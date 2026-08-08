@@ -256,10 +256,7 @@ def _build_painter_model(
     prices = [
         price for candle in display_candles for price in (candle.high, candle.low)
     ] + [marker.price for marker in snapshot.markers]
-    low, high = min(prices), max(prices)
-    if low == high:
-        low -= Decimal("1")
-        high += Decimal("1")
+    low, high = _padded_price_range(min(prices), max(prices))
     price_surface = _plot_surface(surface)
     grid_lines = tuple(
         QLineF(
@@ -270,10 +267,17 @@ def _build_painter_model(
         )
         for line in range(5)
     )
-    width = max(4.0, surface.width() / max(len(display_candles) * 2, 2))
+    width = min(
+        max(4.0, price_surface.width() / max(len(display_candles) * 2, 2)),
+        price_surface.width(),
+    )
     candles: list[CandleGlyph] = []
     for candle in display_candles:
-        x = _marker_x(candle.open_time, visual_range, surface)
+        x = _clamp_x(
+            _marker_x(candle.open_time, visual_range, price_surface),
+            price_surface,
+            width / 2,
+        )
         color = QColor("#0ECB81" if candle.close >= candle.open else "#F6465D")
         body_top = _price_y(max(candle.open, candle.close), low, high, price_surface)
         body_bottom = _price_y(min(candle.open, candle.close), low, high, price_surface)
@@ -296,7 +300,11 @@ def _build_painter_model(
         )
     markers: list[MarkerGlyph] = []
     for marker in snapshot.markers:
-        x = _marker_x(marker.filled_at_utc, snapshot.chart_range, surface)
+        x = _clamp_x(
+            _marker_x(marker.filled_at_utc, snapshot.chart_range, price_surface),
+            price_surface,
+            22.0,
+        )
         y = _price_y(marker.price, low, high, price_surface)
         is_buy = marker.side is FillSide.BUY
         color = QColor("#0ECB81" if is_buy else "#F6465D")
@@ -310,17 +318,23 @@ def _build_painter_model(
         alternate_label_top = y + 10 if is_buy else y - 28
         label_top = preferred_label_top
         if not (
-            surface.top() <= label_top and label_top + label_height <= surface.bottom()
+            price_surface.top() <= label_top
+            and label_top + label_height <= price_surface.bottom()
         ):
             label_top = alternate_label_top
         label_top = min(
-            max(label_top, surface.top()),
-            surface.bottom() - label_height,
+            max(label_top, price_surface.top()),
+            price_surface.bottom() - label_height,
         )
         markers.append(
             MarkerGlyph(
                 triangle=triangle,
-                label_rect=QRectF(x - 22, label_top, 44, label_height),
+                label_rect=QRectF(
+                    _clamp_x(x, price_surface, 22.0) - 22,
+                    label_top,
+                    44,
+                    label_height,
+                ),
                 label="Buy" if is_buy else "Sell",
                 color=color,
             )
@@ -345,6 +359,14 @@ def _plot_surface(surface: QRectF) -> QRectF:
         max(1.0, surface.width() - 72),
         max(1.0, surface.height() - 26),
     )
+
+
+def _padded_price_range(low: Decimal, high: Decimal) -> tuple[Decimal, Decimal]:
+    if low == high:
+        low -= Decimal("1")
+        high += Decimal("1")
+    padding = (high - low) * Decimal("0.05")
+    return low - padding, high + padding
 
 
 def _chart_surface(widget: QWidget) -> QRectF:
@@ -383,11 +405,12 @@ def _time_ticks(
     labels: list[AxisTickGlyph] = []
     duration = chart_range.end - chart_range.start
     label_top = plot_surface.bottom() + 5
-    for index in range(6):
-        ratio = index / 5
+    label_width = 72.0
+    tick_count = min(6, max(2, int(plot_surface.width() // label_width) + 1))
+    for index in range(tick_count):
+        ratio = index / (tick_count - 1)
         value = chart_range.start + duration * ratio
         x = plot_surface.left() + plot_surface.width() * ratio
-        label_width = 96.0
         label_left = min(
             max(x - label_width / 2, plot_surface.left()),
             plot_surface.right() - label_width,
@@ -401,7 +424,7 @@ def _time_ticks(
                     label_width,
                     surface.bottom() - label_top,
                 ),
-                label=_time_text(value, chart_range.start),
+                label=_time_text(value),
                 value=value.isoformat(),
             )
         )
@@ -428,7 +451,7 @@ def _crosshair_at(
         plot.bottom() - label_height,
     )
     time_axis = model.time_ticks[0].label_rect
-    time_label_width = time_axis.width()
+    time_label_width = min(144.0, plot.width())
     time_label_left = min(
         max(position.x() - time_label_width / 2, plot.left()),
         plot.right() - time_label_width,
@@ -469,10 +492,8 @@ def _price_text(value: Decimal) -> str:
     return f"{value:,.2f}"
 
 
-def _time_text(value: datetime, range_start: datetime) -> str:
-    if value != range_start and value.date() == range_start.date():
-        return f"{value:%H:%M} UTC"
-    return f"{value:%Y-%m-%d %H:%M UTC}"
+def _time_text(value: datetime) -> str:
+    return f"{value:%H:%M} UTC"
 
 
 def _price_y(price: Decimal, low: Decimal, high: Decimal, surface: QRectF) -> float:
@@ -487,3 +508,11 @@ def _marker_x(value: datetime, chart_range: ChartRange, surface: QRectF) -> floa
     elapsed = (value - chart_range.start).total_seconds()
     duration = (chart_range.end - chart_range.start).total_seconds()
     return surface.left() + surface.width() * elapsed / duration
+
+
+def _clamp_x(value: float, surface: QRectF, margin: float) -> float:
+    effective_margin = min(margin, surface.width() / 2)
+    return min(
+        max(value, surface.left() + effective_margin),
+        surface.right() - effective_margin,
+    )
