@@ -2,8 +2,8 @@ from dataclasses import dataclass
 from datetime import datetime
 from decimal import Decimal
 
-from PySide6.QtCore import QLineF, QPointF, QRectF, Signal
-from PySide6.QtGui import QColor, QPainter, QPen, QPolygonF
+from PySide6.QtCore import QEvent, QLineF, QPointF, QRectF, Qt, Signal
+from PySide6.QtGui import QColor, QMouseEvent, QPainter, QPen, QPolygonF
 from PySide6.QtWidgets import QHBoxLayout, QLabel, QPushButton, QVBoxLayout, QWidget
 
 from tiewtrade.application.chart_data import (
@@ -40,6 +40,14 @@ class AxisTickGlyph:
 
 
 @dataclass(frozen=True, slots=True)
+class CrosshairGlyph:
+    vertical: QLineF
+    horizontal: QLineF
+    price_label: AxisTickGlyph
+    time_label: AxisTickGlyph
+
+
+@dataclass(frozen=True, slots=True)
 class ChartPainterModel:
     plot_surface: QRectF
     price_low: Decimal
@@ -62,7 +70,9 @@ class CandlestickChartWidget(QWidget):
         super().__init__(parent)
         self.setObjectName("candlestickChart")
         self.setMinimumHeight(280)
+        self.setMouseTracking(True)
         self._snapshot: ChartSnapshot | None = None
+        self._crosshair_position: QPointF | None = None
 
         header = QHBoxLayout()
         header.setContentsMargins(12, 10, 12, 0)
@@ -105,8 +115,18 @@ class CandlestickChartWidget(QWidget):
             for marker in self._snapshot.markers
         )
 
+    @property
+    def crosshair(self) -> CrosshairGlyph | None:
+        snapshot = self._snapshot
+        position = self._crosshair_position
+        if snapshot is None or position is None or not snapshot.display_candles:
+            return None
+        model = _build_painter_model(snapshot, _chart_surface(self))
+        return _crosshair_at(position, model)
+
     def show_snapshot(self, snapshot: ChartSnapshot) -> None:
         self._snapshot = snapshot
+        self._crosshair_position = None
         self.setAccessibleName(
             f"Candlestick chart for {snapshot.symbol} {snapshot.timeframe}"
         )
@@ -133,7 +153,7 @@ class CandlestickChartWidget(QWidget):
         if snapshot is None:
             painter.end()
             return
-        surface = QRectF(12, 54, max(1, self.width() - 24), max(1, self.height() - 66))
+        surface = _chart_surface(self)
         if snapshot.state is ChartReadState.UNAVAILABLE:
             self._draw_message(
                 painter, surface, snapshot.message or "Chart is unavailable"
@@ -145,6 +165,16 @@ class CandlestickChartWidget(QWidget):
         else:
             self._draw_chart(painter, surface, snapshot)
         painter.end()
+
+    def mouseMoveEvent(self, event: QMouseEvent) -> None:  # noqa: N802
+        self._crosshair_position = event.position()
+        self.update()
+        super().mouseMoveEvent(event)
+
+    def leaveEvent(self, event: QEvent) -> None:  # noqa: N802
+        self._crosshair_position = None
+        self.update()
+        super().leaveEvent(event)
 
     def _request_previous_range(self) -> None:
         if self._snapshot is None:
@@ -196,6 +226,20 @@ class CandlestickChartWidget(QWidget):
             painter.setBrush(marker.color)
             painter.drawPolygon(QPolygonF(marker.triangle))
             painter.drawText(marker.label_rect, 0x84, marker.label)
+        crosshair = self.crosshair
+        if crosshair is None:
+            return
+        painter.setPen(QPen(QColor("#64748B"), 1, Qt.PenStyle.DashLine))
+        painter.drawLine(crosshair.vertical)
+        painter.drawLine(crosshair.horizontal)
+        self._draw_crosshair_label(painter, crosshair.price_label)
+        self._draw_crosshair_label(painter, crosshair.time_label)
+
+    @staticmethod
+    def _draw_crosshair_label(painter: QPainter, label: AxisTickGlyph) -> None:
+        painter.fillRect(label.label_rect, QColor("#334155"))
+        painter.setPen(QPen(QColor("#F8FAFC"), 1))
+        painter.drawText(label.label_rect, 0x84, label.label)
 
 
 def _build_painter_model(
@@ -303,6 +347,10 @@ def _plot_surface(surface: QRectF) -> QRectF:
     )
 
 
+def _chart_surface(widget: QWidget) -> QRectF:
+    return QRectF(12, 54, max(1, widget.width() - 24), max(1, widget.height() - 66))
+
+
 def _price_ticks(
     low: Decimal,
     high: Decimal,
@@ -339,15 +387,78 @@ def _time_ticks(
         ratio = index / 5
         value = chart_range.start + duration * ratio
         x = plot_surface.left() + plot_surface.width() * ratio
+        label_width = 96.0
+        label_left = min(
+            max(x - label_width / 2, plot_surface.left()),
+            plot_surface.right() - label_width,
+        )
         labels.append(
             AxisTickGlyph(
                 line=QLineF(x, plot_surface.bottom(), x, plot_surface.bottom() + 4),
-                label_rect=QRectF(x - 48, label_top, 96, surface.bottom() - label_top),
+                label_rect=QRectF(
+                    label_left,
+                    label_top,
+                    label_width,
+                    surface.bottom() - label_top,
+                ),
                 label=_time_text(value, chart_range.start),
                 value=value.isoformat(),
             )
         )
     return tuple(labels)
+
+
+def _crosshair_at(
+    position: QPointF,
+    model: ChartPainterModel,
+) -> CrosshairGlyph | None:
+    plot = model.plot_surface
+    if not plot.contains(position):
+        return None
+    price = _price_at(position.y(), model.price_low, model.price_high, plot)
+    ratio = (position.x() - plot.left()) / plot.width()
+    timestamp = (
+        model.visual_range.start
+        + (model.visual_range.end - model.visual_range.start) * ratio
+    )
+    price_axis = model.price_ticks[0].label_rect
+    label_height = price_axis.height()
+    price_label_top = min(
+        max(position.y() - label_height / 2, plot.top()),
+        plot.bottom() - label_height,
+    )
+    time_axis = model.time_ticks[0].label_rect
+    time_label_width = time_axis.width()
+    time_label_left = min(
+        max(position.x() - time_label_width / 2, plot.left()),
+        plot.right() - time_label_width,
+    )
+    return CrosshairGlyph(
+        vertical=QLineF(position.x(), plot.top(), position.x(), plot.bottom()),
+        horizontal=QLineF(plot.left(), position.y(), plot.right(), position.y()),
+        price_label=AxisTickGlyph(
+            line=QLineF(),
+            label_rect=QRectF(
+                price_axis.left(),
+                price_label_top,
+                price_axis.width(),
+                label_height,
+            ),
+            label=_price_text(price),
+            value=str(price),
+        ),
+        time_label=AxisTickGlyph(
+            line=QLineF(),
+            label_rect=QRectF(
+                time_label_left,
+                time_axis.top(),
+                time_label_width,
+                time_axis.height(),
+            ),
+            label=f"{timestamp:%Y-%m-%d %H:%M UTC}",
+            value=timestamp.isoformat(),
+        ),
+    )
 
 
 def _range_text(chart_range: ChartRange) -> str:
@@ -366,6 +477,10 @@ def _time_text(value: datetime, range_start: datetime) -> str:
 
 def _price_y(price: Decimal, low: Decimal, high: Decimal, surface: QRectF) -> float:
     return surface.bottom() - float((price - low) / (high - low)) * surface.height()
+
+
+def _price_at(y: float, low: Decimal, high: Decimal, surface: QRectF) -> Decimal:
+    return low + Decimal(str((surface.bottom() - y) / surface.height())) * (high - low)
 
 
 def _marker_x(value: datetime, chart_range: ChartRange, surface: QRectF) -> float:
