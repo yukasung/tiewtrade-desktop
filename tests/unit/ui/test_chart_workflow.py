@@ -39,6 +39,14 @@ class DeferredThreadPool:
         self.tasks.append(task)
 
 
+class MutableClock:
+    def __init__(self, value: datetime) -> None:
+        self.value = value
+
+    def __call__(self) -> datetime:
+        return self.value
+
+
 class PartialCompletedCandle:
     symbol = "BTCUSDT"
     timeframe = "5m"
@@ -537,12 +545,78 @@ def test_completed_candle_clears_matching_forming_before_latest_refresh() -> Non
     assert snapshots[-1].in_progress_candle is None
 
 
+def test_pending_completed_then_forming_survives_latest_load_transition() -> None:
+    session = configured_spot_session()
+    snapshots: list[ChartSnapshot] = []
+    pool = DeferredThreadPool()
+    clock = MutableClock(datetime(2026, 1, 1, 0, 43, tzinfo=UTC))
+    workflow = latest_workflow(
+        session=session,
+        snapshots=snapshots,
+        pool=pool,
+        clock=clock,
+        run_load=False,
+    )
+    workflow.runtime_snapshot(runtime_snapshot(session, BotRuntimeState.RUNNING))
+
+    workflow.completed_candle(candle("5m", 40))
+    clock.value = datetime(2026, 1, 1, 0, 48, tzinfo=UTC)
+    forming = candle("5m", 45, close="102")
+    workflow.in_progress_candle(forming)
+    pool.tasks[0].run()
+    pool.tasks[1].run()
+
+    assert snapshots[-1].chart_range == chart_range(25, 45)
+    assert snapshots[-1].in_progress_candle == forming
+
+
+def test_pending_completed_then_forming_survives_latest_refresh_transition() -> None:
+    session = configured_spot_session()
+    snapshots: list[ChartSnapshot] = []
+    pool = DeferredThreadPool()
+    clock = MutableClock(datetime(2026, 1, 1, 0, 43, tzinfo=UTC))
+    workflow = latest_workflow(
+        session=session,
+        snapshots=snapshots,
+        pool=pool,
+        clock=clock,
+    )
+    workflow.runtime_snapshot(runtime_snapshot(session, BotRuntimeState.RUNNING))
+
+    workflow.completed_candle(candle("5m", 40))
+    clock.value = datetime(2026, 1, 1, 0, 53, tzinfo=UTC)
+    workflow.completed_candle(candle("5m", 45))
+    forming = candle("5m", 50, close="102")
+    workflow.in_progress_candle(forming)
+    pool.tasks[1].run()
+    pool.tasks[2].run()
+
+    assert snapshots[-1].chart_range == chart_range(30, 50)
+    assert snapshots[-1].in_progress_candle == forming
+
+
+def test_close_clears_forming_snapshot_but_keeps_completed_history() -> None:
+    session = configured_spot_session()
+    snapshots: list[ChartSnapshot] = []
+    workflow = latest_workflow(session=session, snapshots=snapshots)
+    workflow.runtime_snapshot(runtime_snapshot(session, BotRuntimeState.RUNNING))
+    workflow.in_progress_candle(candle("5m", 40))
+    with_forming = snapshots[-1]
+
+    workflow.close()
+
+    assert workflow._snapshot is not None
+    assert workflow._snapshot.in_progress_candle is None
+    assert workflow._snapshot.candles == with_forming.candles
+
+
 def latest_workflow(
     *,
     session: ConfiguredPaperSession,
     snapshots: list[ChartSnapshot],
     refresh_calls: list[Candle] | None = None,
     pool: ImmediateThreadPool | DeferredThreadPool | None = None,
+    clock: MutableClock | None = None,
     run_load: bool = True,
 ) -> ChartWorkflow:
     selected_pool = pool or ImmediateThreadPool()
@@ -576,7 +650,11 @@ def latest_workflow(
         ),
         refresh_chart=refresh_chart,
         thread_pool=selected_pool,  # type: ignore[arg-type]
-        clock=lambda: datetime(2026, 1, 1, 0, 43, tzinfo=UTC),
+        clock=(
+            clock
+            if clock is not None
+            else lambda: datetime(2026, 1, 1, 0, 43, tzinfo=UTC)
+        ),
     )
     workflow.snapshot_changed.connect(snapshots.append)
     workflow.configure(session)

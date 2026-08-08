@@ -249,13 +249,14 @@ class ChartWorkflow(QObject):
             self._start_load(*pending)
             return
         self.loading_changed.emit(False)
-        self._drain_pending_in_progress_candle()
         self._drain_pending_completed_candle()
+        self._drain_pending_in_progress_candle()
 
     @Slot()
     def close(self) -> None:
         if self._closed:
             return
+        self._clear_in_progress_candle()
         self._closed = True
         self._generation += 1
         self._pending_request = None
@@ -340,8 +341,8 @@ class ChartWorkflow(QObject):
             self._start_load(*pending)
             return
         self.loading_changed.emit(False)
-        self._drain_pending_in_progress_candle()
         self._drain_pending_completed_candle()
+        self._drain_pending_in_progress_candle()
 
     async def _load_in_background(
         self, session: ConfiguredPaperSession, chart_range: ChartRange
