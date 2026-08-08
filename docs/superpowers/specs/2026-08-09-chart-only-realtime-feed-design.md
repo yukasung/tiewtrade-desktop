@@ -1,7 +1,7 @@
 # Chart-only Real-time Feed Design
 
 **Issue:** DEV-150
-**Status:** Proposed
+**Status:** Approved
 
 ## Goal
 
