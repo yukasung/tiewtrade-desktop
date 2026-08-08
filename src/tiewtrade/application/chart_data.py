@@ -94,6 +94,7 @@ class ChartSnapshot:
     candles: tuple[Candle, ...]
     fills: tuple[TradeFill, ...]
     state: ChartReadState
+    in_progress_candle: Candle | None = None
     message: str | None = None
     session: InitVar[ConfiguredPaperSession | None] = None
     _session_facts: InitVar[tuple[UUID, str, str] | None] = None
@@ -141,6 +142,31 @@ class ChartSnapshot:
         if self.state is ChartReadState.EMPTY and self.candles:
             raise ValueError("empty ChartSnapshot cannot contain candles")
 
+        in_progress_candle = self.in_progress_candle
+        if in_progress_candle is not None:
+            if self.state not in {ChartReadState.READY, ChartReadState.EMPTY}:
+                raise ValueError(
+                    "in_progress_candle requires a ready or empty ChartSnapshot"
+                )
+            if not isinstance(in_progress_candle, Candle):
+                raise ValueError("in_progress_candle must be a Candle")
+            if in_progress_candle.symbol != self.symbol:
+                raise ValueError("in_progress_candle symbol must match Session")
+            if in_progress_candle.timeframe != self.timeframe:
+                raise ValueError("in_progress_candle timeframe must match Session")
+            if in_progress_candle.open_time != self.chart_range.end:
+                raise ValueError(
+                    "in_progress_candle open_time must match ChartRange end"
+                )
+            if not (
+                in_progress_candle.open_time
+                <= self.observed_at_utc
+                < in_progress_candle.close_time
+            ):
+                raise ValueError(
+                    "in_progress_candle must be observed inside its interval"
+                )
+
         previous_open_time: datetime | None = None
         for candle in self.candles:
             if not isinstance(candle, Candle):
@@ -176,6 +202,12 @@ class ChartSnapshot:
             markers.append(ChartMarker.from_fill(fill))
         object.__setattr__(self, "markers", tuple(markers))
 
+    @property
+    def display_candles(self) -> tuple[Candle, ...]:
+        if self.in_progress_candle is None:
+            return self.candles
+        return (*self.candles, self.in_progress_candle)
+
 
 def append_completed_candle(snapshot: ChartSnapshot, candle: Candle) -> ChartSnapshot:
     if snapshot.state is not ChartReadState.READY:
@@ -191,6 +223,7 @@ def append_completed_candle(snapshot: ChartSnapshot, candle: Candle) -> ChartSna
         observed_at_utc=snapshot.observed_at_utc,
         fills=snapshot.fills,
         state=snapshot.state,
+        in_progress_candle=snapshot.in_progress_candle,
         message=snapshot.message,
         _session_facts=(snapshot.session_id, snapshot.symbol, snapshot.timeframe),
     )

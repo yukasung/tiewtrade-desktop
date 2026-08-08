@@ -3,12 +3,23 @@ from decimal import Decimal
 
 from tests.support.paper_session_setup import configured_spot_session
 from tests.support.trade_history_records import trade_fill
+from tiewtrade.application.bot_control import (
+    BotControlAction,
+    BotControlSnapshot,
+    workspace_with_runtime_state,
+)
 from tiewtrade.application.chart_data import (
     ChartRange,
     ChartReadState,
     ChartSnapshot,
 )
 from tiewtrade.application.paper_session_setup import ConfiguredPaperSession
+from tiewtrade.application.trading_workspace import (
+    BotRuntimeState,
+    DataFreshness,
+    TradingWorkspaceSnapshot,
+    configured_workspace_snapshot,
+)
 from tiewtrade.market_data.candle import Candle
 from tiewtrade.trading.trade_history import FillSide
 from tiewtrade.ui.background_task import BackgroundTask
@@ -170,6 +181,7 @@ def test_completed_candle_ignores_other_session_and_updates_current_snapshot() -
             configured, requested, []
         ),
         thread_pool=ImmediateThreadPool(),  # type: ignore[arg-type]
+        clock=clock_at_23,
     )
     workflow.snapshot_changed.connect(snapshots.append)
     workflow.configure(session)
@@ -221,6 +233,7 @@ def test_completed_candle_refreshes_shifted_latest_range_and_durable_fills() -> 
         ),
         refresh_chart=refresh_chart,
         thread_pool=ImmediateThreadPool(),  # type: ignore[arg-type]
+        clock=clock_at_23,
     )
     workflow.snapshot_changed.connect(snapshots.append)
     workflow.configure(session)
@@ -262,6 +275,7 @@ def test_retry_uses_latest_runtime_refreshed_visible_range() -> None:
         ),
         refresh_chart=refresh_chart,
         thread_pool=ImmediateThreadPool(),  # type: ignore[arg-type]
+        clock=clock_at_23,
     )
     workflow.configure(session)
     workflow.load_range(initial_range)
@@ -302,6 +316,7 @@ def test_completed_candle_refresh_keeps_latest_event_while_worker_is_active() ->
         ),
         refresh_chart=refresh_chart,
         thread_pool=pool,  # type: ignore[arg-type]
+        clock=clock_at_23,
     )
     workflow.snapshot_changed.connect(snapshots.append)
     workflow.configure(session)
@@ -347,6 +362,7 @@ def test_completed_candle_gap_advances_and_keeps_following_runtime_updates() -> 
         ),
         refresh_chart=refresh_chart,
         thread_pool=ImmediateThreadPool(),  # type: ignore[arg-type]
+        clock=clock_at_23,
     )
     workflow.snapshot_changed.connect(snapshots.append)
     workflow.configure(session)
@@ -411,6 +427,7 @@ def test_load_queued_during_refresh_is_drained_and_latest_request_wins() -> None
         ),
         refresh_chart=refresh_chart,
         thread_pool=pool,  # type: ignore[arg-type]
+        clock=clock_at_23,
     )
     workflow.configure(session)
     workflow.load_range(initial_range)
@@ -423,6 +440,184 @@ def test_load_queued_during_refresh_is_drained_and_latest_request_wins() -> None
     pool.tasks[2].run()
 
     assert calls == [initial_range, latest_range]
+
+
+def test_open_candle_replaces_forming_fact_while_following_latest() -> None:
+    session = configured_spot_session()
+    snapshots: list[ChartSnapshot] = []
+    workflow = latest_workflow(session=session, snapshots=snapshots)
+    workflow.runtime_snapshot(runtime_snapshot(session, BotRuntimeState.RUNNING))
+
+    workflow.in_progress_candle(candle("5m", 40, close="102"))
+    workflow.in_progress_candle(candle("5m", 40, close="104"))
+
+    assert snapshots[-1].candles == snapshots[-3].candles
+    assert snapshots[-1].in_progress_candle == candle("5m", 40, close="104")
+    assert len(snapshots[-1].display_candles) == len(snapshots[-1].candles) + 1
+
+
+def test_open_candle_buffers_latest_fact_while_latest_range_loads() -> None:
+    session = configured_spot_session()
+    snapshots: list[ChartSnapshot] = []
+    pool = DeferredThreadPool()
+    workflow = latest_workflow(
+        session=session,
+        snapshots=snapshots,
+        pool=pool,
+        run_load=False,
+    )
+    workflow.runtime_snapshot(runtime_snapshot(session, BotRuntimeState.RUNNING))
+
+    workflow.in_progress_candle(candle("5m", 40, close="102"))
+    workflow.in_progress_candle(candle("5m", 40, close="104"))
+    pool.tasks[0].run()
+
+    assert snapshots[-1].in_progress_candle == candle("5m", 40, close="104")
+
+
+def test_previous_range_freezes_until_next_returns_to_latest() -> None:
+    session = configured_spot_session()
+    snapshots: list[ChartSnapshot] = []
+    refresh_calls: list[Candle] = []
+    workflow = latest_workflow(
+        session=session,
+        snapshots=snapshots,
+        refresh_calls=refresh_calls,
+    )
+    workflow.runtime_snapshot(runtime_snapshot(session, BotRuntimeState.RUNNING))
+
+    previous_range = chart_range(0, 20)
+    workflow.load_range(previous_range)
+    workflow.in_progress_candle(candle("5m", 20))
+    workflow.completed_candle(candle("5m", 20))
+
+    assert snapshots[-1].chart_range == previous_range
+    assert snapshots[-1].in_progress_candle is None
+    assert refresh_calls == []
+
+    workflow.load_range(chart_range(20, 40))
+    workflow.in_progress_candle(candle("5m", 40))
+
+    assert snapshots[-1].chart_range == chart_range(20, 40)
+    assert snapshots[-1].in_progress_candle == candle("5m", 40)
+
+
+def test_stop_clears_forming_but_keeps_completed_history() -> None:
+    session = configured_spot_session()
+    snapshots: list[ChartSnapshot] = []
+    workflow = latest_workflow(session=session, snapshots=snapshots)
+    workflow.runtime_snapshot(runtime_snapshot(session, BotRuntimeState.RUNNING))
+    workflow.in_progress_candle(candle("5m", 40))
+    with_forming = snapshots[-1]
+
+    workflow.runtime_snapshot(runtime_snapshot(session, BotRuntimeState.STOPPED))
+
+    assert snapshots[-1].in_progress_candle is None
+    assert snapshots[-1].candles == with_forming.candles
+
+
+def test_completed_candle_clears_matching_forming_before_latest_refresh() -> None:
+    session = configured_spot_session()
+    snapshots: list[ChartSnapshot] = []
+    refresh_calls: list[Candle] = []
+    workflow = latest_workflow(
+        session=session,
+        snapshots=snapshots,
+        refresh_calls=refresh_calls,
+    )
+    workflow.runtime_snapshot(runtime_snapshot(session, BotRuntimeState.RUNNING))
+    forming = candle("5m", 40, close="102")
+    completed = candle("5m", 40, close="104")
+    workflow.in_progress_candle(forming)
+
+    workflow.completed_candle(completed)
+
+    assert refresh_calls == [completed]
+    assert snapshots[-2].in_progress_candle is None
+    assert snapshots[-1].in_progress_candle is None
+
+
+def latest_workflow(
+    *,
+    session: ConfiguredPaperSession,
+    snapshots: list[ChartSnapshot],
+    refresh_calls: list[Candle] | None = None,
+    pool: ImmediateThreadPool | DeferredThreadPool | None = None,
+    run_load: bool = True,
+) -> ChartWorkflow:
+    selected_pool = pool or ImmediateThreadPool()
+
+    async def refresh_chart(
+        configured: ConfiguredPaperSession,
+        current: ChartSnapshot,
+        completed: Candle,
+    ) -> ChartSnapshot:
+        assert configured is session
+        if refresh_calls is not None:
+            refresh_calls.append(completed)
+        duration = current.chart_range.end - current.chart_range.start
+        return ChartSnapshot(
+            session=configured,
+            chart_range=ChartRange(
+                completed.close_time - duration,
+                completed.close_time,
+            ),
+            observed_at_utc=completed.close_time,
+            candles=(completed,),
+            fills=(),
+            state=ChartReadState.READY,
+        )
+
+    workflow = ChartWorkflow(
+        load_chart=lambda configured, requested: load_snapshot(
+            configured,
+            requested,
+            [],
+        ),
+        refresh_chart=refresh_chart,
+        thread_pool=selected_pool,  # type: ignore[arg-type]
+        clock=lambda: datetime(2026, 1, 1, 0, 43, tzinfo=UTC),
+    )
+    workflow.snapshot_changed.connect(snapshots.append)
+    workflow.configure(session)
+    workflow.load_range(chart_range(20, 40))
+    if run_load and isinstance(selected_pool, DeferredThreadPool):
+        selected_pool.tasks[0].run()
+    return workflow
+
+
+def runtime_snapshot(
+    session: ConfiguredPaperSession,
+    state: BotRuntimeState,
+) -> BotControlSnapshot:
+    configured = workspace_with_runtime_state(
+        _configured_workspace(session),
+        state,
+        data_freshness=(
+            DataFreshness.FRESH
+            if state is BotRuntimeState.RUNNING
+            else DataFreshness.NOT_STARTED
+        ),
+    )
+    return BotControlSnapshot(
+        state=state,
+        session=session,
+        workspace=configured,
+        available_actions=(
+            frozenset({BotControlAction.STOP})
+            if state is BotRuntimeState.RUNNING
+            else frozenset()
+        ),
+    )
+
+
+def _configured_workspace(
+    session: ConfiguredPaperSession,
+) -> TradingWorkspaceSnapshot:
+    return configured_workspace_snapshot(
+        session,
+        observed_at_utc=datetime(2026, 1, 1, 0, 0, tzinfo=UTC),
+    )
 
 
 async def load_snapshot(
@@ -445,6 +640,10 @@ async def fail_load() -> ChartSnapshot:
     raise RuntimeError("transport details must not reach the chart")
 
 
+def clock_at_23() -> datetime:
+    return datetime(2026, 1, 1, 0, 23, tzinfo=UTC)
+
+
 def chart_range(start_minute: int, end_minute: int) -> ChartRange:
     return ChartRange(
         datetime(2026, 1, 1, 0, start_minute, tzinfo=UTC),
@@ -452,7 +651,7 @@ def chart_range(start_minute: int, end_minute: int) -> ChartRange:
     )
 
 
-def candle(timeframe: str, minute: int) -> Candle:
+def candle(timeframe: str, minute: int, *, close: str = "103") -> Candle:
     return Candle(
         symbol="BTCUSDT",
         timeframe=timeframe,
@@ -460,5 +659,5 @@ def candle(timeframe: str, minute: int) -> Candle:
         open=Decimal("100"),
         high=Decimal("106"),
         low=Decimal("99"),
-        close=Decimal("103"),
+        close=Decimal(close),
     )

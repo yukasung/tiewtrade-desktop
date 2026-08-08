@@ -38,6 +38,80 @@ def test_snapshot_rejects_partial_candle_facts_without_ohlcv() -> None:
         ready_chart_snapshot(candles=(cast(Candle, PartialCandle()),), fills=())
 
 
+def test_snapshot_separates_completed_and_forming_candle() -> None:
+    completed = candle("5m", minute=15)
+    forming = candle("5m", minute=20)
+
+    snapshot = ready_chart_snapshot(
+        candles=(completed,),
+        in_progress_candle=forming,
+    )
+
+    assert snapshot.candles == (completed,)
+    assert snapshot.in_progress_candle == forming
+    assert snapshot.display_candles == (completed, forming)
+
+
+@pytest.mark.parametrize(
+    ("state", "message"),
+    [
+        (ChartReadState.LOADING, None),
+        (ChartReadState.UNAVAILABLE, "Chart is unavailable"),
+    ],
+)
+def test_snapshot_rejects_forming_candle_outside_display_states(
+    state: ChartReadState,
+    message: str | None,
+) -> None:
+    with pytest.raises(
+        ValueError,
+        match="in_progress_candle requires a ready or empty ChartSnapshot",
+    ):
+        ChartSnapshot(
+            session=session(),
+            chart_range=chart_range(),
+            observed_at_utc=datetime(2026, 1, 1, 0, 20, tzinfo=UTC),
+            candles=(),
+            fills=(),
+            state=state,
+            message=message,
+            in_progress_candle=candle("5m", minute=20),
+        )
+
+
+@pytest.mark.parametrize(
+    ("timeframe", "minute", "observed_minute", "message"),
+    [
+        ("15m", 15, 20, "timeframe"),
+        ("5m", 15, 20, "ChartRange end"),
+        ("5m", 20, 25, "observed"),
+    ],
+)
+def test_snapshot_validates_forming_candle_session_range_and_observation(
+    timeframe: str,
+    minute: int,
+    observed_minute: int,
+    message: str,
+) -> None:
+    with pytest.raises(ValueError, match=message):
+        ChartSnapshot(
+            session=session(),
+            chart_range=chart_range(),
+            observed_at_utc=datetime(
+                2026,
+                1,
+                1,
+                0,
+                observed_minute,
+                tzinfo=UTC,
+            ),
+            candles=(),
+            fills=(),
+            state=ChartReadState.EMPTY,
+            in_progress_candle=candle(timeframe, minute=minute),
+        )
+
+
 def test_append_completed_candle_replaces_same_open_time_and_keeps_order() -> None:
     snapshot = ready_chart_snapshot(candles=(candle("5m", minute=15),))
 
@@ -150,6 +224,7 @@ def ready_chart_snapshot(
     *,
     candles: tuple[Candle, ...] = (),
     fills: tuple[TradeFill, ...] = (),
+    in_progress_candle: Candle | None = None,
 ) -> ChartSnapshot:
     return ChartSnapshot(
         session=session(),
@@ -158,6 +233,7 @@ def ready_chart_snapshot(
         candles=candles,
         fills=fills,
         state=ChartReadState.READY,
+        in_progress_candle=in_progress_candle,
     )
 
 

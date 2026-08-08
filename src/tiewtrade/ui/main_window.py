@@ -117,6 +117,9 @@ class MainWindow(QMainWindow):
         self._chart_workflow.snapshot_changed.connect(
             self.workspace.chart.show_snapshot
         )
+        self._lifecycle_workflow.snapshot_changed.connect(
+            self._chart_workflow.runtime_snapshot
+        )
         self.workspace.chart.range_requested.connect(self._chart_workflow.load_range)
         self.workspace.chart.retry_requested.connect(self._chart_workflow.retry)
         self._runtime_snapshots = runtime_snapshots
@@ -178,9 +181,7 @@ class MainWindow(QMainWindow):
         runtime_snapshots = self._runtime_snapshots
         if runtime_snapshots is None or not runtime_snapshots.is_current(generation):
             return
-        callback = getattr(self._chart_workflow, "in_progress_candle", None)
-        if callback is not None:
-            callback(candle)
+        self._chart_workflow.in_progress_candle(candle)
 
     @Slot(str, str)
     def _show_validation_error(self, field: str, message: str) -> None:

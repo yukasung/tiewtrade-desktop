@@ -1,7 +1,6 @@
 from datetime import UTC, datetime
 from decimal import Decimal
 
-import pytest
 from PySide6.QtWidgets import QPushButton
 from pytestqt.qtbot import QtBot
 
@@ -142,7 +141,6 @@ def test_chart_failure_does_not_stop_runtime_or_trade_history(qtbot: QtBot) -> N
 
 def test_runtime_candles_reach_chart_only_from_current_generation(
     qtbot: QtBot,
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     session = configured_spot_session()
     relay = RuntimeSnapshotRelay()
@@ -151,7 +149,16 @@ def test_runtime_candles_reach_chart_only_from_current_generation(
     relay.completed_candle_ready.connect(
         lambda candle, _generation: relayed.append(candle)
     )
-    in_progress: list[Candle] = []
+    chart_snapshots: list[ChartSnapshot] = []
+
+    def start_bot(snapshot: BotControlSnapshot) -> BotLifecycleResult:
+        return BotLifecycleResult(
+            workspace=workspace_with_runtime_state(
+                snapshot.workspace,
+                BotRuntimeState.RUNNING,
+                data_freshness=DataFreshness.FRESH,
+            )
+        )
 
     async def load_chart(
         configured: ConfiguredPaperSession, chart_range: ChartRange
@@ -195,18 +202,16 @@ def test_runtime_candles_reach_chart_only_from_current_generation(
         list_fills=empty_fills,
         load_chart=load_chart,
         refresh_chart=refresh_chart,
+        start_bot=start_bot,
         runtime_snapshots=relay,
         chart_clock=lambda: datetime(2026, 8, 2, 10, 3, tzinfo=UTC),
     )
     qtbot.addWidget(window)
     window.show()
     qtbot.waitUntil(lambda: window.workspace.chart._snapshot is not None)
-    monkeypatch.setattr(
-        window._chart_workflow,
-        "in_progress_candle",
-        in_progress.append,
-        raising=False,
-    )
+    window._chart_workflow.snapshot_changed.connect(chart_snapshots.append)
+    click(window.workspace.bot_control_widget.start_button)
+    qtbot.waitUntil(lambda: window.workspace.header_runtime.text() == "Running")
     stale_publisher = relay.new_generation()
     publisher = relay.new_generation()
     forming = Candle(
@@ -230,12 +235,19 @@ def test_runtime_candles_reach_chart_only_from_current_generation(
 
     stale_publisher.in_progress_candle(forming)
     publisher.in_progress_candle(forming)
+    qtbot.waitUntil(
+        lambda: (
+            window.workspace.chart._snapshot is not None
+            and window.workspace.chart._snapshot.in_progress_candle == forming
+        )
+    )
     publisher.completed_candle(completed)
 
-    qtbot.waitUntil(lambda: in_progress == [forming])
     qtbot.waitUntil(lambda: relayed == [completed])
     qtbot.waitUntil(lambda: refreshed == [completed])
     qtbot.waitUntil(lambda: window.workspace.chart.marker_labels == ("Buy",))
     snapshot = window.workspace.chart._snapshot
     assert snapshot is not None
     assert snapshot.candles == (completed,)
+    assert snapshot.in_progress_candle is None
+    assert sum(item.in_progress_candle == forming for item in chart_snapshots) == 1

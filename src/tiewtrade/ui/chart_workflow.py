@@ -5,6 +5,7 @@ from typing import TypeGuard
 
 from PySide6.QtCore import QObject, QThreadPool, Signal, Slot
 
+from tiewtrade.application.bot_control import BotControlSnapshot
 from tiewtrade.application.chart_data import (
     ChartCandle,
     ChartRange,
@@ -12,8 +13,10 @@ from tiewtrade.application.chart_data import (
     ChartSnapshot,
     append_completed_candle,
     default_chart_range,
+    latest_completed_boundary,
 )
 from tiewtrade.application.paper_session_setup import ConfiguredPaperSession
+from tiewtrade.application.trading_workspace import BotRuntimeState
 from tiewtrade.ui.background_task import BackgroundTask
 
 LoadChart = Callable[[ConfiguredPaperSession, ChartRange], Awaitable[ChartSnapshot]]
@@ -49,7 +52,10 @@ class ChartWorkflow(QObject):
         self._active_task: BackgroundTask | None = None
         self._pending_request: tuple[int, ChartRange] | None = None
         self._pending_completed_candle: ChartCandle | None = None
+        self._pending_in_progress_candle: ChartCandle | None = None
         self._last_safe_range: ChartRange | None = None
+        self._following_latest = True
+        self._runtime_running = False
         self._closed = False
 
     def configure(self, session: ConfiguredPaperSession) -> None:
@@ -60,7 +66,10 @@ class ChartWorkflow(QObject):
         self._snapshot = None
         self._pending_request = None
         self._pending_completed_candle = None
+        self._pending_in_progress_candle = None
         self._last_safe_range = None
+        self._following_latest = True
+        self._runtime_running = False
 
     def start(self, session: ConfiguredPaperSession) -> None:
         self.configure(session)
@@ -69,6 +78,12 @@ class ChartWorkflow(QObject):
     def load_range(self, chart_range: ChartRange) -> None:
         if self._closed or self._session is None:
             return
+        self._following_latest = chart_range.end == latest_completed_boundary(
+            self._session.market_data.timeframe,
+            self._clock(),
+        )
+        self._pending_in_progress_candle = None
+        self._clear_in_progress_candle()
         self._generation += 1
         generation = self._generation
         self._last_safe_range = chart_range
@@ -85,9 +100,49 @@ class ChartWorkflow(QObject):
         if chart_range is not None:
             self.load_range(chart_range)
 
-    def completed_candle(self, candle: object) -> None:
+    def runtime_snapshot(self, snapshot: object) -> None:
+        if (
+            self._closed
+            or not isinstance(snapshot, BotControlSnapshot)
+            or self._session is None
+            or snapshot.session.config.session_id != self._session.config.session_id
+        ):
+            return
+        self._runtime_running = snapshot.state is BotRuntimeState.RUNNING
+        if not self._runtime_running:
+            self._pending_in_progress_candle = None
+            self._clear_in_progress_candle()
+
+    def in_progress_candle(self, candle: object) -> None:
+        if (
+            self._closed
+            or not self._runtime_running
+            or not self._following_latest
+            or not self._is_current_session_candle_fact(candle)
+            or not self._is_observed_inside_candle(candle)
+        ):
+            return
         snapshot = self._snapshot
+        if self._active_task is not None or (
+            snapshot is not None and snapshot.state is ChartReadState.LOADING
+        ):
+            pending = self._pending_in_progress_candle
+            if pending is None or candle.open_time >= pending.open_time:
+                self._pending_in_progress_candle = candle
+            return
+        if snapshot is None or snapshot.state not in {
+            ChartReadState.READY,
+            ChartReadState.EMPTY,
+        }:
+            return
+        self._publish_in_progress_candle(snapshot, candle)
+
+    def completed_candle(self, candle: object) -> None:
         if not self._is_current_session_candle_fact(candle):
+            return
+        self._clear_in_progress_candle(matching_open_time=candle.open_time)
+        snapshot = self._snapshot
+        if not self._following_latest:
             return
         if self._active_task is not None or (
             snapshot is not None and snapshot.state is ChartReadState.LOADING
@@ -169,6 +224,7 @@ class ChartWorkflow(QObject):
         if generation != self._generation or session is None:
             return
         self._pending_completed_candle = None
+        self._pending_in_progress_candle = None
         unavailable = ChartSnapshot(
             session=session,
             chart_range=snapshot.chart_range,
@@ -193,6 +249,7 @@ class ChartWorkflow(QObject):
             self._start_load(*pending)
             return
         self.loading_changed.emit(False)
+        self._drain_pending_in_progress_candle()
         self._drain_pending_completed_candle()
 
     @Slot()
@@ -203,7 +260,10 @@ class ChartWorkflow(QObject):
         self._generation += 1
         self._pending_request = None
         self._pending_completed_candle = None
+        self._pending_in_progress_candle = None
         self._session = None
+        self._runtime_running = False
+        self._following_latest = False
 
     def _start_load(self, generation: int, chart_range: ChartRange) -> None:
         session = self._session
@@ -254,6 +314,7 @@ class ChartWorkflow(QObject):
         del error
         if generation != self._generation or self._session is None:
             return
+        self._pending_in_progress_candle = None
         observed_at_utc = max(self._clock(), chart_range.end)
         unavailable = ChartSnapshot(
             session=self._session,
@@ -279,6 +340,7 @@ class ChartWorkflow(QObject):
             self._start_load(*pending)
             return
         self.loading_changed.emit(False)
+        self._drain_pending_in_progress_candle()
         self._drain_pending_completed_candle()
 
     async def _load_in_background(
@@ -323,6 +385,72 @@ class ChartWorkflow(QObject):
             and candle.symbol == self._session.market_data.symbol
             and candle.timeframe == self._session.market_data.timeframe
         )
+
+    def _is_observed_inside_candle(self, candle: ChartCandle) -> bool:
+        observed_at_utc = self._clock()
+        return candle.open_time <= observed_at_utc < candle.close_time
+
+    def _publish_in_progress_candle(
+        self,
+        snapshot: ChartSnapshot,
+        candle: ChartCandle,
+    ) -> None:
+        try:
+            updated = self._copy_snapshot(
+                snapshot,
+                in_progress_candle=candle,
+            )
+        except ValueError:
+            return
+        self._snapshot = updated
+        self.snapshot_changed.emit(updated)
+
+    def _clear_in_progress_candle(
+        self,
+        *,
+        matching_open_time: datetime | None = None,
+    ) -> None:
+        pending = self._pending_in_progress_candle
+        if pending is not None and (
+            matching_open_time is None or pending.open_time == matching_open_time
+        ):
+            self._pending_in_progress_candle = None
+        snapshot = self._snapshot
+        if snapshot is None or snapshot.in_progress_candle is None:
+            return
+        forming = snapshot.in_progress_candle
+        if matching_open_time is not None and forming.open_time != matching_open_time:
+            return
+        updated = self._copy_snapshot(snapshot, in_progress_candle=None)
+        self._snapshot = updated
+        self.snapshot_changed.emit(updated)
+
+    def _copy_snapshot(
+        self,
+        snapshot: ChartSnapshot,
+        *,
+        in_progress_candle: ChartCandle | None,
+    ) -> ChartSnapshot:
+        return ChartSnapshot(
+            chart_range=snapshot.chart_range,
+            observed_at_utc=max(self._clock(), snapshot.chart_range.end),
+            candles=snapshot.candles,
+            fills=snapshot.fills,
+            state=snapshot.state,
+            in_progress_candle=in_progress_candle,
+            message=snapshot.message,
+            _session_facts=(
+                snapshot.session_id,
+                snapshot.symbol,
+                snapshot.timeframe,
+            ),
+        )
+
+    def _drain_pending_in_progress_candle(self) -> None:
+        pending = self._pending_in_progress_candle
+        self._pending_in_progress_candle = None
+        if pending is not None:
+            self.in_progress_candle(pending)
 
     def _drain_pending_completed_candle(self) -> None:
         pending = self._pending_completed_candle
