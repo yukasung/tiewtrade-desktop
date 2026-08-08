@@ -30,7 +30,6 @@ def candle_at(minute: int) -> Candle:
         high=Decimal("102"),
         low=Decimal("99"),
         close=Decimal("101"),
-        volume=Decimal("10"),
     )
 
 

@@ -191,7 +191,6 @@ def candle(
         high=max(open_value, close_value) + Decimal("3"),
         low=Decimal("99"),
         close=close_value,
-        volume=Decimal("1"),
     )
 
 

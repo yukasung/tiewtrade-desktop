@@ -14,7 +14,6 @@ class Candle:
     high: Decimal
     low: Decimal
     close: Decimal
-    volume: Decimal
 
     def __post_init__(self) -> None:
         interval = timeframe_to_interval(self.timeframe)
@@ -30,8 +29,6 @@ class Candle:
             self.open, self.close
         ):
             raise ValueError("OHLC range is invalid")
-        if self.volume < 0:
-            raise ValueError("volume must not be negative")
 
     @property
     def close_time(self) -> datetime:

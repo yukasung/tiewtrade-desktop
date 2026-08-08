@@ -321,7 +321,6 @@ def candles(
             high=Decimal("102"),
             low=Decimal("99"),
             close=Decimal("101"),
-            volume=Decimal("10"),
         )
         for minute in range(start, start + count * 5, 5)
     )

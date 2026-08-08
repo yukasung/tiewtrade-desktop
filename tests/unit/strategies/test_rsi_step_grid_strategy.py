@@ -24,7 +24,6 @@ def candle(minute: int, open_price: str, close_price: str) -> Candle:
         high=high,
         low=low,
         close=Decimal(close_price),
-        volume=Decimal("1"),
     )
 
 

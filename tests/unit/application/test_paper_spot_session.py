@@ -533,7 +533,6 @@ def candle(
         ),
         low=min(open_decimal, close_decimal) - Decimal("1"),
         close=close_decimal,
-        volume=Decimal("1"),
     )
 
 
@@ -566,7 +565,6 @@ def next_candle_after(previous: Candle) -> Candle:
         high=previous.close + Decimal("2"),
         low=previous.close - Decimal("1"),
         close=previous.close + Decimal("1"),
-        volume=Decimal("1"),
     )
 
 

@@ -152,5 +152,4 @@ def configured_candle(index: int, *, close: Decimal) -> Candle:
         high=max(open_price, close) + Decimal("1"),
         low=min(open_price, close) - Decimal("1"),
         close=close,
-        volume=Decimal("1"),
     )

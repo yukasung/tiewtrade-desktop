@@ -336,7 +336,6 @@ def configured_liquidation_candles() -> list[Candle]:
             high=Decimal("500"),
             low=Decimal("1"),
             close=last.close,
-            volume=Decimal("1"),
         )
     )
     return candles
@@ -357,5 +356,4 @@ def configured_candle(
         high=Decimal("500") if wide_range else max(open_price, close) + Decimal("1"),
         low=Decimal("50") if wide_range else min(open_price, close) - Decimal("1"),
         close=close,
-        volume=Decimal("1"),
     )

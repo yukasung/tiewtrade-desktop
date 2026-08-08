@@ -50,7 +50,6 @@ def completed_candle() -> Candle:
         high=Decimal("111"),
         low=Decimal("99"),
         close=Decimal("110"),
-        volume=Decimal("10"),
     )
 
 

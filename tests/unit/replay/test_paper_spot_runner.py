@@ -32,7 +32,6 @@ def test_replay_rejects_a_candle_that_the_session_does_not_accept() -> None:
         high=Decimal("102"),
         low=Decimal("99"),
         close=Decimal("100"),
-        volume=Decimal("1"),
     )
 
     with pytest.raises(ValueError, match="rejected candle"):

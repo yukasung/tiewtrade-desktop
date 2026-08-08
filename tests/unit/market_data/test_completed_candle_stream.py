@@ -22,7 +22,6 @@ def candle_at(minute: int, *, symbol: str = "BTCUSDT", timeframe: str = "5m") ->
         high=Decimal("102"),
         low=Decimal("99"),
         close=Decimal("101"),
-        volume=Decimal("10"),
     )
 
 
@@ -85,8 +84,21 @@ def test_candle_requires_utc_and_valid_ohlc() -> None:
             high=Decimal("102"),
             low=Decimal("99"),
             close=Decimal("101"),
-            volume=Decimal("10"),
         )
+
+
+def test_candle_is_an_ohlc_fact_without_volume() -> None:
+    candle = Candle(
+        symbol="BTCUSDT",
+        timeframe="5m",
+        open_time=datetime(2026, 1, 1, tzinfo=UTC),
+        open=Decimal("100"),
+        high=Decimal("102"),
+        low=Decimal("99"),
+        close=Decimal("101"),
+    )
+
+    assert not hasattr(candle, "volume")
 
 
 @pytest.mark.parametrize(
@@ -94,7 +106,6 @@ def test_candle_requires_utc_and_valid_ohlc() -> None:
     [
         ("open_time", datetime(2026, 1, 1, 0, 1, tzinfo=UTC), "timeframe boundary"),
         ("high", Decimal("100"), "OHLC range"),
-        ("volume", Decimal("-1"), "volume must not be negative"),
     ],
 )
 def test_candle_rejects_invalid_market_data(
@@ -108,7 +119,6 @@ def test_candle_rejects_invalid_market_data(
         "high": Decimal("102"),
         "low": Decimal("99"),
         "close": Decimal("101"),
-        "volume": Decimal("10"),
     }
     values[field] = value
 

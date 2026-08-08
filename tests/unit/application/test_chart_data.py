@@ -200,7 +200,6 @@ def candle(
         high=Decimal("106"),
         low=Decimal("99"),
         close=Decimal(close),
-        volume=Decimal("1.25"),
     )
 
 

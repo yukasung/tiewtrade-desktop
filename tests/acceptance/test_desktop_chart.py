@@ -207,7 +207,6 @@ def test_runtime_completed_candle_updates_chart_and_new_durable_fill_marker(
         high=Decimal("106"),
         low=Decimal("99"),
         close=Decimal("103"),
-        volume=Decimal("2"),
     )
 
     publisher.completed_candle(completed)

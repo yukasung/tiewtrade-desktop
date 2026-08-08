@@ -6,7 +6,7 @@ from pathlib import Path
 from tiewtrade.market_data.candle import Candle
 from tiewtrade.market_data.config import MarketDataConfig
 
-CSV_HEADER = ("open_time", "open", "high", "low", "close", "volume")
+CSV_HEADER = ("open_time", "open", "high", "low", "close")
 
 
 def load_candles_csv(path: Path, config: MarketDataConfig) -> tuple[Candle, ...]:
@@ -14,7 +14,7 @@ def load_candles_csv(path: Path, config: MarketDataConfig) -> tuple[Candle, ...]
         rows = csv.reader(source)
         header = next(rows, None)
         if header != list(CSV_HEADER):
-            raise ValueError("CSV header must be open_time,open,high,low,close,volume")
+            raise ValueError("CSV header must be open_time,open,high,low,close")
         candles = tuple(
             _parse_candle(row, row_number, config)
             for row_number, row in enumerate(rows, start=2)
@@ -26,14 +26,14 @@ def load_candles_csv(path: Path, config: MarketDataConfig) -> tuple[Candle, ...]
 
 def _parse_candle(row: list[str], row_number: int, config: MarketDataConfig) -> Candle:
     if len(row) != len(CSV_HEADER):
-        raise ValueError(f"invalid CSV row {row_number}: expected 6 columns")
+        raise ValueError(f"invalid CSV row {row_number}: expected 5 columns")
 
     try:
         open_time = datetime.fromisoformat(row[0])
-        open_price, high, low, close, volume = (Decimal(value) for value in row[1:])
-        values = (open_price, high, low, close, volume)
+        open_price, high, low, close = (Decimal(value) for value in row[1:])
+        values = (open_price, high, low, close)
         if not all(value.is_finite() for value in values):
-            raise ValueError("OHLCV values must be finite")
+            raise ValueError("OHLC values must be finite")
         return Candle(
             symbol=config.symbol,
             timeframe=config.timeframe,
@@ -42,7 +42,6 @@ def _parse_candle(row: list[str], row_number: int, config: MarketDataConfig) -> 
             high=high,
             low=low,
             close=close,
-            volume=volume,
         )
     except (InvalidOperation, ValueError) as error:
         raise ValueError(f"invalid CSV row {row_number}: {error}") from error

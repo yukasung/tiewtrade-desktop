@@ -66,7 +66,6 @@ def candle_at(minute: int, *, symbol: str = "BTCUSDT") -> Candle:
         high=Decimal("102"),
         low=Decimal("99"),
         close=Decimal("101"),
-        volume=Decimal("10"),
     )
 
 

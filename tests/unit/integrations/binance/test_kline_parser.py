@@ -44,9 +44,9 @@ def open_kline_payload() -> dict[str, object]:
     return payload
 
 
-def test_rest_kline_maps_exact_decimal_and_utc_values() -> None:
+def test_rest_kline_maps_ohlc_and_ignores_transport_volume() -> None:
     candle = parse_rest_kline(
-        [1767225600000, "100.10", "102.20", "99.90", "101.30", "12.50"],
+        [1767225600000, "100.10", "102.20", "99.90", "101.30", object()],
         config(),
     )
 
@@ -57,7 +57,7 @@ def test_rest_kline_maps_exact_decimal_and_utc_values() -> None:
     assert candle.high == Decimal("102.20")
     assert candle.low == Decimal("99.90")
     assert candle.close == Decimal("101.30")
-    assert candle.volume == Decimal("12.50")
+    assert not hasattr(candle, "volume")
 
 
 def test_rest_kline_rejects_timestamp_with_subsecond_remainder() -> None:
@@ -120,6 +120,19 @@ def test_closed_websocket_kline_maps_to_candle() -> None:
     assert candle is not None
     assert candle.open_time == datetime(2026, 1, 1, tzinfo=UTC)
     assert candle.close == Decimal("101.30")
+
+
+def test_closed_websocket_kline_ignores_transport_volume() -> None:
+    payload = closed_kline_payload()
+    kline = payload["k"]
+    assert isinstance(kline, dict)
+    kline["v"] = object()
+
+    candle = parse_websocket_kline(payload, config())
+
+    assert candle is not None
+    assert candle.close == Decimal("101.30")
+    assert not hasattr(candle, "volume")
 
 
 def test_open_websocket_kline_is_not_emitted() -> None:
@@ -195,6 +208,26 @@ def test_websocket_kline_with_mismatched_identity_is_rejected(
 def test_malformed_rest_kline_is_rejected(payload: list[object]) -> None:
     with pytest.raises(BinanceMarketDataPayloadError, match="invalid Binance"):
         parse_rest_kline(payload, config())
+
+
+def test_rest_kline_requires_only_timestamp_and_ohlc_fields() -> None:
+    with pytest.raises(BinanceMarketDataPayloadError) as captured:
+        parse_rest_kline(
+            [1767225600000, "100.10", "102.20", "99.90"],
+            config(),
+        )
+
+    assert isinstance(captured.value.__cause__, ValueError)
+    assert str(captured.value.__cause__) == (
+        "REST kline payload must contain at least 5 fields"
+    )
+
+    candle = parse_rest_kline(
+        [1767225600000, "100.10", "102.20", "99.90", "101.30"],
+        config(),
+    )
+
+    assert candle.close == Decimal("101.30")
 
 
 def test_malformed_websocket_kline_is_rejected() -> None:

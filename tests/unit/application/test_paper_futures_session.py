@@ -647,5 +647,4 @@ def candle(
             min(open_price, close_price) - Decimal("1") if low is None else Decimal(low)
         ),
         close=close_price,
-        volume=Decimal("1"),
     )

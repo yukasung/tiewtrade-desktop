@@ -384,7 +384,6 @@ def candle(
         high=Decimal(high) if high is not None else open_price,
         low=Decimal(low) if low is not None else open_price,
         close=open_price,
-        volume=Decimal("1"),
     )
 
 

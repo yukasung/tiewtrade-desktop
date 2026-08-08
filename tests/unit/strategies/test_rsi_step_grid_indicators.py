@@ -18,7 +18,6 @@ def candle(index: int, close: int) -> Candle:
         high=price + Decimal("1"),
         low=price - Decimal("1"),
         close=price,
-        volume=Decimal("1"),
     )
 
 

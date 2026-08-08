@@ -461,5 +461,4 @@ def candle(timeframe: str, minute: int) -> Candle:
         high=Decimal("106"),
         low=Decimal("99"),
         close=Decimal("103"),
-        volume=Decimal("1"),
     )

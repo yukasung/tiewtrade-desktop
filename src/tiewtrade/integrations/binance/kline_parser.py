@@ -16,12 +16,12 @@ def parse_rest_kline(payload: object, config: MarketDataConfig) -> Candle:
     try:
         if not isinstance(payload, list):
             raise ValueError("REST kline payload must be a list")
-        if len(payload) < 6:
-            raise ValueError("REST kline payload must contain at least 6 fields")
+        if len(payload) < 5:
+            raise ValueError("REST kline payload must contain at least 5 fields")
         return _candle_from_values(
-            payload[:6],
+            payload[:5],
             config,
-            field_names=("open_time", "open", "high", "low", "close", "volume"),
+            field_names=("open_time", "open", "high", "low", "close"),
         )
     except BinanceMarketDataPayloadError:
         raise
@@ -54,10 +54,9 @@ def parse_websocket_kline(payload: object, config: MarketDataConfig) -> Candle |
                 kline.get("h"),
                 kline.get("l"),
                 kline.get("c"),
-                kline.get("v"),
             ],
             config,
-            field_names=("k.t", "k.o", "k.h", "k.l", "k.c", "k.v"),
+            field_names=("k.t", "k.o", "k.h", "k.l", "k.c"),
         )
         if not is_closed:
             return None
@@ -72,7 +71,7 @@ def _candle_from_values(
     values: Sequence[object],
     config: MarketDataConfig,
     *,
-    field_names: tuple[str, str, str, str, str, str],
+    field_names: tuple[str, str, str, str, str],
 ) -> Candle:
     open_time = _utc_datetime(
         _required_milliseconds(values[0], name=field_names[0]), name=field_names[0]
@@ -85,7 +84,6 @@ def _candle_from_values(
         high=_decimal_from_string(values[2], name=field_names[2]),
         low=_decimal_from_string(values[3], name=field_names[3]),
         close=_decimal_from_string(values[4], name=field_names[4]),
-        volume=_decimal_from_string(values[5], name=field_names[5]),
     )
 
 

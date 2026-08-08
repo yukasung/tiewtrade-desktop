@@ -941,7 +941,6 @@ def _candle(index: int, *, close: Decimal) -> Candle:
         high=close + Decimal("1"),
         low=opened - Decimal("1"),
         close=close,
-        volume=Decimal("1"),
     )
 
 
