@@ -552,6 +552,11 @@ class PaperRuntimeController:
             and not self._thread_finished.is_set()
         )
 
+    def owns_active_runtime(self, session: ConfiguredPaperSession) -> bool:
+        """Report whether this process still owns the Session runtime worker."""
+        self._validate_session(session)
+        return self._owns_active_runtime(session)
+
     def _publish_blocked(
         self,
         *,
@@ -569,6 +574,16 @@ class PaperRuntimeController:
             workspace = current
         else:
             workspace = paper_runtime_blocked_workspace_snapshot(current)
+        with self._lock:
+            active_session = self._active_session
+        if active_session is not None:
+            try:
+                self._lifecycle.mark_blocked(
+                    active_session.config.session_id,
+                    self._clock(),
+                )
+            except Exception:
+                pass
         result = BotLifecycleResult(
             workspace=workspace,
             blocked_reason=reason,

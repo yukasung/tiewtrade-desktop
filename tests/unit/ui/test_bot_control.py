@@ -326,6 +326,33 @@ def test_default_stop_confirmation_is_destructive_and_default_safe(
     qtbot.waitUntil(widget.stop_button.hasFocus)
 
 
+def test_blocked_with_live_runtime_shows_disabled_new_session_action(
+    qtbot: QtBot,
+) -> None:
+    widget = BotControlWidget()
+    qtbot.addWidget(widget)
+    widget.show()
+    configured = configured_bot_control(
+        configured_spot_session(), observed_at_utc=datetime(2026, 8, 1, 12, tzinfo=UTC)
+    )
+
+    widget.show_snapshot(
+        BotControlSnapshot(
+            state=BotRuntimeState.BLOCKED,
+            session=configured.session,
+            workspace=workspace_with_runtime_state(
+                configured.workspace, BotRuntimeState.BLOCKED
+            ),
+            available_actions=frozenset({BotControlAction.RECOVER}),
+            blocked_reason="Paper Bot could not be stopped",
+        )
+    )
+
+    assert widget.new_session_button.isVisible()
+    assert not widget.new_session_button.isEnabled()
+    assert "Close and reopen" in widget.recovery_required.text()
+
+
 def test_decimal_text_is_context_independent_and_exact() -> None:
     with localcontext() as context:
         context.prec = 4

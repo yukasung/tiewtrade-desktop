@@ -644,7 +644,7 @@ def test_stop_closes_runtime_marks_stopped_and_preserves_basket(
     )
 
 
-def test_stop_timeout_blocks_without_writing_stopped_marker(
+def test_stop_timeout_persists_blocked_marker(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -674,7 +674,7 @@ def test_stop_timeout_blocks_without_writing_stopped_marker(
     assert result.blocked_reason == "Paper Bot could not be stopped"
     marker = SQLitePaperRuntimeLifecycle(database).read(session.config.session_id)
     assert marker is not None
-    assert marker.state is PaperRuntimeLifecycleState.RUNNING
+    assert marker.state is PaperRuntimeLifecycleState.BLOCKED
     source.release_close()
     assert source.closed.wait(1)
 
@@ -812,7 +812,7 @@ def test_recover_interrupted_running_marker_finishes_stopped_without_market_data
     )
 
 
-def test_recover_rejects_owned_running_runtime_without_changing_marker(
+def test_recover_rejects_owned_running_runtime_and_persists_blocked_marker(
     tmp_path: Path,
 ) -> None:
     session = configured_spot_session()
@@ -837,7 +837,7 @@ def test_recover_rejects_owned_running_runtime_without_changing_marker(
     assert result.blocked_reason == "Paper Bot recovery failed"
     marker = lifecycle.read(session.config.session_id)
     assert marker is not None
-    assert marker.state is PaperRuntimeLifecycleState.RUNNING
+    assert marker.state is PaperRuntimeLifecycleState.BLOCKED
     assert not source.closed.is_set()
 
     stopped = controller.stop(session)

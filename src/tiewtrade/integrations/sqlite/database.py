@@ -10,7 +10,7 @@ class UnsupportedDatabaseSchemaError(ValueError):
 
 
 class SQLiteDatabase:
-    _SCHEMA_VERSION = 5
+    _SCHEMA_VERSION = 6
     _BUSY_TIMEOUT_MS = 5_000
 
     def __init__(self, path: Path) -> None:
@@ -48,6 +48,8 @@ class SQLiteDatabase:
                     _create_bot_sessions_schema(connection)
                 if version in {0, 1, 2, 3}:
                     _create_paper_runtime_lifecycle_schema(connection)
+                if version == 5:
+                    _migrate_paper_runtime_lifecycle_v5(connection)
                 if version in {1, 2, 3, 4} and _table_exists(connection, "trade_fills"):
                     _create_chart_history_indexes(connection)
                 connection.execute(f"PRAGMA user_version = {self._SCHEMA_VERSION}")
@@ -197,8 +199,23 @@ def _create_paper_runtime_lifecycle_schema(connection: sqlite3.Connection) -> No
         """
         CREATE TABLE IF NOT EXISTS paper_runtime_lifecycle (
             session_id TEXT PRIMARY KEY REFERENCES bot_sessions(session_id),
-            state TEXT NOT NULL CHECK (state IN ('running', 'stopped')),
+            state TEXT NOT NULL CHECK (state IN ('running', 'stopped', 'blocked')),
             observed_at_utc TEXT NOT NULL
         )
         """
     )
+
+
+def _migrate_paper_runtime_lifecycle_v5(connection: sqlite3.Connection) -> None:
+    connection.execute(
+        "ALTER TABLE paper_runtime_lifecycle RENAME TO legacy_runtime_lifecycle"
+    )
+    _create_paper_runtime_lifecycle_schema(connection)
+    connection.execute(
+        """
+        INSERT INTO paper_runtime_lifecycle (session_id, state, observed_at_utc)
+        SELECT session_id, state, observed_at_utc
+        FROM legacy_runtime_lifecycle
+        """
+    )
+    connection.execute("DROP TABLE legacy_runtime_lifecycle")

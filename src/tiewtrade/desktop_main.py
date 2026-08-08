@@ -1,4 +1,5 @@
 from collections.abc import Callable
+from datetime import UTC, datetime
 from decimal import Decimal
 from pathlib import Path
 from threading import Event, Lock
@@ -166,6 +167,13 @@ class _PaperRuntimeActions:
             return
         self._stop_controller_if_needed(controller, session)
 
+    def new_session_available(self, session: ConfiguredPaperSession) -> bool:
+        with self._lock:
+            if self._operation is not None:
+                return False
+            controller = self._controller if self._session == session else None
+        return controller is None or not controller.owns_active_runtime(session)
+
     def _begin_operation(self, operation: str) -> None:
         with self._lock:
             if self._shutdown_requested:
@@ -314,6 +322,12 @@ def run_desktop(database_path: Path | None = None) -> int:
         prepare_database()
         return store.get_active()
 
+    def retire_after_migration(session: ConfiguredPaperSession) -> None:
+        prepare_database()
+        if not runtime_actions.new_session_available(session):
+            raise RuntimeError("Paper Runtime worker is still active")
+        store.retire(session.config.session_id, datetime.now(UTC))
+
     def list_baskets_after_migration(
         filters: TradeHistoryFilter,
         page: PageRequest,
@@ -387,6 +401,8 @@ def run_desktop(database_path: Path | None = None) -> int:
         start_bot=runtime_actions.start,
         stop_bot=runtime_actions.stop,
         recover_bot=runtime_actions.recover,
+        retire_session=retire_after_migration,
+        new_session_available=runtime_actions.new_session_available,
         initialize_bot=runtime_actions.initialize,
         runtime_snapshots=runtime_snapshots,
         shutdown_runtime=runtime_actions.shutdown,

@@ -48,10 +48,54 @@ def test_reader_can_read_committed_snapshot_while_writer_is_active(
 def test_migrate_reports_newer_schema_with_version_facts(tmp_path: Path) -> None:
     database = SQLiteDatabase(tmp_path / "tiewtrade.sqlite3")
     with database.connect() as connection:
-        connection.execute("PRAGMA user_version = 6")
+        connection.execute("PRAGMA user_version = 7")
 
     with pytest.raises(UnsupportedDatabaseSchemaError) as caught:
         database.migrate()
 
-    assert caught.value.database_version == 6
-    assert caught.value.supported_version == 5
+    assert caught.value.database_version == 7
+    assert caught.value.supported_version == 6
+
+
+def test_migrate_v5_rebuilds_lifecycle_constraint_for_blocked_state(
+    tmp_path: Path,
+) -> None:
+    database = SQLiteDatabase(tmp_path / "tiewtrade.sqlite3")
+    with database.connect() as connection:
+        connection.execute("CREATE TABLE bot_sessions (session_id TEXT PRIMARY KEY)")
+        connection.execute("INSERT INTO bot_sessions (session_id) VALUES ('session')")
+        connection.execute(
+            """
+            CREATE TABLE paper_runtime_lifecycle (
+                session_id TEXT PRIMARY KEY,
+                state TEXT NOT NULL CHECK (state IN ('running', 'stopped')),
+                observed_at_utc TEXT NOT NULL
+            )
+            """
+        )
+        connection.execute(
+            """
+            INSERT INTO paper_runtime_lifecycle (session_id, state, observed_at_utc)
+            VALUES ('session', 'stopped', '2026-08-08T00:00:00+00:00')
+            """
+        )
+        connection.execute("PRAGMA user_version = 5")
+
+    database.migrate()
+
+    with database.connect() as connection:
+        states = [
+            row["state"]
+            for row in connection.execute(
+                "SELECT state FROM paper_runtime_lifecycle ORDER BY session_id"
+            )
+        ]
+        connection.execute(
+            """
+            UPDATE paper_runtime_lifecycle
+            SET state = 'blocked', observed_at_utc = '2026-08-08T00:01:00+00:00'
+            WHERE session_id = 'session'
+            """
+        )
+
+    assert states == ["stopped"]

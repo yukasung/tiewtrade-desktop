@@ -449,7 +449,7 @@ def test_migration_creates_versioned_history_schema_and_indexes(tmp_path: Path) 
             for row in connection.execute("PRAGMA table_info(trade_fills)")
         }
 
-    assert version == 5
+    assert version == 6
     assert "paper_runtime_lifecycle" in table_names
     assert {"basket_results", "trade_fills"} <= table_names
     assert {
@@ -545,7 +545,7 @@ def test_migration_from_legacy_schema_adds_session_fill_history_index(
 def test_migration_rejects_future_schema_version(tmp_path: Path) -> None:
     database = SQLiteDatabase(tmp_path / "history.sqlite3")
     with database.connect() as connection:
-        connection.execute("PRAGMA user_version = 6")
+        connection.execute("PRAGMA user_version = 7")
 
     with pytest.raises(ValueError, match="newer than supported"):
         database.migrate()
@@ -615,7 +615,7 @@ def test_migration_from_v1_preserves_spot_basket_with_null_leverage(
             "SELECT leverage FROM basket_results WHERE basket_id = ?",
             (str(legacy.basket_id),),
         ).fetchone()[0]
-    assert version == 5
+    assert version == 6
     assert leverage is None
     assert SQLiteTradeHistory(database).get_basket(legacy.basket_id) == legacy
 

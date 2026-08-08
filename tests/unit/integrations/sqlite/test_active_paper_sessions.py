@@ -1,5 +1,6 @@
 import sqlite3
 from concurrent.futures import ThreadPoolExecutor
+from datetime import UTC, datetime
 from pathlib import Path
 from threading import Barrier
 from uuid import UUID
@@ -19,6 +20,48 @@ from tiewtrade.integrations.sqlite.active_paper_sessions import (
     SQLiteActivePaperSessions,
 )
 from tiewtrade.integrations.sqlite.database import SQLiteDatabase
+from tiewtrade.integrations.sqlite.paper_runtime_lifecycle import (
+    SQLitePaperRuntimeLifecycle,
+)
+
+
+def test_retire_stopped_session_removes_only_active_registration(
+    tmp_path: Path,
+) -> None:
+    database = SQLiteDatabase(tmp_path / "tiewtrade.sqlite3")
+    database.migrate()
+    store = SQLiteActivePaperSessions(database)
+    session = configured_spot_session()
+    store.create(session)
+    SQLitePaperRuntimeLifecycle(database).mark_stopped(
+        session.config.session_id, datetime(2026, 8, 8, 5, 0, tzinfo=UTC)
+    )
+
+    store.retire(session.config.session_id, datetime(2026, 8, 8, 5, 1, tzinfo=UTC))
+
+    assert store.get_active() is None
+    with database.connect() as connection:
+        row = connection.execute(
+            "SELECT ended_at_utc FROM bot_sessions WHERE session_id = ?",
+            (str(session.config.session_id),),
+        ).fetchone()
+    assert row["ended_at_utc"] == "2026-08-08T05:01:00+00:00"
+
+
+def test_retire_rejects_running_session_without_mutation(tmp_path: Path) -> None:
+    database = SQLiteDatabase(tmp_path / "tiewtrade.sqlite3")
+    database.migrate()
+    store = SQLiteActivePaperSessions(database)
+    session = configured_spot_session()
+    store.create(session)
+    SQLitePaperRuntimeLifecycle(database).mark_running(
+        session.config.session_id, datetime(2026, 8, 8, 5, 0, tzinfo=UTC)
+    )
+
+    with pytest.raises(PaperSessionUnavailableError, match="cannot be retired"):
+        store.retire(session.config.session_id, datetime(2026, 8, 8, 5, 1, tzinfo=UTC))
+
+    assert store.get_active() == session
 
 
 def test_create_and_restart_round_trip_exact_spot_session(tmp_path: Path) -> None:
@@ -122,7 +165,7 @@ def test_migration_from_v2_preserves_trade_history_record(tmp_path: Path) -> Non
             """
         ).fetchone()
 
-    assert version == 5
+    assert version == 6
     assert basket_id == "basket-sentinel"
     assert bot_sessions_exists is not None
 

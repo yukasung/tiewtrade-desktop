@@ -22,6 +22,7 @@ from tiewtrade.ui.background_task import BackgroundTask
 from tiewtrade.ui.notification_center import NotificationStore
 
 LifecycleAction = Callable[[BotControlSnapshot], BotLifecycleResult]
+NewSessionAvailability = Callable[[ConfiguredPaperSession], bool]
 
 
 class RuntimeSnapshotPublisher:
@@ -85,6 +86,7 @@ class BotLifecycleWorkflow(QObject):
         start_bot: LifecycleAction | None,
         stop_bot: LifecycleAction | None,
         recover: LifecycleAction | None,
+        new_session_available: NewSessionAvailability | None = None,
         initialize_bot: LifecycleAction | None = None,
         runtime_snapshots: RuntimeSnapshotRelay | None = None,
         thread_pool: QThreadPool | None = None,
@@ -95,6 +97,7 @@ class BotLifecycleWorkflow(QObject):
         self._start_bot = start_bot
         self._stop_bot = stop_bot
         self._recover = recover
+        self._new_session_available = new_session_available
         self._initialize_bot = initialize_bot
         self._runtime_snapshots = runtime_snapshots
         self._thread_pool = thread_pool or QThreadPool.globalInstance()
@@ -136,7 +139,7 @@ class BotLifecycleWorkflow(QObject):
             actions=(
                 frozenset()
                 if active_task or self._initialize_bot is not None
-                else self._actions_for(BotRuntimeState.CONFIGURED)
+                else self._actions_for(BotRuntimeState.CONFIGURED, session)
             ),
         )
         self._publish(configured)
@@ -275,7 +278,7 @@ class BotLifecycleWorkflow(QObject):
             state=header.runtime_state,
             session=current.session,
             workspace=result.workspace,
-            available_actions=self._actions_for(header.runtime_state),
+            available_actions=self._actions_for(header.runtime_state, current.session),
             blocked_reason=result.blocked_reason,
         )
 
@@ -291,7 +294,7 @@ class BotLifecycleWorkflow(QObject):
         return transition_bot_control(
             snapshot,
             result=result,
-            actions=self._actions_for(header.runtime_state),
+            actions=self._actions_for(header.runtime_state, snapshot.session),
         )
 
     @Slot(object)
@@ -326,7 +329,9 @@ class BotLifecycleWorkflow(QObject):
             self._publish(
                 replace(
                     snapshot,
-                    available_actions=self._actions_for(BotRuntimeState.CONFIGURED),
+                    available_actions=self._actions_for(
+                        BotRuntimeState.CONFIGURED, snapshot.session
+                    ),
                 )
             )
             self.busy_changed.emit(False)
@@ -346,7 +351,7 @@ class BotLifecycleWorkflow(QObject):
         blocked = blocked_bot_control(
             snapshot,
             reason=reason,
-            actions=self._actions_for(BotRuntimeState.BLOCKED),
+            actions=self._actions_for(BotRuntimeState.BLOCKED, snapshot.session),
         )
         self._publish(blocked)
         self._publish_notification(
@@ -394,7 +399,9 @@ class BotLifecycleWorkflow(QObject):
                 state=header.runtime_state,
                 session=current.session,
                 workspace=result.workspace,
-                available_actions=self._actions_for(header.runtime_state),
+                available_actions=self._actions_for(
+                    header.runtime_state, current.session
+                ),
                 blocked_reason=result.blocked_reason,
             )
         except ValueError:
@@ -424,14 +431,35 @@ class BotLifecycleWorkflow(QObject):
         if self._runtime_snapshots is not None:
             self._runtime_snapshots.invalidate()
 
-    def _actions_for(self, state: BotRuntimeState) -> frozenset[BotControlAction]:
+    def _actions_for(
+        self,
+        state: BotRuntimeState,
+        session: ConfiguredPaperSession,
+    ) -> frozenset[BotControlAction]:
         if state is BotRuntimeState.CONFIGURED and self._start_bot is not None:
             return frozenset({BotControlAction.START})
         if state is BotRuntimeState.RUNNING and self._stop_bot is not None:
             return frozenset({BotControlAction.STOP})
-        if state is BotRuntimeState.BLOCKED and self._recover is not None:
-            return frozenset({BotControlAction.RECOVER})
+        if state is BotRuntimeState.STOPPED:
+            return self._new_session_actions(session)
+        if state is BotRuntimeState.BLOCKED:
+            actions = set()
+            if self._recover is not None:
+                actions.add(BotControlAction.RECOVER)
+            actions.update(self._new_session_actions(session))
+            return frozenset(actions)
         return frozenset()
+
+    def _new_session_actions(
+        self, session: ConfiguredPaperSession
+    ) -> frozenset[BotControlAction]:
+        if self._new_session_available is None:
+            return frozenset()
+        return (
+            frozenset({BotControlAction.NEW_SESSION})
+            if self._new_session_available(session)
+            else frozenset()
+        )
 
     def _is_allowed_result(
         self,

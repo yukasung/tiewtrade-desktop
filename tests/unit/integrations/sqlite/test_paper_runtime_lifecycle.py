@@ -20,6 +20,7 @@ from tiewtrade.integrations.sqlite.paper_runtime_lifecycle import (
 SESSION_ID = UUID("00000000-0000-0000-0000-000000000123")
 RUNNING_AT = datetime(2026, 8, 2, 4, 15, tzinfo=UTC)
 STOPPED_AT = datetime(2026, 8, 2, 4, 45, tzinfo=UTC)
+BLOCKED_AT = datetime(2026, 8, 2, 5, 0, tzinfo=UTC)
 
 
 def test_read_returns_none_when_active_session_has_no_lifecycle_marker(
@@ -55,6 +56,16 @@ def test_running_and_stopped_markers_persist_exact_utc_facts_across_restart(
         session_id=SESSION_ID,
         state=PaperRuntimeLifecycleState.STOPPED,
         observed_at_utc=STOPPED_AT,
+    )
+
+    lifecycle.mark_blocked(SESSION_ID, BLOCKED_AT)
+
+    assert SQLitePaperRuntimeLifecycle(SQLiteDatabase(database_path)).read(
+        SESSION_ID
+    ) == PaperRuntimeLifecycleRecord(
+        session_id=SESSION_ID,
+        state=PaperRuntimeLifecycleState.BLOCKED,
+        observed_at_utc=BLOCKED_AT,
     )
 
 
@@ -110,7 +121,7 @@ def test_migration_from_v3_creates_lifecycle_marker_table(tmp_path: Path) -> Non
             for row in connection.execute("PRAGMA table_info(paper_runtime_lifecycle)")
         }
 
-    assert version == 5
+    assert version == 6
     assert columns == {"session_id", "state", "observed_at_utc"}
 
 
