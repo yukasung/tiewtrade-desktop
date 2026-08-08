@@ -249,6 +249,8 @@ def test_marker_labels_stay_visible_at_price_extrema_at_minimum_height(
 def test_previous_and_next_range_controls_are_keyboard_accessible(qtbot: QtBot) -> None:
     chart = CandlestickChartWidget()
     qtbot.addWidget(chart)
+    chart.resize(1200, 500)
+    chart.show()
     chart.show_snapshot(ready_snapshot())
     requests: list[ChartRange] = []
     chart.range_requested.connect(requests.append)
@@ -258,8 +260,27 @@ def test_previous_and_next_range_controls_are_keyboard_accessible(qtbot: QtBot) 
     chart.previous_range_button.setFocus()
     cast(Any, qtbot).keyClick(chart.previous_range_button, Qt.Key.Key_Space)
 
-    assert chart.next_range_button.accessibleName() == "Next chart range"
+    assert chart.previous_range_button.text() == "←"
+    assert chart.next_range_button.text() == "→"
+    assert chart.previous_range_button.width() == 44
+    assert chart.next_range_button.width() == 44
     assert chart.previous_range_button.accessibleName() == "Previous chart range"
+    assert chart.next_range_button.accessibleName() == "Next chart range"
+    assert (
+        chart.previous_range_button.geometry().left()
+        - chart._range.geometry().right()
+        - 1
+        == 12
+    )
+    assert (
+        chart.next_range_button.geometry().left()
+        - chart.previous_range_button.geometry().right()
+        - 1
+        == 8
+    )
+    surface = chart._chart_surface()
+    assert surface.top() >= chart.previous_range_button.geometry().bottom() + 24
+    assert surface.top() >= chart.next_range_button.geometry().bottom() + 24
     assert requests == [
         ChartRange(
             datetime(2025, 12, 31, 23, 40, tzinfo=UTC),

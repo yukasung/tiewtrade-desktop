@@ -104,6 +104,23 @@ QCalendarWidget QToolButton, QCalendarWidget QMenu {
     background: #1B2430;
     color: #F1F5F9;
 }
+QPushButton {
+    background: #1B2430;
+    border: 1px solid #3A4656;
+    border-radius: 6px;
+    color: #F1F5F9;
+    min-height: 36px;
+    padding: 0 14px;
+}
+QPushButton:hover {
+    background: #243044;
+    border-color: #4C7DFF;
+}
+QPushButton:disabled {
+    background: #151C25;
+    border-color: #2B3441;
+    color: #6F7D93;
+}
 QPushButton#primaryButton {
     background: #315CF4;
     border: 0;

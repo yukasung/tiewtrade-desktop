@@ -31,17 +31,25 @@ class CandlestickChartWidget(QWidget):
         self._snapshot: ChartSnapshot | None = None
         self._crosshair_position: QPointF | None = None
 
-        header = QHBoxLayout()
-        header.setContentsMargins(12, 10, 12, 0)
+        self._header = QHBoxLayout()
+        self._header.setContentsMargins(12, 10, 12, 0)
+        self._header.setSpacing(0)
         self._facts = QLabel("Chart")
         self._facts.setObjectName("chartFacts")
         self._range = QLabel()
         self._range.setObjectName("chartRange")
-        self.previous_range_button = QPushButton("Previous")
+        controls = QHBoxLayout()
+        controls.setSpacing(12)
+        controls.addWidget(self._range)
+        navigation = QHBoxLayout()
+        navigation.setSpacing(8)
+        self.previous_range_button = QPushButton("←")
         self.previous_range_button.setObjectName("previousRangeButton")
+        self.previous_range_button.setFixedWidth(44)
         self.previous_range_button.setAccessibleName("Previous chart range")
-        self.next_range_button = QPushButton("Next")
+        self.next_range_button = QPushButton("→")
         self.next_range_button.setObjectName("nextRangeButton")
+        self.next_range_button.setFixedWidth(44)
         self.next_range_button.setAccessibleName("Next chart range")
         self.retry_button = QPushButton("Retry")
         self.retry_button.setObjectName("chartRetryButton")
@@ -50,17 +58,18 @@ class CandlestickChartWidget(QWidget):
         self.previous_range_button.clicked.connect(self._request_previous_range)
         self.next_range_button.clicked.connect(self._request_next_range)
         self.retry_button.clicked.connect(self.retry_requested)
-        header.addWidget(self._facts)
-        header.addStretch()
-        header.addWidget(self._range)
-        header.addWidget(self.previous_range_button)
-        header.addWidget(self.next_range_button)
-        header.addWidget(self.retry_button)
+        navigation.addWidget(self.previous_range_button)
+        navigation.addWidget(self.next_range_button)
+        controls.addLayout(navigation)
+        controls.addWidget(self.retry_button)
+        self._header.addWidget(self._facts)
+        self._header.addStretch()
+        self._header.addLayout(controls)
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
-        layout.addLayout(header)
+        layout.addLayout(self._header)
         layout.addStretch()
 
     @property
@@ -78,7 +87,7 @@ class CandlestickChartWidget(QWidget):
         position = self._crosshair_position
         if snapshot is None or position is None or not snapshot.display_candles:
             return None
-        model = build_painter_model(snapshot, _chart_surface(self))
+        model = build_painter_model(snapshot, self._chart_surface())
         return crosshair_at(position, model)
 
     def show_snapshot(self, snapshot: ChartSnapshot) -> None:
@@ -110,7 +119,7 @@ class CandlestickChartWidget(QWidget):
         if snapshot is None:
             painter.end()
             return
-        surface = _chart_surface(self)
+        surface = self._chart_surface()
         if snapshot.state is ChartReadState.UNAVAILABLE:
             self._draw_message(
                 painter, surface, snapshot.message or "Chart is unavailable"
@@ -203,15 +212,20 @@ class CandlestickChartWidget(QWidget):
         self._draw_crosshair_label(painter, crosshair.price_label)
         self._draw_crosshair_label(painter, crosshair.time_label)
 
+    def _chart_surface(self) -> QRectF:
+        top = self._header.geometry().bottom() + 24
+        return QRectF(
+            12,
+            top,
+            max(1, self.width() - 24),
+            max(1, self.height() - top - 12),
+        )
+
     @staticmethod
     def _draw_crosshair_label(painter: QPainter, label: AxisTickGlyph) -> None:
         painter.fillRect(label.label_rect, QColor("#334155"))
         painter.setPen(QPen(QColor("#F8FAFC"), 1))
         painter.drawText(label.label_rect, 0x84, label.label)
-
-
-def _chart_surface(widget: QWidget) -> QRectF:
-    return QRectF(12, 54, max(1, widget.width() - 24), max(1, widget.height() - 66))
 
 
 def _range_text(chart_range: ChartRange) -> str:

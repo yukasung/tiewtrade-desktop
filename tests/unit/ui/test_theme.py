@@ -1,5 +1,5 @@
 from PySide6.QtGui import QColor, QPalette
-from PySide6.QtWidgets import QAbstractItemView, QLabel, QWidget
+from PySide6.QtWidgets import QAbstractItemView, QLabel, QPushButton, QWidget
 from pytestqt.qtbot import QtBot
 
 from tiewtrade.ui.theme import DARK_THEME
@@ -211,6 +211,21 @@ def test_compact_drawer_focus_renders_on_actionable_close_button(qtbot: QtBot) -
 
     assert workspace.bot_control_close_button.hasFocus()
     assert "#4c7dff" in _rendered_colors(workspace.bot_control_close_button)
+
+
+def test_unclassified_button_renders_a_visible_dark_theme_surface(
+    qtbot: QtBot,
+) -> None:
+    button = QPushButton("Previous")
+    qtbot.addWidget(button)
+    button.setStyleSheet(DARK_THEME)
+    button.resize(120, 40)
+    button.show()
+
+    colors = _rendered_colors(button)
+
+    assert "#1b2430" in colors
+    assert "#f1f5f9" in colors
 
 
 def _palette_color(widget: QWidget, role: QPalette.ColorRole) -> QColor:
