@@ -65,6 +65,40 @@ def test_painter_model_contains_only_price_candles_and_fill_markers() -> None:
     assert all(glyph.body.width() > 0 for glyph in model.candles)
 
 
+def test_marker_labels_stay_visible_at_price_extrema_at_minimum_height(
+    qtbot: QtBot,
+) -> None:
+    chart = CandlestickChartWidget()
+    qtbot.addWidget(chart)
+    chart.resize(640, chart.minimumHeight())
+    snapshot = ready_snapshot(
+        fills=(
+            fill(
+                "buy-high",
+                FillSide.BUY,
+                datetime(2026, 1, 1, 0, 5, tzinfo=UTC),
+                price="110",
+            ),
+            fill(
+                "sell-low",
+                FillSide.SELL,
+                datetime(2026, 1, 1, 0, 10, tzinfo=UTC),
+                price="90",
+            ),
+        )
+    )
+    surface = QRectF(12, 54, chart.width() - 24, chart.height() - 66)
+
+    model = chart_module._build_painter_model(snapshot, surface)
+
+    visible_bounds = QRectF(chart.rect())
+    assert [marker.label for marker in model.markers] == ["Buy", "Sell"]
+    for marker in model.markers:
+        assert visible_bounds.contains(marker.label_rect), (
+            f"{marker.label} label is outside the chart: {marker.label_rect}"
+        )
+
+
 def test_previous_and_next_range_controls_are_keyboard_accessible(qtbot: QtBot) -> None:
     chart = CandlestickChartWidget()
     qtbot.addWidget(chart)
@@ -157,7 +191,11 @@ def test_unavailable_chart_exposes_chart_specific_retry(qtbot: QtBot) -> None:
     assert retries == [True]
 
 
-def ready_snapshot(*, candles: tuple[Candle, ...] | None = None) -> ChartSnapshot:
+def ready_snapshot(
+    *,
+    candles: tuple[Candle, ...] | None = None,
+    fills: tuple[TradeFill, ...] | None = None,
+) -> ChartSnapshot:
     session = configured_spot_session()
     chart_range = ChartRange(
         datetime(2026, 1, 1, 0, 0, tzinfo=UTC),
@@ -170,7 +208,7 @@ def ready_snapshot(*, candles: tuple[Candle, ...] | None = None) -> ChartSnapsho
         chart_range=chart_range,
         observed_at_utc=chart_range.end,
         candles=candles or (candle(0), candle(5), candle(10)),
-        fills=(buy, sell),
+        fills=fills or (buy, sell),
         state=ChartReadState.READY,
     )
 
@@ -194,7 +232,13 @@ def candle(
     )
 
 
-def fill(fill_id: str, side: FillSide, filled_at_utc: datetime) -> TradeFill:
+def fill(
+    fill_id: str,
+    side: FillSide,
+    filled_at_utc: datetime,
+    *,
+    price: str = "102",
+) -> TradeFill:
     from tests.support.trade_history_records import trade_fill
 
     return trade_fill(
@@ -202,7 +246,7 @@ def fill(fill_id: str, side: FillSide, filled_at_utc: datetime) -> TradeFill:
         side=side,
         session_id=configured_spot_session().config.session_id,
         filled_at_utc=filled_at_utc,
-        price=Decimal("102"),
+        price=Decimal(price),
         quantity=Decimal("2"),
-        notional=Decimal("204"),
+        notional=Decimal(price) * Decimal("2"),
     )

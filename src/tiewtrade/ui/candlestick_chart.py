@@ -235,10 +235,22 @@ def _build_painter_model(
             QPointF(x - 6, y + 2 if is_buy else y - 2),
             QPointF(x + 6, y + 2 if is_buy else y - 2),
         )
+        label_height = 16.0
+        preferred_label_top = y - 28 if is_buy else y + 10
+        alternate_label_top = y + 10 if is_buy else y - 28
+        label_top = preferred_label_top
+        if not (
+            surface.top() <= label_top and label_top + label_height <= surface.bottom()
+        ):
+            label_top = alternate_label_top
+        label_top = min(
+            max(label_top, surface.top()),
+            surface.bottom() - label_height,
+        )
         markers.append(
             MarkerGlyph(
                 triangle=triangle,
-                label_rect=QRectF(x - 22, y - 28 if is_buy else y + 10, 44, 16),
+                label_rect=QRectF(x - 22, label_top, 44, label_height),
                 label="Buy" if is_buy else "Sell",
                 color=color,
             )
