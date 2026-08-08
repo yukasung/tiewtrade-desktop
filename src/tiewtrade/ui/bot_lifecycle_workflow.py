@@ -35,12 +35,16 @@ class RuntimeSnapshotPublisher:
     def completed_candle(self, candle: ChartCandle) -> None:
         self._relay.completed_candle_ready.emit(candle, self._generation)
 
+    def in_progress_candle(self, candle: ChartCandle) -> None:
+        self._relay.in_progress_candle_ready.emit(candle, self._generation)
+
 
 class RuntimeSnapshotRelay(QObject):
     """Queue immutable runtime results onto the owning Qt thread."""
 
     snapshot_ready = Signal(object, int)
     completed_candle_ready = Signal(object, int)
+    in_progress_candle_ready = Signal(object, int)
 
     def __init__(self, parent: QObject | None = None) -> None:
         super().__init__(parent)

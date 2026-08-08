@@ -255,11 +255,17 @@ class QueuedPublicCandleSource(ControllablePublicCandleSource):
         self.closed.set()
 
     def emit(self, candle: Candle) -> None:
+        self._emit(MarketDataKlineUpdate(candle=candle, is_closed=True))
+
+    def emit_open(self, candle: Candle) -> None:
+        self._emit(MarketDataKlineUpdate(candle=candle, is_closed=False))
+
+    def _emit(self, update: MarketDataKlineUpdate) -> None:
         assert self.stream_ready.wait(1)
         assert self._queue_loop is not None
         assert self._queue is not None
         asyncio.run_coroutine_threadsafe(
-            self._queue.put(MarketDataKlineUpdate(candle=candle, is_closed=True)),
+            self._queue.put(update),
             self._queue_loop,
         ).result(timeout=1)
 
@@ -270,6 +276,61 @@ class QueuedPublicCandleSource(ControllablePublicCandleSource):
         while True:
             yield await self._queue.get()
             self.delivery_completed.set()
+
+
+def test_in_progress_candle_is_published_without_changing_workspace(
+    tmp_path: Path,
+) -> None:
+    session = configured_spot_session()
+    database = _database_with_session(tmp_path, session)
+    source = QueuedPublicCandleSource(warm_up=_warm_up_candles())
+    in_progress_candles: list[Candle] = []
+    controller = PaperRuntimeController(
+        lifecycle=SQLitePaperRuntimeLifecycle(database),
+        trade_history=SQLiteTradeHistory(database),
+        symbol_rules=_symbol_rules(),
+        source_factory=lambda _endpoints: source,
+        scheduler=ImmediateScheduler(),
+        snapshot_callback=lambda _snapshot: None,
+        in_progress_candle_callback=in_progress_candles.append,
+    )
+    controller.start(session)
+    before = controller.current_workspace
+    forming = _candle(15, close=Decimal("87.25"))
+
+    source.emit_open(forming)
+
+    assert source.delivery_completed.wait(1)
+    assert in_progress_candles == [forming]
+    assert controller.current_workspace == before
+    controller.stop(session)
+
+
+def test_in_progress_candle_observer_failure_does_not_block_runtime(
+    tmp_path: Path,
+) -> None:
+    session = configured_spot_session()
+    database = _database_with_session(tmp_path, session)
+    source = QueuedPublicCandleSource(warm_up=_warm_up_candles())
+    controller = PaperRuntimeController(
+        lifecycle=SQLitePaperRuntimeLifecycle(database),
+        trade_history=SQLiteTradeHistory(database),
+        symbol_rules=_symbol_rules(),
+        source_factory=lambda _endpoints: source,
+        scheduler=ImmediateScheduler(),
+        snapshot_callback=lambda _snapshot: None,
+        in_progress_candle_callback=lambda _candle: _raise_callback_failure(),
+    )
+    controller.start(session)
+
+    source.emit_open(_candle(15, close=Decimal("87.25")))
+
+    assert source.delivery_completed.wait(1)
+    assert controller.current_result.workspace.header is not None
+    assert controller.current_result.workspace.header.runtime_state is (
+        BotRuntimeState.RUNNING
+    )
+    controller.stop(session)
 
 
 @pytest.mark.parametrize("market_type", [MarketType.SPOT, MarketType.FUTURES])

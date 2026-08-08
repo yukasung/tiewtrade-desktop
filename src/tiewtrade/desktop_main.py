@@ -237,6 +237,7 @@ class _PaperRuntimeActions:
             source_factory=BinancePublicMarketData,
             snapshot_callback=publish_current_result,
             completed_candle_callback=publish.completed_candle,
+            in_progress_candle_callback=publish.in_progress_candle,
         )
         return controller
 

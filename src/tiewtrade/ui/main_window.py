@@ -125,6 +125,10 @@ class MainWindow(QMainWindow):
                 self._runtime_completed_candle,
                 Qt.ConnectionType.QueuedConnection,
             )
+            runtime_snapshots.in_progress_candle_ready.connect(
+                self._runtime_in_progress_candle,
+                Qt.ConnectionType.QueuedConnection,
+            )
 
         self._history_started = False
         self._history_workflow = TradeHistoryWorkflow(
@@ -168,6 +172,15 @@ class MainWindow(QMainWindow):
         if runtime_snapshots is None or not runtime_snapshots.is_current(generation):
             return
         self._chart_workflow.completed_candle(candle)
+
+    @Slot(object, int)
+    def _runtime_in_progress_candle(self, candle: object, generation: int) -> None:
+        runtime_snapshots = self._runtime_snapshots
+        if runtime_snapshots is None or not runtime_snapshots.is_current(generation):
+            return
+        callback = getattr(self._chart_workflow, "in_progress_candle", None)
+        if callback is not None:
+            callback(candle)
 
     @Slot(str, str)
     def _show_validation_error(self, field: str, message: str) -> None:

@@ -1,6 +1,7 @@
 from datetime import UTC, datetime
 from decimal import Decimal
 
+import pytest
 from PySide6.QtWidgets import QPushButton
 from pytestqt.qtbot import QtBot
 
@@ -139,8 +140,9 @@ def test_chart_failure_does_not_stop_runtime_or_trade_history(qtbot: QtBot) -> N
     assert window.workspace.tabs.currentWidget() is window.trade_history
 
 
-def test_runtime_completed_candle_updates_chart_and_new_durable_fill_marker(
+def test_runtime_candles_reach_chart_only_from_current_generation(
     qtbot: QtBot,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     session = configured_spot_session()
     relay = RuntimeSnapshotRelay()
@@ -149,6 +151,7 @@ def test_runtime_completed_candle_updates_chart_and_new_durable_fill_marker(
     relay.completed_candle_ready.connect(
         lambda candle, _generation: relayed.append(candle)
     )
+    in_progress: list[Candle] = []
 
     async def load_chart(
         configured: ConfiguredPaperSession, chart_range: ChartRange
@@ -198,7 +201,23 @@ def test_runtime_completed_candle_updates_chart_and_new_durable_fill_marker(
     qtbot.addWidget(window)
     window.show()
     qtbot.waitUntil(lambda: window.workspace.chart._snapshot is not None)
+    monkeypatch.setattr(
+        window._chart_workflow,
+        "in_progress_candle",
+        in_progress.append,
+        raising=False,
+    )
+    stale_publisher = relay.new_generation()
     publisher = relay.new_generation()
+    forming = Candle(
+        symbol="BTCUSDT",
+        timeframe="5m",
+        open_time=datetime(2026, 8, 2, 10, 0, tzinfo=UTC),
+        open=Decimal("100"),
+        high=Decimal("104"),
+        low=Decimal("99"),
+        close=Decimal("102"),
+    )
     completed = Candle(
         symbol="BTCUSDT",
         timeframe="5m",
@@ -209,8 +228,11 @@ def test_runtime_completed_candle_updates_chart_and_new_durable_fill_marker(
         close=Decimal("103"),
     )
 
+    stale_publisher.in_progress_candle(forming)
+    publisher.in_progress_candle(forming)
     publisher.completed_candle(completed)
 
+    qtbot.waitUntil(lambda: in_progress == [forming])
     qtbot.waitUntil(lambda: relayed == [completed])
     qtbot.waitUntil(lambda: refreshed == [completed])
     qtbot.waitUntil(lambda: window.workspace.chart.marker_labels == ("Buy",))

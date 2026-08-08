@@ -16,6 +16,7 @@ from tiewtrade.application.bot_control import (
     BotLifecycleResult,
     workspace_with_runtime_state,
 )
+from tiewtrade.application.chart_data import ChartCandle
 from tiewtrade.application.trading_workspace import (
     BasketSnapshot,
     BotRuntimeState,
@@ -37,6 +38,30 @@ from tiewtrade.ui.bot_lifecycle_workflow import (
 from tiewtrade.ui.notification_center import NotificationCategory, NotificationSeverity
 
 OBSERVED_AT = datetime(2026, 8, 1, 12, tzinfo=UTC)
+
+
+def chart_candle() -> ChartCandle:
+    return ChartCandle(
+        symbol="BTCUSDT",
+        timeframe="5m",
+        open_time=datetime(2026, 8, 1, 12, tzinfo=UTC),
+        open=Decimal("100"),
+        high=Decimal("103"),
+        low=Decimal("99"),
+        close=Decimal("102"),
+    )
+
+
+def test_runtime_publisher_emits_in_progress_candle_with_generation() -> None:
+    relay = RuntimeSnapshotRelay()
+    received: list[tuple[ChartCandle, int]] = []
+    relay.in_progress_candle_ready.connect(
+        lambda candle, generation: received.append((candle, generation))
+    )
+
+    relay.new_generation().in_progress_candle(chart_candle())
+
+    assert received == [(chart_candle(), 1)]
 
 
 def _workflow(
