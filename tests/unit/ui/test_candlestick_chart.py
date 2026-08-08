@@ -61,6 +61,7 @@ def test_painter_model_contains_only_price_candles_and_fill_markers() -> None:
         "time_ticks",
         "candles",
         "markers",
+        "current_price",
     ]
     assert min(min(glyph.wick.y1(), glyph.wick.y2()) for glyph in model.candles) > (
         model.plot_surface.top()
@@ -173,7 +174,6 @@ def test_painter_draws_forming_candle_in_normal_bullish_style() -> None:
         ),
         QRectF(0, 0, 600, 300),
     )
-
     assert len(model.candles) == 2
     assert model.candles[-1].color == QColor("#0ECB81")
     assert model.candles[-1].body.center().x() < 600
@@ -181,6 +181,21 @@ def test_painter_draws_forming_candle_in_normal_bullish_style() -> None:
         min(model.candles[-1].wick.y1(), model.candles[-1].wick.y2())
         > model.plot_surface.top()
     )
+
+
+def test_forming_candle_exposes_colored_current_price_label() -> None:
+    model = chart_module._build_painter_model(
+        ready_snapshot(in_progress_candle=candle(20, close_price="103")),
+        QRectF(0, 0, 600, 300),
+    )
+
+    assert model.current_price is not None
+    assert model.current_price.price_text == "103.00"
+    assert model.current_price.remaining_text == "05:00"
+    assert model.current_price.color == QColor("#0ECB81")
+    assert model.plot_surface.contains(model.current_price.line.p1())
+    assert model.plot_surface.contains(model.current_price.line.p2())
+    assert model.current_price.label_rect.left() >= model.plot_surface.right()
 
 
 def test_marker_labels_stay_visible_at_price_extrema_at_minimum_height(
