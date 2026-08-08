@@ -454,8 +454,8 @@ def _time_ticks(
     labels: list[AxisTickGlyph] = []
     duration = chart_range.end - chart_range.start
     label_top = plot_surface.bottom() + 5
-    label_width = 72.0
-    tick_count = min(6, max(2, int(plot_surface.width() // label_width) + 1))
+    label_width = 56.0
+    tick_count = min(12, max(2, int(plot_surface.width() // (label_width * 1.5)) + 1))
     for index in range(tick_count):
         ratio = index / (tick_count - 1)
         value = chart_range.start + duration * ratio
@@ -542,7 +542,7 @@ def _price_text(value: Decimal) -> str:
 
 
 def _time_text(value: datetime) -> str:
-    return f"{value:%H:%M} UTC"
+    return f"{value:%H:%M}"
 
 
 def _remaining_time_text(value: timedelta) -> str:

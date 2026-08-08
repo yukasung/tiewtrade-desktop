@@ -83,9 +83,13 @@ def test_painter_model_reserves_axis_space_and_exposes_ticks() -> None:
     assert model.plot_surface.right() < 600
     assert model.plot_surface.bottom() < 300
     assert len(model.price_ticks) == 5
-    assert len(model.time_ticks) in {5, 6}
-    assert all(tick.label.endswith("UTC") for tick in model.time_ticks)
-    assert all(not tick.label.startswith("2026-") for tick in model.time_ticks)
+    assert len(model.time_ticks) > 6
+    assert all("UTC" not in tick.label for tick in model.time_ticks)
+    assert all(len(tick.label) == 5 for tick in model.time_ticks)
+    assert all(
+        left.label_rect.right() <= right.label_rect.left()
+        for left, right in zip(model.time_ticks, model.time_ticks[1:], strict=False)
+    )
 
 
 def test_mouse_over_plot_shows_crosshair_price_and_time(qtbot: QtBot) -> None:
