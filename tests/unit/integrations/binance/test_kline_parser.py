@@ -114,12 +114,12 @@ def test_rest_kline_preserves_public_error_with_open_field_diagnostic() -> None:
     assert str(captured.value.__cause__) == "open must be a finite decimal string"
 
 
-def test_closed_websocket_kline_maps_to_candle() -> None:
-    candle = parse_websocket_kline(closed_kline_payload(), config())
+def test_closed_websocket_kline_maps_to_closed_update() -> None:
+    update = parse_websocket_kline(closed_kline_payload(), config())
 
-    assert candle is not None
-    assert candle.open_time == datetime(2026, 1, 1, tzinfo=UTC)
-    assert candle.close == Decimal("101.30")
+    assert update.is_closed is True
+    assert update.candle.open_time == datetime(2026, 1, 1, tzinfo=UTC)
+    assert update.candle.close == Decimal("101.30")
 
 
 def test_closed_websocket_kline_ignores_transport_volume() -> None:
@@ -128,15 +128,19 @@ def test_closed_websocket_kline_ignores_transport_volume() -> None:
     assert isinstance(kline, dict)
     kline["v"] = object()
 
-    candle = parse_websocket_kline(payload, config())
+    update = parse_websocket_kline(payload, config())
 
-    assert candle is not None
-    assert candle.close == Decimal("101.30")
-    assert not hasattr(candle, "volume")
+    assert update.is_closed is True
+    assert update.candle.close == Decimal("101.30")
+    assert not hasattr(update.candle, "volume")
 
 
-def test_open_websocket_kline_is_not_emitted() -> None:
-    assert parse_websocket_kline(open_kline_payload(), config()) is None
+def test_open_websocket_kline_maps_to_open_update() -> None:
+    update = parse_websocket_kline(open_kline_payload(), config())
+
+    assert update.is_closed is False
+    assert update.candle.open_time == datetime(2026, 1, 1, tzinfo=UTC)
+    assert not hasattr(update.candle, "volume")
 
 
 def test_websocket_kline_preserves_public_error_for_out_of_range_open_time() -> None:

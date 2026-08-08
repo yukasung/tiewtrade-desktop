@@ -1,9 +1,16 @@
 from collections.abc import AsyncIterator
+from dataclasses import dataclass
 from datetime import datetime
 from typing import Protocol
 
 from tiewtrade.market_data.candle import Candle
 from tiewtrade.market_data.config import MarketDataConfig
+
+
+@dataclass(frozen=True, slots=True)
+class MarketDataKlineUpdate:
+    candle: Candle
+    is_closed: bool
 
 
 class HistoricalCandleSource(Protocol):
@@ -27,7 +34,9 @@ class HistoricalCandleSource(Protocol):
 
 
 class LiveCandleSource(Protocol):
-    def stream_completed(self, config: MarketDataConfig) -> AsyncIterator[Candle]: ...
+    def stream_klines(
+        self, config: MarketDataConfig
+    ) -> AsyncIterator[MarketDataKlineUpdate]: ...
 
 
 class MarketDataCandleSource(HistoricalCandleSource, LiveCandleSource, Protocol):

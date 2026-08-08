@@ -6,6 +6,7 @@ from tiewtrade.integrations.binance.public_endpoints import (
     BinanceMarketDataPayloadError,
 )
 from tiewtrade.market_data.candle import Candle
+from tiewtrade.market_data.candle_source import MarketDataKlineUpdate
 from tiewtrade.market_data.config import MarketDataConfig
 
 _INVALID_PAYLOAD_MESSAGE = "invalid Binance market-data payload"
@@ -29,8 +30,10 @@ def parse_rest_kline(payload: object, config: MarketDataConfig) -> Candle:
         raise BinanceMarketDataPayloadError(_INVALID_PAYLOAD_MESSAGE) from error
 
 
-def parse_websocket_kline(payload: object, config: MarketDataConfig) -> Candle | None:
-    """Normalize a valid closed WebSocket kline; ignore valid open updates."""
+def parse_websocket_kline(
+    payload: object, config: MarketDataConfig
+) -> MarketDataKlineUpdate:
+    """Normalize one Binance WebSocket kline into a validated stateful update."""
     try:
         if not isinstance(payload, Mapping):
             raise ValueError("WebSocket kline payload must be an object")
@@ -58,9 +61,7 @@ def parse_websocket_kline(payload: object, config: MarketDataConfig) -> Candle |
             config,
             field_names=("k.t", "k.o", "k.h", "k.l", "k.c"),
         )
-        if not is_closed:
-            return None
-        return candle
+        return MarketDataKlineUpdate(candle=candle, is_closed=is_closed)
     except BinanceMarketDataPayloadError:
         raise
     except (InvalidOperation, OverflowError, TypeError, ValueError) as error:

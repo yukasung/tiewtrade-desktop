@@ -14,6 +14,7 @@ from tiewtrade.integrations.binance.public_endpoints import (
     BinancePublicEndpoints,
 )
 from tiewtrade.market_data.candle import Candle
+from tiewtrade.market_data.candle_source import MarketDataKlineUpdate
 from tiewtrade.market_data.config import MarketDataConfig
 from tiewtrade.market_data.source_errors import (
     MarketDataFailureKind,
@@ -209,9 +210,9 @@ class BinancePublicMarketData:
                 kind=MarketDataFailureKind.TRANSPORT,
             ) from error
 
-    async def _stream_completed(
+    async def _stream_klines(
         self, config: MarketDataConfig
-    ) -> AsyncIterator[Candle]:
+    ) -> AsyncIterator[MarketDataKlineUpdate]:
         session = self._network_session()
         stream_url = (
             f"{self._endpoints.websocket_base_url}/"
@@ -222,9 +223,7 @@ class BinancePublicMarketData:
                 async for message in websocket:
                     if message.type is aiohttp.WSMsgType.TEXT:
                         payload = json.loads(message.data)
-                        candle = parse_websocket_kline(payload, config)
-                        if candle is not None:
-                            yield candle
+                        yield parse_websocket_kline(payload, config)
                     elif message.type in {
                         aiohttp.WSMsgType.CLOSE,
                         aiohttp.WSMsgType.CLOSED,
@@ -289,8 +288,10 @@ class BinancePublicMarketData:
                 kind=MarketDataFailureKind.PAYLOAD,
             ) from error
 
-    def stream_completed(self, config: MarketDataConfig) -> AsyncIterator[Candle]:
-        return self._stream_completed(config)
+    def stream_klines(
+        self, config: MarketDataConfig
+    ) -> AsyncIterator[MarketDataKlineUpdate]:
+        return self._stream_klines(config)
 
     def _network_session(self) -> aiohttp.ClientSession:
         if self._closed:
