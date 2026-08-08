@@ -35,10 +35,12 @@ Bot Control แสดงปุ่ม `New Session` เฉพาะเมื่�
 
 ## Architecture
 
-เพิ่ม focused application use case สำหรับ retire current active Paper Session แล้ว
-ปล่อยให้ Session Setup use case สร้าง Active Session ใหม่ในขั้นตอนถัดไป. การ retire
-ตรวจ lifecycle marker ของ Session เดิมภายใน SQLite transaction เดียว: อนุญาตเฉพาะ
-`STOPPED` หรือ `BLOCKED`; ถ้า state เปลี่ยน, ไม่มี active session หรือ persistence
+เพิ่ม `blocked` เป็น durable `PaperRuntimeLifecycleState` และบันทึกเมื่อ Paper Runtime
+เปลี่ยนเป็น `Blocked`; schema migration ต้องรองรับ database เดิมที่มี CHECK constraint
+เฉพาะ `running`/`stopped`. เพิ่ม focused application use case สำหรับ retire current active
+Paper Session แล้วปล่อยให้ Session Setup use case สร้าง Active Session ใหม่ในขั้นตอนถัดไป.
+การ retire ตรวจ lifecycle marker ของ Session เดิมภายใน SQLite transaction เดียว: อนุญาต
+เฉพาะ `STOPPED` หรือ `BLOCKED`; ถ้า state เปลี่ยน, ไม่มี active session หรือ persistence
 ล้มเหลว ต้อง rollback ทั้งหมดและไม่ลบ active record.
 
 SQLite เก็บ Session facts และ Trade History เดิมแบบ immutable; การ retire เปลี่ยนเพียง
@@ -52,6 +54,7 @@ Session Setup. Session ใหม่จะผ่าน validation และ `Crea
 ```text
 Stopped / Blocked Bot Control
   -> New Session confirmation
+  -> PaperRuntimeLifecycle durable state is stopped / blocked
   -> RetireActivePaperSession(session_id)
   -> SQLite transaction verifies lifecycle state and removes active registry row
   -> UI invalidates old runtime/chart generation
@@ -66,6 +69,8 @@ Trade History write path.
 ## Failure Handling
 
 - confirm ระหว่าง lifecycle state ที่ไม่ใช่ `Stopped`/`Blocked`: reject without mutation
+- runtime fail-closed ต้อง persist `blocked` ก่อน UI เปิด New Session; หาก persist ไม่สำเร็จ
+  ให้คง fail-closed behavior และไม่อนุญาต retire
 - SQLite failure: rollback; active Session เดิมยัง load ได้หลัง restart
 - Session Setup validation failure: Session เก่าเป็น retired แล้ว แต่ไม่มี Session ใหม่
   ถูกสร้าง และ Setup แสดง field error ตาม behavior เดิม
@@ -74,8 +79,8 @@ Trade History write path.
 
 ## Verification
 
-1. unit tests สำหรับ lifecycle policy: permit only `STOPPED`/`BLOCKED` และ reject
-   `RUNNING`/transition states
+1. unit tests สำหรับ lifecycle policy: durable `BLOCKED` persistence, permit only
+   `STOPPED`/`BLOCKED` และ reject `RUNNING`/transition states
 2. SQLite integration tests: retire ไม่ลบ Session/Basket/Fill, atomic rollback และ
    restart หลัง retire ไม่มี active session
 3. UI tests: action visibility, cancel, success-to-setup, failure behavior และ busy state
