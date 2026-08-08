@@ -1,6 +1,7 @@
 from dataclasses import fields
 from datetime import UTC, datetime
 from decimal import Decimal
+from pathlib import Path
 from typing import Any, cast
 
 from PySide6.QtCore import QPoint, QRectF, Qt
@@ -8,7 +9,7 @@ from PySide6.QtGui import QColor
 from PySide6.QtWidgets import QPushButton
 from pytestqt.qtbot import QtBot
 
-import tiewtrade.ui.candlestick_chart as chart_module
+import tiewtrade.ui.chart_painter_model as chart_module
 from tests.support.paper_session_setup import configured_spot_session
 from tiewtrade.application.chart_data import (
     ChartRange,
@@ -18,6 +19,15 @@ from tiewtrade.application.chart_data import (
 from tiewtrade.market_data.candle import Candle
 from tiewtrade.trading.trade_history import FillSide, TradeFill
 from tiewtrade.ui.candlestick_chart import CandlestickChartWidget
+
+
+def test_painter_model_is_pure_and_widget_imports_its_public_api() -> None:
+    model_source = Path("src/tiewtrade/ui/chart_painter_model.py").read_text()
+    widget_source = Path("src/tiewtrade/ui/candlestick_chart.py").read_text()
+
+    assert "QWidget" not in model_source
+    assert "QPainter" not in model_source
+    assert "from tiewtrade.ui.chart_painter_model import" in widget_source
 
 
 def test_chart_renders_durable_buy_and_sell_markers_without_action_buttons(
@@ -44,7 +54,7 @@ def test_painter_model_contains_only_price_candles_and_fill_markers() -> None:
         )
     )
 
-    model = chart_module._build_painter_model(snapshot, QRectF(0, 0, 300, 200))
+    model = chart_module.build_painter_model(snapshot, QRectF(0, 0, 300, 200))
 
     assert [field.name for field in fields(chart_module.CandleGlyph)] == [
         "wick",
@@ -78,7 +88,7 @@ def test_painter_model_contains_only_price_candles_and_fill_markers() -> None:
 
 
 def test_painter_model_reserves_axis_space_and_exposes_ticks() -> None:
-    model = chart_module._build_painter_model(ready_snapshot(), QRectF(0, 0, 600, 300))
+    model = chart_module.build_painter_model(ready_snapshot(), QRectF(0, 0, 600, 300))
 
     assert model.plot_surface.right() < 600
     assert model.plot_surface.bottom() < 300
@@ -121,7 +131,7 @@ def test_crosshair_hides_outside_plot_area(qtbot: QtBot) -> None:
 
 
 def test_candles_and_markers_remain_inside_plot_not_axis_space() -> None:
-    model = chart_module._build_painter_model(ready_snapshot(), QRectF(0, 0, 600, 300))
+    model = chart_module.build_painter_model(ready_snapshot(), QRectF(0, 0, 600, 300))
 
     assert all(
         model.plot_surface.contains(glyph.body.center()) for glyph in model.candles
@@ -133,7 +143,7 @@ def test_candles_and_markers_remain_inside_plot_not_axis_space() -> None:
 
 
 def test_chart_geometry_pads_extrema_and_keeps_end_candle_inside_plot() -> None:
-    model = chart_module._build_painter_model(
+    model = chart_module.build_painter_model(
         ready_snapshot(candles=(candle(0), candle(15))), QRectF(0, 0, 600, 300)
     )
 
@@ -167,7 +177,7 @@ def test_snapshot_change_clears_crosshair(qtbot: QtBot) -> None:
 
 
 def test_painter_draws_forming_candle_in_normal_bullish_style() -> None:
-    model = chart_module._build_painter_model(
+    model = chart_module.build_painter_model(
         ready_snapshot(
             candles=(candle(15, close_price="101"),),
             in_progress_candle=candle(
@@ -188,7 +198,7 @@ def test_painter_draws_forming_candle_in_normal_bullish_style() -> None:
 
 
 def test_forming_candle_exposes_colored_current_price_label() -> None:
-    model = chart_module._build_painter_model(
+    model = chart_module.build_painter_model(
         ready_snapshot(in_progress_candle=candle(20, close_price="103")),
         QRectF(0, 0, 600, 300),
     )
@@ -226,7 +236,7 @@ def test_marker_labels_stay_visible_at_price_extrema_at_minimum_height(
     )
     surface = QRectF(12, 54, chart.width() - 24, chart.height() - 66)
 
-    model = chart_module._build_painter_model(snapshot, surface)
+    model = chart_module.build_painter_model(snapshot, surface)
 
     visible_bounds = QRectF(chart.rect())
     assert [marker.label for marker in model.markers] == ["Buy", "Sell"]
