@@ -44,10 +44,12 @@ Paper Session แล้วปล่อยให้ Session Setup use case สร
 ล้มเหลว ต้อง rollback ทั้งหมดและไม่ลบ active record.
 
 SQLite เก็บ Session facts และ Trade History เดิมแบบ immutable; การ retire เปลี่ยนเพียง
-ความเป็น active ของ Session ใน registry จึงไม่ลบหรือแก้ Basket/Fill. หลัง application
-use case สำเร็จ UI workflow invalidate runtime relay/chart state เดิม แล้ว route กลับ
-Session Setup. Session ใหม่จะผ่าน validation และ `CreatePaperSession` เดิม จึงยัง
-บังคับ active Session สูงสุดหนึ่งรายการ.
+ความเป็น active ของ Session ใน registry จึงไม่ลบหรือแก้ Basket/Fill. เพิ่ม
+`NewSessionWorkflow` เป็น focused UI workflow แยกจาก `BotLifecycleWorkflow`: มันรัน
+retire use case off the Qt thread, invalidate runtime relay/chart state เดิม, แล้ว emit
+setup-required เมื่อสำเร็จ. `BotLifecycleWorkflow` จึงยังรับเฉพาะ result ที่มี active
+Session และไม่ต้องสร้าง lifecycle snapshot ปลอมหลัง retire. Session ใหม่จะผ่าน
+validation และ `CreatePaperSession` เดิม จึงยังบังคับ active Session สูงสุดหนึ่งรายการ.
 
 ## Data Flow
 

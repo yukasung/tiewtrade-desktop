@@ -173,19 +173,19 @@ git commit -m "feat: retire stopped or blocked paper session"
 **Files:**
 - Modify: src/tiewtrade/application/bot_control.py
 - Modify: src/tiewtrade/ui/bot_control.py
-- Modify: src/tiewtrade/ui/bot_lifecycle_workflow.py
+- Create: src/tiewtrade/ui/new_session_workflow.py
 - Modify: src/tiewtrade/ui/trading_workspace.py
 - Modify: src/tiewtrade/ui/main_window.py
 - Modify: src/tiewtrade/desktop_main.py
 - Test: tests/unit/ui/test_bot_control.py
-- Test: tests/unit/ui/test_bot_lifecycle_workflow.py
+- Test: tests/unit/ui/test_new_session_workflow.py
 - Test: tests/unit/ui/test_main_window.py
 
 **Interfaces:**
 - Add BotControlAction.NEW_SESSION = "new_session".
 - Add BotControlWidget.new_session_requested signal.
-- Add BotLifecycleWorkflow.new_session() and constructor callback new_session: LifecycleAction | None.
-- MainWindow calls SessionWorkflow.start() after a successful retire to show Setup only when no active session remains.
+- NewSessionWorkflow(retire_session: Callable[[ConfiguredPaperSession], None]) emits setup_required only after a successful retire.
+- MainWindow calls SessionWorkflow.start() from NewSessionWorkflow.setup_required to show Setup only when no active session remains.
 
 - [ ] **Step 1: Write failing UI tests**
 
@@ -212,7 +212,7 @@ def test_confirmed_new_session_retires_then_opens_setup(qtbot) -> None:
 
 - [ ] **Step 2: Verify RED**
 
-Run: QT_QPA_PLATFORM=offscreen PYTHONPATH=src .venv/bin/python -m pytest tests/unit/ui/test_bot_control.py tests/unit/ui/test_bot_lifecycle_workflow.py tests/unit/ui/test_main_window.py -k new_session -v
+Run: QT_QPA_PLATFORM=offscreen PYTHONPATH=src .venv/bin/python -m pytest tests/unit/ui/test_bot_control.py tests/unit/ui/test_new_session_workflow.py tests/unit/ui/test_main_window.py -k new_session -v
 
 Expected: FAIL because action, signal, workflow and transition do not exist.
 
@@ -226,16 +226,16 @@ class BotControlAction(StrEnum):
     NEW_SESSION = "new_session"
 ~~~
 
-Allow NEW_SESSION only in BotControlSnapshot STOPPED/BLOCKED action validation. Add a New Session button and confirmation message exactly: Create a new Paper Session? The current session will remain available in Trade History. The lifecycle workflow invalidates runtime relay first, executes retire on a background task, and on success emits a dedicated setup_requested signal. MainWindow connects it to SessionWorkflow.start(); SessionWorkflow loads no active Session then emits its existing setup_required. Cancel performs no callback. Failure retains the old BotControl snapshot and displays sanitized failure notification. Do not show the Setup page until retire succeeds.
+Allow NEW_SESSION only in BotControlSnapshot STOPPED/BLOCKED action validation. Add a New Session button and confirmation message exactly: Create a new Paper Session? The current session will remain available in Trade History. NewSessionWorkflow invalidates runtime relay first, executes retire on a background task, and on success emits setup_required. MainWindow connects it to SessionWorkflow.start(); SessionWorkflow loads no active Session then emits its existing setup_required. Cancel performs no callback. Failure retains the old BotControl snapshot and displays sanitized failure notification. Do not show the Setup page until retire succeeds.
 
 - [ ] **Step 4: Verify GREEN and commit**
 
-Run: QT_QPA_PLATFORM=offscreen PYTHONPATH=src .venv/bin/python -m pytest tests/unit/ui/test_bot_control.py tests/unit/ui/test_bot_lifecycle_workflow.py tests/unit/ui/test_main_window.py -v
+Run: QT_QPA_PLATFORM=offscreen PYTHONPATH=src .venv/bin/python -m pytest tests/unit/ui/test_bot_control.py tests/unit/ui/test_new_session_workflow.py tests/unit/ui/test_main_window.py -v
 
 Expected: PASS.
 
 ~~~bash
-git add src/tiewtrade/application/bot_control.py src/tiewtrade/ui/bot_control.py src/tiewtrade/ui/bot_lifecycle_workflow.py src/tiewtrade/ui/trading_workspace.py src/tiewtrade/ui/main_window.py src/tiewtrade/desktop_main.py tests/unit/ui/test_bot_control.py tests/unit/ui/test_bot_lifecycle_workflow.py tests/unit/ui/test_main_window.py
+git add src/tiewtrade/application/bot_control.py src/tiewtrade/ui/bot_control.py src/tiewtrade/ui/new_session_workflow.py src/tiewtrade/ui/trading_workspace.py src/tiewtrade/ui/main_window.py src/tiewtrade/desktop_main.py tests/unit/ui/test_bot_control.py tests/unit/ui/test_new_session_workflow.py tests/unit/ui/test_main_window.py
 git commit -m "feat: open setup for a new paper session"
 ~~~
 
@@ -297,5 +297,4 @@ Do not create an empty commit if only earlier tasks supplied every required test
 
 - Task 1 covers durable BLOCKED and legacy schema migration; Task 2 covers atomic active-session retirement and retained history; Task 3 covers confirmation, visibility, failure and setup routing; Task 4 verifies the full 5m-to-3m workflow.
 - No task changes immutable session configuration, deletes durable history, creates concurrent active sessions, or uses Live APIs.
-- Types align: lifecycle BLOCKED enables SQLiteActivePaperSessions.retire; RetireActivePaperSession feeds BotLifecycleWorkflow new_session; its setup_requested event invokes SessionWorkflow.start.
-
+- Types align: lifecycle BLOCKED enables SQLiteActivePaperSessions.retire; RetireActivePaperSession feeds NewSessionWorkflow; its setup_required event invokes SessionWorkflow.start.
