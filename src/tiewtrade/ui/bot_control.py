@@ -18,21 +18,27 @@ from tiewtrade.application.trading_workspace import BotRuntimeState, DataFreshne
 from tiewtrade.ui.session_overview import SessionOverviewWidget
 
 StopConfirmation = Callable[[Callable[[], None], Callable[[], None]], None]
+NewSessionConfirmation = Callable[[Callable[[], None], Callable[[], None]], None]
 
 
 class BotControlWidget(QWidget):
     start_requested = Signal()
     stop_requested = Signal()
     recover_requested = Signal()
+    new_session_requested = Signal()
 
     def __init__(
         self,
         parent: QWidget | None = None,
         *,
         stop_confirmation: StopConfirmation | None = None,
+        new_session_confirmation: NewSessionConfirmation | None = None,
     ) -> None:
         super().__init__(parent)
         self._stop_confirmation = stop_confirmation or self._open_stop_confirmation
+        self._new_session_confirmation = (
+            new_session_confirmation or self._open_new_session_confirmation
+        )
         self._stop_confirmation_pending = False
         self._stop_confirmation_dialog: QMessageBox | None = None
         self.setObjectName("botControlWidget")
@@ -58,9 +64,12 @@ class BotControlWidget(QWidget):
         self.stop_button.setProperty("destructive", True)
         self.recover_button = QPushButton("Recover")
         self.recover_button.setObjectName("recoverBotButton")
+        self.new_session_button = QPushButton("New Session")
+        self.new_session_button.setObjectName("newSessionButton")
         self.start_button.clicked.connect(self._start_clicked)
         self.stop_button.clicked.connect(self._stop_clicked)
         self.recover_button.clicked.connect(self._recover_clicked)
+        self.new_session_button.clicked.connect(self._new_session_clicked)
         self._build_layout()
         self._hide_actions()
         self.recovery_required.hide()
@@ -78,6 +87,7 @@ class BotControlWidget(QWidget):
         assert header is not None
         self.data_freshness_value.setText(_DATA_FRESHNESS_TEXT[header.data_freshness])
         self.recovery_required.setVisible(value.state is BotRuntimeState.BLOCKED)
+        self.recovery_required.setText("Recovery Required")
         self._show_basket_facts(value)
         self._show_state_content(value)
 
@@ -118,6 +128,7 @@ class BotControlWidget(QWidget):
         actions.addWidget(self.start_button)
         actions.addWidget(self.stop_button)
         actions.addWidget(self.recover_button)
+        actions.addWidget(self.new_session_button)
         root.addLayout(actions)
 
     def _show_basket_facts(self, snapshot: BotControlSnapshot) -> None:
@@ -166,13 +177,30 @@ class BotControlWidget(QWidget):
             return
         if state is BotRuntimeState.STOPPED:
             self.supporting_text.setText("Paper Bot has stopped")
+            self._show_action(
+                self.new_session_button,
+                BotControlAction.NEW_SESSION in snapshot.available_actions,
+            )
             return
         self.supporting_text.setText(snapshot.blocked_reason or "")
         if BotControlAction.RECOVER in snapshot.available_actions:
             self._show_action(self.recover_button, True)
+        self._show_action(
+            self.new_session_button,
+            BotControlAction.NEW_SESSION in snapshot.available_actions,
+        )
+        if BotControlAction.NEW_SESSION not in snapshot.available_actions:
+            self.recovery_required.setText(
+                "Close and reopen the app before creating a new session."
+            )
 
     def _hide_actions(self) -> None:
-        for button in (self.start_button, self.stop_button, self.recover_button):
+        for button in (
+            self.start_button,
+            self.stop_button,
+            self.recover_button,
+            self.new_session_button,
+        ):
             button.hide()
             button.setDisabled(True)
 
@@ -195,6 +223,34 @@ class BotControlWidget(QWidget):
     @Slot()
     def _recover_clicked(self) -> None:
         self._emit_once(self.recover_button, self.recover_requested.emit)
+
+    @Slot()
+    def _new_session_clicked(self) -> None:
+        if not self.new_session_button.isEnabled():
+            return
+        self._new_session_confirmation(
+            lambda: self._emit_once(
+                self.new_session_button, self.new_session_requested.emit
+            ),
+            lambda: None,
+        )
+
+    def _open_new_session_confirmation(
+        self,
+        confirm: Callable[[], None],
+        cancel: Callable[[], None],
+    ) -> None:
+        answer = QMessageBox.question(
+            self,
+            "Confirm New Session",
+            "Retire this Paper Session and create a new one? Trade history is kept.",
+            QMessageBox.StandardButton.Cancel | QMessageBox.StandardButton.Yes,
+            QMessageBox.StandardButton.Cancel,
+        )
+        if answer is QMessageBox.StandardButton.Yes:
+            confirm()
+        else:
+            cancel()
 
     def _open_stop_confirmation(
         self,

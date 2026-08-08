@@ -3,6 +3,7 @@ from collections.abc import Callable
 
 from PySide6.QtWidgets import QApplication
 
+from tiewtrade.application.paper_session_setup import ConfiguredPaperSession
 from tiewtrade.ui.bot_lifecycle_workflow import LifecycleAction, RuntimeSnapshotRelay
 from tiewtrade.ui.chart_workflow import LoadChart, RefreshChart
 from tiewtrade.ui.main_window import MainWindow
@@ -20,6 +21,8 @@ def run_desktop(
     start_bot: LifecycleAction | None = None,
     stop_bot: LifecycleAction | None = None,
     recover_bot: LifecycleAction | None = None,
+    retire_session: Callable[[ConfiguredPaperSession], None] | None = None,
+    new_session_available: Callable[[ConfiguredPaperSession], bool] | None = None,
     initialize_bot: LifecycleAction | None = None,
     runtime_snapshots: RuntimeSnapshotRelay | None = None,
     shutdown_runtime: Callable[[], None] | None = None,
@@ -38,6 +41,8 @@ def run_desktop(
         start_bot=start_bot,
         stop_bot=stop_bot,
         recover_bot=recover_bot,
+        retire_session=retire_session,
+        new_session_available=new_session_available,
         initialize_bot=initialize_bot,
         runtime_snapshots=runtime_snapshots,
         shutdown_runtime=shutdown_runtime,

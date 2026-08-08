@@ -72,6 +72,48 @@ class SQLiteActivePaperSessions:
             _close_if_open(connection)
         return result
 
+    def retire(self, session_id: UUID, ended_at_utc: datetime) -> None:
+        connection: sqlite3.Connection | None = None
+        try:
+            connection = self._database.connect()
+            connection.execute("BEGIN IMMEDIATE")
+            active = connection.execute(
+                "SELECT 1 FROM bot_sessions "
+                "WHERE session_id = ? AND ended_at_utc IS NULL",
+                (str(session_id),),
+            ).fetchone()
+            lifecycle = connection.execute(
+                "SELECT state FROM paper_runtime_lifecycle WHERE session_id = ?",
+                (str(session_id),),
+            ).fetchone()
+            if (
+                active is None
+                or lifecycle is None
+                or lifecycle["state"]
+                not in {
+                    "stopped",
+                    "blocked",
+                }
+            ):
+                raise PaperSessionUnavailableError(
+                    "Active Paper Session cannot be retired"
+                )
+            connection.execute(
+                "UPDATE bot_sessions SET ended_at_utc = ? WHERE session_id = ?",
+                (ended_at_utc.isoformat(), str(session_id)),
+            )
+            connection.commit()
+        except sqlite3.Error as error:
+            _rollback_if_open(connection)
+            raise PaperSessionUnavailableError(
+                "Active Paper Session retirement failed"
+            ) from error
+        except BaseException:
+            _rollback_if_open(connection)
+            raise
+        finally:
+            _close_if_open(connection)
+
 
 def _session_from_row(row: sqlite3.Row) -> ConfiguredPaperSession:
     if row["symbol"] != "BTCUSDT":

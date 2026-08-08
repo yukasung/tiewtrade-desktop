@@ -10,6 +10,7 @@ from tiewtrade.integrations.sqlite.database import SQLiteDatabase
 class PaperRuntimeLifecycleState(StrEnum):
     RUNNING = "running"
     STOPPED = "stopped"
+    BLOCKED = "blocked"
 
 
 class PaperRuntimeLifecycleUnavailableError(RuntimeError):
@@ -59,6 +60,9 @@ class SQLitePaperRuntimeLifecycle:
 
     def mark_stopped(self, session_id: UUID, observed_at_utc: datetime) -> None:
         self._mark(session_id, PaperRuntimeLifecycleState.STOPPED, observed_at_utc)
+
+    def mark_blocked(self, session_id: UUID, observed_at_utc: datetime) -> None:
+        self._mark(session_id, PaperRuntimeLifecycleState.BLOCKED, observed_at_utc)
 
     def _mark(
         self,

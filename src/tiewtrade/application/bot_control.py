@@ -16,6 +16,7 @@ class BotControlAction(StrEnum):
     START = "start"
     STOP = "stop"
     RECOVER = "recover"
+    NEW_SESSION = "new_session"
 
 
 @dataclass(frozen=True, slots=True)
@@ -94,13 +95,17 @@ class BotControlSnapshot:
             _require_absent(self.progress_message, "progress_message")
             _require_absent(self.blocked_reason, "blocked_reason")
         elif self.state is BotRuntimeState.STOPPED:
-            _require_allowed_actions(self.available_actions, frozenset(), self.state)
+            _require_allowed_actions(
+                self.available_actions,
+                frozenset({BotControlAction.NEW_SESSION}),
+                self.state,
+            )
             _require_absent(self.progress_message, "progress_message")
             _require_absent(self.blocked_reason, "blocked_reason")
         elif self.state is BotRuntimeState.BLOCKED:
             _require_allowed_actions(
                 self.available_actions,
-                frozenset({BotControlAction.RECOVER}),
+                frozenset({BotControlAction.RECOVER, BotControlAction.NEW_SESSION}),
                 self.state,
             )
             _require_absent(self.progress_message, "progress_message")

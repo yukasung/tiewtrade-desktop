@@ -43,6 +43,8 @@ class MainWindow(QMainWindow):
         start_bot: LifecycleAction | None = None,
         stop_bot: LifecycleAction | None = None,
         recover_bot: LifecycleAction | None = None,
+        retire_session: Callable[[ConfiguredPaperSession], None] | None = None,
+        new_session_available: Callable[[ConfiguredPaperSession], bool] | None = None,
         initialize_bot: LifecycleAction | None = None,
         runtime_snapshots: RuntimeSnapshotRelay | None = None,
         shutdown_runtime: Callable[[], None] | None = None,
@@ -54,6 +56,7 @@ class MainWindow(QMainWindow):
         super().__init__()
         self._thread_pool = thread_pool or QThreadPool.globalInstance()
         self._load_chart = load_chart
+        self._retire_session = retire_session
         self._shutdown_runtime = shutdown_runtime
         self._close_sequence_started = False
         self._close_sequence_completed = False
@@ -92,6 +95,7 @@ class MainWindow(QMainWindow):
             start_bot=start_bot,
             stop_bot=stop_bot,
             recover=recover_bot,
+            new_session_available=new_session_available,
             initialize_bot=initialize_bot,
             runtime_snapshots=runtime_snapshots,
             thread_pool=self._thread_pool,
@@ -106,6 +110,7 @@ class MainWindow(QMainWindow):
         self.workspace.start_bot_requested.connect(self._lifecycle_workflow.start_bot)
         self.workspace.stop_bot_requested.connect(self._lifecycle_workflow.stop_bot)
         self.workspace.recover_requested.connect(self._lifecycle_workflow.recover)
+        self.workspace.new_session_requested.connect(self._new_session_requested)
 
         self._chart_workflow = ChartWorkflow(
             load_chart=load_chart or _unused_chart_loader,
@@ -152,6 +157,18 @@ class MainWindow(QMainWindow):
         self._pending_validation_field = None
         self.setup.clear_errors()
         self._workflow.create(raw_values)
+
+    @Slot()
+    def _new_session_requested(self) -> None:
+        retire_session = self._retire_session
+        if retire_session is None:
+            return
+        try:
+            retire_session(self._lifecycle_workflow.snapshot.session)
+        except Exception:
+            self._show_unavailable("Session storage is unavailable")
+            return
+        self._workflow.start()
 
     @Slot(bool)
     def _set_busy(self, busy: bool) -> None:

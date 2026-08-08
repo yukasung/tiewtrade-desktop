@@ -65,6 +65,7 @@ class TradingWorkspace(QWidget):
     start_bot_requested = Signal()
     stop_bot_requested = Signal()
     recover_requested = Signal()
+    new_session_requested = Signal()
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -106,6 +107,9 @@ class TradingWorkspace(QWidget):
         self.bot_control_widget.start_requested.connect(self.start_bot_requested)
         self.bot_control_widget.stop_requested.connect(self.stop_bot_requested)
         self.bot_control_widget.recover_requested.connect(self.recover_requested)
+        self.bot_control_widget.new_session_requested.connect(
+            self.new_session_requested
+        )
 
         self.tabs = QTabWidget()
         self.tabs.addTab(self.open_orders, "Open Orders")
