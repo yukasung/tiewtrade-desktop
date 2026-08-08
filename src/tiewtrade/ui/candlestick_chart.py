@@ -213,7 +213,7 @@ class CandlestickChartWidget(QWidget):
         self._draw_crosshair_label(painter, crosshair.time_label)
 
     def _chart_surface(self) -> QRectF:
-        top = self._header.geometry().bottom() + 12
+        top = self._header.geometry().bottom() + 24
         return QRectF(
             12,
             top,

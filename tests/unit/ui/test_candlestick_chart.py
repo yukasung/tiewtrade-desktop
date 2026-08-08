@@ -279,8 +279,8 @@ def test_previous_and_next_range_controls_are_keyboard_accessible(qtbot: QtBot) 
         == 8
     )
     surface = chart._chart_surface()
-    assert surface.top() >= chart.previous_range_button.geometry().bottom() + 12
-    assert surface.top() >= chart.next_range_button.geometry().bottom() + 12
+    assert surface.top() >= chart.previous_range_button.geometry().bottom() + 24
+    assert surface.top() >= chart.next_range_button.geometry().bottom() + 24
     assert requests == [
         ChartRange(
             datetime(2025, 12, 31, 23, 40, tzinfo=UTC),
