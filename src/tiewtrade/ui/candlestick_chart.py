@@ -1,5 +1,5 @@
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 from decimal import Decimal
 
 from PySide6.QtCore import QEvent, QLineF, QPointF, QRectF, Qt, Signal
@@ -48,6 +48,15 @@ class CrosshairGlyph:
 
 
 @dataclass(frozen=True, slots=True)
+class CurrentPriceGlyph:
+    line: QLineF
+    label_rect: QRectF
+    price_text: str
+    remaining_text: str
+    color: QColor
+
+
+@dataclass(frozen=True, slots=True)
 class ChartPainterModel:
     plot_surface: QRectF
     price_low: Decimal
@@ -58,6 +67,7 @@ class ChartPainterModel:
     time_ticks: tuple[AxisTickGlyph, ...]
     candles: tuple[CandleGlyph, ...]
     markers: tuple[MarkerGlyph, ...]
+    current_price: CurrentPriceGlyph | None
 
 
 class CandlestickChartWidget(QWidget):
@@ -226,6 +236,17 @@ class CandlestickChartWidget(QWidget):
             painter.setBrush(marker.color)
             painter.drawPolygon(QPolygonF(marker.triangle))
             painter.drawText(marker.label_rect, 0x84, marker.label)
+        current_price = model.current_price
+        if current_price is not None:
+            painter.setPen(QPen(current_price.color, 1, Qt.PenStyle.DotLine))
+            painter.drawLine(current_price.line)
+            painter.fillRect(current_price.label_rect, current_price.color)
+            painter.setPen(QPen(QColor("#F8FAFC"), 1))
+            painter.drawText(
+                current_price.label_rect,
+                0x84,
+                f"{current_price.price_text}\n{current_price.remaining_text}",
+            )
         crosshair = self.crosshair
         if crosshair is None:
             return
@@ -339,6 +360,7 @@ def _build_painter_model(
                 color=color,
             )
         )
+    current_price = _current_price_glyph(snapshot, low, high, price_surface, surface)
     return ChartPainterModel(
         plot_surface=price_surface,
         price_low=low,
@@ -349,6 +371,33 @@ def _build_painter_model(
         time_ticks=_time_ticks(visual_range, price_surface, surface),
         candles=tuple(candles),
         markers=tuple(markers),
+        current_price=current_price,
+    )
+
+
+def _current_price_glyph(
+    snapshot: ChartSnapshot,
+    low: Decimal,
+    high: Decimal,
+    plot_surface: QRectF,
+    surface: QRectF,
+) -> CurrentPriceGlyph | None:
+    candle = snapshot.in_progress_candle
+    if candle is None:
+        return None
+    y = _price_y(candle.close, low, high, plot_surface)
+    if not plot_surface.top() <= y <= plot_surface.bottom():
+        return None
+    color = QColor("#0ECB81" if candle.close >= candle.open else "#F6465D")
+    label_left = plot_surface.right() + 6
+    label_rect = QRectF(label_left, y - 21, surface.right() - label_left, 42)
+    remaining = max(candle.close_time - snapshot.observed_at_utc, timedelta())
+    return CurrentPriceGlyph(
+        line=QLineF(plot_surface.left(), y, plot_surface.right(), y),
+        label_rect=label_rect,
+        price_text=_price_text(candle.close),
+        remaining_text=_remaining_time_text(remaining),
+        color=color,
     )
 
 
@@ -494,6 +543,11 @@ def _price_text(value: Decimal) -> str:
 
 def _time_text(value: datetime) -> str:
     return f"{value:%H:%M} UTC"
+
+
+def _remaining_time_text(value: timedelta) -> str:
+    seconds = int(value.total_seconds())
+    return f"{seconds // 60:02}:{seconds % 60:02}"
 
 
 def _price_y(price: Decimal, low: Decimal, high: Decimal, surface: QRectF) -> float:
