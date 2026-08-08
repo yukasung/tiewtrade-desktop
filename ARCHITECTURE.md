@@ -86,6 +86,14 @@ integration ที่ส่งมอบตาม Live gate
 request และแสดง durable result เท่านั้น UI ห้าม import SQLite, Strategy หรือ Execution
 adapter โดยตรง และงาน persistence ต้องทำผ่าน focused worker นอก UI thread
 
+ข้อยกเว้นที่จำกัดเฉพาะ Chart presentation: `ui` อาจแสดง ephemeral chart read-model
+ที่ application/market-data runtime ส่งผ่าน application-owned, generation-bound relay ได้
+เพื่อแสดง market-data fact ที่ยังไม่ durable เช่น in-progress candle. Fact นี้ต้องเป็น
+read-only, อยู่ในหน่วยความจำ, ไม่ถูกบันทึก, ไม่ใช้สร้าง durable marker และไม่มีเส้นทางไปยัง
+Strategy, risk policy, execution, persistence, replay หรือ lifecycle decision. UI ยังคงห้าม
+import transport, SQLite, Strategy หรือ Execution adapter โดยตรง และต้องล้าง ephemeral fact
+เมื่อ session หรือ runtime generation ไม่ใช่ current
+
 Application layer เป็นเจ้าของ `Create Paper Session` use case ซึ่งสร้าง shared immutable
 Session/market configuration ก่อนเรียก concrete SQLite adapter การสร้าง Session เป็น
 durable configuration step และไม่เริ่ม Market Data, Strategy หรือ Execution
