@@ -32,8 +32,22 @@ class MarkerGlyph:
 
 
 @dataclass(frozen=True, slots=True)
+class AxisTickGlyph:
+    line: QLineF
+    label_rect: QRectF
+    label: str
+    value: str
+
+
+@dataclass(frozen=True, slots=True)
 class ChartPainterModel:
+    plot_surface: QRectF
+    price_low: Decimal
+    price_high: Decimal
+    visual_range: ChartRange
     grid_lines: tuple[QLineF, ...]
+    price_ticks: tuple[AxisTickGlyph, ...]
+    time_ticks: tuple[AxisTickGlyph, ...]
     candles: tuple[CandleGlyph, ...]
     markers: tuple[MarkerGlyph, ...]
 
@@ -169,6 +183,10 @@ class CandlestickChartWidget(QWidget):
         painter.setPen(QPen(QColor("#26313F"), 1))
         for line in model.grid_lines:
             painter.drawLine(line)
+        painter.setPen(QPen(QColor("#94A3B8"), 1))
+        for tick in model.price_ticks + model.time_ticks:
+            painter.drawLine(tick.line)
+            painter.drawText(tick.label_rect, 0x84, tick.label)
         for candle in model.candles:
             painter.setPen(QPen(candle.color, 1))
             painter.drawLine(candle.wick)
@@ -198,7 +216,7 @@ def _build_painter_model(
     if low == high:
         low -= Decimal("1")
         high += Decimal("1")
-    price_surface = surface
+    price_surface = _plot_surface(surface)
     grid_lines = tuple(
         QLineF(
             price_surface.left(),
@@ -264,14 +282,86 @@ def _build_painter_model(
             )
         )
     return ChartPainterModel(
+        plot_surface=price_surface,
+        price_low=low,
+        price_high=high,
+        visual_range=visual_range,
         grid_lines=grid_lines,
+        price_ticks=_price_ticks(low, high, price_surface, surface),
+        time_ticks=_time_ticks(visual_range, price_surface, surface),
         candles=tuple(candles),
         markers=tuple(markers),
     )
 
 
+def _plot_surface(surface: QRectF) -> QRectF:
+    return QRectF(
+        surface.left(),
+        surface.top(),
+        max(1.0, surface.width() - 72),
+        max(1.0, surface.height() - 26),
+    )
+
+
+def _price_ticks(
+    low: Decimal,
+    high: Decimal,
+    plot_surface: QRectF,
+    surface: QRectF,
+) -> tuple[AxisTickGlyph, ...]:
+    labels: list[AxisTickGlyph] = []
+    axis_left = plot_surface.right() + 6
+    axis_width = max(1.0, surface.right() - axis_left)
+    for index in range(5):
+        ratio = Decimal(index) / Decimal("4")
+        value = low + (high - low) * ratio
+        y = _price_y(value, low, high, plot_surface)
+        labels.append(
+            AxisTickGlyph(
+                line=QLineF(plot_surface.right(), y, plot_surface.right() + 4, y),
+                label_rect=QRectF(axis_left, y - 9, axis_width, 18),
+                label=_price_text(value),
+                value=str(value),
+            )
+        )
+    return tuple(reversed(labels))
+
+
+def _time_ticks(
+    chart_range: ChartRange,
+    plot_surface: QRectF,
+    surface: QRectF,
+) -> tuple[AxisTickGlyph, ...]:
+    labels: list[AxisTickGlyph] = []
+    duration = chart_range.end - chart_range.start
+    label_top = plot_surface.bottom() + 5
+    for index in range(6):
+        ratio = index / 5
+        value = chart_range.start + duration * ratio
+        x = plot_surface.left() + plot_surface.width() * ratio
+        labels.append(
+            AxisTickGlyph(
+                line=QLineF(x, plot_surface.bottom(), x, plot_surface.bottom() + 4),
+                label_rect=QRectF(x - 48, label_top, 96, surface.bottom() - label_top),
+                label=_time_text(value, chart_range.start),
+                value=value.isoformat(),
+            )
+        )
+    return tuple(labels)
+
+
 def _range_text(chart_range: ChartRange) -> str:
     return f"{chart_range.start:%Y-%m-%d %H:%M}–{chart_range.end:%H:%M} UTC"
+
+
+def _price_text(value: Decimal) -> str:
+    return f"{value:,.2f}"
+
+
+def _time_text(value: datetime, range_start: datetime) -> str:
+    if value != range_start and value.date() == range_start.date():
+        return f"{value:%H:%M} UTC"
+    return f"{value:%Y-%m-%d %H:%M UTC}"
 
 
 def _price_y(price: Decimal, low: Decimal, high: Decimal, surface: QRectF) -> float:
