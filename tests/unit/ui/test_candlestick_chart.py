@@ -4,6 +4,7 @@ from decimal import Decimal
 from typing import Any, cast
 
 from PySide6.QtCore import QRectF, Qt
+from PySide6.QtGui import QColor
 from PySide6.QtWidgets import QPushButton
 from pytestqt.qtbot import QtBot
 
@@ -63,6 +64,25 @@ def test_painter_model_contains_only_price_candles_and_fill_markers() -> None:
     assert sell.label == "Sell"
     assert sell.triangle[0].y() > sell.triangle[1].y()
     assert all(glyph.body.width() > 0 for glyph in model.candles)
+
+
+def test_painter_draws_forming_candle_in_normal_bullish_style() -> None:
+    model = chart_module._build_painter_model(
+        ready_snapshot(
+            candles=(candle(15, close_price="101"),),
+            in_progress_candle=candle(
+                20,
+                close_price="103",
+                high_price="120",
+            ),
+        ),
+        QRectF(0, 0, 600, 300),
+    )
+
+    assert len(model.candles) == 2
+    assert model.candles[-1].color == QColor("#0ECB81")
+    assert model.candles[-1].body.center().x() < 600
+    assert min(model.candles[-1].wick.y1(), model.candles[-1].wick.y2()) == 0
 
 
 def test_marker_labels_stay_visible_at_price_extrema_at_minimum_height(
@@ -195,6 +215,7 @@ def ready_snapshot(
     *,
     candles: tuple[Candle, ...] | None = None,
     fills: tuple[TradeFill, ...] | None = None,
+    in_progress_candle: Candle | None = None,
 ) -> ChartSnapshot:
     session = configured_spot_session()
     chart_range = ChartRange(
@@ -210,6 +231,7 @@ def ready_snapshot(
         candles=candles or (candle(0), candle(5), candle(10)),
         fills=fills or (buy, sell),
         state=ChartReadState.READY,
+        in_progress_candle=in_progress_candle,
     )
 
 
@@ -218,6 +240,8 @@ def candle(
     *,
     open_price: str = "100",
     close_price: str = "103",
+    high_price: str | None = None,
+    low_price: str = "99",
 ) -> Candle:
     open_value = Decimal(open_price)
     close_value = Decimal(close_price)
@@ -226,8 +250,10 @@ def candle(
         timeframe="5m",
         open_time=datetime(2026, 1, 1, 0, minute, tzinfo=UTC),
         open=open_value,
-        high=max(open_value, close_value) + Decimal("3"),
-        low=Decimal("99"),
+        high=Decimal(high_price)
+        if high_price is not None
+        else max(open_value, close_value) + Decimal("3"),
+        low=Decimal(low_price),
         close=close_value,
     )
 

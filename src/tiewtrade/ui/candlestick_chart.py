@@ -12,6 +12,7 @@ from tiewtrade.application.chart_data import (
     ChartSnapshot,
     latest_completed_boundary,
 )
+from tiewtrade.market_data.config import timeframe_to_interval
 from tiewtrade.trading.trade_history import FillSide
 
 
@@ -125,7 +126,7 @@ class CandlestickChartWidget(QWidget):
             )
         elif snapshot.state is ChartReadState.LOADING:
             self._draw_message(painter, surface, "Loading chart")
-        elif not snapshot.candles:
+        elif not snapshot.display_candles:
             self._draw_message(painter, surface, "No completed candles")
         else:
             self._draw_chart(painter, surface, snapshot)
@@ -183,8 +184,15 @@ def _build_painter_model(
     snapshot: ChartSnapshot,
     surface: QRectF,
 ) -> ChartPainterModel:
+    display_candles = snapshot.display_candles
+    visual_range = snapshot.chart_range
+    if snapshot.in_progress_candle is not None:
+        visual_range = ChartRange(
+            start=snapshot.chart_range.start,
+            end=snapshot.chart_range.end + timeframe_to_interval(snapshot.timeframe),
+        )
     prices = [
-        price for candle in snapshot.candles for price in (candle.high, candle.low)
+        price for candle in display_candles for price in (candle.high, candle.low)
     ] + [marker.price for marker in snapshot.markers]
     low, high = min(prices), max(prices)
     if low == high:
@@ -200,10 +208,10 @@ def _build_painter_model(
         )
         for line in range(5)
     )
-    width = max(4.0, surface.width() / max(len(snapshot.candles) * 2, 2))
+    width = max(4.0, surface.width() / max(len(display_candles) * 2, 2))
     candles: list[CandleGlyph] = []
-    for candle in snapshot.candles:
-        x = _marker_x(candle.open_time, snapshot.chart_range, surface)
+    for candle in display_candles:
+        x = _marker_x(candle.open_time, visual_range, surface)
         color = QColor("#0ECB81" if candle.close >= candle.open else "#F6465D")
         body_top = _price_y(max(candle.open, candle.close), low, high, price_surface)
         body_bottom = _price_y(min(candle.open, candle.close), low, high, price_surface)
