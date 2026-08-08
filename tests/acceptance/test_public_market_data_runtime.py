@@ -15,6 +15,7 @@ from tests.support.market_data_logging import market_data_records
 from tiewtrade.application.paper_spot_market_data import PaperSpotMarketDataSink
 from tiewtrade.application.paper_spot_session import PaperSpotSession
 from tiewtrade.market_data.candle import Candle
+from tiewtrade.market_data.candle_source import MarketDataKlineUpdate
 from tiewtrade.market_data.config import MarketDataConfig
 from tiewtrade.market_data.runtime import MarketDataRuntime
 from tiewtrade.market_data.runtime_logging import MarketDataEventName
@@ -45,7 +46,9 @@ class FakePublicCandleSource:
         live: Iterable[Candle],
     ) -> None:
         self._warm_up = tuple(warm_up)
-        self._live = tuple(live)
+        self._live = tuple(
+            MarketDataKlineUpdate(candle=candle, is_closed=True) for candle in live
+        )
         self._closed = asyncio.Event()
         self.requested_warm_up_count: int | None = None
         self.close_count = 0
@@ -69,8 +72,10 @@ class FakePublicCandleSource:
     ) -> tuple[Candle, ...]:
         raise AssertionError("contiguous acceptance candles must not backfill")
 
-    def stream_completed(self, config: MarketDataConfig) -> AsyncIterator[Candle]:
-        return self._stream_completed()
+    def stream_klines(
+        self, config: MarketDataConfig
+    ) -> AsyncIterator[MarketDataKlineUpdate]:
+        return self._stream_klines()
 
     async def close(self) -> None:
         if self._closed.is_set():
@@ -78,9 +83,9 @@ class FakePublicCandleSource:
         self.close_count += 1
         self._closed.set()
 
-    async def _stream_completed(self) -> AsyncIterator[Candle]:
-        for candle in self._live:
-            yield candle
+    async def _stream_klines(self) -> AsyncIterator[MarketDataKlineUpdate]:
+        for update in self._live:
+            yield update
         await self._closed.wait()
 
 
@@ -103,14 +108,14 @@ class FakeFailureRuntimeScheduler(FakeRuntimeScheduler):
         self.sleeps.append(seconds)
 
 
-class FailedCompletedCandleStream:
+class FailedKlineStream:
     def __init__(self, failure: Exception) -> None:
         self._failure = failure
 
-    def __aiter__(self) -> FailedCompletedCandleStream:
+    def __aiter__(self) -> FailedKlineStream:
         return self
 
-    async def __anext__(self) -> Candle:
+    async def __anext__(self) -> MarketDataKlineUpdate:
         raise self._failure
 
 
@@ -125,9 +130,11 @@ class FakeFailingPublicCandleSource(FakePublicCandleSource):
         self._failure = failure
         self.stream_count = 0
 
-    def stream_completed(self, config: MarketDataConfig) -> AsyncIterator[Candle]:
+    def stream_klines(
+        self, config: MarketDataConfig
+    ) -> AsyncIterator[MarketDataKlineUpdate]:
         self.stream_count += 1
-        return FailedCompletedCandleStream(self._failure)
+        return FailedKlineStream(self._failure)
 
 
 def test_fake_public_runtime_warms_then_processes_paper_spot_live_candle() -> None:

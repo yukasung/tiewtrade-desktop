@@ -40,6 +40,7 @@ from tiewtrade.integrations.sqlite.trade_history import (
     TradeHistoryUnavailableError,
 )
 from tiewtrade.market_data.candle import Candle
+from tiewtrade.market_data.candle_source import MarketDataKlineUpdate
 from tiewtrade.market_data.config import MarketDataConfig
 from tiewtrade.market_data.runtime_state import (
     MarketDataRuntimeReason,
@@ -78,7 +79,9 @@ class ControllablePublicCandleSource:
         live: tuple[Candle, ...],
     ) -> None:
         self._warm_up = warm_up
-        self._live = live
+        self._live = tuple(
+            MarketDataKlineUpdate(candle=candle, is_closed=True) for candle in live
+        )
         self._loop: asyncio.AbstractEventLoop | None = None
         self._release: asyncio.Event | None = None
         self.closed = Event()
@@ -102,8 +105,10 @@ class ControllablePublicCandleSource:
     ) -> tuple[Candle, ...]:
         raise AssertionError("contiguous fake candles must not backfill")
 
-    def stream_completed(self, config: MarketDataConfig) -> AsyncIterator[Candle]:
-        return self._stream_completed()
+    def stream_klines(
+        self, config: MarketDataConfig
+    ) -> AsyncIterator[MarketDataKlineUpdate]:
+        return self._stream_klines()
 
     async def close(self) -> None:
         self.closed.set()
@@ -115,11 +120,11 @@ class ControllablePublicCandleSource:
                 raise AssertionError("unreachable")
         self._loop.call_soon_threadsafe(self._release.set)
 
-    async def _stream_completed(self) -> AsyncIterator[Candle]:
+    async def _stream_klines(self) -> AsyncIterator[MarketDataKlineUpdate]:
         self._loop = asyncio.get_running_loop()
         self._release = asyncio.Event()
-        for candle in self._live:
-            yield candle
+        for update in self._live:
+            yield update
         await self._release.wait()
         raise MarketDataFatalError(
             "fake stream finished",
@@ -237,11 +242,13 @@ class QueuedPublicCandleSource(ControllablePublicCandleSource):
     def __init__(self, *, warm_up: tuple[Candle, ...]) -> None:
         super().__init__(warm_up=warm_up, live=())
         self._queue_loop: asyncio.AbstractEventLoop | None = None
-        self._queue: asyncio.Queue[Candle] | None = None
+        self._queue: asyncio.Queue[MarketDataKlineUpdate] | None = None
         self.stream_ready = Event()
         self.delivery_completed = Event()
 
-    def stream_completed(self, config: MarketDataConfig) -> AsyncIterator[Candle]:
+    def stream_klines(
+        self, config: MarketDataConfig
+    ) -> AsyncIterator[MarketDataKlineUpdate]:
         return self._queued_stream()
 
     async def close(self) -> None:
@@ -252,11 +259,11 @@ class QueuedPublicCandleSource(ControllablePublicCandleSource):
         assert self._queue_loop is not None
         assert self._queue is not None
         asyncio.run_coroutine_threadsafe(
-            self._queue.put(candle),
+            self._queue.put(MarketDataKlineUpdate(candle=candle, is_closed=True)),
             self._queue_loop,
         ).result(timeout=1)
 
-    async def _queued_stream(self) -> AsyncIterator[Candle]:
+    async def _queued_stream(self) -> AsyncIterator[MarketDataKlineUpdate]:
         self._queue_loop = asyncio.get_running_loop()
         self._queue = asyncio.Queue()
         self.stream_ready.set()

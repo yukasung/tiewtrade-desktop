@@ -15,7 +15,10 @@ from tiewtrade.market_data.candle_pipeline import (
 from tiewtrade.market_data.candle_pipeline import (
     MarketDataCandleSink as MarketDataCandleSink,
 )
-from tiewtrade.market_data.candle_source import MarketDataCandleSource
+from tiewtrade.market_data.candle_source import (
+    MarketDataCandleSource,
+    MarketDataKlineUpdate,
+)
 from tiewtrade.market_data.completed_candle_stream import (
     CandleAcceptance,
     CandleGapError,
@@ -83,6 +86,7 @@ class MarketDataRuntime:
         sink: MarketDataCandleSink,
         scheduler: RuntimeScheduler | None = None,
         on_transition: Callable[[MarketDataRuntimeSnapshot], None] | None = None,
+        on_open_candle: Callable[[Candle], None] | None = None,
         logger: logging.Logger | None = None,
     ) -> None:
         if warm_up_count <= 0:
@@ -91,6 +95,7 @@ class MarketDataRuntime:
         self._config = config
         self._warm_up_count = warm_up_count
         self._source = source
+        self._on_open_candle = on_open_candle
         self._scheduler = scheduler or AsyncioRuntimeScheduler()
         self._status = MarketDataRuntimeStatus(
             self._scheduler.now,
@@ -272,7 +277,7 @@ class MarketDataRuntime:
 
     async def _consume_live(self) -> None:
         try:
-            stream = self._source.stream_completed(self._config)
+            stream = self._source.stream_klines(self._config)
         except MarketDataFatalError as error:
             self._fail_closed(
                 MarketDataRuntimeReason.SOURCE_FATAL,
@@ -297,7 +302,7 @@ class MarketDataRuntime:
         while not self._stop_requested:
             disconnect_reason: MarketDataRuntimeReason
             try:
-                candle = await self._next_before_stale(stream)
+                update = await self._next_before_stale(stream)
             except TimeoutError:
                 disconnect_reason = MarketDataRuntimeReason.DATA_STALE
             except MarketDataFatalError as error:
@@ -318,7 +323,10 @@ class MarketDataRuntime:
             except Exception:
                 disconnect_reason = MarketDataRuntimeReason.SOURCE_DISCONNECTED
             else:
-                if not await self._accept_live_candle(candle):
+                if not update.is_closed:
+                    self._publish_open_candle(update.candle)
+                    continue
+                if not await self._accept_live_candle(update.candle):
                     return
                 continue
 
@@ -329,15 +337,15 @@ class MarketDataRuntime:
 
     async def _next_before_stale(
         self,
-        stream: AsyncIterator[Candle],
-    ) -> Candle:
+        stream: AsyncIterator[MarketDataKlineUpdate],
+    ) -> MarketDataKlineUpdate:
         timeout = self._seconds_until(self._freshness_deadline())
         return await self._scheduler.wait_for(stream.__anext__(), timeout)
 
     async def _next_reconnect_candle(
         self,
-        stream: AsyncIterator[Candle],
-    ) -> Candle:
+        stream: AsyncIterator[MarketDataKlineUpdate],
+    ) -> MarketDataKlineUpdate:
         now = self._scheduler.now()
         next_boundary = (
             _latest_completed_boundary(now, interval=self._config.interval)
@@ -345,6 +353,15 @@ class MarketDataRuntime:
         )
         timeout = self._seconds_until(next_boundary + _STALE_GRACE)
         return await self._scheduler.wait_for(stream.__anext__(), timeout)
+
+    def _publish_open_candle(self, candle: Candle) -> None:
+        callback = self._on_open_candle
+        if callback is None:
+            return
+        try:
+            callback(candle)
+        except Exception:
+            pass
 
     def _seconds_until(self, deadline: datetime) -> float:
         return max(
@@ -526,7 +543,7 @@ class MarketDataRuntime:
         reason: MarketDataRuntimeReason,
         *,
         pending_rate_limit: MarketDataRateLimitError | None = None,
-    ) -> AsyncIterator[Candle] | None:
+    ) -> AsyncIterator[MarketDataKlineUpdate] | None:
         last_failure_kind = (
             _failure_kind(pending_rate_limit)
             if pending_rate_limit is not None
@@ -569,8 +586,13 @@ class MarketDataRuntime:
                 reason=reason,
             )
             try:
-                stream = self._source.stream_completed(self._config)
-                observed = await self._next_reconnect_candle(stream)
+                stream = self._source.stream_klines(self._config)
+                while True:
+                    update = await self._next_reconnect_candle(stream)
+                    if update.is_closed:
+                        observed = update.candle
+                        break
+                    self._publish_open_candle(update.candle)
             except MarketDataFatalError as error:
                 self._fail_closed(
                     MarketDataRuntimeReason.SOURCE_FATAL,

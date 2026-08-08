@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from collections.abc import AsyncIterator, Awaitable, Coroutine, Iterable
+from collections.abc import AsyncIterator, Awaitable, Callable, Coroutine, Iterable
 from dataclasses import FrozenInstanceError
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
@@ -16,6 +16,7 @@ from tiewtrade.market_data.candle import Candle
 from tiewtrade.market_data.candle_pipeline import (
     MarketDataCandleSink as PipelineMarketDataCandleSink,
 )
+from tiewtrade.market_data.candle_source import MarketDataKlineUpdate
 from tiewtrade.market_data.completed_candle_stream import CandleAcceptance
 from tiewtrade.market_data.config import MarketDataConfig
 from tiewtrade.market_data.runtime import MarketDataCandleSink, MarketDataRuntime
@@ -196,11 +197,16 @@ class FakeSource:
         self,
         *,
         recent: Iterable[Candle] = (),
-        live: Iterable[Candle] = (),
+        live: Iterable[Candle | MarketDataKlineUpdate] = (),
         ranges: dict[tuple[datetime, datetime], Iterable[Candle]] | None = None,
     ) -> None:
         self._recent = tuple(recent)
-        self._live = tuple(live)
+        self._live = tuple(
+            update
+            if isinstance(update, MarketDataKlineUpdate)
+            else MarketDataKlineUpdate(candle=update, is_closed=True)
+            for update in live
+        )
         self._ranges = {
             requested_range: tuple(candles)
             for requested_range, candles in (ranges or {}).items()
@@ -231,8 +237,10 @@ class FakeSource:
         self.range_requests.append((config, start, end))
         return self._ranges.get((start, end), ())
 
-    def stream_completed(self, config: MarketDataConfig) -> AsyncIterator[Candle]:
-        return self._stream_completed()
+    def stream_klines(
+        self, config: MarketDataConfig
+    ) -> AsyncIterator[MarketDataKlineUpdate]:
+        return self._stream_klines()
 
     async def close(self) -> None:
         if self._closed.is_set():
@@ -240,7 +248,7 @@ class FakeSource:
         self.close_count += 1
         self._closed.set()
 
-    async def _stream_completed(self) -> AsyncIterator[Candle]:
+    async def _stream_klines(self) -> AsyncIterator[MarketDataKlineUpdate]:
         self.live_started = True
         for candle in self._live:
             yield candle
@@ -252,11 +260,11 @@ class NotClosedThenValidSource(FakeSource):
         super().__init__(recent=warm_up_candles())
         self._scheduler = scheduler
 
-    async def _stream_completed(self) -> AsyncIterator[Candle]:
+    async def _stream_klines(self) -> AsyncIterator[MarketDataKlineUpdate]:
         self.live_started = True
-        yield candle_at(15)
+        yield MarketDataKlineUpdate(candle=candle_at(15), is_closed=True)
         self._scheduler.advance(60.0)
-        yield candle_at(15)
+        yield MarketDataKlineUpdate(candle=candle_at(15), is_closed=True)
         await self._closed.wait()
 
 
@@ -291,12 +299,14 @@ class StreamFailureSource(FakeSource):
         self._failures = iter(failures)
         self.stream_count = 0
 
-    def stream_completed(self, config: MarketDataConfig) -> AsyncIterator[Candle]:
+    def stream_klines(
+        self, config: MarketDataConfig
+    ) -> AsyncIterator[MarketDataKlineUpdate]:
         self.stream_count += 1
         try:
             error = next(self._failures)
         except StopIteration:
-            return self._stream_completed()
+            return self._stream_klines()
         raise error
 
 
@@ -306,18 +316,22 @@ class AsyncIteratorFailureSource(FakeSource):
         self._failures = iter(failures)
         self.stream_count = 0
 
-    def stream_completed(self, config: MarketDataConfig) -> AsyncIterator[Candle]:
+    def stream_klines(
+        self, config: MarketDataConfig
+    ) -> AsyncIterator[MarketDataKlineUpdate]:
         self.stream_count += 1
         try:
             error = next(self._failures)
         except StopIteration:
-            return self._stream_completed()
+            return self._stream_klines()
         return self._raise_on_next(error)
 
-    async def _raise_on_next(self, error: Exception) -> AsyncIterator[Candle]:
+    async def _raise_on_next(
+        self, error: Exception
+    ) -> AsyncIterator[MarketDataKlineUpdate]:
         raise error
         if False:
-            yield candle_at(15)
+            yield MarketDataKlineUpdate(candle=candle_at(15), is_closed=True)
 
 
 class BackfillFailureSource(FakeSource):
@@ -475,10 +489,10 @@ class AlwaysDisconnectingSource(FakeSource):
         super().__init__(recent=warm_up_candles())
         self.stream_count = 0
 
-    async def _stream_completed(self) -> AsyncIterator[Candle]:
+    async def _stream_klines(self) -> AsyncIterator[MarketDataKlineUpdate]:
         self.stream_count += 1
         if False:
-            yield candle_at(15)
+            yield MarketDataKlineUpdate(candle=candle_at(15), is_closed=True)
 
 
 class SynchronousDisconnectSource(FakeSource):
@@ -486,7 +500,9 @@ class SynchronousDisconnectSource(FakeSource):
         super().__init__(recent=warm_up_candles())
         self.stream_count = 0
 
-    def stream_completed(self, config: MarketDataConfig) -> AsyncIterator[Candle]:
+    def stream_klines(
+        self, config: MarketDataConfig
+    ) -> AsyncIterator[MarketDataKlineUpdate]:
         self.stream_count += 1
         raise RuntimeError("websocket handshake failed")
 
@@ -504,20 +520,33 @@ class DisconnectThenRecoverSource(FakeSource):
         )
         self.stream_count = 0
 
-    async def _stream_completed(self) -> AsyncIterator[Candle]:
+    async def _stream_klines(self) -> AsyncIterator[MarketDataKlineUpdate]:
         self.stream_count += 1
         if self.stream_count == 1:
             return
-        yield candle_at(20)
+        yield MarketDataKlineUpdate(candle=candle_at(20), is_closed=True)
+        await self._closed.wait()
+
+
+class DisconnectThenOpenAndClosedSource(DisconnectThenRecoverSource):
+    async def _stream_klines(self) -> AsyncIterator[MarketDataKlineUpdate]:
+        self.stream_count += 1
+        if self.stream_count == 1:
+            return
+        yield MarketDataKlineUpdate(candle=candle_at(20), is_closed=False)
+        yield MarketDataKlineUpdate(candle=candle_at(20), is_closed=True)
         await self._closed.wait()
 
 
 class MismatchedReconnectSource(DisconnectThenRecoverSource):
-    async def _stream_completed(self) -> AsyncIterator[Candle]:
+    async def _stream_klines(self) -> AsyncIterator[MarketDataKlineUpdate]:
         self.stream_count += 1
         if self.stream_count == 1:
             return
-        yield candle_at(20, symbol="ETHUSDT")
+        yield MarketDataKlineUpdate(
+            candle=candle_at(20, symbol="ETHUSDT"),
+            is_closed=True,
+        )
         await self._closed.wait()
 
 
@@ -526,12 +555,12 @@ class DisconnectThenDuplicateSource(FakeSource):
         super().__init__(recent=warm_up_candles())
         self.stream_count = 0
 
-    async def _stream_completed(self) -> AsyncIterator[Candle]:
+    async def _stream_klines(self) -> AsyncIterator[MarketDataKlineUpdate]:
         self.stream_count += 1
         if self.stream_count == 1:
             return
-        yield candle_at(10)
-        yield candle_at(15)
+        yield MarketDataKlineUpdate(candle=candle_at(10), is_closed=True)
+        yield MarketDataKlineUpdate(candle=candle_at(15), is_closed=True)
         await self._closed.wait()
 
 
@@ -541,7 +570,7 @@ class BlockingLiveSource(FakeSource):
         self.live_wait_started = asyncio.Event()
         self.live_wait_finished = asyncio.Event()
 
-    async def _stream_completed(self) -> AsyncIterator[Candle]:
+    async def _stream_klines(self) -> AsyncIterator[MarketDataKlineUpdate]:
         self.live_started = True
         self.live_wait_started.set()
         try:
@@ -549,7 +578,7 @@ class BlockingLiveSource(FakeSource):
         finally:
             self.live_wait_finished.set()
         if False:
-            yield candle_at(15)
+            yield MarketDataKlineUpdate(candle=candle_at(15), is_closed=True)
 
 
 class StaleThenRecoverSource(FakeSource):
@@ -562,12 +591,12 @@ class StaleThenRecoverSource(FakeSource):
         )
         self.stream_count = 0
 
-    async def _stream_completed(self) -> AsyncIterator[Candle]:
+    async def _stream_klines(self) -> AsyncIterator[MarketDataKlineUpdate]:
         self.stream_count += 1
         if self.stream_count == 1:
             await asyncio.Event().wait()
             return
-        yield candle_at(15)
+        yield MarketDataKlineUpdate(candle=candle_at(15), is_closed=True)
         await self._closed.wait()
 
 
@@ -678,6 +707,7 @@ class ObservedMarketDataRuntime(MarketDataRuntime):
         source: FakeSource,
         sink: RecordingSink,
         scheduler: FakeScheduler,
+        on_open_candle: Callable[[Candle], None] | None = None,
         logger: logging.Logger | None = None,
     ) -> None:
         self._state_recorder = RuntimeStateRecorder()
@@ -687,6 +717,7 @@ class ObservedMarketDataRuntime(MarketDataRuntime):
             source=source,
             sink=sink,
             scheduler=scheduler,
+            on_open_candle=on_open_candle,
             on_transition=self._state_recorder,
             logger=logger,
         )
@@ -705,6 +736,7 @@ def runtime_for(
     sink: RecordingSink,
     *,
     scheduler: FakeScheduler | None = None,
+    on_open_candle: Callable[[Candle], None] | None = None,
     logger: logging.Logger | None = None,
 ) -> ObservedMarketDataRuntime:
     runtime = ObservedMarketDataRuntime(
@@ -713,10 +745,76 @@ def runtime_for(
         source=source,
         sink=sink,
         scheduler=scheduler or FakeScheduler(),
+        on_open_candle=on_open_candle,
         logger=logger,
     )
     sink.runtime = runtime
     return runtime
+
+
+def test_open_kline_notifies_presentation_without_completed_pipeline() -> None:
+    observed: list[Candle] = []
+    observer_called = asyncio.Event()
+
+    def observe(candle: Candle) -> None:
+        observed.append(candle)
+        observer_called.set()
+
+    sink = RecordingSink()
+    runtime = runtime_for(
+        FakeSource(
+            recent=warm_up_candles(),
+            live=(MarketDataKlineUpdate(candle=candle_at(15), is_closed=False),),
+        ),
+        sink,
+        on_open_candle=observe,
+    )
+
+    async def exercise() -> None:
+        task = asyncio.create_task(runtime.run())
+        try:
+            await observer_called.wait()
+            assert observed == [candle_at(15)]
+            assert sink.live_candles == []
+            assert runtime.snapshot.state is MarketDataRuntimeState.LIVE
+            assert runtime.snapshot.reason is MarketDataRuntimeReason.WARM_UP_COMPLETED
+            assert (
+                runtime.snapshot.last_accepted_open_time
+                == warm_up_candles()[-1].open_time
+            )
+        finally:
+            await runtime.stop()
+            await task
+
+    asyncio.run(exercise())
+
+
+def test_open_kline_observer_failure_does_not_fail_runtime() -> None:
+    observer_called = asyncio.Event()
+
+    def fail_observer(candle: Candle) -> None:
+        observer_called.set()
+        raise RuntimeError("chart down")
+
+    runtime = runtime_for(
+        FakeSource(
+            recent=warm_up_candles(),
+            live=(MarketDataKlineUpdate(candle=candle_at(15), is_closed=False),),
+        ),
+        RecordingSink(),
+        on_open_candle=fail_observer,
+    )
+
+    async def exercise() -> None:
+        task = asyncio.create_task(runtime.run())
+        try:
+            await observer_called.wait()
+            assert runtime.snapshot.state is MarketDataRuntimeState.LIVE
+        finally:
+            await runtime.stop()
+            await task
+
+    asyncio.run(exercise())
 
 
 async def run_until_sink_receives(
@@ -2188,6 +2286,27 @@ def test_reconnect_backfills_buffered_first_candle_before_returning_live() -> No
     )
     assert scheduler.sleeps == [1.0]
     assert source.stream_count == 2
+
+
+def test_reconnect_publishes_open_kline_before_closed_backfill() -> None:
+    source = DisconnectThenOpenAndClosedSource()
+    scheduler = FakeScheduler(
+        now=datetime(2026, 1, 1, 0, 25, tzinfo=UTC),
+    )
+    sink = RecordingSink()
+    observed: list[Candle] = []
+    runtime = runtime_for(
+        source,
+        sink,
+        scheduler=scheduler,
+        on_open_candle=observed.append,
+    )
+
+    asyncio.run(run_until_sink_receives_or_runtime_stops(runtime, sink, count=2))
+
+    assert observed == [candle_at(20)]
+    assert sink.live_candles == [candle_at(15), candle_at(20)]
+    assert runtime.snapshot.last_accepted_open_time == candle_at(20).open_time
 
 
 def test_reconnect_rejects_malformed_buffered_first_candle_before_sink() -> None:

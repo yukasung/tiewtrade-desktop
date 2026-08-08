@@ -13,6 +13,7 @@ from tiewtrade.application.public_market_data_runtime import (
 )
 from tiewtrade.integrations.binance.public_endpoints import BinancePublicEndpoints
 from tiewtrade.market_data.candle import Candle
+from tiewtrade.market_data.candle_source import MarketDataKlineUpdate
 from tiewtrade.market_data.config import MarketDataConfig
 from tiewtrade.market_data.runtime import MarketDataRuntime
 from tiewtrade.strategies.rsi_step_grid.preset import RsiStepGridPreset
@@ -45,13 +46,15 @@ class FakePublicCandleSource:
     ) -> tuple[Candle, ...]:
         raise AssertionError("unit composition must not backfill market data")
 
-    def stream_completed(self, config: MarketDataConfig) -> AsyncIterator[Candle]:
-        return self._stream_completed()
+    def stream_klines(
+        self, config: MarketDataConfig
+    ) -> AsyncIterator[MarketDataKlineUpdate]:
+        return self._stream_klines()
 
     async def close(self) -> None:
         return None
 
-    async def _stream_completed(self) -> AsyncIterator[Candle]:
+    async def _stream_klines(self) -> AsyncIterator[MarketDataKlineUpdate]:
         if False:
             yield
 

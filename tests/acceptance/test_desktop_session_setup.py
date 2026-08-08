@@ -58,6 +58,7 @@ from tiewtrade.integrations.sqlite.paper_spot_history import (
 )
 from tiewtrade.integrations.sqlite.trade_history import SQLiteTradeHistory
 from tiewtrade.market_data.candle import Candle
+from tiewtrade.market_data.candle_source import MarketDataKlineUpdate
 from tiewtrade.market_data.config import MarketDataConfig
 from tiewtrade.trading.futures_policy import MarginMode, PositionMode
 from tiewtrade.trading.session_config import MarketType, TradeMode
@@ -102,9 +103,11 @@ class _AcceptancePublicCandleSource:
     ) -> None:
         self._config = config
         self._warm_up = warm_up
-        self._live = live
+        self._live = tuple(
+            MarketDataKlineUpdate(candle=candle, is_closed=True) for candle in live
+        )
         self.load_recent_calls = 0
-        self.stream_completed_calls = 0
+        self.stream_klines_calls = 0
         self.closed = Event()
 
     async def load_recent(
@@ -129,17 +132,19 @@ class _AcceptancePublicCandleSource:
     ) -> tuple[Candle, ...]:
         raise AssertionError("contiguous acceptance candles must not backfill")
 
-    def stream_completed(self, config: MarketDataConfig) -> AsyncIterator[Candle]:
+    def stream_klines(
+        self, config: MarketDataConfig
+    ) -> AsyncIterator[MarketDataKlineUpdate]:
         assert config == self._config
-        self.stream_completed_calls += 1
-        return self._stream_completed()
+        self.stream_klines_calls += 1
+        return self._stream_klines()
 
     async def close(self) -> None:
         self.closed.set()
 
-    async def _stream_completed(self) -> AsyncIterator[Candle]:
-        for candle in self._live:
-            yield candle
+    async def _stream_klines(self) -> AsyncIterator[MarketDataKlineUpdate]:
+        for update in self._live:
+            yield update
         await asyncio.Event().wait()
 
 
@@ -276,7 +281,7 @@ def test_desktop_real_paper_runtime_starts_once_and_stops_without_closing_basket
     source = sources[0]
     assert start_calls == 1
     assert source.load_recent_calls == 1
-    assert source.stream_completed_calls == 1
+    assert source.stream_klines_calls == 1
     assert selected_endpoints == [
         BinancePublicEndpoints.for_market_type(MarketType(case.market_type))
     ]

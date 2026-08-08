@@ -33,6 +33,7 @@ from tiewtrade.integrations.sqlite.paper_runtime_lifecycle import (
 )
 from tiewtrade.integrations.sqlite.trade_history import SQLiteTradeHistory
 from tiewtrade.market_data.candle import Candle
+from tiewtrade.market_data.candle_source import MarketDataKlineUpdate
 from tiewtrade.market_data.config import MarketDataConfig
 from tiewtrade.market_data.source_errors import (
     MarketDataFailureKind,
@@ -97,15 +98,17 @@ class _RuntimeFailureSource:
     ) -> tuple[Candle, ...]:
         raise AssertionError("failure acceptance path must not backfill")
 
-    def stream_completed(self, config: MarketDataConfig) -> AsyncIterator[Candle]:
-        return self._stream_completed()
+    def stream_klines(
+        self, config: MarketDataConfig
+    ) -> AsyncIterator[MarketDataKlineUpdate]:
+        return self._stream_klines()
 
     async def close(self) -> None:
         self.closed.set()
 
-    async def _stream_completed(self) -> AsyncIterator[Candle]:
+    async def _stream_klines(self) -> AsyncIterator[MarketDataKlineUpdate]:
         await asyncio.Event().wait()
-        yield self._warm_up[-1]
+        yield MarketDataKlineUpdate(candle=self._warm_up[-1], is_closed=True)
 
 
 class _FailingRunningLifecycle(SQLitePaperRuntimeLifecycle):
