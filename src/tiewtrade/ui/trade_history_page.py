@@ -348,6 +348,7 @@ class TradeHistoryPage(QWidget):
         self.scroll_area = QScrollArea()
         self.scroll_area.setObjectName("tradeHistoryScroll")
         self.scroll_area.viewport().setObjectName("tradeHistoryViewport")
+        self.scroll_area.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self.scroll_area.setWidgetResizable(True)
         self.scroll_area.setVerticalScrollBarPolicy(
             Qt.ScrollBarPolicy.ScrollBarAsNeeded

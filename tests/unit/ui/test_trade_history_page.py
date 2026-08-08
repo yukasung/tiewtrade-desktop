@@ -4,6 +4,7 @@ from uuid import UUID
 
 import pytest
 from PySide6.QtCore import QPoint, QRect, Qt
+from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QAbstractItemView, QWidget
 from pytestqt.qtbot import QtBot
 
@@ -166,6 +167,31 @@ def test_page_avoids_unnecessary_scrollbars_when_content_fits(qtbot: QtBot) -> N
     )
     assert page.scroll_area.verticalScrollBar().maximum() == 0
     assert page.scroll_area.horizontalScrollBar().maximum() == 0
+
+
+def test_keyboard_focus_skips_scroll_area_and_scrolls_to_lower_table(
+    qtbot: QtBot,
+) -> None:
+    page = TradeHistoryPage()
+    qtbot.addWidget(page)
+    page.setFixedSize(1200, 240)
+    page.show()
+
+    scroll_bar = page.scroll_area.verticalScrollBar()
+    qtbot.waitUntil(lambda: scroll_bar.maximum() > 0)
+    page.apply_button.setFocus()
+    qtbot.waitUntil(page.apply_button.hasFocus)
+
+    QTest.keyClick(page.apply_button, Qt.Key.Key_Tab)
+
+    assert page.basket_table.hasFocus()
+    qtbot.waitUntil(lambda: scroll_bar.value() > 0)
+
+    page.fill_table.setFocus()
+    QTest.keyClick(page.fill_table, Qt.Key.Key_Tab)
+
+    assert page.symbol.hasFocus()
+    assert not page.scroll_area.hasFocus()
 
 
 def test_apply_and_reset_emit_immutable_filter_values(qtbot: QtBot) -> None:

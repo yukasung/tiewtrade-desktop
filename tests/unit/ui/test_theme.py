@@ -171,6 +171,33 @@ def test_bot_control_scroll_surfaces_and_scrollbar_render_dark(qtbot: QtBot) -> 
     )
 
 
+def test_trade_history_scroll_surfaces_and_scrollbar_render_dark(
+    qtbot: QtBot,
+) -> None:
+    page = TradeHistoryPage()
+    qtbot.addWidget(page)
+    page.setStyleSheet(DARK_THEME)
+    page.setFixedSize(1200, 240)
+    page.show()
+
+    scroll_area = page.scroll_area
+    scroll_bar = scroll_area.verticalScrollBar()
+    qtbot.waitUntil(lambda: scroll_bar.maximum() > 0)
+    content = scroll_area.widget()
+    assert content is not None
+
+    assert _palette_color(scroll_area, QPalette.ColorRole.Window) == QColor("#141A22")
+    assert _palette_color(scroll_area.viewport(), QPalette.ColorRole.Window) == QColor(
+        "#141A22"
+    )
+    assert _palette_color(content, QPalette.ColorRole.Window) == QColor("#141A22")
+    assert _palette_color(scroll_bar, QPalette.ColorRole.Window) == QColor("#0B0E11")
+    assert _palette_color(scroll_bar, QPalette.ColorRole.Base) == QColor("#0B0E11")
+    assert (
+        max(QColor(color).lightness() for color in _rendered_colors(scroll_bar)) < 128
+    )
+
+
 def test_compact_drawer_focus_renders_on_actionable_close_button(qtbot: QtBot) -> None:
     workspace = TradingWorkspace()
     qtbot.addWidget(workspace)
