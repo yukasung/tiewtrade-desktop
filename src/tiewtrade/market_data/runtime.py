@@ -345,14 +345,19 @@ class MarketDataRuntime:
     async def _next_reconnect_candle(
         self,
         stream: AsyncIterator[MarketDataKlineUpdate],
+        *,
+        deadline: datetime,
     ) -> MarketDataKlineUpdate:
+        timeout = self._seconds_until(deadline)
+        return await self._scheduler.wait_for(stream.__anext__(), timeout)
+
+    def _reconnect_deadline(self) -> datetime:
         now = self._scheduler.now()
         next_boundary = (
             _latest_completed_boundary(now, interval=self._config.interval)
             + self._config.interval
         )
-        timeout = self._seconds_until(next_boundary + _STALE_GRACE)
-        return await self._scheduler.wait_for(stream.__anext__(), timeout)
+        return next_boundary + _STALE_GRACE
 
     def _publish_open_candle(self, candle: Candle) -> None:
         callback = self._on_open_candle
@@ -587,8 +592,12 @@ class MarketDataRuntime:
             )
             try:
                 stream = self._source.stream_klines(self._config)
+                deadline = self._reconnect_deadline()
                 while True:
-                    update = await self._next_reconnect_candle(stream)
+                    update = await self._next_reconnect_candle(
+                        stream,
+                        deadline=deadline,
+                    )
                     if update.is_closed:
                         observed = update.candle
                         break

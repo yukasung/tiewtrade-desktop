@@ -139,6 +139,28 @@ class RecoveringAfterStaleScheduler(FakeScheduler):
         return await awaitable
 
 
+class ReconnectDeadlineScheduler(FakeScheduler):
+    def __init__(self) -> None:
+        super().__init__(now=datetime(2026, 1, 1, 0, 15, tzinfo=UTC))
+        self._wait_count = 0
+
+    async def wait_for(self, awaitable: Awaitable[_T], timeout: float) -> _T:
+        self.timeouts.append(timeout)
+        self._wait_count += 1
+        if self._wait_count <= 3:
+            return await awaitable
+        if timeout <= 30.0:
+            task = asyncio.ensure_future(awaitable)
+            await asyncio.sleep(0)
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+            self.advance(timeout)
+            raise TimeoutError
+        value = await awaitable
+        self.advance(300.0)
+        return value
+
+
 class TimeoutScheduler(FakeScheduler):
     async def wait_for(self, awaitable: Awaitable[_T], timeout: float) -> _T:
         self.timeouts.append(timeout)
@@ -536,6 +558,26 @@ class DisconnectThenOpenAndClosedSource(DisconnectThenRecoverSource):
         yield MarketDataKlineUpdate(candle=candle_at(20), is_closed=False)
         yield MarketDataKlineUpdate(candle=candle_at(20), is_closed=True)
         await self._closed.wait()
+
+
+class OpenOnlyReconnectSource(FakeSource):
+    def __init__(self) -> None:
+        super().__init__(recent=warm_up_candles())
+        self.stream_count = 0
+        self.open_update_count = 0
+
+    async def _stream_klines(self) -> AsyncIterator[MarketDataKlineUpdate]:
+        self.stream_count += 1
+        if self.stream_count == 1:
+            return
+        while self.open_update_count < 5:
+            await asyncio.sleep(0)
+            self.open_update_count += 1
+            yield MarketDataKlineUpdate(candle=candle_at(15), is_closed=False)
+        raise MarketDataFatalError(
+            "open-only reconnect stream was consumed past its deadline",
+            kind=MarketDataFailureKind.TRANSPORT,
+        )
 
 
 class MismatchedReconnectSource(DisconnectThenRecoverSource):
@@ -2307,6 +2349,30 @@ def test_reconnect_publishes_open_kline_before_closed_backfill() -> None:
     assert observed == [candle_at(20)]
     assert sink.live_candles == [candle_at(15), candle_at(20)]
     assert runtime.snapshot.last_accepted_open_time == candle_at(20).open_time
+
+
+def test_open_only_reconnect_stream_uses_fixed_deadline_per_attempt() -> None:
+    source = OpenOnlyReconnectSource()
+    scheduler = ReconnectDeadlineScheduler()
+    sink = RecordingSink()
+    observed: list[Candle] = []
+    runtime = runtime_for(
+        source,
+        sink,
+        scheduler=scheduler,
+        on_open_candle=observed.append,
+    )
+
+    asyncio.run(runtime.run())
+
+    assert source.stream_count == 4
+    assert source.open_update_count == 3
+    assert observed == [candle_at(15)] * 3
+    assert sink.live_candles == []
+    assert runtime.snapshot.last_accepted_open_time == candle_at(10).open_time
+    assert runtime.snapshot.state is MarketDataRuntimeState.FAILED_CLOSED
+    assert runtime.snapshot.reason is MarketDataRuntimeReason.RECONNECT_EXHAUSTED
+    assert scheduler.sleeps == [1.0, 2.0, 4.0]
 
 
 def test_reconnect_rejects_malformed_buffered_first_candle_before_sink() -> None:
