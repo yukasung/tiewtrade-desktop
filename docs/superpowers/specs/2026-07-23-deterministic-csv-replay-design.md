@@ -38,13 +38,13 @@ ReplayResult -> Stable JSON -> CLI stdout
 `Candle` โดย:
 
 - รับ `Path` และ `MarketDataConfig`
-- บังคับ header ตามลำดับ `open_time,open,high,low,close,volume`
+- บังคับ header ตามลำดับ `open_time,open,high,low,close`
 - ปฏิเสธ header ที่ขาด เกิน ซ้ำ หรือเรียงผิด
 - รับ timestamp แบบ ISO-8601 ที่มี UTC offset เท่านั้น
-- แปลง OHLCV เป็น `Decimal` โดยไม่ผ่าน `float` แล้วตรวจ `.is_finite()` ของ
-  `open`, `high`, `low`, `close` และ `volume` ทุกค่า ก่อนสร้าง `Candle`
+- แปลง OHLC เป็น `Decimal` โดยไม่ผ่าน `float` แล้วตรวจ `.is_finite()` ของ
+  `open`, `high`, `low` และ `close` ทุกค่า ก่อนสร้าง `Candle`
 - ใช้ symbol และ timeframe จาก `MarketDataConfig` ไม่อ่านหรือ hard-code ใน CSV
-- ส่ง validation ของราคา, range, volume และ timeframe alignment ให้ `Candle`
+- ส่ง validation ของราคา, range และ timeframe alignment ให้ `Candle`
 - รายงาน row number ใน `ValueError` เมื่อข้อมูลไม่ถูกต้อง
 - คืน immutable `tuple[Candle, ...]` และปฏิเสธไฟล์ว่าง
 
@@ -115,7 +115,7 @@ JSON summary มีเฉพาะ audit facts ต่อไปนี้:
 
 - file missing หรือ unreadable: propagate error ที่ระบุ path
 - empty CSV หรือ header ผิด: `ValueError`
-- timestamp, Decimal, non-finite OHLCV หรือ Candle field ผิด: `ValueError` ที่ระบุ
+- timestamp, Decimal, non-finite OHLC หรือ Candle field ผิด: `ValueError` ที่ระบุ
   row number
 - Candle gap, duplicate หรือ out-of-order: replay หยุดด้วย `ValueError` แทนการคืน
   summary บางส่วน
@@ -129,7 +129,7 @@ deterministic และปิดบังข้อมูลตลาดที่
 ใช้ Test-Driven Development ตามลำดับ:
 
 1. unit tests ของ strict CSV loader สำหรับ happy path, exact headers, UTC, Decimal,
-   non-finite OHLCV ทุก field และ row-numbered errors
+   non-finite OHLC ทุก field และ row-numbered errors
 2. unit tests ของ `ReplayResult` สำหรับ stable JSON และ Decimal serialization
 3. acceptance test replay fixture 40 Candles สองครั้งผ่าน object graph ใหม่คนละชุด
 4. assert ว่า outputs ตรงกันทุกตัวอักษรและเกิด Entry Fill/closed Basket/realized PnL

@@ -22,7 +22,7 @@ Issue นี้ไม่กำหนด file handler, rotation, persistence ห�
 - ใช้ `MarketDataFailureKind` เป็น diagnostic metadata เท่านั้น Runtime ยังตัดสินใจจาก
   action exception type เดิม
 - ห้ามบันทึก API Key, Secret, credentials, private account payload, response body,
-  exception message, Candle OHLC หรือ volume
+  exception message, Candle OHLC หรือ Binance payload volume
 - Logging failure ต้องไม่เปลี่ยน Runtime decision หรือทำให้ Runtime หยุด
 - แยกเฉพาะ `Exception` จาก logging backend; ไม่จับ `BaseException` เช่น
   `KeyboardInterrupt` หรือ `SystemExit`
@@ -213,7 +213,8 @@ module และ output ใช้ concrete Python logging ที่มีอย�
 - Structured logs ครอบคลุม discard, Clock Skew, Stale Data, Stream Reconnect,
   Backfill success/failure และ terminal fail-closed
 - Event name, level และ fields เป็น deterministic contract ที่ tests ตรวจได้
-- Logs ไม่ถือ secrets, private payload, exception message, OHLC หรือ volume
+- Logs ไม่ถือ secrets, private payload, exception message, Candle OHLC หรือ Binance
+  payload volume
 - Logging backend failure ไม่เปลี่ยน Runtime decision
 - Existing Runtime state, retry, timeout, rate-limit และ fail-closed behavior ไม่เปลี่ยน
 - Regression tests และ quality gates ผ่านโดยไม่มี network หรือ Live side effect

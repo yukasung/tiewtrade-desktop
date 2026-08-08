@@ -155,8 +155,7 @@ boundary.
 
 For every yielded candle:
 
-1. `CompletedCandlePipeline` validates symbol, timeframe, UTC alignment, OHLC,
-   and volume.
+1. `CompletedCandlePipeline` validates symbol, timeframe, UTC alignment, and OHLC.
 2. The Pipeline passes the candle through its internal `CompletedCandleStream`.
 3. Ignore a duplicate already seen by `CompletedCandleStream` without evaluating
    Strategy again.

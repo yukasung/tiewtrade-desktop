@@ -9,8 +9,9 @@ terminal or changing any trading policy.
 
 ## Scope
 
-- Show completed OHLCV candles for the configured symbol and immutable Session
+- Show completed OHLC candles for the configured symbol and immutable Session
   timeframe.
+- The price surface has no Volume panel.
 - Load only the visible historical range from Binance public market data; do not
   persist chart candles in SQLite.
 - Add Buy/Sell markers from durable `TradeFill` records using each fill's UTC
