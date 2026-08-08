@@ -12,7 +12,10 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QHeaderView,
     QLabel,
+    QLayout,
     QPushButton,
+    QScrollArea,
+    QSizePolicy,
     QTableWidget,
     QTableWidgetItem,
     QVBoxLayout,
@@ -339,7 +342,26 @@ class TradeHistoryPage(QWidget):
         self.page_requested.emit(self._current_page + 1)
 
     def _build_layout(self) -> None:
-        root = QVBoxLayout(self)
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+
+        self.scroll_area = QScrollArea()
+        self.scroll_area.setObjectName("tradeHistoryScroll")
+        self.scroll_area.viewport().setObjectName("tradeHistoryViewport")
+        self.scroll_area.setWidgetResizable(True)
+        self.scroll_area.setVerticalScrollBarPolicy(
+            Qt.ScrollBarPolicy.ScrollBarAsNeeded
+        )
+        self.scroll_area.setHorizontalScrollBarPolicy(
+            Qt.ScrollBarPolicy.ScrollBarAlwaysOff
+        )
+        self.scroll_area.setFrameShape(QFrame.Shape.NoFrame)
+
+        content = QWidget()
+        content.setObjectName("tradeHistoryContent")
+        content.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Minimum)
+        root = QVBoxLayout(content)
+        root.setSizeConstraint(QLayout.SizeConstraint.SetMinimumSize)
         root.setContentsMargins(0, 0, 0, 0)
         root.setSpacing(14)
 
@@ -379,6 +401,9 @@ class TradeHistoryPage(QWidget):
         root.addWidget(fill_title)
         root.addWidget(self.fill_table, 1)
         root.addLayout(self._state_row(self.fill_state, self.retry_fills_button))
+
+        self.scroll_area.setWidget(content)
+        outer.addWidget(self.scroll_area)
 
     def _build_filter_card(self) -> QFrame:
         card = QFrame()

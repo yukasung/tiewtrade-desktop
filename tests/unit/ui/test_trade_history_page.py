@@ -3,8 +3,8 @@ from decimal import Decimal
 from uuid import UUID
 
 import pytest
-from PySide6.QtCore import Qt
-from PySide6.QtWidgets import QAbstractItemView
+from PySide6.QtCore import QPoint, QRect, Qt
+from PySide6.QtWidgets import QAbstractItemView, QWidget
 from pytestqt.qtbot import QtBot
 
 from tests.support.qt_interactions import click, qdate, table_item
@@ -27,6 +27,10 @@ def history_page(
         total_items=len(items) if total_items is None else total_items,
         net_realized_pnl=net_realized_pnl,
     )
+
+
+def widget_rect_in_parent(widget: QWidget, parent: QWidget) -> QRect:
+    return QRect(widget.mapTo(parent, QPoint(0, 0)), widget.size())
 
 
 def test_page_exposes_filters_and_exact_table_columns(qtbot: QtBot) -> None:
@@ -98,6 +102,70 @@ def test_page_exposes_filters_and_exact_table_columns(qtbot: QtBot) -> None:
     assert page.to_date_enabled.text() == "To Date (UTC)"
     assert page.from_date.accessibleName() == "From Date (UTC)"
     assert page.to_date.accessibleName() == "To Date (UTC)"
+
+
+def test_page_scrolls_vertically_without_squashing_filter_controls(
+    qtbot: QtBot,
+) -> None:
+    page = TradeHistoryPage()
+    qtbot.addWidget(page)
+    page.setFixedSize(1200, 240)
+    page.show()
+
+    vertical = page.scroll_area.verticalScrollBar()
+    horizontal = page.scroll_area.horizontalScrollBar()
+    qtbot.waitUntil(lambda: vertical.maximum() > 0)
+
+    filter_card = page.from_date.parentWidget()
+    assert filter_card is not None
+    controls = (
+        page.symbol,
+        page.timeframe,
+        page.market,
+        page.mode,
+        page.status,
+        page.from_date_enabled,
+        page.from_date,
+        page.to_date_enabled,
+        page.to_date,
+        page.reset_button,
+        page.apply_button,
+    )
+    control_rects = [
+        widget_rect_in_parent(control, filter_card) for control in controls
+    ]
+
+    assert all(rect.width() > 0 and rect.height() > 0 for rect in control_rects)
+    assert all(
+        not left.intersects(right)
+        for index, left in enumerate(control_rects)
+        for right in control_rects[index + 1 :]
+    )
+    assert vertical.maximum() > 0
+    assert horizontal.maximum() == 0
+
+    page.scroll_area.ensureWidgetVisible(page.fill_table)
+    qtbot.waitUntil(lambda: vertical.value() > 0)
+
+
+def test_page_avoids_unnecessary_scrollbars_when_content_fits(qtbot: QtBot) -> None:
+    page = TradeHistoryPage()
+    qtbot.addWidget(page)
+    page.setFixedSize(1600, 1000)
+    page.show()
+
+    qtbot.waitUntil(lambda: page.scroll_area.viewport().height() > 0)
+
+    assert (
+        page.scroll_area.verticalScrollBarPolicy()
+        == Qt.ScrollBarPolicy.ScrollBarAsNeeded
+    )
+    assert (
+        page.scroll_area.horizontalScrollBarPolicy()
+        == Qt.ScrollBarPolicy.ScrollBarAlwaysOff
+    )
+    assert page.scroll_area.verticalScrollBar().maximum() == 0
+    assert page.scroll_area.horizontalScrollBar().maximum() == 0
 
 
 def test_apply_and_reset_emit_immutable_filter_values(qtbot: QtBot) -> None:
