@@ -5,7 +5,7 @@ from PySide6.QtWidgets import QApplication
 
 from tiewtrade.application.paper_session_setup import ConfiguredPaperSession
 from tiewtrade.ui.bot_lifecycle_workflow import LifecycleAction, RuntimeSnapshotRelay
-from tiewtrade.ui.chart_workflow import LoadChart, RefreshChart
+from tiewtrade.ui.chart_workflow import ChartFactRelay, LoadChart, RefreshChart
 from tiewtrade.ui.main_window import MainWindow
 from tiewtrade.ui.session_workflow import CreateSession, LoadActiveSession
 from tiewtrade.ui.theme import DARK_THEME
@@ -28,6 +28,9 @@ def run_desktop(
     shutdown_runtime: Callable[[], None] | None = None,
     load_chart: LoadChart | None = None,
     refresh_chart: RefreshChart | None = None,
+    chart_fact_relay: ChartFactRelay | None = None,
+    start_chart_feed: Callable[[ConfiguredPaperSession], None] | None = None,
+    stop_chart_feed: Callable[[], None] | None = None,
 ) -> int:
     app = QApplication.instance()
     if app is None:
@@ -48,6 +51,9 @@ def run_desktop(
         shutdown_runtime=shutdown_runtime,
         load_chart=load_chart,
         refresh_chart=refresh_chart,
+        chart_fact_relay=chart_fact_relay,
+        start_chart_feed=start_chart_feed,
+        stop_chart_feed=stop_chart_feed,
     )
     window.setStyleSheet(DARK_THEME)
     window.show()

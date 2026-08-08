@@ -75,6 +75,26 @@ def test_start_loads_application_owned_default_visible_range() -> None:
     ]
 
 
+def test_configured_session_displays_valid_forming_candle() -> None:
+    session = configured_spot_session()
+    snapshots: list[ChartSnapshot] = []
+    workflow = ChartWorkflow(
+        load_chart=lambda configured, requested: load_snapshot(
+            configured, requested, []
+        ),
+        thread_pool=ImmediateThreadPool(),  # type: ignore[arg-type]
+        clock=lambda: datetime(2026, 1, 1, 0, 23, tzinfo=UTC),
+    )
+    workflow.snapshot_changed.connect(snapshots.append)
+    workflow.configure(session)
+    workflow.load_range(chart_range(0, 20))
+
+    forming = candle("5m", 20)
+    workflow.in_progress_candle(forming)
+
+    assert snapshots[-1].in_progress_candle == forming
+
+
 def test_latest_chart_request_wins() -> None:
     session = configured_spot_session()
     first_range = chart_range(0, 20)
@@ -510,7 +530,7 @@ def test_previous_range_freezes_until_next_returns_to_latest() -> None:
     assert snapshots[-1].in_progress_candle == candle("5m", 40)
 
 
-def test_stop_clears_forming_but_keeps_completed_history() -> None:
+def test_stop_keeps_forming_candle_for_chart_only_feed() -> None:
     session = configured_spot_session()
     snapshots: list[ChartSnapshot] = []
     workflow = latest_workflow(session=session, snapshots=snapshots)
@@ -520,7 +540,7 @@ def test_stop_clears_forming_but_keeps_completed_history() -> None:
 
     workflow.runtime_snapshot(runtime_snapshot(session, BotRuntimeState.STOPPED))
 
-    assert snapshots[-1].in_progress_candle is None
+    assert snapshots[-1].in_progress_candle == candle("5m", 40)
     assert snapshots[-1].candles == with_forming.candles
 
 
