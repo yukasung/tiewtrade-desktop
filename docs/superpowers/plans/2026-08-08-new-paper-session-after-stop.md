@@ -13,7 +13,8 @@
 - SessionConfig/timeframe immutable; เปลี่ยน configuration ต้องสร้าง Session ใหม่.
 - หนึ่ง installation มี Active Bot Session ได้สูงสุดหนึ่งรายการ.
 - Retire ต้องไม่ลบ/แก้ Session, Basket, Fill หรือ Trade History เดิม.
-- New Session ใช้ได้เฉพาะ durable STOPPED/BLOCKED; ห้าม RUNNING/STARTING/STOPPING.
+- New Session ใช้ได้เมื่อ durable STOPPED หรือ durable BLOCKED ที่ไม่มี owned runtime worker;
+  ห้าม RUNNING/STARTING/STOPPING และ Blocked ที่ worker ยังทำงาน.
 - Paper/fake adapters only; ไม่มี Live API, credentials หรือ orders ใหม่.
 - SQLite error ต้อง rollback และคง active Session เดิม.
 - UI English, docs/Linear Thai; code identifiers English.
@@ -99,7 +100,7 @@ git commit -m "feat: persist blocked paper lifecycle"
 **Interfaces:**
 - RetireActivePaperSession(session_id: UUID, retire_active: Callable[[UUID, datetime], None], clock: Callable[[], datetime]) with execute(session: ConfiguredPaperSession) -> None.
 - SQLiteActivePaperSessions.retire(session_id: UUID, ended_at_utc: datetime) -> None.
-- Retire permits lifecycle state stopped/blocked only and raises PaperSessionUnavailableError for all other durable states or storage errors.
+- Retire permits lifecycle state stopped/blocked only; PaperRuntimeController rejects New Session while it owns a live runtime worker.
 
 - [ ] **Step 1: Write failing atomicity tests**
 
@@ -199,6 +200,14 @@ def test_stopped_and_blocked_snapshots_show_new_session_action(qtbot) -> None:
 
     widget.show_snapshot(running_snapshot())
     assert not widget.new_session_button.isVisible()
+
+
+def test_blocked_session_with_live_runtime_disables_new_session(qtbot) -> None:
+    widget = BotControlWidget()
+    widget.show_snapshot(blocked_snapshot(new_session_allowed=False))
+
+    assert widget.new_session_button.isVisible()
+    assert not widget.new_session_button.isEnabled()
 
 
 def test_confirmed_new_session_retires_then_opens_setup(qtbot) -> None:

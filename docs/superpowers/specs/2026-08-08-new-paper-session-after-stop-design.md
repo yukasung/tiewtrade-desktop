@@ -18,8 +18,10 @@ Session, Basket และ Trade Fill เดิมไว้เป็นประ�
 
 ## UX
 
-Bot Control แสดงปุ่ม `New Session` เฉพาะเมื่อ state เป็น `Stopped` หรือ `Blocked`.
-ไม่มีปุ่มนี้ใน `Configured`, `Starting`, `Running` และ `Stopping`.
+Bot Control แสดงปุ่ม `New Session` เมื่อ state เป็น `Stopped`. สำหรับ `Blocked` ปุ่มจะ
+แสดงและ enabled เฉพาะเมื่อ runtime worker ของ Session เดิมจบแล้ว; หาก worker ยังทำงาน
+หรือ Stop timeout ให้ปุ่ม disabled พร้อมข้อความให้ปิดและเปิดแอปใหม่ก่อน. ไม่มีปุ่มนี้ใน
+`Configured`, `Starting`, `Running` และ `Stopping`.
 
 เมื่อกดปุ่ม ระบบแสดง confirmation:
 
@@ -40,8 +42,10 @@ Bot Control แสดงปุ่ม `New Session` เฉพาะเมื่�
 เฉพาะ `running`/`stopped`. เพิ่ม focused application use case สำหรับ retire current active
 Paper Session แล้วปล่อยให้ Session Setup use case สร้าง Active Session ใหม่ในขั้นตอนถัดไป.
 การ retire ตรวจ lifecycle marker ของ Session เดิมภายใน SQLite transaction เดียว: อนุญาต
-เฉพาะ `STOPPED` หรือ `BLOCKED`; ถ้า state เปลี่ยน, ไม่มี active session หรือ persistence
-ล้มเหลว ต้อง rollback ทั้งหมดและไม่ลบ active record.
+เฉพาะ `STOPPED` หรือ `BLOCKED`. `PaperRuntimeController` เป็น owner ของ in-process
+runtime worker และต้องปฏิเสธ retire หาก worker ของ Session เดิมยังทำงานอยู่. ถ้า state
+เปลี่ยน, ไม่มี active session หรือ persistence ล้มเหลว ต้อง rollback ทั้งหมดและไม่ลบ active
+record.
 
 SQLite เก็บ Session facts และ Trade History เดิมแบบ immutable; การ retire เปลี่ยนเพียง
 ความเป็น active ของ Session ใน registry จึงไม่ลบหรือแก้ Basket/Fill. เพิ่ม
@@ -73,6 +77,9 @@ Trade History write path.
 - confirm ระหว่าง lifecycle state ที่ไม่ใช่ `Stopped`/`Blocked`: reject without mutation
 - runtime fail-closed ต้อง persist `blocked` ก่อน UI เปิด New Session; หาก persist ไม่สำเร็จ
   ให้คง fail-closed behavior และไม่อนุญาต retire
+- `Blocked` ที่ runtime worker ยังไม่หยุด เช่น Stop timeout: UI ต้องไม่ retire และต้อง
+  แสดงคำแนะนำให้ปิดและเปิดแอปใหม่; หลัง restart ไม่มี worker เดิมและ durable blocked
+  marker จึงใช้ New Session ได้
 - SQLite failure: rollback; active Session เดิมยัง load ได้หลัง restart
 - Session Setup validation failure: Session เก่าเป็น retired แล้ว แต่ไม่มี Session ใหม่
   ถูกสร้าง และ Setup แสดง field error ตาม behavior เดิม
@@ -82,7 +89,8 @@ Trade History write path.
 ## Verification
 
 1. unit tests สำหรับ lifecycle policy: durable `BLOCKED` persistence, permit only
-   `STOPPED`/`BLOCKED` และ reject `RUNNING`/transition states
+   `STOPPED`/`BLOCKED` เมื่อไม่มี owned runtime worker และ reject `RUNNING`/transition
+   states หรือ Stop timeout ที่ worker ยังทำงาน
 2. SQLite integration tests: retire ไม่ลบ Session/Basket/Fill, atomic rollback และ
    restart หลัง retire ไม่มี active session
 3. UI tests: action visibility, cancel, success-to-setup, failure behavior และ busy state
