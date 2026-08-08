@@ -10,9 +10,9 @@ from typing import overload
 from uuid import UUID
 
 import pytest
-from PySide6.QtCore import QDeadlineTimer, QPoint, QRect, Qt, QThreadPool
+from PySide6.QtCore import QDeadlineTimer, QPoint, QRect, Qt, QThreadPool, QTimer
 from PySide6.QtTest import QTest
-from PySide6.QtWidgets import QMessageBox, QWidget
+from PySide6.QtWidgets import QApplication, QMessageBox, QWidget
 from pytestqt.qtbot import QtBot
 
 import tiewtrade.ui.main_window as main_window_module
@@ -1672,6 +1672,78 @@ def test_lifecycle_recovery_hides_raw_fake_exception(
 
     qtbot.waitUntil(lambda: window.workspace.header_runtime.text() == "Configured")
     assert control.state_value.text() == "Configured"
+
+
+def test_new_session_reopens_an_editable_setup_form(qtbot: QtBot) -> None:
+    active: ConfiguredPaperSession | None = configured_spot_session()
+
+    def load_active() -> ConfiguredPaperSession | None:
+        return active
+
+    def start(snapshot: BotControlSnapshot) -> BotLifecycleResult:
+        return BotLifecycleResult(
+            workspace=workspace_with_runtime_state(
+                snapshot.workspace,
+                BotRuntimeState.RUNNING,
+                data_freshness=DataFreshness.FRESH,
+            )
+        )
+
+    def stop(snapshot: BotControlSnapshot) -> BotLifecycleResult:
+        return BotLifecycleResult(
+            workspace=workspace_with_runtime_state(
+                snapshot.workspace, BotRuntimeState.STOPPED
+            )
+        )
+
+    def retire(session: ConfiguredPaperSession) -> None:
+        nonlocal active
+        assert session == active
+        active = None
+
+    window = MainWindow(
+        create_session=unused_create,
+        load_active=load_active,
+        list_baskets=empty_basket_page,
+        list_fills=empty_fills,
+        start_bot=start,
+        stop_bot=stop,
+        retire_session=retire,
+        new_session_available=lambda _session: True,
+    )
+    qtbot.addWidget(window)
+    window.show()
+    control = window.workspace.bot_control_widget
+    qtbot.waitUntil(control.start_button.isEnabled)
+
+    click(control.start_button)
+    qtbot.waitUntil(lambda: control.state_value.text() == "Running")
+    click(control.stop_button)
+    stop_confirmation = window.findChild(QMessageBox)
+    assert stop_confirmation is not None
+    stop_button = next(
+        button
+        for button in stop_confirmation.buttons()
+        if button.text() == "Stop Session"
+    )
+    click(stop_button)
+    qtbot.waitUntil(lambda: control.state_value.text() == "Stopped")
+
+    def confirm_new_session() -> None:
+        dialog = QApplication.activeModalWidget()
+        assert isinstance(dialog, QMessageBox)
+        button = dialog.button(QMessageBox.StandardButton.Yes)
+        assert button is not None
+        click(button)
+
+    QTimer.singleShot(0, confirm_new_session)
+    click(control.new_session_button)
+
+    qtbot.waitUntil(lambda: active is None)
+    qtbot.waitUntil(window.setup.isVisible)
+    qtbot.waitUntil(window.setup.timeframe.isEnabled)
+    assert window.setup.timeframe.currentData() == "5m"
+    assert window.setup.available_capital.isEnabled()
 
 
 def test_configured_session_does_not_auto_start_and_explains_missing_runtime(
