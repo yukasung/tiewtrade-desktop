@@ -3,7 +3,7 @@ from datetime import UTC, datetime
 from decimal import Decimal
 from typing import Any, cast
 
-from PySide6.QtCore import QRectF, Qt
+from PySide6.QtCore import QPoint, QRectF, Qt
 from PySide6.QtGui import QColor
 from PySide6.QtWidgets import QPushButton
 from pytestqt.qtbot import QtBot
@@ -52,18 +52,92 @@ def test_painter_model_contains_only_price_candles_and_fill_markers() -> None:
         "color",
     ]
     assert [field.name for field in fields(chart_module.ChartPainterModel)] == [
+        "plot_surface",
+        "price_low",
+        "price_high",
+        "visual_range",
         "grid_lines",
+        "price_ticks",
+        "time_ticks",
         "candles",
         "markers",
     ]
-    assert min(min(glyph.wick.y1(), glyph.wick.y2()) for glyph in model.candles) == 0
-    assert max(max(glyph.wick.y1(), glyph.wick.y2()) for glyph in model.candles) == 200
+    assert min(min(glyph.wick.y1(), glyph.wick.y2()) for glyph in model.candles) == (
+        model.plot_surface.top()
+    )
+    assert max(max(glyph.wick.y1(), glyph.wick.y2()) for glyph in model.candles) == (
+        model.plot_surface.bottom()
+    )
     buy, sell = model.markers
     assert buy.label == "Buy"
     assert buy.triangle[0].y() < buy.triangle[1].y()
     assert sell.label == "Sell"
     assert sell.triangle[0].y() > sell.triangle[1].y()
     assert all(glyph.body.width() > 0 for glyph in model.candles)
+
+
+def test_painter_model_reserves_axis_space_and_exposes_ticks() -> None:
+    model = chart_module._build_painter_model(ready_snapshot(), QRectF(0, 0, 600, 300))
+
+    assert model.plot_surface.right() < 600
+    assert model.plot_surface.bottom() < 300
+    assert len(model.price_ticks) == 5
+    assert len(model.time_ticks) in {5, 6}
+    assert model.time_ticks[0].label.startswith("2026-01-01")
+
+
+def test_mouse_over_plot_shows_crosshair_price_and_time(qtbot: QtBot) -> None:
+    chart = CandlestickChartWidget()
+    qtbot.addWidget(chart)
+    chart.resize(640, 360)
+    chart.show_snapshot(ready_snapshot())
+    chart.show()
+
+    cast(Any, qtbot).mouseMove(chart, QPoint(280, 180))
+
+    assert chart.crosshair is not None
+    assert chart.crosshair.price_label.label
+    assert chart.crosshair.time_label.label.endswith("UTC")
+
+
+def test_crosshair_hides_outside_plot_area(qtbot: QtBot) -> None:
+    chart = CandlestickChartWidget()
+    qtbot.addWidget(chart)
+    chart.resize(640, 360)
+    chart.show_snapshot(ready_snapshot())
+    chart.show()
+
+    cast(Any, qtbot).mouseMove(chart, QPoint(300, 180))
+    assert chart.crosshair is not None
+    cast(Any, qtbot).mouseMove(chart, QPoint(chart.width() - 4, 20))
+
+    assert chart.crosshair is None
+
+
+def test_candles_and_markers_remain_inside_plot_not_axis_space() -> None:
+    model = chart_module._build_painter_model(ready_snapshot(), QRectF(0, 0, 600, 300))
+
+    assert all(
+        model.plot_surface.contains(glyph.body.center()) for glyph in model.candles
+    )
+    assert all(
+        model.plot_surface.contains(marker.label_rect.center())
+        for marker in model.markers
+    )
+
+
+def test_snapshot_change_clears_crosshair(qtbot: QtBot) -> None:
+    chart = CandlestickChartWidget()
+    qtbot.addWidget(chart)
+    chart.resize(640, 360)
+    chart.show_snapshot(ready_snapshot())
+    chart.show()
+    cast(Any, qtbot).mouseMove(chart, QPoint(280, 180))
+    assert chart.crosshair is not None
+
+    chart.show_snapshot(ready_snapshot())
+
+    assert chart.crosshair is None
 
 
 def test_painter_draws_forming_candle_in_normal_bullish_style() -> None:
