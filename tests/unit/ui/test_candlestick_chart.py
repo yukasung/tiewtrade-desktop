@@ -62,10 +62,10 @@ def test_painter_model_contains_only_price_candles_and_fill_markers() -> None:
         "candles",
         "markers",
     ]
-    assert min(min(glyph.wick.y1(), glyph.wick.y2()) for glyph in model.candles) == (
+    assert min(min(glyph.wick.y1(), glyph.wick.y2()) for glyph in model.candles) > (
         model.plot_surface.top()
     )
-    assert max(max(glyph.wick.y1(), glyph.wick.y2()) for glyph in model.candles) == (
+    assert max(max(glyph.wick.y1(), glyph.wick.y2()) for glyph in model.candles) < (
         model.plot_surface.bottom()
     )
     buy, sell = model.markers
@@ -83,7 +83,8 @@ def test_painter_model_reserves_axis_space_and_exposes_ticks() -> None:
     assert model.plot_surface.bottom() < 300
     assert len(model.price_ticks) == 5
     assert len(model.time_ticks) in {5, 6}
-    assert model.time_ticks[0].label.startswith("2026-01-01")
+    assert all(tick.label.endswith("UTC") for tick in model.time_ticks)
+    assert all(not tick.label.startswith("2026-") for tick in model.time_ticks)
 
 
 def test_mouse_over_plot_shows_crosshair_price_and_time(qtbot: QtBot) -> None:
@@ -126,6 +127,26 @@ def test_candles_and_markers_remain_inside_plot_not_axis_space() -> None:
     )
 
 
+def test_chart_geometry_pads_extrema_and_keeps_end_candle_inside_plot() -> None:
+    model = chart_module._build_painter_model(
+        ready_snapshot(candles=(candle(0), candle(15))), QRectF(0, 0, 600, 300)
+    )
+
+    assert (
+        min(min(glyph.wick.y1(), glyph.wick.y2()) for glyph in model.candles)
+        > model.plot_surface.top()
+    )
+    assert (
+        max(max(glyph.wick.y1(), glyph.wick.y2()) for glyph in model.candles)
+        < model.plot_surface.bottom()
+    )
+    assert all(model.plot_surface.contains(glyph.body) for glyph in model.candles)
+    assert all(
+        model.plot_surface.left() <= glyph.wick.x1() <= model.plot_surface.right()
+        for glyph in model.candles
+    )
+
+
 def test_snapshot_change_clears_crosshair(qtbot: QtBot) -> None:
     chart = CandlestickChartWidget()
     qtbot.addWidget(chart)
@@ -156,7 +177,10 @@ def test_painter_draws_forming_candle_in_normal_bullish_style() -> None:
     assert len(model.candles) == 2
     assert model.candles[-1].color == QColor("#0ECB81")
     assert model.candles[-1].body.center().x() < 600
-    assert min(model.candles[-1].wick.y1(), model.candles[-1].wick.y2()) == 0
+    assert (
+        min(model.candles[-1].wick.y1(), model.candles[-1].wick.y2())
+        > model.plot_surface.top()
+    )
 
 
 def test_marker_labels_stay_visible_at_price_extrema_at_minimum_height(
