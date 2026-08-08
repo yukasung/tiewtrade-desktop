@@ -1,6 +1,7 @@
 import asyncio
 from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
+from threading import Lock
 from typing import TypeGuard
 
 from PySide6.QtCore import QObject, QThreadPool, Signal, Slot
@@ -16,7 +17,6 @@ from tiewtrade.application.chart_data import (
     latest_completed_boundary,
 )
 from tiewtrade.application.paper_session_setup import ConfiguredPaperSession
-from tiewtrade.application.trading_workspace import BotRuntimeState
 from tiewtrade.ui.background_task import BackgroundTask
 
 LoadChart = Callable[[ConfiguredPaperSession, ChartRange], Awaitable[ChartSnapshot]]
@@ -24,6 +24,43 @@ RefreshChart = Callable[
     [ConfiguredPaperSession, ChartSnapshot, ChartCandle],
     Awaitable[ChartSnapshot],
 ]
+
+
+class ChartFactPublisher:
+    def __init__(self, relay: "ChartFactRelay", generation: int) -> None:
+        self._relay = relay
+        self._generation = generation
+
+    def completed_candle(self, candle: ChartCandle) -> None:
+        self._relay.completed_candle_ready.emit(candle, self._generation)
+
+    def in_progress_candle(self, candle: ChartCandle) -> None:
+        self._relay.in_progress_candle_ready.emit(candle, self._generation)
+
+
+class ChartFactRelay(QObject):
+    """Queues generation-bound chart facts onto the Qt thread."""
+
+    completed_candle_ready = Signal(object, int)
+    in_progress_candle_ready = Signal(object, int)
+
+    def __init__(self, parent: QObject | None = None) -> None:
+        super().__init__(parent)
+        self._lock = Lock()
+        self._generation = 0
+
+    def new_generation(self) -> ChartFactPublisher:
+        with self._lock:
+            self._generation += 1
+            return ChartFactPublisher(self, self._generation)
+
+    def invalidate(self) -> None:
+        with self._lock:
+            self._generation += 1
+
+    def is_current(self, generation: int) -> bool:
+        with self._lock:
+            return generation == self._generation
 
 
 class ChartWorkflow(QObject):
@@ -55,7 +92,6 @@ class ChartWorkflow(QObject):
         self._pending_in_progress_candle: ChartCandle | None = None
         self._last_safe_range: ChartRange | None = None
         self._following_latest = True
-        self._runtime_running = False
         self._closed = False
 
     def configure(self, session: ConfiguredPaperSession) -> None:
@@ -69,7 +105,6 @@ class ChartWorkflow(QObject):
         self._pending_in_progress_candle = None
         self._last_safe_range = None
         self._following_latest = True
-        self._runtime_running = False
 
     def start(self, session: ConfiguredPaperSession) -> None:
         self.configure(session)
@@ -108,15 +143,11 @@ class ChartWorkflow(QObject):
             or snapshot.session.config.session_id != self._session.config.session_id
         ):
             return
-        self._runtime_running = snapshot.state is BotRuntimeState.RUNNING
-        if not self._runtime_running:
-            self._pending_in_progress_candle = None
-            self._clear_in_progress_candle()
+        del snapshot
 
     def in_progress_candle(self, candle: object) -> None:
         if (
             self._closed
-            or not self._runtime_running
             or not self._following_latest
             or not self._is_current_session_candle_fact(candle)
             or not self._is_observed_inside_candle(candle)
@@ -263,7 +294,6 @@ class ChartWorkflow(QObject):
         self._pending_completed_candle = None
         self._pending_in_progress_candle = None
         self._session = None
-        self._runtime_running = False
         self._following_latest = False
 
     def _start_load(self, generation: int, chart_range: ChartRange) -> None:

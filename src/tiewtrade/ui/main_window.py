@@ -16,7 +16,12 @@ from tiewtrade.ui.bot_lifecycle_workflow import (
     LifecycleAction,
     RuntimeSnapshotRelay,
 )
-from tiewtrade.ui.chart_workflow import ChartWorkflow, LoadChart, RefreshChart
+from tiewtrade.ui.chart_workflow import (
+    ChartFactRelay,
+    ChartWorkflow,
+    LoadChart,
+    RefreshChart,
+)
 from tiewtrade.ui.session_workflow import (
     CreateSession,
     LoadActiveSession,
@@ -50,6 +55,9 @@ class MainWindow(QMainWindow):
         shutdown_runtime: Callable[[], None] | None = None,
         load_chart: LoadChart | None = None,
         refresh_chart: RefreshChart | None = None,
+        chart_fact_relay: ChartFactRelay | None = None,
+        start_chart_feed: Callable[[ConfiguredPaperSession], None] | None = None,
+        stop_chart_feed: Callable[[], None] | None = None,
         chart_clock: Callable[[], datetime] = lambda: datetime.now(UTC),
         thread_pool: QThreadPool | None = None,
     ) -> None:
@@ -58,6 +66,9 @@ class MainWindow(QMainWindow):
         self._load_chart = load_chart
         self._retire_session = retire_session
         self._shutdown_runtime = shutdown_runtime
+        self._chart_fact_relay = chart_fact_relay
+        self._start_chart_feed = start_chart_feed
+        self._stop_chart_feed = stop_chart_feed
         self._close_sequence_started = False
         self._close_sequence_completed = False
         self._shutdown_task: BackgroundTask | None = None
@@ -122,13 +133,19 @@ class MainWindow(QMainWindow):
         self._chart_workflow.snapshot_changed.connect(
             self.workspace.chart.show_snapshot
         )
-        self._lifecycle_workflow.snapshot_changed.connect(
-            self._chart_workflow.runtime_snapshot
-        )
         self.workspace.chart.range_requested.connect(self._chart_workflow.load_range)
         self.workspace.chart.retry_requested.connect(self._chart_workflow.retry)
+        if chart_fact_relay is not None:
+            chart_fact_relay.completed_candle_ready.connect(
+                self._chart_completed_candle,
+                Qt.ConnectionType.QueuedConnection,
+            )
+            chart_fact_relay.in_progress_candle_ready.connect(
+                self._chart_in_progress_candle,
+                Qt.ConnectionType.QueuedConnection,
+            )
         self._runtime_snapshots = runtime_snapshots
-        if runtime_snapshots is not None:
+        if chart_fact_relay is None and runtime_snapshots is not None:
             runtime_snapshots.completed_candle_ready.connect(
                 self._runtime_completed_candle,
                 Qt.ConnectionType.QueuedConnection,
@@ -185,18 +202,34 @@ class MainWindow(QMainWindow):
         self._lifecycle_workflow.configure(session)
         if self._load_chart is not None:
             self._chart_workflow.start(session)
+        if self._start_chart_feed is not None:
+            self._start_chart_feed(session)
+
+    @Slot(object, int)
+    def _chart_completed_candle(self, candle: object, generation: int) -> None:
+        relay = self._chart_fact_relay
+        if relay is None or not relay.is_current(generation):
+            return
+        self._chart_workflow.completed_candle(candle)
+
+    @Slot(object, int)
+    def _chart_in_progress_candle(self, candle: object, generation: int) -> None:
+        relay = self._chart_fact_relay
+        if relay is None or not relay.is_current(generation):
+            return
+        self._chart_workflow.in_progress_candle(candle)
 
     @Slot(object, int)
     def _runtime_completed_candle(self, candle: object, generation: int) -> None:
-        runtime_snapshots = self._runtime_snapshots
-        if runtime_snapshots is None or not runtime_snapshots.is_current(generation):
+        relay = self._runtime_snapshots
+        if relay is None or not relay.is_current(generation):
             return
         self._chart_workflow.completed_candle(candle)
 
     @Slot(object, int)
     def _runtime_in_progress_candle(self, candle: object, generation: int) -> None:
-        runtime_snapshots = self._runtime_snapshots
-        if runtime_snapshots is None or not runtime_snapshots.is_current(generation):
+        relay = self._runtime_snapshots
+        if relay is None or not relay.is_current(generation):
             return
         self._chart_workflow.in_progress_candle(candle)
 
@@ -237,6 +270,10 @@ class MainWindow(QMainWindow):
         super().closeEvent(event)
 
     def _close_workflows(self) -> None:
+        if self._stop_chart_feed is not None:
+            self._stop_chart_feed()
+        if self._chart_fact_relay is not None:
+            self._chart_fact_relay.invalidate()
         self._workflow.close()
         self._lifecycle_workflow.close()
         self._history_workflow.close()

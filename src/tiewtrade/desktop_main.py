@@ -15,6 +15,7 @@ from tiewtrade.application.chart_data import (
     ChartSnapshot,
 )
 from tiewtrade.application.chart_history import ChartHistory
+from tiewtrade.application.chart_realtime_feed import ChartOnlyFeedController
 from tiewtrade.application.database_compatibility import DatabaseCompatibilityError
 from tiewtrade.application.paper_runtime import PaperRuntimeController
 from tiewtrade.application.paper_session_setup import (
@@ -48,6 +49,7 @@ from tiewtrade.trading.session_config import MarketType
 from tiewtrade.trading.symbol_rules import SymbolRules
 from tiewtrade.trading.trade_history import TradeFill
 from tiewtrade.ui.bot_lifecycle_workflow import RuntimeSnapshotRelay
+from tiewtrade.ui.chart_workflow import ChartFactRelay
 from tiewtrade.ui.desktop import run_desktop as run_desktop_ui
 
 _RUNTIME_SHUTDOWN_TIMEOUT_SECONDS = 30.0
@@ -340,6 +342,8 @@ def run_desktop(database_path: Path | None = None) -> int:
         return history.list_fills(basket_id)
 
     runtime_snapshots = RuntimeSnapshotRelay()
+    chart_fact_relay = ChartFactRelay()
+    chart_feed = ChartOnlyFeedController(source_factory=BinancePublicMarketData)
     runtime_actions = _PaperRuntimeActions(
         lifecycle=SQLitePaperRuntimeLifecycle(database),
         trade_history=history,
@@ -393,6 +397,17 @@ def run_desktop(database_path: Path | None = None) -> int:
         prepare_database()
         return await chart_history.refresh_completed(session, snapshot, candle)
 
+    def start_chart_feed(session: ConfiguredPaperSession) -> None:
+        publisher = chart_fact_relay.new_generation()
+        chart_feed.start(
+            session,
+            publisher.completed_candle,
+            publisher.in_progress_candle,
+        )
+
+    def stop_chart_feed() -> None:
+        chart_feed.close()
+
     return run_desktop_ui(
         create_session=create_after_migration,
         load_active=load_after_migration,
@@ -408,6 +423,9 @@ def run_desktop(database_path: Path | None = None) -> int:
         shutdown_runtime=runtime_actions.shutdown,
         load_chart=load_chart,
         refresh_chart=refresh_chart,
+        chart_fact_relay=chart_fact_relay,
+        start_chart_feed=start_chart_feed,
+        stop_chart_feed=stop_chart_feed,
     )
 
 
