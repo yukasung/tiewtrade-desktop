@@ -405,8 +405,9 @@ def run_desktop(database_path: Path | None = None) -> int:
             publisher.in_progress_candle,
         )
 
-    def stop_chart_feed() -> None:
+    def shutdown_desktop_runtimes() -> None:
         chart_feed.close()
+        runtime_actions.shutdown()
 
     return run_desktop_ui(
         create_session=create_after_migration,
@@ -420,12 +421,11 @@ def run_desktop(database_path: Path | None = None) -> int:
         new_session_available=runtime_actions.new_session_available,
         initialize_bot=runtime_actions.initialize,
         runtime_snapshots=runtime_snapshots,
-        shutdown_runtime=runtime_actions.shutdown,
+        shutdown_runtime=shutdown_desktop_runtimes,
         load_chart=load_chart,
         refresh_chart=refresh_chart,
         chart_fact_relay=chart_fact_relay,
         start_chart_feed=start_chart_feed,
-        stop_chart_feed=stop_chart_feed,
     )
 
 

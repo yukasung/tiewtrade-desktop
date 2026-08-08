@@ -1501,6 +1501,22 @@ def test_closing_window_invokes_controlled_runtime_shutdown(qtbot: QtBot) -> Non
     assert len(shutdown_threads) == 1
 
 
+def test_closing_window_does_not_stop_chart_feed_on_qt_thread(qtbot: QtBot) -> None:
+    stopped: list[bool] = []
+    window = MainWindow(
+        create_session=unused_create,
+        load_active=no_active_session,
+        list_baskets=empty_basket_page,
+        list_fills=empty_fills,
+        stop_chart_feed=lambda: stopped.append(True),
+    )
+    qtbot.addWidget(window)
+
+    window._close_workflows()
+
+    assert stopped == []
+
+
 def test_closing_window_ignores_late_trade_history_result(qtbot: QtBot) -> None:
     started = threading.Event()
     release = threading.Event()

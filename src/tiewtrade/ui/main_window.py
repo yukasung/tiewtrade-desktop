@@ -270,8 +270,6 @@ class MainWindow(QMainWindow):
         super().closeEvent(event)
 
     def _close_workflows(self) -> None:
-        if self._stop_chart_feed is not None:
-            self._stop_chart_feed()
         if self._chart_fact_relay is not None:
             self._chart_fact_relay.invalidate()
         self._workflow.close()
