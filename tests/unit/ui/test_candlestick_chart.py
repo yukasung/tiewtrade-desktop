@@ -1,3 +1,4 @@
+from dataclasses import fields
 from datetime import UTC, datetime
 from decimal import Decimal
 from typing import Any, cast
@@ -33,23 +34,29 @@ def test_chart_renders_durable_buy_and_sell_markers_without_action_buttons(
     assert not chart.grab().isNull()
 
 
-def test_painter_model_contains_buy_sell_triangles_and_scaled_volume_geometry() -> None:
+def test_painter_model_contains_only_price_candles_and_fill_markers() -> None:
     snapshot = ready_snapshot(
         candles=(
-            candle(0, volume="1", open_price="100", close_price="103"),
-            candle(5, volume="3", open_price="103", close_price="101"),
-            candle(10, volume="2", open_price="101", close_price="104"),
+            candle(0, open_price="100", close_price="103"),
+            candle(5, open_price="103", close_price="101"),
+            candle(10, open_price="101", close_price="104"),
         )
     )
 
     model = chart_module._build_painter_model(snapshot, QRectF(0, 0, 300, 200))
 
-    assert len(model.candles) == 3
-    assert [round(glyph.volume_bar.height(), 2) for glyph in model.candles] == [
-        20.0,
-        60.0,
-        40.0,
+    assert [field.name for field in fields(chart_module.CandleGlyph)] == [
+        "wick",
+        "body",
+        "color",
     ]
+    assert [field.name for field in fields(chart_module.ChartPainterModel)] == [
+        "grid_lines",
+        "candles",
+        "markers",
+    ]
+    assert min(min(glyph.wick.y1(), glyph.wick.y2()) for glyph in model.candles) == 0
+    assert max(max(glyph.wick.y1(), glyph.wick.y2()) for glyph in model.candles) == 200
     buy, sell = model.markers
     assert buy.label == "Buy"
     assert buy.triangle[0].y() < buy.triangle[1].y()
@@ -171,7 +178,6 @@ def ready_snapshot(*, candles: tuple[Candle, ...] | None = None) -> ChartSnapsho
 def candle(
     minute: int,
     *,
-    volume: str = "1",
     open_price: str = "100",
     close_price: str = "103",
 ) -> Candle:
@@ -185,7 +191,7 @@ def candle(
         high=max(open_value, close_value) + Decimal("3"),
         low=Decimal("99"),
         close=close_value,
-        volume=Decimal(volume),
+        volume=Decimal("1"),
     )
 
 

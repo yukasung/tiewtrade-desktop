@@ -19,7 +19,6 @@ from tiewtrade.trading.trade_history import FillSide
 class CandleGlyph:
     wick: QLineF
     body: QRectF
-    volume_bar: QRectF
     color: QColor
 
 
@@ -34,7 +33,6 @@ class MarkerGlyph:
 @dataclass(frozen=True, slots=True)
 class ChartPainterModel:
     grid_lines: tuple[QLineF, ...]
-    volume_divider: QLineF
     candles: tuple[CandleGlyph, ...]
     markers: tuple[MarkerGlyph, ...]
 
@@ -170,12 +168,10 @@ class CandlestickChartWidget(QWidget):
         painter.setPen(QPen(QColor("#26313F"), 1))
         for line in model.grid_lines:
             painter.drawLine(line)
-        painter.drawLine(model.volume_divider)
         for candle in model.candles:
             painter.setPen(QPen(candle.color, 1))
             painter.drawLine(candle.wick)
             painter.fillRect(candle.body, candle.color)
-            painter.fillRect(candle.volume_bar, candle.color)
         for marker in model.markers:
             painter.setPen(QPen(marker.color, 2))
             painter.setBrush(marker.color)
@@ -194,18 +190,7 @@ def _build_painter_model(
     if low == high:
         low -= Decimal("1")
         high += Decimal("1")
-    price_surface = QRectF(
-        surface.left(),
-        surface.top(),
-        surface.width(),
-        surface.height() * 0.65,
-    )
-    volume_surface = QRectF(
-        surface.left(),
-        surface.top() + surface.height() * 0.70,
-        surface.width(),
-        surface.height() * 0.30,
-    )
+    price_surface = surface
     grid_lines = tuple(
         QLineF(
             price_surface.left(),
@@ -216,18 +201,12 @@ def _build_painter_model(
         for line in range(5)
     )
     width = max(4.0, surface.width() / max(len(snapshot.candles) * 2, 2))
-    max_volume = max((candle.volume for candle in snapshot.candles), default=Decimal(0))
     candles: list[CandleGlyph] = []
     for candle in snapshot.candles:
         x = _marker_x(candle.open_time, snapshot.chart_range, surface)
         color = QColor("#0ECB81" if candle.close >= candle.open else "#F6465D")
         body_top = _price_y(max(candle.open, candle.close), low, high, price_surface)
         body_bottom = _price_y(min(candle.open, candle.close), low, high, price_surface)
-        volume_height = (
-            0.0
-            if max_volume == 0
-            else float(candle.volume / max_volume) * volume_surface.height()
-        )
         candles.append(
             CandleGlyph(
                 wick=QLineF(
@@ -241,12 +220,6 @@ def _build_painter_model(
                     body_top,
                     width,
                     max(1.0, body_bottom - body_top),
-                ),
-                volume_bar=QRectF(
-                    x - width / 2,
-                    volume_surface.bottom() - volume_height,
-                    width,
-                    volume_height,
                 ),
                 color=color,
             )
@@ -272,12 +245,6 @@ def _build_painter_model(
         )
     return ChartPainterModel(
         grid_lines=grid_lines,
-        volume_divider=QLineF(
-            volume_surface.left(),
-            volume_surface.top(),
-            volume_surface.right(),
-            volume_surface.top(),
-        ),
         candles=tuple(candles),
         markers=tuple(markers),
     )
