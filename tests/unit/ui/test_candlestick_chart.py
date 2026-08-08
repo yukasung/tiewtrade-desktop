@@ -93,7 +93,7 @@ def test_mouse_over_plot_shows_crosshair_price_and_time(qtbot: QtBot) -> None:
     chart.show_snapshot(ready_snapshot())
     chart.show()
 
-    qtbot.mouseMove(chart, QPoint(280, 180))
+    cast(Any, qtbot).mouseMove(chart, QPoint(280, 180))
 
     assert chart.crosshair is not None
     assert chart.crosshair.price_label.label
@@ -107,9 +107,35 @@ def test_crosshair_hides_outside_plot_area(qtbot: QtBot) -> None:
     chart.show_snapshot(ready_snapshot())
     chart.show()
 
-    qtbot.mouseMove(chart, QPoint(300, 180))
+    cast(Any, qtbot).mouseMove(chart, QPoint(300, 180))
     assert chart.crosshair is not None
-    qtbot.mouseMove(chart, QPoint(chart.width() - 4, 20))
+    cast(Any, qtbot).mouseMove(chart, QPoint(chart.width() - 4, 20))
+
+    assert chart.crosshair is None
+
+
+def test_candles_and_markers_remain_inside_plot_not_axis_space() -> None:
+    model = chart_module._build_painter_model(ready_snapshot(), QRectF(0, 0, 600, 300))
+
+    assert all(
+        model.plot_surface.contains(glyph.body.center()) for glyph in model.candles
+    )
+    assert all(
+        model.plot_surface.contains(marker.label_rect.center())
+        for marker in model.markers
+    )
+
+
+def test_snapshot_change_clears_crosshair(qtbot: QtBot) -> None:
+    chart = CandlestickChartWidget()
+    qtbot.addWidget(chart)
+    chart.resize(640, 360)
+    chart.show_snapshot(ready_snapshot())
+    chart.show()
+    cast(Any, qtbot).mouseMove(chart, QPoint(280, 180))
+    assert chart.crosshair is not None
+
+    chart.show_snapshot(ready_snapshot())
 
     assert chart.crosshair is None
 
