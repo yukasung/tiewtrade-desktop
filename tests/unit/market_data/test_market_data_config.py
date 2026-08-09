@@ -13,7 +13,7 @@ def test_market_data_config_exposes_symbol_and_timeframe() -> None:
     assert config.interval == timedelta(minutes=15)
 
 
-@pytest.mark.parametrize("timeframe", ["3m", "5m", "15m", "30m", "1h", "4h"])
+@pytest.mark.parametrize("timeframe", ["1m", "3m", "5m", "15m", "30m", "1h", "4h"])
 def test_market_data_config_accepts_supported_v1_timeframes(timeframe: str) -> None:
     config = MarketDataConfig(symbol="BTCUSDT", timeframe=timeframe)
 
@@ -31,7 +31,7 @@ def test_market_data_config_rejects_blank_symbol() -> None:
         MarketDataConfig(symbol="", timeframe="5m")
 
 
-@pytest.mark.parametrize("timeframe", ["1m", "7m", "1d"])
+@pytest.mark.parametrize("timeframe", ["7m", "1d"])
 def test_market_data_config_rejects_timeframe_outside_v1_session_options(
     timeframe: str,
 ) -> None:

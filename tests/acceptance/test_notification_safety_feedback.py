@@ -66,7 +66,7 @@ def test_static_dependency_scanner_expands_from_import_aliases(
     }
 
 
-def test_paper_notification_feedback_shows_blocked_and_recovery_without_side_effects(
+def test_paper_notification_feedback_shows_blocked_without_side_effects(
     monkeypatch: MonkeyPatch,
     qtbot: QtBot,
     tmp_path: Path,
@@ -79,7 +79,6 @@ def test_paper_notification_feedback_shows_blocked_and_recovery_without_side_eff
     _prove_durable_write_guard_rejects_updates(database, write_guard)
     initial_durable_state = _sqlite_table_contents(database)
     initialize_calls = 0
-    recover_calls = 0
 
     def initialize_bot(snapshot: BotControlSnapshot) -> BotLifecycleResult:
         nonlocal initialize_calls
@@ -90,18 +89,12 @@ def test_paper_notification_feedback_shows_blocked_and_recovery_without_side_eff
             blocked_reason="Paper Bot recovery required",
         )
 
-    def recover_bot(snapshot: BotControlSnapshot) -> BotLifecycleResult:
-        nonlocal recover_calls
-        recover_calls += 1
-        return _result(snapshot, BotRuntimeState.STOPPED)
-
     window = MainWindow(
         create_session=lambda _values: pytest.fail("create must not run"),
         load_active=sessions.get_active,
         list_baskets=empty_basket_page,
         list_fills=empty_fills,
         initialize_bot=initialize_bot,
-        recover_bot=recover_bot,
     )
     qtbot.addWidget(window)
     window.show()
@@ -133,14 +126,7 @@ def test_paper_notification_feedback_shows_blocked_and_recovery_without_side_eff
         == "Notifications: 0 unread"
     )
 
-    click(window.workspace.bot_control_widget.recover_button)
-    qtbot.waitUntil(lambda: window.workspace.header_runtime.text() == "Stopped")
-
-    assert recover_calls == 1
-    assert window.workspace.notification_rows[0].text() == (
-        "2026-08-02 12:00:00 UTC · Info · Recovery · "
-        "Paper Bot recovery completed safely"
-    )
+    assert window.setup.isVisible()
     assert write_guard.write_attempts == []
     assert _sqlite_table_contents(database) == initial_durable_state
 

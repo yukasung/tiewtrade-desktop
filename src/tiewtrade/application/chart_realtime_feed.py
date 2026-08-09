@@ -7,6 +7,7 @@ from threading import Lock, Thread, current_thread
 from typing import Protocol
 from uuid import UUID
 
+from tiewtrade.application.chart_view_selection import ChartViewSelection
 from tiewtrade.application.latest_market_price import LatestMarketPrice
 from tiewtrade.application.paper_session_setup import ConfiguredPaperSession
 from tiewtrade.integrations.binance.public_endpoints import BinancePublicEndpoints
@@ -70,22 +71,29 @@ class ChartOnlyFeedController:
         session: ConfiguredPaperSession,
         publish_completed: Callable[[Candle], None],
         publish_in_progress: Callable[[Candle], None],
+        selection: ChartViewSelection | None = None,
     ) -> None:
         self.stop()
         if self._latest_market_price is not None:
             self._latest_market_price.reset()
+        captures_session_price = (
+            selection is None or selection.market_data_config() == session.market_data
+        )
         publish_completed_with_price = self._capture_price(
             session.config.session_id,
             publish_completed,
+            capture_price=captures_session_price,
         )
         publish_in_progress_with_price = self._capture_price(
             session.config.session_id,
             publish_in_progress,
+            capture_price=captures_session_price,
         )
         ready = Thread(
             target=self._run,
             args=(
                 session,
+                selection,
                 publish_completed_with_price,
                 publish_in_progress_with_price,
             ),
@@ -100,10 +108,12 @@ class ChartOnlyFeedController:
         self,
         session_id: UUID,
         publish: Callable[[Candle], None],
+        *,
+        capture_price: bool,
     ) -> Callable[[Candle], None]:
         def capture(candle: Candle) -> None:
             latest_market_price = self._latest_market_price
-            if latest_market_price is not None:
+            if capture_price and latest_market_price is not None:
                 latest_market_price.observe(session_id, candle.close)
             publish(candle)
 
@@ -126,14 +136,23 @@ class ChartOnlyFeedController:
     def _run(
         self,
         session: ConfiguredPaperSession,
+        selection: ChartViewSelection | None,
         publish_completed: Callable[[Candle], None],
         publish_in_progress: Callable[[Candle], None],
     ) -> None:
-        asyncio.run(self._run_async(session, publish_completed, publish_in_progress))
+        asyncio.run(
+            self._run_async(
+                session,
+                selection,
+                publish_completed,
+                publish_in_progress,
+            )
+        )
 
     async def _run_async(
         self,
         session: ConfiguredPaperSession,
+        selection: ChartViewSelection | None,
         publish_completed: Callable[[Candle], None],
         publish_in_progress: Callable[[Candle], None],
     ) -> None:
@@ -141,7 +160,11 @@ class ChartOnlyFeedController:
             BinancePublicEndpoints.for_market_type(session.config.market_type)
         )
         runtime = self._runtime_factory(
-            config=session.market_data,
+            config=(
+                session.market_data
+                if selection is None
+                else selection.market_data_config()
+            ),
             warm_up_count=1,
             source=source,
             sink=_ChartOnlySink(publish_completed),

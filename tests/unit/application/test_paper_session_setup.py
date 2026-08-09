@@ -64,6 +64,20 @@ def test_create_spot_session_builds_immutable_configuration() -> None:
     assert recorded == [outcome.session]
 
 
+def test_create_paper_session_accepts_ethusdt() -> None:
+    use_case = CreatePaperSession(
+        create_active=lambda session: PaperSessionCreateOutcome(
+            session=session, created=True
+        ),
+        session_ids=lambda: SESSION_ID,
+        clock=lambda: CREATED_AT,
+    )
+
+    outcome = use_case.execute(replace(spot_values(), symbol="ETHUSDT"))
+
+    assert outcome.session.market_data.symbol == "ETHUSDT"
+
+
 @pytest.mark.parametrize(
     ("field", "value"),
     [

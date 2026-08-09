@@ -176,6 +176,7 @@ def test_desktop_composition_supplies_migrated_create_and_load_operations(
         captured["load_active"] = load_active
         captured["list_baskets"] = list_baskets
         captured["list_fills"] = list_fills
+        captured.update(dependencies)
         return 0
 
     monkeypatch.setattr(desktop_main, "run_desktop_ui", capture_desktop)
@@ -205,6 +206,10 @@ def test_desktop_composition_supplies_migrated_create_and_load_operations(
     active = load_active_session()
     assert isinstance(active, ConfiguredPaperSession)
     assert active.config.session_id == outcome.session.config.session_id
+    has_open_position = cast(
+        Callable[[ConfiguredPaperSession], bool], captured["has_open_position"]
+    )
+    assert has_open_position(active) is False
 
 
 def test_desktop_composition_supplies_chart_loader_without_ui_adapter_imports(
@@ -629,7 +634,7 @@ def test_runtime_shutdown_waits_for_active_lifecycle_operation_without_duplicate
             state=BotRuntimeState.BLOCKED,
             session=session,
             workspace=blocked_workspace,
-            available_actions=frozenset({BotControlAction.RECOVER}),
+            available_actions=frozenset(),
             blocked_reason="Paper Bot recovery failed",
         )
         lifecycle_action = actions.recover
@@ -663,6 +668,7 @@ def test_runtime_symbol_rules_derive_symbol_from_session_market_data() -> None:
     rules = desktop_main._symbol_rules_for(session)
 
     assert rules.symbol == "ETHUSDT"
+    assert rules.tick_size == Decimal("0.01")
 
 
 def test_concurrent_session_load_and_history_query_serialize_v1_migration(
@@ -825,6 +831,51 @@ def test_ui_desktop_forwards_required_trade_history_dependencies(
     assert captured["shutdown_runtime"] is shutdown_runtime
     assert captured["style_sheet"] == DARK_THEME
     assert captured["shown"] is True
+
+
+def test_ui_desktop_forwards_chart_view_selection_callback(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    captured: dict[str, object] = {}
+
+    class FakeApplication:
+        @classmethod
+        def instance(cls) -> "FakeApplication":
+            return cls()
+
+        def exec(self) -> int:
+            return 0
+
+    class FakeMainWindow:
+        def __init__(self, **dependencies: object) -> None:
+            captured.update(dependencies)
+
+        def setStyleSheet(self, style_sheet: str) -> None:
+            pass
+
+        def show(self) -> None:
+            pass
+
+    def select_chart_view(
+        session: ConfiguredPaperSession,
+        selection: object,
+    ) -> None:
+        pass
+
+    monkeypatch.setattr(ui_desktop, "QApplication", FakeApplication)
+    monkeypatch.setattr(ui_desktop, "MainWindow", FakeMainWindow)
+
+    assert (
+        ui_desktop.run_desktop(
+            create_session=lambda values: None,  # type: ignore[arg-type,return-value]
+            load_active=lambda: None,
+            list_baskets=empty_basket_page,
+            list_fills=empty_fills,
+            select_chart_view=select_chart_view,
+        )
+        == 0
+    )
+    assert captured["select_chart_view"] is select_chart_view
 
 
 def test_desktop_composition_defers_database_directory_creation_to_load_worker(

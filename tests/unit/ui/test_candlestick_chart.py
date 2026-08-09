@@ -16,6 +16,7 @@ from tiewtrade.application.chart_data import (
     ChartReadState,
     ChartSnapshot,
 )
+from tiewtrade.application.chart_view_selection import ChartViewSelection
 from tiewtrade.market_data.candle import Candle
 from tiewtrade.trading.trade_history import FillSide, TradeFill
 from tiewtrade.ui.candlestick_chart import CandlestickChartWidget
@@ -43,6 +44,31 @@ def test_chart_renders_durable_buy_and_sell_markers_without_action_buttons(
     assert chart.marker_labels == ("Buy", "Sell")
     assert chart.findChildren(QPushButton, "manualOrderButton") == []
     assert not chart.grab().isNull()
+
+
+def test_chart_header_emits_selected_read_only_view(qtbot: QtBot) -> None:
+    chart = CandlestickChartWidget()
+    qtbot.addWidget(chart)
+    selected: list[ChartViewSelection] = []
+    chart.view_requested.connect(selected.append)
+
+    chart.symbol.setCurrentIndex(chart.symbol.findData("BNBUSDT"))
+    chart.timeframe.setCurrentIndex(chart.timeframe.findData("1m"))
+
+    assert selected[-1] == ChartViewSelection(symbol="BNBUSDT", timeframe="1m")
+
+
+def test_chart_selector_header_leaves_readable_space_between_controls(
+    qtbot: QtBot,
+) -> None:
+    chart = CandlestickChartWidget()
+    qtbot.addWidget(chart)
+    chart.resize(1200, 500)
+    chart.show_snapshot(ready_snapshot())
+    chart.show()
+
+    assert chart.timeframe.geometry().left() - chart.symbol.geometry().right() - 1 == 12
+    assert chart._facts.geometry().left() - chart.timeframe.geometry().right() - 1 == 16
 
 
 def test_painter_model_contains_only_price_candles_and_fill_markers() -> None:

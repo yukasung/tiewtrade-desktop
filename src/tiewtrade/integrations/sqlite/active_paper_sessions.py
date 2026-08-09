@@ -8,6 +8,7 @@ from tiewtrade.application.paper_session_setup import (
     PaperSessionCreateOutcome,
     PaperSessionUnavailableError,
 )
+from tiewtrade.application.paper_symbols import validate_paper_symbol
 from tiewtrade.integrations.sqlite.database import SQLiteDatabase
 from tiewtrade.market_data.config import MarketDataConfig
 from tiewtrade.strategies.rsi_step_grid.preset import RsiStepGridPreset
@@ -116,8 +117,12 @@ class SQLiteActivePaperSessions:
 
 
 def _session_from_row(row: sqlite3.Row) -> ConfiguredPaperSession:
-    if row["symbol"] != "BTCUSDT":
-        raise PaperSessionUnavailableError("Active Paper Session read failed")
+    try:
+        validate_paper_symbol(row["symbol"])
+    except ValueError as error:
+        raise PaperSessionUnavailableError(
+            "Active Paper Session read failed"
+        ) from error
     if row["preset_version"] != RsiStepGridPreset.v1().version:
         raise PaperSessionUnavailableError("Active Paper Session read failed")
     market_type = MarketType(row["market_type"])

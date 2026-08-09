@@ -1,5 +1,6 @@
 import sqlite3
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
 from threading import Barrier
@@ -78,6 +79,26 @@ def test_create_and_restart_round_trip_exact_spot_session(tmp_path: Path) -> Non
     assert restarted == session
 
 
+def test_create_and_restart_round_trip_exact_ethusdt_spot_session(
+    tmp_path: Path,
+) -> None:
+    database_path = tmp_path / "tiewtrade.sqlite3"
+    database = SQLiteDatabase(database_path)
+    database.migrate()
+    store = SQLiteActivePaperSessions(database)
+    btcusdt_session = configured_spot_session()
+    session = replace(
+        btcusdt_session,
+        market_data=replace(btcusdt_session.market_data, symbol="ETHUSDT"),
+    )
+
+    store.create(session)
+
+    restarted = SQLiteActivePaperSessions(SQLiteDatabase(database_path)).get_active()
+
+    assert restarted == session
+
+
 def test_create_and_restart_round_trip_exact_futures_session(tmp_path: Path) -> None:
     database_path = tmp_path / "tiewtrade.sqlite3"
     database = SQLiteDatabase(database_path)
@@ -118,7 +139,7 @@ def test_get_active_returns_none_when_database_has_no_session(tmp_path: Path) ->
 @pytest.mark.parametrize(
     ("column", "unsupported_value"),
     [
-        pytest.param("symbol", "ETHUSDT", id="symbol"),
+        pytest.param("symbol", "DOGEUSDT", id="symbol"),
         pytest.param("preset_version", "rsi-step-grid-v2", id="preset-version"),
     ],
 )

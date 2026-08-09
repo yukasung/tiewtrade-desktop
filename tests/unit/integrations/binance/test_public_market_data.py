@@ -149,13 +149,13 @@ def rest_kline(minute: int) -> list[object]:
     ]
 
 
-def websocket_kline(*, closed: bool) -> dict[str, object]:
+def websocket_kline(*, closed: bool, timeframe: str = "5m") -> dict[str, object]:
     return {
         "s": "BTCUSDT",
         "k": {
             "t": 1767225600000,
             "s": "BTCUSDT",
-            "i": "5m",
+            "i": timeframe,
             "o": "100.10",
             "h": "102.20",
             "l": "99.90",
@@ -188,8 +188,12 @@ def source_with(
 
 async def collect_updates(
     source: BinancePublicMarketData,
+    market_data: MarketDataConfig | None = None,
 ) -> tuple[MarketDataKlineUpdate, ...]:
-    return tuple([update async for update in source.stream_klines(config())])
+    configured_market_data = market_data or config()
+    return tuple(
+        [update async for update in source.stream_klines(configured_market_data)]
+    )
 
 
 def request_info() -> tuple[RequestInfo, CIMultiDictProxy[str]]:
@@ -537,6 +541,20 @@ def test_stream_klines_yields_open_then_closed_from_one_websocket() -> None:
     assert [update.is_closed for update in updates] == [False, True]
     assert session.websocket_urls == [
         "wss://data-stream.binance.vision/ws/btcusdt@kline_5m"
+    ]
+
+
+def test_stream_klines_uses_one_minute_configured_interval() -> None:
+    source, session = source_with(
+        websocket_payloads=[websocket_kline(closed=True, timeframe="1m")]
+    )
+
+    updates = asyncio.run(collect_updates(source, config(timeframe="1m")))
+
+    assert len(updates) == 1
+    assert updates[0].candle.timeframe == "1m"
+    assert session.websocket_urls == [
+        "wss://data-stream.binance.vision/ws/btcusdt@kline_1m"
     ]
 
 

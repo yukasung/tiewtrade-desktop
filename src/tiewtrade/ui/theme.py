@@ -68,6 +68,13 @@ QLineEdit, QComboBox, QSpinBox, QDateEdit {
     padding: 0 10px;
     selection-background-color: #315CF4;
 }
+QComboBox#chartSymbol, QComboBox#chartTimeframe {
+    padding: 0 40px 0 14px;
+}
+QComboBox#chartSymbol QAbstractItemView::item,
+QComboBox#chartTimeframe QAbstractItemView::item {
+    padding: 6px 12px;
+}
 QLineEdit:focus, QComboBox:focus, QSpinBox:focus, QDateEdit:focus,
 QPushButton:focus, QTabBar::tab:focus, QTableWidget:focus {
     border: 2px solid #4C7DFF;
@@ -243,5 +250,13 @@ QLabel#unavailableMessage {
     border-radius: 6px;
     color: #FF9CAA;
     padding: 10px 12px;
+}
+QMessageBox {
+    background: #141A22;
+    color: #F1F5F9;
+}
+QMessageBox QLabel {
+    background: transparent;
+    color: #F1F5F9;
 }
 """

@@ -176,20 +176,6 @@ class BotLifecycleWorkflow(QObject):
             "Stopping Paper Bot",
         )
 
-    @Slot()
-    def recover(self) -> None:
-        snapshot = self._snapshot
-        if (
-            self._closed
-            or self._active_task is not None
-            or snapshot is None
-            or self._recover is None
-            or BotControlAction.RECOVER not in snapshot.available_actions
-        ):
-            return
-        self._invalidate_runtime_snapshots()
-        self._start_task(_LifecycleOperation.RECOVER, self._recover, snapshot)
-
     def close(self) -> None:
         if self._closed:
             return
@@ -446,26 +432,9 @@ class BotLifecycleWorkflow(QObject):
             return frozenset({BotControlAction.START})
         if state is BotRuntimeState.RUNNING and self._stop_bot is not None:
             return frozenset({BotControlAction.STOP})
-        if state is BotRuntimeState.STOPPED:
-            return self._new_session_actions(session)
-        if state is BotRuntimeState.BLOCKED:
-            actions = set()
-            if self._recover is not None:
-                actions.add(BotControlAction.RECOVER)
-            actions.update(self._new_session_actions(session))
-            return frozenset(actions)
-        return frozenset()
-
-    def _new_session_actions(
-        self, session: ConfiguredPaperSession
-    ) -> frozenset[BotControlAction]:
-        if self._new_session_available is None:
+        if state in {BotRuntimeState.STOPPED, BotRuntimeState.BLOCKED}:
             return frozenset()
-        return (
-            frozenset({BotControlAction.NEW_SESSION})
-            if self._new_session_available(session)
-            else frozenset()
-        )
+        return frozenset()
 
     def _is_allowed_result(
         self,

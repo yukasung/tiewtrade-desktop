@@ -110,7 +110,7 @@ def test_stopping_and_stopped_disallow_actions_and_entries() -> None:
     assert stopped.entry_creation_allowed is False
 
 
-def test_blocked_control_requires_sanitized_reason_and_only_allows_recovery() -> None:
+def test_blocked_control_requires_sanitized_reason_and_has_no_action() -> None:
     running = _running_control()
 
     for reason in (
@@ -121,12 +121,12 @@ def test_blocked_control_requires_sanitized_reason_and_only_allows_recovery() ->
         blocked = blocked_bot_control(
             running,
             reason=reason,
-            actions=frozenset({BotControlAction.RECOVER}),
+            actions=frozenset(),
         )
 
         assert blocked.state is BotRuntimeState.BLOCKED
         assert blocked.blocked_reason == reason
-        assert blocked.available_actions == frozenset({BotControlAction.RECOVER})
+        assert blocked.available_actions == frozenset()
         assert blocked.entry_creation_allowed is False
 
 
@@ -171,7 +171,7 @@ def test_blocked_control_rejects_raw_exception_credential_and_payload_reasons(
         ),
         (
             BotRuntimeState.RUNNING,
-            frozenset({BotControlAction.RECOVER}),
+            frozenset({BotControlAction.START}),
             None,
             None,
             "RUNNING",
@@ -185,7 +185,7 @@ def test_blocked_control_rejects_raw_exception_credential_and_payload_reasons(
         ),
         (
             BotRuntimeState.BLOCKED,
-            frozenset({BotControlAction.RECOVER}),
+            frozenset(),
             None,
             None,
             "blocked_reason",
@@ -409,7 +409,7 @@ def test_blocked_control_can_remain_blocked_through_application_transition() -> 
             workspace=result_workspace,
             blocked_reason="Paper Bot recovery failed",
         ),
-        actions=frozenset({BotControlAction.RECOVER}),
+        actions=frozenset(),
     )
 
     assert still_blocked.workspace is result_workspace

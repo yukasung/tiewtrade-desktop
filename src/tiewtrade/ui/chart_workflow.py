@@ -1,5 +1,6 @@
 import asyncio
 from collections.abc import Awaitable, Callable
+from dataclasses import replace
 from datetime import UTC, datetime
 from threading import Lock
 from typing import TypeGuard
@@ -16,6 +17,7 @@ from tiewtrade.application.chart_data import (
     default_chart_range,
     latest_completed_boundary,
 )
+from tiewtrade.application.chart_view_selection import ChartViewSelection
 from tiewtrade.application.paper_session_setup import ConfiguredPaperSession
 from tiewtrade.ui.background_task import BackgroundTask
 
@@ -84,6 +86,7 @@ class ChartWorkflow(QObject):
         self._thread_pool = thread_pool or QThreadPool.globalInstance()
         self._clock = clock
         self._session: ConfiguredPaperSession | None = None
+        self._selection: ChartViewSelection | None = None
         self._snapshot: ChartSnapshot | None = None
         self._generation = 0
         self._active_task: BackgroundTask | None = None
@@ -99,6 +102,10 @@ class ChartWorkflow(QObject):
             return
         self._generation += 1
         self._session = session
+        self._selection = ChartViewSelection(
+            symbol=session.market_data.symbol,
+            timeframe=session.market_data.timeframe,
+        )
         self._snapshot = None
         self._pending_request = None
         self._pending_completed_candle = None
@@ -108,13 +115,25 @@ class ChartWorkflow(QObject):
 
     def start(self, session: ConfiguredPaperSession) -> None:
         self.configure(session)
-        self.load_range(default_chart_range(session, self._clock()))
+        self.load_range(default_chart_range(self._view_session(), self._clock()))
+
+    def select_view(self, selection: ChartViewSelection) -> None:
+        if self._closed or self._session is None or selection == self._selection:
+            return
+        self._selection = selection
+        self._generation += 1
+        self._pending_request = None
+        self._pending_completed_candle = None
+        self._pending_in_progress_candle = None
+        self._last_safe_range = None
+        self._following_latest = True
+        self.load_range(default_chart_range(self._view_session(), self._clock()))
 
     def load_range(self, chart_range: ChartRange) -> None:
-        if self._closed or self._session is None:
+        if self._closed or self._session is None or self._selection is None:
             return
         self._following_latest = chart_range.end == latest_completed_boundary(
-            self._session.market_data.timeframe,
+            self._selection.timeframe,
             self._clock(),
         )
         self._pending_in_progress_candle = None
@@ -198,8 +217,7 @@ class ChartWorkflow(QObject):
             return
         if self._refresh_chart is not None:
             refresh_chart = self._refresh_chart
-            session = self._session
-            if session is None:
+            if self._session is None or self._selection is None:
                 return
             self._generation += 1
             generation = self._generation
@@ -207,7 +225,7 @@ class ChartWorkflow(QObject):
                 lambda: asyncio.run(
                     self._refresh_in_background(
                         refresh_chart,
-                        session,
+                        self._view_session(),
                         snapshot,
                         candle,
                     )
@@ -233,16 +251,21 @@ class ChartWorkflow(QObject):
 
     def _refresh_succeeded(self, generation: int, result: object) -> None:
         session = self._session
+        selection = self._selection
         if (
             generation != self._generation
             or not isinstance(result, ChartSnapshot)
             or session is None
+            or selection is None
             or result.session_id != session.config.session_id
+            or result.symbol != selection.symbol
+            or result.timeframe != selection.timeframe
         ):
             return
-        self._snapshot = result
-        self._last_safe_range = result.chart_range
-        self.snapshot_changed.emit(result)
+        normalized = self._normalize_snapshot(result)
+        self._snapshot = normalized
+        self._last_safe_range = normalized.chart_range
+        self.snapshot_changed.emit(normalized)
 
     def _refresh_failed(
         self,
@@ -252,18 +275,23 @@ class ChartWorkflow(QObject):
     ) -> None:
         del error
         session = self._session
-        if generation != self._generation or session is None:
+        selection = self._selection
+        if generation != self._generation or session is None or selection is None:
             return
         self._pending_completed_candle = None
         self._pending_in_progress_candle = None
         unavailable = ChartSnapshot(
-            session=session,
             chart_range=snapshot.chart_range,
             observed_at_utc=max(self._clock(), snapshot.chart_range.end),
             candles=(),
             fills=(),
             state=ChartReadState.UNAVAILABLE,
             message="Chart is unavailable",
+            _session_facts=(
+                session.config.session_id,
+                selection.symbol,
+                selection.timeframe,
+            ),
         )
         self._snapshot = unavailable
         self.snapshot_changed.emit(unavailable)
@@ -297,11 +325,12 @@ class ChartWorkflow(QObject):
         self._following_latest = False
 
     def _start_load(self, generation: int, chart_range: ChartRange) -> None:
-        session = self._session
-        if session is None:
+        if self._session is None or self._selection is None:
             return
         task = BackgroundTask(
-            lambda: asyncio.run(self._load_in_background(session, chart_range))
+            lambda: asyncio.run(
+                self._load_in_background(self._view_session(), chart_range)
+            )
         )
         task.signals.succeeded.connect(
             lambda result: self._load_succeeded(generation, chart_range, result)
@@ -316,15 +345,20 @@ class ChartWorkflow(QObject):
 
     def _publish_loading(self, chart_range: ChartRange) -> None:
         session = self._session
-        if session is None:
+        selection = self._selection
+        if session is None or selection is None:
             return
         loading = ChartSnapshot(
-            session=session,
             chart_range=chart_range,
             observed_at_utc=max(self._clock(), chart_range.end),
             candles=(),
             fills=(),
             state=ChartReadState.LOADING,
+            _session_facts=(
+                session.config.session_id,
+                selection.symbol,
+                selection.timeframe,
+            ),
         )
         self._snapshot = loading
         self.snapshot_changed.emit(loading)
@@ -336,25 +370,32 @@ class ChartWorkflow(QObject):
             result, chart_range
         ):
             return
-        self._snapshot = result
-        self.snapshot_changed.emit(result)
+        normalized = self._normalize_snapshot(result)
+        self._snapshot = normalized
+        self.snapshot_changed.emit(normalized)
 
     def _load_failed(
         self, generation: int, chart_range: ChartRange, error: object
     ) -> None:
         del error
-        if generation != self._generation or self._session is None:
+        session = self._session
+        selection = self._selection
+        if generation != self._generation or session is None or selection is None:
             return
         self._pending_in_progress_candle = None
         observed_at_utc = max(self._clock(), chart_range.end)
         unavailable = ChartSnapshot(
-            session=self._session,
             chart_range=chart_range,
             observed_at_utc=observed_at_utc,
             candles=(),
             fills=(),
             state=ChartReadState.UNAVAILABLE,
             message="Chart is unavailable",
+            _session_facts=(
+                session.config.session_id,
+                selection.symbol,
+                selection.timeframe,
+            ),
         )
         self._snapshot = unavailable
         self.snapshot_changed.emit(unavailable)
@@ -394,7 +435,10 @@ class ChartWorkflow(QObject):
         return (
             isinstance(result, ChartSnapshot)
             and self._session is not None
+            and self._selection is not None
             and result.session_id == self._session.config.session_id
+            and result.symbol == self._selection.symbol
+            and result.timeframe == self._selection.timeframe
             and result.chart_range == chart_range
         )
 
@@ -412,9 +456,9 @@ class ChartWorkflow(QObject):
     ) -> TypeGuard[ChartCandle]:
         return (
             isinstance(candle, ChartCandle)
-            and self._session is not None
-            and candle.symbol == self._session.market_data.symbol
-            and candle.timeframe == self._session.market_data.timeframe
+            and self._selection is not None
+            and candle.symbol == self._selection.symbol
+            and candle.timeframe == self._selection.timeframe
         )
 
     def _is_observed_inside_candle(self, candle: ChartCandle) -> bool:
@@ -474,6 +518,39 @@ class ChartWorkflow(QObject):
                 snapshot.session_id,
                 snapshot.symbol,
                 snapshot.timeframe,
+            ),
+        )
+
+    def _view_session(self) -> ConfiguredPaperSession:
+        session = self._session
+        selection = self._selection
+        if session is None or selection is None:
+            raise RuntimeError("Chart view has not been configured")
+        if selection.market_data_config() == session.market_data:
+            return session
+        return replace(session, market_data=selection.market_data_config())
+
+    def _normalize_snapshot(self, snapshot: ChartSnapshot) -> ChartSnapshot:
+        session = self._session
+        selection = self._selection
+        if (
+            session is None
+            or selection is None
+            or selection.market_data_config() == session.market_data
+        ):
+            return snapshot
+        return ChartSnapshot(
+            chart_range=snapshot.chart_range,
+            observed_at_utc=snapshot.observed_at_utc,
+            candles=snapshot.candles,
+            fills=(),
+            state=snapshot.state,
+            in_progress_candle=snapshot.in_progress_candle,
+            message=snapshot.message,
+            _session_facts=(
+                session.config.session_id,
+                selection.symbol,
+                selection.timeframe,
             ),
         )
 

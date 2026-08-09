@@ -3,13 +3,16 @@ from datetime import UTC, datetime
 
 from PySide6.QtCore import Qt, QThreadPool, Slot
 from PySide6.QtGui import QCloseEvent
-from PySide6.QtWidgets import QMainWindow
+from PySide6.QtWidgets import QMainWindow, QMessageBox
 
 from tiewtrade.application.bot_control import BotControlAction, BotControlSnapshot
 from tiewtrade.application.chart_data import ChartRange, ChartReadState, ChartSnapshot
+from tiewtrade.application.chart_view_selection import ChartViewSelection
 from tiewtrade.application.paper_session_setup import (
     ConfiguredPaperSession,
     PaperSessionSetupValues,
+    PaperSessionValidationError,
+    validate_paper_session,
 )
 from tiewtrade.application.trading_workspace import BotRuntimeState
 from tiewtrade.ui.background_task import BackgroundTask
@@ -50,7 +53,10 @@ class MainWindow(QMainWindow):
         start_bot: LifecycleAction | None = None,
         stop_bot: LifecycleAction | None = None,
         recover_bot: LifecycleAction | None = None,
+        stop_for_replacement: Callable[[ConfiguredPaperSession], None] | None = None,
+        validate_session: Callable[[PaperSessionSetupValues], None] | None = None,
         close_position: Callable[[ConfiguredPaperSession], None] | None = None,
+        has_open_position: Callable[[ConfiguredPaperSession], bool] | None = None,
         retire_session: Callable[[ConfiguredPaperSession], None] | None = None,
         new_session_available: Callable[[ConfiguredPaperSession], bool] | None = None,
         initialize_bot: LifecycleAction | None = None,
@@ -60,6 +66,8 @@ class MainWindow(QMainWindow):
         refresh_chart: RefreshChart | None = None,
         chart_fact_relay: ChartFactRelay | None = None,
         start_chart_feed: Callable[[ConfiguredPaperSession], None] | None = None,
+        select_chart_view: Callable[[ConfiguredPaperSession, ChartViewSelection], None]
+        | None = None,
         stop_chart_feed: Callable[[], None] | None = None,
         chart_clock: Callable[[], datetime] = lambda: datetime.now(UTC),
         thread_pool: QThreadPool | None = None,
@@ -68,15 +76,19 @@ class MainWindow(QMainWindow):
         self._thread_pool = thread_pool or QThreadPool.globalInstance()
         self._load_chart = load_chart
         self._close_position = close_position
+        self._has_open_position = has_open_position
         self._retire_session = retire_session
+        self._stop_for_replacement = stop_for_replacement
+        self._validate_session = validate_session or validate_paper_session
         self._shutdown_runtime = shutdown_runtime
         self._chart_fact_relay = chart_fact_relay
         self._start_chart_feed = start_chart_feed
+        self._select_chart_view = select_chart_view
         self._stop_chart_feed = stop_chart_feed
         self._close_sequence_started = False
         self._close_sequence_completed = False
         self._shutdown_task: BackgroundTask | None = None
-        self._new_session_task: BackgroundTask | None = None
+        self._replacement_task: BackgroundTask | None = None
         self._runtime_shutdown_pool = QThreadPool(self)
         self._runtime_shutdown_pool.setMaxThreadCount(1)
         self.workspace = TradingWorkspace()
@@ -94,7 +106,9 @@ class MainWindow(QMainWindow):
         self._start_after_create = False
         self._pending_start_session: ConfiguredPaperSession | None = None
         self._return_to_setup_after_stop = False
-        self._new_session_retry_pending = False
+        self._replacement_session: ConfiguredPaperSession | None = None
+        self._replacement_values: PaperSessionSetupValues | None = None
+        self._replacement_succeeded = False
 
         self._workflow = SessionWorkflow(
             create_session=create_session,
@@ -114,8 +128,8 @@ class MainWindow(QMainWindow):
         self._lifecycle_workflow = BotLifecycleWorkflow(
             start_bot=start_bot,
             stop_bot=stop_bot,
-            recover=recover_bot,
-            new_session_available=new_session_available,
+            recover=None,
+            new_session_available=None,
             initialize_bot=initialize_bot,
             runtime_snapshots=runtime_snapshots,
             thread_pool=self._thread_pool,
@@ -127,8 +141,6 @@ class MainWindow(QMainWindow):
         )
         self.workspace.start_bot_requested.connect(self._lifecycle_workflow.start_bot)
         self.workspace.stop_bot_requested.connect(self._stop_requested)
-        self.workspace.recover_requested.connect(self._lifecycle_workflow.recover)
-        self.workspace.new_session_requested.connect(self._new_session_requested)
 
         self._chart_workflow = ChartWorkflow(
             load_chart=load_chart or _unused_chart_loader,
@@ -140,8 +152,12 @@ class MainWindow(QMainWindow):
         self._chart_workflow.snapshot_changed.connect(
             self.workspace.chart.show_snapshot
         )
+        self._chart_workflow.loading_changed.connect(
+            self.workspace.chart.set_view_loading
+        )
         self.workspace.chart.range_requested.connect(self._chart_workflow.load_range)
         self.workspace.chart.retry_requested.connect(self._chart_workflow.retry)
+        self.workspace.chart.view_requested.connect(self._chart_view_requested)
         if chart_fact_relay is not None:
             chart_fact_relay.completed_candle_ready.connect(
                 self._chart_completed_candle,
@@ -179,53 +195,112 @@ class MainWindow(QMainWindow):
             return
 
         self._pending_validation_field = None
-        self._start_after_create = True
         self.setup.clear_errors()
-        self._workflow.create(raw_values)
-
-    @Slot()
-    def _new_session_requested(self) -> None:
-        retire_session = self._retire_session
-        if retire_session is None or self._new_session_task is not None:
+        if self._replacement_session is None:
+            self._start_after_create = True
+            self._workflow.create(raw_values)
             return
-        snapshot = self._lifecycle_workflow.snapshot
+        try:
+            self._validate_session(raw_values)
+        except PaperSessionValidationError as error:
+            self._show_validation_error(error.field, str(error))
+            return
+        self._replacement_values = raw_values
+        persisted_position = (
+            self._has_open_position(self._replacement_session)
+            if self._has_open_position is not None
+            else False
+        )
+        visible_position = (
+            self._lifecycle_workflow.snapshot.workspace.basket is not None
+        )
+        if persisted_position or visible_position:
+            answer = QMessageBox.question(
+                self,
+                "Close Paper Position?",
+                "Close all Paper positions at the latest fresh market price "
+                "before starting the new bot?",
+                QMessageBox.StandardButton.Cancel | QMessageBox.StandardButton.Yes,
+                QMessageBox.StandardButton.Cancel,
+            )
+            if answer != QMessageBox.StandardButton.Yes:
+                return
+        self._replace_session()
 
-        def close_and_retire() -> None:
-            if snapshot.workspace.basket is not None:
-                close_position = self._close_position
-                if close_position is None:
+    def _replace_session(self) -> None:
+        session = self._replacement_session
+        values = self._replacement_values
+        retire_session = self._retire_session
+        if session is None or values is None:
+            return
+        if retire_session is None:
+            self.setup.show_field_error(
+                "available_capital",
+                "Paper Session replacement is unavailable. Restart the application.",
+            )
+            return
+        if self._replacement_task is not None:
+            return
+
+        def stop_close_and_retire() -> None:
+            if self._stop_for_replacement is not None:
+                self._stop_for_replacement(session)
+            if self._has_open_position is not None and self._has_open_position(session):
+                if self._close_position is None:
                     raise RuntimeError("Paper position close is unavailable")
-                close_position(snapshot.session)
-            retire_session(snapshot.session)
+                self._close_position(session)
+            retire_session(session)
 
-        task = BackgroundTask(close_and_retire)
-        task.signals.succeeded.connect(self._new_session_completed)
-        task.signals.failed.connect(self._new_session_failed)
-        task.signals.finished.connect(self._new_session_finished)
-        self._new_session_task = task
+        self.workspace.set_bot_busy(True)
+        self._replacement_succeeded = False
+        task = BackgroundTask(stop_close_and_retire)
+        task.signals.succeeded.connect(self._replacement_completed)
+        task.signals.failed.connect(self._replacement_failed)
+        task.signals.finished.connect(self._replacement_finished)
+        self._replacement_task = task
         self._thread_pool.start(task)
 
     @Slot(object)
-    def _new_session_completed(self, _result: object) -> None:
-        self._new_session_retry_pending = False
-        self._workflow.start()
+    def _replacement_completed(self, _result: object) -> None:
+        self._replacement_session = None
+        self._replacement_succeeded = True
+        self._start_after_create = True
 
     @Slot(object)
-    def _new_session_failed(self, _error: object) -> None:
-        self._new_session_retry_pending = True
-        self._show_unavailable(
-            "Could not close the Paper position or retire the Session. Try again."
+    def _replacement_failed(self, _error: object) -> None:
+        message = "Could not stop, close, or retire the existing Paper Session. "
+        if isinstance(_error, RuntimeError) and str(_error) == (
+            "A fresh market price is unavailable"
+        ):
+            message = (
+                "Current market price is not fresh. Wait for live price data, "
+                "then try again."
+            )
+        elif isinstance(_error, RuntimeError) and str(_error) == (
+            "Paper Bot must stop before it can be replaced"
+        ):
+            message = (
+                "Paper Bot is still stopping. Wait for it to stop, then try again."
+            )
+        self.setup.show_field_error(
+            "available_capital",
+            f"{message} Try Start Paper Bot again.",
         )
 
     @Slot()
-    def _new_session_finished(self) -> None:
-        self._new_session_task = None
+    def _replacement_finished(self) -> None:
+        self._replacement_task = None
+        if not self._replacement_succeeded:
+            self.workspace.set_bot_busy(False)
+            return
+        self._replacement_succeeded = False
+        values = self._replacement_values
+        self._replacement_values = None
+        if values is not None:
+            self._workflow.create(values)
 
     @Slot()
     def _retry_unavailable(self) -> None:
-        if self._new_session_retry_pending:
-            self._new_session_requested()
-            return
         self._workflow.start()
 
     @Slot(bool)
@@ -266,8 +341,14 @@ class MainWindow(QMainWindow):
             self._pending_start_session = None
             self._lifecycle_workflow.start_bot()
             return
+        if value.state is BotRuntimeState.CONFIGURED:
+            self._show_editable_setup(value)
+            return
         if self._return_to_setup_after_stop and value.state is BotRuntimeState.STOPPED:
             self._return_to_setup_after_stop = False
+            self._show_editable_setup(value)
+            return
+        if value.state is BotRuntimeState.BLOCKED:
             self._show_editable_setup(value)
 
     @Slot()
@@ -276,16 +357,7 @@ class MainWindow(QMainWindow):
         self._lifecycle_workflow.stop_bot()
 
     def _show_editable_setup(self, snapshot: BotControlSnapshot) -> None:
-        if snapshot.workspace.basket is not None or snapshot.workspace.orders:
-            return
-        retire_session = self._retire_session
-        if retire_session is None:
-            return
-        try:
-            retire_session(snapshot.session)
-        except Exception:
-            self._show_unavailable("Session storage is unavailable")
-            return
+        self._replacement_session = snapshot.session
         self.setup.set_values_from_session(snapshot.session)
         self.workspace.show_setup()
 
@@ -302,6 +374,19 @@ class MainWindow(QMainWindow):
         if relay is None or not relay.is_current(generation):
             return
         self._chart_workflow.in_progress_candle(candle)
+
+    @Slot(object)
+    def _chart_view_requested(self, value: object) -> None:
+        if not isinstance(value, ChartViewSelection):
+            return
+        try:
+            snapshot = self._lifecycle_workflow.snapshot
+        except RuntimeError:
+            return
+        session = snapshot.session
+        self._chart_workflow.select_view(value)
+        if self._select_chart_view is not None:
+            self._select_chart_view(session, value)
 
     @Slot(object, int)
     def _runtime_completed_candle(self, candle: object, generation: int) -> None:
