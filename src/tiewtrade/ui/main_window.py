@@ -50,6 +50,7 @@ class MainWindow(QMainWindow):
         start_bot: LifecycleAction | None = None,
         stop_bot: LifecycleAction | None = None,
         recover_bot: LifecycleAction | None = None,
+        close_position: Callable[[ConfiguredPaperSession], None] | None = None,
         retire_session: Callable[[ConfiguredPaperSession], None] | None = None,
         new_session_available: Callable[[ConfiguredPaperSession], bool] | None = None,
         initialize_bot: LifecycleAction | None = None,
@@ -66,6 +67,7 @@ class MainWindow(QMainWindow):
         super().__init__()
         self._thread_pool = thread_pool or QThreadPool.globalInstance()
         self._load_chart = load_chart
+        self._close_position = close_position
         self._retire_session = retire_session
         self._shutdown_runtime = shutdown_runtime
         self._chart_fact_relay = chart_fact_relay
@@ -74,6 +76,7 @@ class MainWindow(QMainWindow):
         self._close_sequence_started = False
         self._close_sequence_completed = False
         self._shutdown_task: BackgroundTask | None = None
+        self._new_session_task: BackgroundTask | None = None
         self._runtime_shutdown_pool = QThreadPool(self)
         self._runtime_shutdown_pool.setMaxThreadCount(1)
         self.workspace = TradingWorkspace()
@@ -91,6 +94,7 @@ class MainWindow(QMainWindow):
         self._start_after_create = False
         self._pending_start_session: ConfiguredPaperSession | None = None
         self._return_to_setup_after_stop = False
+        self._new_session_retry_pending = False
 
         self._workflow = SessionWorkflow(
             create_session=create_session,
@@ -105,7 +109,7 @@ class MainWindow(QMainWindow):
         self._workflow.validation_failed.connect(self._show_validation_error)
         self._workflow.unavailable.connect(self._show_unavailable)
         self.setup.create_requested.connect(self._create_requested)
-        self.unavailable_retry_button.clicked.connect(self._workflow.start)
+        self.unavailable_retry_button.clicked.connect(self._retry_unavailable)
 
         self._lifecycle_workflow = BotLifecycleWorkflow(
             start_bot=start_bot,
@@ -182,12 +186,45 @@ class MainWindow(QMainWindow):
     @Slot()
     def _new_session_requested(self) -> None:
         retire_session = self._retire_session
-        if retire_session is None:
+        if retire_session is None or self._new_session_task is not None:
             return
-        try:
-            retire_session(self._lifecycle_workflow.snapshot.session)
-        except Exception:
-            self._show_unavailable("Session storage is unavailable")
+        snapshot = self._lifecycle_workflow.snapshot
+
+        def close_and_retire() -> None:
+            if snapshot.workspace.basket is not None:
+                close_position = self._close_position
+                if close_position is None:
+                    raise RuntimeError("Paper position close is unavailable")
+                close_position(snapshot.session)
+            retire_session(snapshot.session)
+
+        task = BackgroundTask(close_and_retire)
+        task.signals.succeeded.connect(self._new_session_completed)
+        task.signals.failed.connect(self._new_session_failed)
+        task.signals.finished.connect(self._new_session_finished)
+        self._new_session_task = task
+        self._thread_pool.start(task)
+
+    @Slot(object)
+    def _new_session_completed(self, _result: object) -> None:
+        self._new_session_retry_pending = False
+        self._workflow.start()
+
+    @Slot(object)
+    def _new_session_failed(self, _error: object) -> None:
+        self._new_session_retry_pending = True
+        self._show_unavailable(
+            "Could not close the Paper position or retire the Session. Try again."
+        )
+
+    @Slot()
+    def _new_session_finished(self) -> None:
+        self._new_session_task = None
+
+    @Slot()
+    def _retry_unavailable(self) -> None:
+        if self._new_session_retry_pending:
+            self._new_session_requested()
             return
         self._workflow.start()
 

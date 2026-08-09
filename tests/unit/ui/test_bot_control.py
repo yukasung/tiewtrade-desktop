@@ -291,6 +291,41 @@ def test_stop_confirm_emits_once_and_guards_repeated_confirmation(qtbot: QtBot) 
     qtbot.waitUntil(widget.state_value.hasFocus)
 
 
+def test_new_session_cancel_keeps_session_and_reenables_action(qtbot: QtBot) -> None:
+    callbacks: list[tuple[Callable[[], None], Callable[[], None]]] = []
+
+    def confirm_new_session(
+        confirm: Callable[[], None], cancel: Callable[[], None]
+    ) -> None:
+        callbacks.append((confirm, cancel))
+
+    configured = configured_bot_control(
+        configured_spot_session(),
+        observed_at_utc=datetime(2026, 8, 1, 12, tzinfo=UTC),
+    )
+    widget = BotControlWidget(new_session_confirmation=confirm_new_session)
+    qtbot.addWidget(widget)
+    widget.show()
+    widget.show_snapshot(
+        BotControlSnapshot(
+            state=BotRuntimeState.STOPPED,
+            session=configured.session,
+            workspace=workspace_with_runtime_state(
+                configured.workspace, BotRuntimeState.STOPPED
+            ),
+            available_actions=frozenset({BotControlAction.NEW_SESSION}),
+        )
+    )
+    emissions: list[None] = []
+    widget.new_session_requested.connect(lambda: emissions.append(None))
+
+    click(widget.new_session_button)
+    callbacks[0][1]()
+
+    assert emissions == []
+    assert widget.new_session_button.isEnabled()
+
+
 def test_default_stop_confirmation_is_destructive_and_default_safe(
     qtbot: QtBot,
 ) -> None:

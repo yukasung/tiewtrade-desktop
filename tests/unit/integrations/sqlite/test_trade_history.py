@@ -54,6 +54,20 @@ def test_exact_duplicate_fill_is_a_no_op(history: SQLiteTradeHistory) -> None:
     assert history.list_fills(basket.basket_id) == (fill,)
 
 
+def test_find_open_basket_returns_only_open_basket_for_session(
+    history: SQLiteTradeHistory,
+) -> None:
+    basket = open_basket()
+    history.record_open_basket(basket, trade_fill())
+
+    assert history.find_open_basket(basket.session_id) == basket
+    assert history.find_open_basket(uuid4()) is None
+
+    history.record_closed_basket(closed_basket(basket), sell_fill())
+
+    assert history.find_open_basket(basket.session_id) is None
+
+
 def test_list_session_fills_orders_by_utc_then_fill_id_and_excludes_other_session(
     history: SQLiteTradeHistory,
 ) -> None:

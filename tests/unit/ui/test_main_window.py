@@ -10,9 +10,9 @@ from typing import overload
 from uuid import UUID
 
 import pytest
-from PySide6.QtCore import QDeadlineTimer, QPoint, QRect, Qt, QThreadPool
+from PySide6.QtCore import QDeadlineTimer, QPoint, QRect, Qt, QThreadPool, QTimer
 from PySide6.QtTest import QTest
-from PySide6.QtWidgets import QMessageBox, QWidget
+from PySide6.QtWidgets import QApplication, QMessageBox, QWidget
 from pytestqt.qtbot import QtBot
 
 import tiewtrade.ui.main_window as main_window_module
@@ -42,7 +42,12 @@ from tiewtrade.application.trade_history import (
     PageRequest,
     TradeHistoryFilter,
 )
-from tiewtrade.application.trading_workspace import BotRuntimeState, DataFreshness
+from tiewtrade.application.trading_workspace import (
+    BasketSnapshot,
+    BotRuntimeState,
+    DataFreshness,
+    paper_runtime_workspace_snapshot,
+)
 from tiewtrade.integrations.sqlite.active_paper_sessions import (
     SQLiteActivePaperSessions,
 )
@@ -50,6 +55,7 @@ from tiewtrade.integrations.sqlite.database import SQLiteDatabase
 from tiewtrade.trading.futures_policy import FuturesTradingPolicy
 from tiewtrade.trading.spot_policy import SpotTradingPolicy
 from tiewtrade.trading.trade_history import TradeFill
+from tiewtrade.ui.bot_lifecycle_workflow import RuntimeSnapshotRelay
 from tiewtrade.ui.main_window import MainWindow
 from tiewtrade.ui.session_overview import SessionOverviewWidget
 
@@ -1898,6 +1904,134 @@ def test_stop_without_exposure_retires_session_and_reopens_prefilled_form(
         session.config.available_capital, "f"
     )
     assert window.setup.timeframe.currentData() == "5m"
+
+
+def test_new_session_confirms_and_closes_open_position_before_retire(
+    qtbot: QtBot,
+) -> None:
+    session = configured_spot_session()
+    events: list[str] = []
+    close_threads: list[int] = []
+    ui_thread = threading.get_ident()
+    retire_attempts = 0
+    runtime_snapshots = RuntimeSnapshotRelay()
+    observed_at = datetime.now(UTC)
+    basket = BasketSnapshot(
+        symbol="BTCUSDT",
+        market_type="spot",
+        entry_count=1,
+        total_quantity=Decimal("1"),
+        average_entry_price=Decimal("100"),
+        current_price=Decimal("110"),
+        take_profit_price=Decimal("120"),
+        unrealized_pnl=Decimal("10"),
+        liquidation_price=None,
+        lifecycle="open",
+        updated_at_utc=observed_at,
+    )
+
+    def start(snapshot: BotControlSnapshot) -> BotLifecycleResult:
+        return BotLifecycleResult(
+            workspace=workspace_with_runtime_state(
+                snapshot.workspace,
+                BotRuntimeState.RUNNING,
+                data_freshness=DataFreshness.FRESH,
+            )
+        )
+
+    def stop(snapshot: BotControlSnapshot) -> BotLifecycleResult:
+        return BotLifecycleResult(
+            workspace=workspace_with_runtime_state(
+                snapshot.workspace, BotRuntimeState.STOPPED
+            )
+        )
+
+    def close_position(_session: ConfiguredPaperSession) -> None:
+        close_threads.append(threading.get_ident())
+        if "close" not in events:
+            events.append("close")
+
+    def retire_session(_session: ConfiguredPaperSession) -> None:
+        nonlocal retire_attempts
+        retire_attempts += 1
+        events.append(f"retire:{retire_attempts}")
+        if retire_attempts == 1:
+            raise RuntimeError("forced retire failure")
+
+    window = MainWindow(
+        create_session=unused_create,
+        load_active=lambda: session,
+        list_baskets=empty_basket_page,
+        list_fills=empty_fills,
+        start_bot=start,
+        stop_bot=stop,
+        close_position=close_position,
+        retire_session=retire_session,
+        new_session_available=lambda _session: True,
+        runtime_snapshots=runtime_snapshots,
+    )
+    qtbot.addWidget(window)
+    window.show()
+    control = window.workspace.bot_control_widget
+    qtbot.waitUntil(control.start_button.isEnabled)
+    click(control.start_button)
+    qtbot.waitUntil(lambda: control.state_value.text() == "Running")
+    runtime_snapshots.new_generation()(
+        BotLifecycleResult(
+            workspace=paper_runtime_workspace_snapshot(
+                window._lifecycle_workflow.snapshot.workspace,
+                orders=(),
+                basket=basket,
+                observed_at_utc=observed_at,
+            )
+        )
+    )
+    qtbot.waitUntil(
+        lambda: window._lifecycle_workflow.snapshot.workspace.basket == basket
+    )
+    click(control.stop_button)
+    stop_dialog = window.findChild(QMessageBox)
+    assert stop_dialog is not None
+    click(
+        next(
+            button
+            for button in stop_dialog.buttons()
+            if button.text() == "Stop Session"
+        )
+    )
+    qtbot.waitUntil(control.new_session_button.isEnabled)
+    assert control.state_value.text() == "Stopped"
+    assert window._lifecycle_workflow.snapshot.workspace.basket == basket
+
+    dialog_text: list[str] = []
+
+    def confirm_close() -> None:
+        close_dialog = QApplication.activeModalWidget()
+        assert isinstance(close_dialog, QMessageBox)
+        dialog_text.append(close_dialog.text())
+        yes_button = close_dialog.button(QMessageBox.StandardButton.Yes)
+        assert yes_button is not None
+        click(yes_button)
+
+    QTimer.singleShot(0, confirm_close)
+    click(control.new_session_button)
+
+    assert dialog_text == [
+        "Close all Paper positions and create a new session? "
+        "The market close is recorded in Trade History."
+    ]
+    qtbot.waitUntil(
+        lambda: (
+            window.unavailable_retry_button.isVisible()
+            and window._new_session_task is None
+        )
+    )
+    assert events == ["close", "retire:1"]
+
+    click(window.unavailable_retry_button)
+
+    qtbot.waitUntil(lambda: events == ["close", "retire:1", "retire:2"])
+    assert close_threads[0] != ui_thread
 
 
 def test_configured_session_does_not_auto_start_and_explains_missing_runtime(

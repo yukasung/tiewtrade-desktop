@@ -1,5 +1,5 @@
 from collections.abc import Callable
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
 from threading import Event, Lock
@@ -17,6 +17,8 @@ from tiewtrade.application.chart_data import (
 from tiewtrade.application.chart_history import ChartHistory
 from tiewtrade.application.chart_realtime_feed import ChartOnlyFeedController
 from tiewtrade.application.database_compatibility import DatabaseCompatibilityError
+from tiewtrade.application.latest_market_price import LatestMarketPrice
+from tiewtrade.application.paper_manual_close import ClosePaperPosition
 from tiewtrade.application.paper_runtime import PaperRuntimeController
 from tiewtrade.application.paper_session_setup import (
     ConfiguredPaperSession,
@@ -53,6 +55,7 @@ from tiewtrade.ui.chart_workflow import ChartFactRelay
 from tiewtrade.ui.desktop import run_desktop as run_desktop_ui
 
 _RUNTIME_SHUTDOWN_TIMEOUT_SECONDS = 30.0
+_MANUAL_CLOSE_PRICE_MAX_AGE = timedelta(seconds=30)
 
 
 class _PaperRuntimeActions:
@@ -303,6 +306,12 @@ def run_desktop(database_path: Path | None = None) -> int:
     database = SQLiteDatabase(resolved_database_path)
     store = SQLiteActivePaperSessions(database)
     history = SQLiteTradeHistory(database)
+    latest_market_price = LatestMarketPrice()
+    close_paper_position = ClosePaperPosition(
+        find_open_basket=history.find_open_basket,
+        list_fills=history.list_fills,
+        record_closed=history.record_closed_basket,
+    )
     create_session = CreatePaperSession(create_active=store.create)
     database_preparation_lock = Lock()
 
@@ -330,6 +339,17 @@ def run_desktop(database_path: Path | None = None) -> int:
             raise RuntimeError("Paper Runtime worker is still active")
         store.retire(session.config.session_id, datetime.now(UTC))
 
+    def close_position_after_migration(session: ConfiguredPaperSession) -> None:
+        prepare_database()
+        close_paper_position.execute(
+            session,
+            market_price=lambda: latest_market_price.get(
+                session.config.session_id,
+                max_age=_MANUAL_CLOSE_PRICE_MAX_AGE,
+            ),
+            tick_size=_symbol_rules_for(session).tick_size,
+        )
+
     def list_baskets_after_migration(
         filters: TradeHistoryFilter,
         page: PageRequest,
@@ -343,7 +363,10 @@ def run_desktop(database_path: Path | None = None) -> int:
 
     runtime_snapshots = RuntimeSnapshotRelay()
     chart_fact_relay = ChartFactRelay()
-    chart_feed = ChartOnlyFeedController(source_factory=BinancePublicMarketData)
+    chart_feed = ChartOnlyFeedController(
+        source_factory=BinancePublicMarketData,
+        latest_market_price=latest_market_price,
+    )
     runtime_actions = _PaperRuntimeActions(
         lifecycle=SQLitePaperRuntimeLifecycle(database),
         trade_history=history,
@@ -417,6 +440,7 @@ def run_desktop(database_path: Path | None = None) -> int:
         start_bot=runtime_actions.start,
         stop_bot=runtime_actions.stop,
         recover_bot=runtime_actions.recover,
+        close_position=close_position_after_migration,
         retire_session=retire_after_migration,
         new_session_available=runtime_actions.new_session_available,
         initialize_bot=runtime_actions.initialize,

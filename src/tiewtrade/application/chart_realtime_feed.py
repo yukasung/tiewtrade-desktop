@@ -5,7 +5,9 @@ from collections.abc import Callable
 from datetime import datetime
 from threading import Lock, Thread, current_thread
 from typing import Protocol
+from uuid import UUID
 
+from tiewtrade.application.latest_market_price import LatestMarketPrice
 from tiewtrade.application.paper_session_setup import ConfiguredPaperSession
 from tiewtrade.integrations.binance.public_endpoints import BinancePublicEndpoints
 from tiewtrade.market_data.candle import Candle
@@ -53,9 +55,11 @@ class ChartOnlyFeedController:
         *,
         source_factory: Callable[[BinancePublicEndpoints], MarketDataCandleSource],
         runtime_factory: RuntimeFactory = MarketDataRuntime,
+        latest_market_price: LatestMarketPrice | None = None,
     ) -> None:
         self._source_factory = source_factory
         self._runtime_factory = runtime_factory
+        self._latest_market_price = latest_market_price
         self._lock = Lock()
         self._runtime: _Runtime | None = None
         self._loop: asyncio.AbstractEventLoop | None = None
@@ -68,15 +72,42 @@ class ChartOnlyFeedController:
         publish_in_progress: Callable[[Candle], None],
     ) -> None:
         self.stop()
+        if self._latest_market_price is not None:
+            self._latest_market_price.reset()
+        publish_completed_with_price = self._capture_price(
+            session.config.session_id,
+            publish_completed,
+        )
+        publish_in_progress_with_price = self._capture_price(
+            session.config.session_id,
+            publish_in_progress,
+        )
         ready = Thread(
             target=self._run,
-            args=(session, publish_completed, publish_in_progress),
+            args=(
+                session,
+                publish_completed_with_price,
+                publish_in_progress_with_price,
+            ),
             daemon=True,
             name=f"chart-feed-{session.config.session_id}",
         )
         with self._lock:
             self._thread = ready
         ready.start()
+
+    def _capture_price(
+        self,
+        session_id: UUID,
+        publish: Callable[[Candle], None],
+    ) -> Callable[[Candle], None]:
+        def capture(candle: Candle) -> None:
+            latest_market_price = self._latest_market_price
+            if latest_market_price is not None:
+                latest_market_price.observe(session_id, candle.close)
+            publish(candle)
+
+        return capture
 
     def stop(self) -> None:
         with self._lock:

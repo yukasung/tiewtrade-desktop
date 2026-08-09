@@ -224,6 +224,13 @@ Stop Session หมายถึง:
 Session เดิม แล้วเปิด Session Setup พร้อม configuration เดิมให้ผู้ใช้แก้ไขและกด
 `Start Paper Bot` เพื่อสร้าง Session ใหม่ได้ทันที
 
+เมื่อ Stop สำเร็จแต่ยังมี Open Basket ระบบต้องคง Session เดิมและแสดง `New Session`
+เมื่อผู้ใช้กดปุ่มนี้ ระบบต้องขอการยืนยันเพียงครั้งเดียวว่าจะปิด Paper Position ทั้งหมด
+หากยืนยัน ระบบบันทึก market close พร้อม fee, slippage และ `manual-close` audit Fill
+โดยใช้ราคาล่าสุดจาก public chart feed ที่รับมาไม่เกิน 30 วินาที ก่อน retire Session เดิม
+แล้วจึงเปิด Session Setup หากราคาไม่สด การปิด หรือการบันทึกล้มเหลว
+ระบบต้องไม่ retire Session และต้องแสดงข้อผิดพลาดให้ผู้ใช้แก้ไขได้
+
 ### 12.2 Startup Recovery
 
 เมื่อเปิดโปรแกรมใหม่:

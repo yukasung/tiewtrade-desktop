@@ -41,6 +41,7 @@ class BotControlWidget(QWidget):
         )
         self._stop_confirmation_pending = False
         self._stop_confirmation_dialog: QMessageBox | None = None
+        self._has_open_position = False
         self.setObjectName("botControlWidget")
         self.overview = SessionOverviewWidget()
         self.state_value = QLabel("—")
@@ -78,6 +79,7 @@ class BotControlWidget(QWidget):
     def show_snapshot(self, value: object) -> None:
         if not isinstance(value, BotControlSnapshot):
             return
+        self._has_open_position = value.workspace.basket is not None
         self.overview.show_session(
             value.session,
             configuration_summary=value.state is not BotRuntimeState.CONFIGURED,
@@ -240,10 +242,18 @@ class BotControlWidget(QWidget):
         confirm: Callable[[], None],
         cancel: Callable[[], None],
     ) -> None:
+        message = (
+            "Close all Paper positions and create a new session? "
+            "The market close is recorded in Trade History."
+            if self._has_open_position
+            else (
+                "Retire this Paper Session and create a new one? Trade history is kept."
+            )
+        )
         answer = QMessageBox.question(
             self,
             "Confirm New Session",
-            "Retire this Paper Session and create a new one? Trade history is kept.",
+            message,
             QMessageBox.StandardButton.Cancel | QMessageBox.StandardButton.Yes,
             QMessageBox.StandardButton.Cancel,
         )

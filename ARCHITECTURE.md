@@ -99,6 +99,16 @@ Session/market configuration ก่อนเรียก concrete SQLite adapter
 orchestration เริ่ม Paper Runtime ต่อจากการสร้างสำเร็จใน action `Start Paper Bot` เดียว
 โดย UI รอผลผ่าน background worker และไม่เรียก adapter โดยตรง
 
+Application layer เป็นเจ้าของ `ClosePaperPosition` use case สำหรับ Paper Session
+เมื่อผู้ใช้ยืนยันเริ่ม Session ใหม่ขณะมี Open Basket โดยคำนวณ Paper exit Fill จาก
+ราคาตลาดล่าสุด, fee และ slippage ของ Session แล้วให้ SQLite Trade History บันทึก
+closed Basket กับ exit Fill ใน transaction เดียว UI ต้อง retire Session หลังการบันทึก
+สำเร็จเท่านั้น โดย orchestration นี้ทำงานผ่าน background worker และใช้ราคาที่ public
+market-data controller ส่งเข้า application-owned `LatestMarketPrice` แยกจาก ephemeral
+Chart read-model โดย service นี้เก็บแบบ thread-safe พร้อม freshness bound และเป็น contract
+เดียวที่ manual close ใช้อ่าน execution price จึงไม่มีเส้นทางจาก Chart presentation fact
+ไป execution, ไม่ใช้ stopped runtime snapshot และไม่มีเส้นทางนี้สำหรับ Live execution
+
 ## Persistence Boundary
 
 `application` เป็นเจ้าของ business Session orchestration และลำดับ shared rules
