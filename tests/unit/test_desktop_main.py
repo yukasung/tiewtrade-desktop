@@ -9,7 +9,6 @@ from pathlib import Path
 from threading import Barrier, BrokenBarrierError, Event, Thread
 from types import TracebackType
 from typing import cast
-from uuid import UUID
 
 import pytest
 from pytest import MonkeyPatch
@@ -20,7 +19,6 @@ from tests.support.paper_session_setup import (
     configured_futures_session,
     configured_spot_session,
 )
-from tests.support.trade_history_ui import empty_basket_page, empty_fills
 from tiewtrade.application.bot_control import (
     BotControlAction,
     BotControlSnapshot,
@@ -36,8 +34,7 @@ from tiewtrade.application.paper_session_setup import (
     PaperSessionSetupValues,
 )
 from tiewtrade.application.trade_history import (
-    BasketHistoryPage,
-    PageRequest,
+    BasketHistoryResult,
     TradeHistoryFilter,
 )
 from tiewtrade.application.trading_workspace import BotRuntimeState, DataFreshness
@@ -55,7 +52,10 @@ from tiewtrade.trading.symbol_rules import SymbolRules
 from tiewtrade.ui.bot_lifecycle_workflow import LifecycleAction, RuntimeSnapshotRelay
 from tiewtrade.ui.session_workflow import CreateSession, LoadActiveSession
 from tiewtrade.ui.theme import DARK_THEME
-from tiewtrade.ui.trade_history_workflow import ListBaskets, ListFills
+from tiewtrade.ui.trade_history_workflow import (
+    ListBasketHistory,
+    ListTradeFills,
+)
 
 
 class _CoordinatedUserVersionCursor:
@@ -168,14 +168,10 @@ def test_desktop_composition_supplies_migrated_create_and_load_operations(
         *,
         create_session: object,
         load_active: object,
-        list_baskets: object,
-        list_fills: object,
         **dependencies: object,
     ) -> int:
         captured["create_session"] = create_session
         captured["load_active"] = load_active
-        captured["list_baskets"] = list_baskets
-        captured["list_fills"] = list_fills
         captured.update(dependencies)
         return 0
 
@@ -311,13 +307,13 @@ def test_desktop_composition_supplies_migrated_trade_history_queries(
     assert desktop_main.run_desktop(tmp_path / "tiewtrade.sqlite3") == 0
     assert migration_calls == 0
 
-    list_baskets = cast(ListBaskets, captured["list_baskets"])
-    list_fills = cast(ListFills, captured["list_fills"])
-    assert list_baskets(TradeHistoryFilter(), PageRequest()).items == ()
+    list_baskets = cast(ListBasketHistory, captured["list_basket_history"])
+    list_fills = cast(ListTradeFills, captured["list_trade_fills"])
+    assert list_baskets(TradeHistoryFilter()).items == ()
     assert migration_calls == 1
-    assert list_fills(UUID("00000000-0000-0000-0000-000000000001")) == ()
+    assert list_fills(TradeHistoryFilter()) == ()
     assert migration_calls == 2
-    assert list_baskets(TradeHistoryFilter(), PageRequest()).items == ()
+    assert list_baskets(TradeHistoryFilter()).items == ()
     assert migration_calls == 3
 
 
@@ -696,15 +692,15 @@ def test_concurrent_session_load_and_history_query_serialize_v1_migration(
 
     assert desktop_main.run_desktop(database_path) == 0
     load_active = cast(LoadActiveSession, captured["load_active"])
-    list_baskets = cast(ListBaskets, captured["list_baskets"])
+    list_baskets = cast(ListBasketHistory, captured["list_basket_history"])
 
     def load_session() -> ConfiguredPaperSession | None:
         worker_start.wait()
         return load_active()
 
-    def query_history() -> BasketHistoryPage:
+    def query_history() -> BasketHistoryResult:
         worker_start.wait()
-        return list_baskets(TradeHistoryFilter(), PageRequest())
+        return list_baskets(TradeHistoryFilter())
 
     with ThreadPoolExecutor(max_workers=2) as pool:
         load_result = pool.submit(load_session)
@@ -746,12 +742,12 @@ def test_failed_database_preparation_can_be_retried_by_later_consumer(
     monkeypatch.setattr(desktop_main, "run_desktop_ui", capture_desktop)
     assert desktop_main.run_desktop(tmp_path / "tiewtrade.sqlite3") == 0
     load_active = cast(LoadActiveSession, captured["load_active"])
-    list_baskets = cast(ListBaskets, captured["list_baskets"])
+    list_baskets = cast(ListBasketHistory, captured["list_basket_history"])
 
     with pytest.raises(sqlite3.OperationalError, match="injected migration failure"):
         load_active()
 
-    result = list_baskets(TradeHistoryFilter(), PageRequest())
+    result = list_baskets(TradeHistoryFilter())
 
     assert result.items == ()
     assert migration_attempts == 2
@@ -818,15 +814,17 @@ def test_ui_desktop_forwards_required_trade_history_dependencies(
         ui_desktop.run_desktop(
             create_session=lambda values: None,  # type: ignore[arg-type,return-value]
             load_active=lambda: None,
-            list_baskets=empty_basket_page,
-            list_fills=empty_fills,
+            list_basket_history=lambda _filters: BasketHistoryResult((), Decimal("0")),
+            list_trade_fills=lambda _filters: (),
             runtime_snapshots=runtime_snapshots,
             shutdown_runtime=shutdown_runtime,
         )
         == 0
     )
-    assert captured["list_baskets"] is empty_basket_page
-    assert captured["list_fills"] is empty_fills
+    assert "list_baskets" not in captured
+    assert "list_fills" not in captured
+    assert callable(captured["list_basket_history"])
+    assert callable(captured["list_trade_fills"])
     assert captured["runtime_snapshots"] is runtime_snapshots
     assert captured["shutdown_runtime"] is shutdown_runtime
     assert captured["style_sheet"] == DARK_THEME
@@ -869,8 +867,8 @@ def test_ui_desktop_forwards_chart_view_selection_callback(
         ui_desktop.run_desktop(
             create_session=lambda values: None,  # type: ignore[arg-type,return-value]
             load_active=lambda: None,
-            list_baskets=empty_basket_page,
-            list_fills=empty_fills,
+            list_basket_history=lambda _filters: BasketHistoryResult((), Decimal("0")),
+            list_trade_fills=lambda _filters: (),
             select_chart_view=select_chart_view,
         )
         == 0
@@ -890,14 +888,10 @@ def test_desktop_composition_defers_database_directory_creation_to_load_worker(
         *,
         create_session: object,
         load_active: object,
-        list_baskets: object,
-        list_fills: object,
         **dependencies: object,
     ) -> int:
         captured["create_session"] = create_session
         captured["load_active"] = load_active
-        captured["list_baskets"] = list_baskets
-        captured["list_fills"] = list_fills
         return 0
 
     def record_mkdir(

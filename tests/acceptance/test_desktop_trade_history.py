@@ -27,11 +27,7 @@ from tiewtrade.application.paper_session_setup import (
     PaperSessionCreateOutcome,
     PaperSessionSetupValues,
 )
-from tiewtrade.application.trade_history import (
-    BasketHistoryPage,
-    PageRequest,
-    TradeHistoryFilter,
-)
+from tiewtrade.application.trade_history import BasketHistoryResult, TradeHistoryFilter
 from tiewtrade.integrations.sqlite.database import SQLiteDatabase
 from tiewtrade.integrations.sqlite.trade_history import (
     SQLiteTradeHistory,
@@ -62,7 +58,7 @@ def test_desktop_trade_history_reads_durable_spot_and_futures_records(
     database.migrate()
     history = SQLiteTradeHistory(database)
     _record_spot_and_futures_history(history)
-    basket_requests: list[tuple[TradeHistoryFilter, PageRequest]] = []
+    basket_requests: list[TradeHistoryFilter] = []
     window = _composed_window(
         path,
         monkeypatch,
@@ -78,9 +74,7 @@ def test_desktop_trade_history_reads_durable_spot_and_futures_records(
     open_trade_history(window)
 
     qtbot.waitUntil(lambda: window.trade_history.basket_table.rowCount() == 2)
-    assert basket_requests == [
-        (TradeHistoryFilter(), PageRequest(page=1, page_size=50))
-    ]
+    assert basket_requests == [TradeHistoryFilter()]
     assert _table_row_text(window.trade_history.basket_table, 0) == (
         "2026-01-03 00:00:00 UTC",
         "Paper",
@@ -122,67 +116,57 @@ def test_desktop_trade_history_reads_durable_spot_and_futures_records(
         == SPOT_BASKET_ID
     )
     assert window.trade_history.total_net_pnl.text() == "48.98 USDT · Profit"
-    qtbot.waitUntil(lambda: window.trade_history.fill_table.rowCount() == 2)
+    window.trade_history.history_tabs.setCurrentIndex(1)
+    qtbot.waitUntil(lambda: window.trade_history.fill_table.rowCount() == 4)
     assert _table_rows_text(window.trade_history.fill_table) == (
         (
-            "2026-01-03 00:00:00 UTC",
-            "Buy",
-            "1",
-            "100",
-            "2",
-            "200 USDT",
-            "0.2 USDT",
-            "0.00 USDT · Break-even",
-            "Paper Executor",
-        ),
-        (
             "2026-01-03 01:00:00 UTC",
+            "BTCUSDT",
             "Sell",
-            "—",
             "100",
             "2",
-            "200 USDT",
             "0.2 USDT",
+            "200 USDT",
             "29.4 USDT · Profit",
             "Paper Executor",
         ),
-    )
-
-    window.trade_history.basket_table.selectRow(1)
-    qtbot.waitUntil(
-        lambda: (
-            window.trade_history.fill_table.rowCount() == 2
-            and table_item(window.trade_history.fill_table, 0, 0).text()
-            == "2026-01-01 00:00:00 UTC"
-        )
-    )
-    assert _table_rows_text(window.trade_history.fill_table) == (
         (
-            "2026-01-01 00:00:00 UTC",
+            "2026-01-03 00:00:00 UTC",
+            "BTCUSDT",
             "Buy",
-            "1",
             "100",
             "2",
-            "200 USDT",
             "0.2 USDT",
+            "200 USDT",
             "0.00 USDT · Break-even",
             "Paper Executor",
         ),
         (
             "2026-01-02 00:00:00 UTC",
+            "BTCUSDT",
             "Sell",
-            "—",
             "100",
             "2",
-            "200 USDT",
             "0.2 USDT",
+            "200 USDT",
             "19.58 USDT · Profit",
+            "Paper Executor",
+        ),
+        (
+            "2026-01-01 00:00:00 UTC",
+            "BTCUSDT",
+            "Buy",
+            "100",
+            "2",
+            "0.2 USDT",
+            "200 USDT",
+            "0.00 USDT · Break-even",
             "Paper Executor",
         ),
     )
 
 
-def test_desktop_trade_history_filters_paginates_and_survives_restart(
+def test_desktop_trade_history_filters_all_rows_and_survives_restart(
     monkeypatch: MonkeyPatch,
     qtbot: QtBot,
     tmp_path: Path,
@@ -191,7 +175,7 @@ def test_desktop_trade_history_filters_paginates_and_survives_restart(
     database = SQLiteDatabase(path)
     database.migrate()
     history = SQLiteTradeHistory(database)
-    basket_requests: list[tuple[TradeHistoryFilter, PageRequest]] = []
+    basket_requests: list[TradeHistoryFilter] = []
     for index in range(51):
         basket_id = UUID(int=index + 1)
         opened_at = datetime(2026, 1, 1, tzinfo=UTC) + timedelta(days=index)
@@ -218,15 +202,15 @@ def test_desktop_trade_history_filters_paginates_and_survives_restart(
     qtbot.addWidget(first)
     first.show()
     open_trade_history(first)
-    qtbot.waitUntil(lambda: first.trade_history.basket_table.rowCount() == 50)
+    qtbot.waitUntil(lambda: first.trade_history.basket_table.rowCount() == 51)
     assert table_item(first.trade_history.basket_table, 0, 4).text() == "15m"
-    assert first.trade_history.page_label.text() == "Page 1 of 2"
+    assert first.trade_history.page_label.isHidden()
     first_page_opened_at = tuple(
-        table_item(first.trade_history.basket_table, row, 0).text() for row in range(50)
+        table_item(first.trade_history.basket_table, row, 0).text() for row in range(51)
     )
     assert first_page_opened_at == tuple(sorted(first_page_opened_at, reverse=True))
     assert first_page_opened_at[0] == "2026-02-20 00:00:00 UTC"
-    assert first_page_opened_at[-1] == "2026-01-02 00:00:00 UTC"
+    assert first_page_opened_at[-1] == "2026-01-01 00:00:00 UTC"
 
     matching_filters = (
         (first.trade_history.symbol, "BTCUSDT"),
@@ -247,17 +231,14 @@ def test_desktop_trade_history_filters_paginates_and_survives_restart(
     assert table_item(first.trade_history.basket_table, 0, 4).text() == "15m"
     assert table_item(first.trade_history.basket_table, 0, 2).text() == "Futures"
     assert first.trade_history.total_net_pnl.text() == "29.4 USDT · Profit"
-    assert basket_requests[-1] == (
-        TradeHistoryFilter(
-            symbol="BTCUSDT",
-            timeframe="15m",
-            market_type=MarketType.FUTURES,
-            trade_mode=TradeMode.PAPER,
-            status=BasketStatus.CLOSED,
-            opened_from_utc=datetime(2026, 2, 20, tzinfo=UTC),
-            opened_before_utc=datetime(2026, 2, 21, tzinfo=UTC),
-        ),
-        PageRequest(page=1, page_size=50),
+    assert basket_requests[-1] == TradeHistoryFilter(
+        symbol="BTCUSDT",
+        timeframe="15m",
+        market_type=MarketType.FUTURES,
+        trade_mode=TradeMode.PAPER,
+        status=BasketStatus.CLOSED,
+        opened_from_utc=datetime(2026, 2, 20, tzinfo=UTC),
+        opened_before_utc=datetime(2026, 2, 21, tzinfo=UTC),
     )
 
     click(first.trade_history.reset_button)
@@ -267,23 +248,16 @@ def test_desktop_trade_history_filters_paginates_and_survives_restart(
     assert not first.trade_history.from_date.isEnabled()
     assert not first.trade_history.to_date_enabled.isChecked()
     assert not first.trade_history.to_date.isEnabled()
-    qtbot.waitUntil(lambda: first.trade_history.basket_table.rowCount() == 50)
-    click(first.trade_history.next_button)
-    qtbot.waitUntil(lambda: first.trade_history.basket_table.rowCount() == 1)
-    assert first.trade_history.page_label.text() == "Page 2 of 2"
-    assert (
-        table_item(first.trade_history.basket_table, 0, 0)
-        .text()
-        .startswith("2026-01-01")
-    )
+    qtbot.waitUntil(lambda: first.trade_history.basket_table.rowCount() == 51)
+    assert first.trade_history.next_button.isHidden()
     first.close()
 
     restarted = _composed_window(path, monkeypatch)
     qtbot.addWidget(restarted)
     restarted.show()
     open_trade_history(restarted)
-    qtbot.waitUntil(lambda: restarted.trade_history.basket_table.rowCount() == 50)
-    assert restarted.trade_history.page_label.text() == "Page 1 of 2"
+    qtbot.waitUntil(lambda: restarted.trade_history.basket_table.rowCount() == 51)
+    assert restarted.trade_history.page_label.isHidden()
     assert table_item(restarted.trade_history.basket_table, 0, 4).text() == "15m"
 
 
@@ -295,17 +269,13 @@ def test_trade_history_read_failure_is_fail_closed_and_sanitized(
 
     def succeed_then_fail(
         filters: TradeHistoryFilter,
-        page: PageRequest,
-    ) -> BasketHistoryPage:
+    ) -> BasketHistoryResult:
         nonlocal basket_calls
-        del filters, page
+        del filters
         basket_calls += 1
         if basket_calls == 1:
-            return BasketHistoryPage(
+            return BasketHistoryResult(
                 items=(basket,),
-                page=1,
-                page_size=50,
-                total_items=1,
                 net_realized_pnl=basket.net_realized_pnl,
             )
         raise TradeHistoryUnavailableError(
@@ -315,26 +285,25 @@ def test_trade_history_read_failure_is_fail_closed_and_sanitized(
     window = MainWindow(
         create_session=_unused_create,
         load_active=_no_active_session,
-        list_baskets=succeed_then_fail,
-        list_fills=lambda basket_id: (trade_fill(basket_id=basket_id),),
+        list_basket_history=succeed_then_fail,
+        list_trade_fills=lambda _filters: (),
     )
     qtbot.addWidget(window)
     window.show()
     open_trade_history(window)
     qtbot.waitUntil(lambda: window.trade_history.basket_table.rowCount() == 1)
-    qtbot.waitUntil(lambda: window.trade_history.fill_table.rowCount() == 1)
     assert not window.trade_history.total_net_pnl.isHidden()
 
     click(window.trade_history.apply_button)
     qtbot.waitUntil(
         lambda: (
             window.trade_history.basket_state.text()
-            == "Stale · Trade History unavailable"
+            == "Stale · Basket History unavailable"
         )
     )
 
     assert window.trade_history.basket_table.rowCount() == 1
-    assert window.trade_history.fill_table.rowCount() == 1
+    assert window.trade_history.fill_table.rowCount() == 0
     assert not window.trade_history.total_net_pnl.isHidden()
     assert not window.trade_history.total_net_pnl_label.isHidden()
     assert window.trade_history.total_net_pnl.text() == "19.58 USDT · Profit"
@@ -414,10 +383,10 @@ def test_trade_history_desktop_flow_has_no_forbidden_import_or_network(
     assert window.setup.isVisible()
     open_trade_history(window)
     qtbot.waitUntil(
-        lambda: window.trade_history.basket_state.text() == "No trade history"
+        lambda: window.trade_history.basket_state.text() == "No Basket history"
     )
     assert window.workspace.tabs.currentWidget() is window.trade_history
-    assert window.trade_history.basket_state.text() == "No trade history"
+    assert window.trade_history.basket_state.text() == "No Basket history"
 
 
 def _record_spot_and_futures_history(history: SQLiteTradeHistory) -> None:
@@ -504,7 +473,7 @@ def _composed_window(
     path: Path,
     monkeypatch: MonkeyPatch,
     *,
-    basket_requests: list[tuple[TradeHistoryFilter, PageRequest]] | None = None,
+    basket_requests: list[TradeHistoryFilter] | None = None,
 ) -> MainWindow:
     assert QApplication.instance() is not None
     captured_window: MainWindow | None = None
@@ -524,19 +493,18 @@ def _composed_window(
             captured_window = self
 
     if basket_requests is not None:
-        original_list_baskets = SQLiteTradeHistory.list_baskets
+        original_list_baskets = SQLiteTradeHistory.list_basket_history
 
         def capture_basket_request(
             history: SQLiteTradeHistory,
             filters: TradeHistoryFilter,
-            page: PageRequest,
-        ) -> BasketHistoryPage:
-            basket_requests.append((filters, page))
-            return original_list_baskets(history, filters, page)
+        ) -> BasketHistoryResult:
+            basket_requests.append(filters)
+            return original_list_baskets(history, filters)
 
         monkeypatch.setattr(
             SQLiteTradeHistory,
-            "list_baskets",
+            "list_basket_history",
             capture_basket_request,
         )
 

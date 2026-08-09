@@ -10,7 +10,12 @@ from pytestqt.qtbot import QtBot
 
 from tests.support.qt_interactions import click, qdate, table_item
 from tests.support.trade_history_records import basket_result, trade_fill
-from tiewtrade.application.trade_history import BasketHistoryPage
+from tiewtrade.application.trade_history import (
+    BasketHistoryPage,
+    BasketHistoryResult,
+    TradeFillHistoryItem,
+)
+from tiewtrade.trading.session_config import MarketType, TradeMode
 from tiewtrade.ui.trade_history_page import TradeHistoryPage
 from tiewtrade.ui.trade_history_presenter import TradeHistoryFilterValues
 
@@ -54,12 +59,12 @@ def test_page_exposes_filters_and_exact_table_columns(qtbot: QtBot) -> None:
     )
     assert page.fill_headers == (
         "Filled At",
+        "Symbol",
         "Side",
-        "Entry #",
         "Price",
         "Quantity",
-        "Notional",
-        "Commission",
+        "Fee",
+        "Total",
         "Realized PnL",
         "Source",
     )
@@ -105,6 +110,93 @@ def test_page_exposes_filters_and_exact_table_columns(qtbot: QtBot) -> None:
     assert page.to_date_enabled.text() == "To Date (UTC)"
     assert page.from_date.accessibleName() == "From Date (UTC)"
     assert page.to_date.accessibleName() == "To Date (UTC)"
+
+
+def test_page_uses_two_tabs_hides_trade_only_status_and_has_no_pagination(
+    qtbot: QtBot,
+) -> None:
+    page = TradeHistoryPage()
+    qtbot.addWidget(page)
+    page.show()
+
+    assert page.history_tabs.tabText(0) == "Basket History"
+    assert page.history_tabs.tabText(1) == "Trade History"
+    assert page.previous_button.isHidden()
+    assert page.next_button.isHidden()
+    assert page.page_label.isHidden()
+
+    page.history_tabs.setCurrentIndex(1)
+
+    assert page.status.isHidden()
+    assert page.status_label.isHidden()
+    assert page.fill_table.isVisible()
+    assert not page.basket_table.isVisible()
+
+
+def test_modern_basket_and_cross_basket_trade_results_render_independently(
+    qtbot: QtBot,
+) -> None:
+    basket = basket_result()
+    item = TradeFillHistoryItem(
+        fill=trade_fill(),
+        symbol="ETHUSDT",
+        timeframe="15m",
+        market_type=MarketType.SPOT,
+        trade_mode=TradeMode.PAPER,
+    )
+    page = TradeHistoryPage()
+    qtbot.addWidget(page)
+
+    page.show_baskets(BasketHistoryResult((basket,), Decimal("19.58")))
+    page.history_tabs.setCurrentIndex(1)
+    page.show_trades((item,))
+
+    assert page.total_items.text() == "1 total Baskets"
+    assert page.fill_table.rowCount() == 1
+    assert table_item(page.fill_table, 0, 1).text() == "ETHUSDT"
+    assert table_item(page.fill_table, 0, 6).text().endswith(" USDT")
+    assert table_item(page.fill_table, 0, 2).foreground().color().name() == "#0ecb81"
+
+    page.history_tabs.setCurrentIndex(0)
+    page.show_baskets(BasketHistoryResult((basket,), Decimal("19.58")))
+    page.history_tabs.setCurrentIndex(1)
+
+    assert page.fill_table.rowCount() == 1
+    assert table_item(page.fill_table, 0, 1).text() == "ETHUSDT"
+
+    page.show_trades_empty()
+
+    assert page.fill_empty_state.text() == "No trade history"
+
+
+def test_initial_basket_failure_preserves_trade_tab_result(qtbot: QtBot) -> None:
+    item = TradeFillHistoryItem(
+        fill=trade_fill(),
+        symbol="BTCUSDT",
+        timeframe="5m",
+        market_type=MarketType.SPOT,
+        trade_mode=TradeMode.PAPER,
+    )
+    page = TradeHistoryPage()
+    qtbot.addWidget(page)
+    page.show_trades((item,))
+
+    page.show_baskets_unavailable("Basket History unavailable")
+
+    assert page.fill_table.rowCount() == 1
+
+
+def test_inactive_basket_loading_does_not_lock_trade_filters(qtbot: QtBot) -> None:
+    page = TradeHistoryPage()
+    qtbot.addWidget(page)
+    page.set_baskets_loading(True)
+    assert not page.apply_button.isEnabled()
+
+    page.history_tabs.setCurrentIndex(1)
+
+    assert page.apply_button.isEnabled()
+    page.set_trades_loading(True)
+    assert not page.apply_button.isEnabled()
 
 
 def test_page_scrolls_vertically_without_squashing_filter_controls(
@@ -185,6 +277,10 @@ def test_keyboard_focus_skips_scroll_area_and_scrolls_to_lower_table(
     qtbot.waitUntil(page.apply_button.hasFocus)
 
     QTest.keyClick(page.apply_button, Qt.Key.Key_Tab)
+
+    assert page.history_tabs.hasFocus()
+
+    QTest.keyClick(page.history_tabs, Qt.Key.Key_Tab)
 
     assert page.basket_table.hasFocus()
     qtbot.waitUntil(lambda: scroll_bar.value() > 0)
@@ -448,6 +544,7 @@ def test_empty_trade_fills_state_is_centered_in_table_body(qtbot: QtBot) -> None
     qtbot.addWidget(page)
     page.show()
     page.show_baskets(history_page(basket))
+    page.history_tabs.setCurrentIndex(1)
 
     page.show_fills_empty(basket.basket_id)
 
@@ -471,6 +568,7 @@ def test_fill_refresh_loading_keeps_same_basket_durable_fills(
     qtbot.addWidget(page)
     page.show()
     page.show_baskets(history_page(basket))
+    page.history_tabs.setCurrentIndex(1)
     page.show_fills(basket.basket_id, (trade_fill(),))
     page.set_fills_loading(True)
 
@@ -482,12 +580,39 @@ def test_fill_refresh_loading_keeps_same_basket_durable_fills(
     assert page.retry_fills_button.isHidden()
 
 
+def test_legacy_fill_rows_cannot_reuse_cross_basket_trade_headers(
+    qtbot: QtBot,
+) -> None:
+    basket = basket_result()
+    page = TradeHistoryPage()
+    qtbot.addWidget(page)
+
+    page.show_fills(basket.basket_id, (trade_fill(),))
+
+    side_header = page.fill_table.horizontalHeaderItem(1)
+    entry_header = page.fill_table.horizontalHeaderItem(2)
+    assert side_header is not None
+    assert entry_header is not None
+    assert side_header.text() == "Side"
+    assert entry_header.text() == "Entry #"
+
+    page.show_trades(())
+
+    symbol_header = page.fill_table.horizontalHeaderItem(1)
+    side_header = page.fill_table.horizontalHeaderItem(2)
+    assert symbol_header is not None
+    assert side_header is not None
+    assert symbol_header.text() == "Symbol"
+    assert side_header.text() == "Side"
+
+
 def test_fill_failure_keeps_basket_rows_and_scopes_retry(qtbot: QtBot) -> None:
     basket = basket_result()
     page = TradeHistoryPage()
     qtbot.addWidget(page)
     page.show()
     page.show_baskets(history_page(basket))
+    page.history_tabs.setCurrentIndex(1)
 
     page.show_fills_unavailable(basket.basket_id, "Trade Fills unavailable")
 
@@ -506,6 +631,7 @@ def test_fill_refresh_failure_keeps_same_basket_durable_fills(
     qtbot.addWidget(page)
     page.show()
     page.show_baskets(history_page(basket))
+    page.history_tabs.setCurrentIndex(1)
     page.show_fills(basket.basket_id, (trade_fill(),))
 
     page.show_fills_unavailable(basket.basket_id, "Trade Fills unavailable")
@@ -533,7 +659,7 @@ def test_basket_failure_does_not_clobber_existing_fill_failure_state(
     assert page.basket_state.text() == "Stale · Trade History unavailable"
     assert page.fill_state.text() == "Stale · Trade Fills unavailable"
     assert page.retry_baskets_button.isVisible()
-    assert page.retry_fills_button.isVisible()
+    assert not page.retry_fills_button.isVisible()
 
 
 def test_fill_loading_for_another_basket_clears_only_fill_scope(qtbot: QtBot) -> None:

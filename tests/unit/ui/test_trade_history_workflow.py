@@ -11,13 +11,17 @@ from pytestqt.qtbot import QtBot
 from tests.support.trade_history_records import basket_result, trade_fill
 from tiewtrade.application.trade_history import (
     BasketHistoryPage,
+    BasketHistoryResult,
     PageRequest,
+    TradeFillHistoryItem,
     TradeHistoryFilter,
 )
+from tiewtrade.trading.session_config import MarketType, TradeMode
 from tiewtrade.trading.trade_history import BasketResult, BasketStatus, TradeFill
 from tiewtrade.ui.background_task import BackgroundTask
 from tiewtrade.ui.trade_history_presenter import TradeHistoryFilterValues
 from tiewtrade.ui.trade_history_workflow import (
+    HistoryTab,
     ListBaskets,
     ListFills,
     TradeHistoryWorkflow,
@@ -67,6 +71,23 @@ class ImmediateThreadPool:
         task.run()
 
 
+def immediate_thread_pool() -> QThreadPool:
+    return cast(QThreadPool, ImmediateThreadPool())
+
+
+class HoldingThreadPool:
+    def __init__(self) -> None:
+        self.tasks: list[BackgroundTask] = []
+
+    def start(self, task: BackgroundTask) -> None:
+        self.tasks.append(task)
+
+
+def holding_thread_pool() -> tuple[QThreadPool, HoldingThreadPool]:
+    pool = HoldingThreadPool()
+    return cast(QThreadPool, pool), pool
+
+
 def test_start_loads_first_page_and_auto_loads_first_basket_fills(
     qtbot: QtBot,
 ) -> None:
@@ -104,6 +125,191 @@ def test_start_loads_first_page_and_auto_loads_first_basket_fills(
     assert fill_calls == [basket.basket_id]
     assert fills == [(basket.basket_id, (fill,))]
     assert pool.waitForDone(1_000)
+
+
+def test_selecting_trade_tab_queries_cross_basket_fill_history(qtbot: QtBot) -> None:
+    item = TradeFillHistoryItem(
+        fill=trade_fill(),
+        symbol="BTCUSDT",
+        timeframe="5m",
+        market_type=MarketType.SPOT,
+        trade_mode=TradeMode.PAPER,
+    )
+    requested: list[TradeHistoryFilter] = []
+
+    def list_trade_fills(
+        filters: TradeHistoryFilter,
+    ) -> tuple[TradeFillHistoryItem, ...]:
+        requested.append(filters)
+        return (item,)
+
+    workflow = TradeHistoryWorkflow(
+        list_basket_history=lambda _filters: BasketHistoryResult((), Decimal("0")),
+        list_trade_fills=list_trade_fills,
+        thread_pool=immediate_thread_pool(),
+    )
+    rows: list[tuple[TradeFillHistoryItem, ...]] = []
+    workflow.trades_ready.connect(rows.append)
+
+    workflow.select_tab(HistoryTab.TRADES)
+
+    assert requested == [TradeHistoryFilter()]
+    assert rows == [(item,)]
+
+
+def test_modern_basket_start_loads_all_rows_without_page_request() -> None:
+    basket = basket_result()
+    requested: list[TradeHistoryFilter] = []
+
+    def list_basket_history(filters: TradeHistoryFilter) -> BasketHistoryResult:
+        requested.append(filters)
+        return BasketHistoryResult((basket,), Decimal("12.50"))
+
+    workflow = TradeHistoryWorkflow(
+        list_basket_history=list_basket_history,
+        list_trade_fills=lambda _filters: (),
+        thread_pool=immediate_thread_pool(),
+    )
+    results: list[BasketHistoryResult] = []
+    events: list[str] = []
+    workflow.baskets_loading.connect(
+        lambda loading: events.append(f"loading:{loading}")
+    )
+    workflow.baskets_ready.connect(results.append)
+
+    workflow.start()
+
+    assert requested == [TradeHistoryFilter()]
+    assert results == [BasketHistoryResult((basket,), Decimal("12.50"))]
+    assert events == ["loading:True", "loading:False"]
+
+
+def test_trade_query_has_independent_loading_empty_error_and_retry() -> None:
+    attempts = 0
+
+    def list_trade_fills(
+        filters: TradeHistoryFilter,
+    ) -> tuple[TradeFillHistoryItem, ...]:
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            raise RuntimeError("temporary")
+        return ()
+
+    workflow = TradeHistoryWorkflow(
+        list_basket_history=lambda _filters: BasketHistoryResult((), Decimal("0")),
+        list_trade_fills=list_trade_fills,
+        thread_pool=immediate_thread_pool(),
+    )
+    loading: list[bool] = []
+    errors: list[str] = []
+    empty: list[None] = []
+    workflow.trades_loading.connect(loading.append)
+    workflow.trades_unavailable.connect(errors.append)
+    workflow.trades_empty.connect(lambda: empty.append(None))
+
+    workflow.select_tab(HistoryTab.TRADES)
+    workflow.retry_fills()
+
+    assert attempts == 2
+    assert loading == [True, False, True, False]
+    assert errors == ["Trade History unavailable"]
+    assert empty == [None]
+
+
+def test_trade_query_ignores_basket_only_status_filter() -> None:
+    requested: list[TradeHistoryFilter] = []
+
+    def list_trade_fills(
+        filters: TradeHistoryFilter,
+    ) -> tuple[TradeFillHistoryItem, ...]:
+        requested.append(filters)
+        return ()
+
+    workflow = TradeHistoryWorkflow(
+        list_basket_history=lambda _filters: BasketHistoryResult((), Decimal("0")),
+        list_trade_fills=list_trade_fills,
+        thread_pool=immediate_thread_pool(),
+    )
+    workflow.apply_filters(TradeHistoryFilterValues(status="closed"))
+
+    workflow.select_tab(HistoryTab.TRADES)
+
+    assert requested == [TradeHistoryFilter()]
+
+
+def test_trade_channel_runs_one_query_and_coalesces_latest_filter() -> None:
+    qt_pool, holding = holding_thread_pool()
+    requested: list[TradeHistoryFilter] = []
+
+    def list_trade_fills(
+        filters: TradeHistoryFilter,
+    ) -> tuple[TradeFillHistoryItem, ...]:
+        requested.append(filters)
+        return ()
+
+    workflow = TradeHistoryWorkflow(
+        list_basket_history=lambda _filters: BasketHistoryResult((), Decimal("0")),
+        list_trade_fills=list_trade_fills,
+        thread_pool=qt_pool,
+    )
+    workflow.select_tab(HistoryTab.TRADES)
+    workflow.apply_filters(TradeHistoryFilterValues(symbol="BTCUSDT"))
+    workflow.apply_filters(TradeHistoryFilterValues(symbol="ETHUSDT"))
+
+    assert len(holding.tasks) == 1
+    holding.tasks[0].run()
+    assert len(holding.tasks) == 2
+    holding.tasks[1].run()
+
+    assert requested == [
+        TradeHistoryFilter(),
+        TradeHistoryFilter(symbol="ETHUSDT"),
+    ]
+
+
+def test_trade_loading_callback_cannot_start_a_second_query() -> None:
+    qt_pool, holding = holding_thread_pool()
+    workflow = TradeHistoryWorkflow(
+        list_basket_history=lambda _filters: BasketHistoryResult((), Decimal("0")),
+        list_trade_fills=lambda _filters: (),
+        thread_pool=qt_pool,
+    )
+    reapplied = False
+
+    def reapply_during_loading(loading: bool) -> None:
+        nonlocal reapplied
+        if loading and not reapplied:
+            reapplied = True
+            workflow.apply_filters(TradeHistoryFilterValues())
+
+    workflow.trades_loading.connect(reapply_during_loading)
+
+    workflow.select_tab(HistoryTab.TRADES)
+
+    assert len(holding.tasks) == 1
+
+
+def test_basket_loading_callback_cannot_start_a_second_query() -> None:
+    qt_pool, holding = holding_thread_pool()
+    workflow = TradeHistoryWorkflow(
+        list_basket_history=lambda _filters: BasketHistoryResult((), Decimal("0")),
+        list_trade_fills=lambda _filters: (),
+        thread_pool=qt_pool,
+    )
+    reapplied = False
+
+    def reapply_during_loading(loading: bool) -> None:
+        nonlocal reapplied
+        if loading and not reapplied:
+            reapplied = True
+            workflow.apply_filters(TradeHistoryFilterValues())
+
+    workflow.baskets_loading.connect(reapply_during_loading)
+
+    workflow.start()
+
+    assert len(holding.tasks) == 1
 
 
 def test_loading_precedes_immediate_queries_and_returns_idle() -> None:

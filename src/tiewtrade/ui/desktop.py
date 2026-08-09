@@ -13,15 +13,18 @@ from tiewtrade.ui.chart_workflow import ChartFactRelay, LoadChart, RefreshChart
 from tiewtrade.ui.main_window import MainWindow
 from tiewtrade.ui.session_workflow import CreateSession, LoadActiveSession
 from tiewtrade.ui.theme import DARK_THEME
-from tiewtrade.ui.trade_history_workflow import ListBaskets, ListFills
+from tiewtrade.ui.trade_history_workflow import (
+    ListBasketHistory,
+    ListTradeFills,
+)
 
 
 def run_desktop(
     *,
     create_session: CreateSession,
     load_active: LoadActiveSession,
-    list_baskets: ListBaskets,
-    list_fills: ListFills,
+    list_basket_history: ListBasketHistory | None = None,
+    list_trade_fills: ListTradeFills | None = None,
     start_bot: LifecycleAction | None = None,
     stop_bot: LifecycleAction | None = None,
     recover_bot: LifecycleAction | None = None,
@@ -50,8 +53,8 @@ def run_desktop(
     window = MainWindow(
         create_session=create_session,
         load_active=load_active,
-        list_baskets=list_baskets,
-        list_fills=list_fills,
+        list_basket_history=list_basket_history,
+        list_trade_fills=list_trade_fills,
         start_bot=start_bot,
         stop_bot=stop_bot,
         stop_for_replacement=stop_for_replacement,

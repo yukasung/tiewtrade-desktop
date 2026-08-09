@@ -246,66 +246,54 @@ def test_paper_execution_history_survives_restart_and_reaches_desktop(
     )
     assert _basket_id(window.trade_history.basket_table, 0) == futures_basket_id
     assert _basket_id(window.trade_history.basket_table, 1) == spot_basket_id
-    qtbot.waitUntil(
-        lambda: (
-            _table_rows_text(window.trade_history.fill_table)
-            == (
-                (
-                    "2026-01-01 02:05:00 UTC",
-                    "Buy",
-                    "1",
-                    "95.6",
-                    "313.807",
-                    "29999.9492 USDT",
-                    "29.9999492 USDT",
-                    "0.00 USDT · Break-even",
-                    "Paper Executor",
-                ),
-                (
-                    "2026-01-01 02:45:00 UTC",
-                    "Sell",
-                    "—",
-                    "103.0",
-                    "313.807",
-                    "32322.1210 USDT",
-                    "32.3221210 USDT",
-                    "2259.8497298 USDT · Profit",
-                    "Paper Executor",
-                ),
-            )
-        )
-    )
-
-    window.trade_history.basket_table.selectRow(1)
-    qtbot.waitUntil(
-        lambda: (
-            _table_rows_text(window.trade_history.fill_table)
-            == (
-                (
-                    "2026-01-01 02:05:00 UTC",
-                    "Buy",
-                    "1",
-                    "95.02",
-                    "1.578",
-                    "149.94156 USDT",
-                    "0.14994156 USDT",
-                    "0.00 USDT · Break-even",
-                    "Paper Executor",
-                ),
-                (
-                    "2026-01-01 02:50:00 UTC",
-                    "Sell",
-                    "—",
-                    "103.99",
-                    "1.578",
-                    "164.09622 USDT",
-                    "0.16409622 USDT",
-                    "13.84062222 USDT · Profit",
-                    "Paper Executor",
-                ),
-            )
-        )
-    )
+    window.trade_history.history_tabs.setCurrentIndex(1)
+    qtbot.waitUntil(lambda: window.trade_history.fill_table.rowCount() == 4)
+    assert set(_table_rows_text(window.trade_history.fill_table)) == {
+        (
+            "2026-01-01 02:05:00 UTC",
+            "BTCUSDT",
+            "Buy",
+            "95.6",
+            "313.807",
+            "29.9999492 USDT",
+            "29999.9492 USDT",
+            "0.00 USDT · Break-even",
+            "Paper Executor",
+        ),
+        (
+            "2026-01-01 02:45:00 UTC",
+            "BTCUSDT",
+            "Sell",
+            "103.0",
+            "313.807",
+            "32.3221210 USDT",
+            "32322.1210 USDT",
+            "2259.8497298 USDT · Profit",
+            "Paper Executor",
+        ),
+        (
+            "2026-01-01 02:05:00 UTC",
+            "BTCUSDT",
+            "Buy",
+            "95.02",
+            "1.578",
+            "0.14994156 USDT",
+            "149.94156 USDT",
+            "0.00 USDT · Break-even",
+            "Paper Executor",
+        ),
+        (
+            "2026-01-01 02:50:00 UTC",
+            "BTCUSDT",
+            "Sell",
+            "103.99",
+            "1.578",
+            "0.16409622 USDT",
+            "164.09622 USDT",
+            "13.84062222 USDT · Profit",
+            "Paper Executor",
+        ),
+    }
 
 
 def _block_network(monkeypatch: MonkeyPatch) -> None:

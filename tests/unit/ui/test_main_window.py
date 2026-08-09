@@ -490,6 +490,7 @@ def test_fill_retry_remains_wired_after_basket_refresh_failure(
         )
     )
 
+    window.trade_history.history_tabs.setCurrentIndex(1)
     assert window.trade_history.retry_fills_button.isVisible()
     click(window.trade_history.retry_fills_button)
 
@@ -553,6 +554,9 @@ def test_invalidated_active_fill_does_not_keep_loading_after_basket_failure(
     qtbot.waitUntil(
         lambda: window.trade_history.fill_state.text() == "Loading trade fills…"
     )
+    assert not window.trade_history.apply_button.isEnabled()
+    release_fill.set()
+    qtbot.waitUntil(window.trade_history.apply_button.isEnabled)
     click(window.trade_history.apply_button)
     qtbot.waitUntil(
         lambda: (

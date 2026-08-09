@@ -11,6 +11,11 @@ QFrame#statusCard, QFrame#filterCard, QFrame#emptyPanel {
     border: 1px solid #2B3441;
     border-radius: 8px;
 }
+QFrame#historyFilterBar {
+    background: #10151C;
+    border-top: 1px solid #2B3441;
+    border-bottom: 1px solid #2B3441;
+}
 QWidget#candlestickChart {
     background: #10151C;
     border: 1px solid #2B3441;
@@ -184,6 +189,12 @@ QTabBar::tab {
 QTabBar::tab:selected {
     color: #F1F5F9;
     border-bottom: 2px solid #4C7DFF;
+}
+QTabBar#historyTabs::tab {
+    background: transparent;
+    min-width: 132px;
+    min-height: 42px;
+    padding: 0 18px;
 }
 QScrollArea#botControlScroll, QWidget#botControlViewport,
 QStackedWidget#botControlPages, QScrollArea#tradeHistoryScroll,

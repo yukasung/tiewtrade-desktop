@@ -318,8 +318,8 @@ def test_list_basket_history_returns_all_matching_rows_without_pagination(
 ) -> None:
     newest = basket(HIGH_ID, opened_at_utc=datetime(2026, 2, 2, tzinfo=UTC))
     oldest = basket(LOW_ID, opened_at_utc=datetime(2026, 2, 1, tzinfo=UTC))
-    for result in (oldest, newest):
-        record(history, result)
+    for basket_item in (oldest, newest):
+        record(history, basket_item)
 
     result = history.list_basket_history(TradeHistoryFilter(symbol="BTCUSDT"))
 
@@ -336,8 +336,8 @@ def test_list_trade_fills_filters_joined_baskets_and_orders_newest_first(
         opened_at_utc=datetime(2026, 2, 1, tzinfo=UTC),
         symbol="ETHUSDT",
     )
-    for result in (excluded, matching):
-        record(history, result)
+    for basket_item in (excluded, matching):
+        record(history, basket_item)
 
     result = history.list_trade_fills(TradeHistoryFilter(symbol="BTCUSDT"))
 

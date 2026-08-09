@@ -33,8 +33,10 @@ from tiewtrade.ui.session_workflow import (
     SessionWorkflow,
 )
 from tiewtrade.ui.trade_history_workflow import (
+    ListBasketHistory,
     ListBaskets,
     ListFills,
+    ListTradeFills,
     TradeHistoryWorkflow,
 )
 from tiewtrade.ui.trading_workspace import TradingWorkspace
@@ -48,8 +50,10 @@ class MainWindow(QMainWindow):
         *,
         create_session: CreateSession,
         load_active: LoadActiveSession,
-        list_baskets: ListBaskets,
-        list_fills: ListFills,
+        list_baskets: ListBaskets | None = None,
+        list_fills: ListFills | None = None,
+        list_basket_history: ListBasketHistory | None = None,
+        list_trade_fills: ListTradeFills | None = None,
         start_bot: LifecycleAction | None = None,
         stop_bot: LifecycleAction | None = None,
         recover_bot: LifecycleAction | None = None,
@@ -74,6 +78,7 @@ class MainWindow(QMainWindow):
     ) -> None:
         super().__init__()
         self._thread_pool = thread_pool or QThreadPool.globalInstance()
+        self._legacy_trade_history = list_baskets is not None and list_fills is not None
         self._load_chart = load_chart
         self._close_position = close_position
         self._has_open_position = has_open_position
@@ -182,6 +187,8 @@ class MainWindow(QMainWindow):
         self._history_workflow = TradeHistoryWorkflow(
             list_baskets=list_baskets,
             list_fills=list_fills,
+            list_basket_history=list_basket_history,
+            list_trade_fills=list_trade_fills,
             thread_pool=self._thread_pool,
             parent=self,
         )
@@ -472,8 +479,14 @@ class MainWindow(QMainWindow):
             self._history_workflow.apply_filters
         )
         self.trade_history.reset_requested.connect(self._history_workflow.reset_filters)
-        self.trade_history.page_requested.connect(self._history_workflow.go_to_page)
-        self.trade_history.basket_selected.connect(self._history_workflow.select_basket)
+        self.trade_history.history_tab_changed.connect(
+            self._history_workflow.select_tab
+        )
+        if self._legacy_trade_history:
+            self.trade_history.page_requested.connect(self._history_workflow.go_to_page)
+            self.trade_history.basket_selected.connect(
+                self._history_workflow.select_basket
+            )
         self.trade_history.baskets_retry_requested.connect(
             self._history_workflow.retry_baskets
         )
@@ -493,13 +506,26 @@ class MainWindow(QMainWindow):
         self._history_workflow.filter_invalid.connect(
             self.trade_history.show_filter_error
         )
-        self._history_workflow.fills_loading.connect(
-            self.trade_history.set_fills_loading
+        if self._legacy_trade_history:
+            self._history_workflow.fills_loading.connect(
+                self.trade_history.set_fills_loading
+            )
+            self._history_workflow.fills_ready.connect(self.trade_history.show_fills)
+            self._history_workflow.fills_empty.connect(
+                self.trade_history.show_fills_empty
+            )
+            self._history_workflow.fills_unavailable.connect(
+                self.trade_history.show_fills_unavailable
+            )
+        self._history_workflow.trades_ready.connect(self.trade_history.show_trades)
+        self._history_workflow.trades_loading.connect(
+            self.trade_history.set_trades_loading
         )
-        self._history_workflow.fills_ready.connect(self.trade_history.show_fills)
-        self._history_workflow.fills_empty.connect(self.trade_history.show_fills_empty)
-        self._history_workflow.fills_unavailable.connect(
-            self.trade_history.show_fills_unavailable
+        self._history_workflow.trades_empty.connect(
+            self.trade_history.show_trades_empty
+        )
+        self._history_workflow.trades_unavailable.connect(
+            self.trade_history.show_trades_unavailable
         )
 
 

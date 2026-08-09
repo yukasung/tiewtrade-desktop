@@ -29,8 +29,8 @@ from tiewtrade.application.paper_session_setup import (
 )
 from tiewtrade.application.paper_symbols import paper_symbol_rules
 from tiewtrade.application.trade_history import (
-    BasketHistoryPage,
-    PageRequest,
+    BasketHistoryResult,
+    TradeFillHistoryItem,
     TradeHistoryFilter,
 )
 from tiewtrade.application.trading_workspace import BotRuntimeState
@@ -369,16 +369,17 @@ def run_desktop(database_path: Path | None = None) -> int:
             tick_size=_symbol_rules_for(session).tick_size,
         )
 
-    def list_baskets_after_migration(
+    def list_trade_fills_after_migration(
         filters: TradeHistoryFilter,
-        page: PageRequest,
-    ) -> BasketHistoryPage:
+    ) -> tuple[TradeFillHistoryItem, ...]:
         prepare_database()
-        return history.list_baskets(filters, page)
+        return history.list_trade_fills(filters)
 
-    def list_fills_after_migration(basket_id: UUID) -> tuple[TradeFill, ...]:
+    def list_basket_history_after_migration(
+        filters: TradeHistoryFilter,
+    ) -> BasketHistoryResult:
         prepare_database()
-        return history.list_fills(basket_id)
+        return history.list_basket_history(filters)
 
     runtime_snapshots = RuntimeSnapshotRelay()
     chart_fact_relay = ChartFactRelay()
@@ -467,8 +468,8 @@ def run_desktop(database_path: Path | None = None) -> int:
     return run_desktop_ui(
         create_session=create_after_migration,
         load_active=load_after_migration,
-        list_baskets=list_baskets_after_migration,
-        list_fills=list_fills_after_migration,
+        list_basket_history=list_basket_history_after_migration,
+        list_trade_fills=list_trade_fills_after_migration,
         start_bot=runtime_actions.start,
         stop_bot=runtime_actions.stop,
         stop_for_replacement=runtime_actions.stop_for_replacement,

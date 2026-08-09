@@ -237,7 +237,7 @@ def test_rejected_notification_presentation_keeps_workspace_interactive(
     assert window.workspace.tabs.currentWidget() is window.trade_history
     click(window.workspace.bot_control_close_button)
     assert not window.workspace.bot_control.isVisible()
-    assert window.workspace.bot_control_button.hasFocus()
+    assert window.focusWidget() is window.workspace.bot_control_button
 
 
 def _paper_session(tmp_path: Path) -> tuple[SQLiteDatabase, SQLiteActivePaperSessions]:

@@ -1,5 +1,7 @@
 from collections.abc import Callable
+from dataclasses import replace
 from decimal import Decimal
+from enum import Enum, auto
 from typing import TypeGuard
 from uuid import UUID
 
@@ -7,7 +9,9 @@ from PySide6.QtCore import QObject, QThreadPool, Signal, Slot
 
 from tiewtrade.application.trade_history import (
     BasketHistoryPage,
+    BasketHistoryResult,
     PageRequest,
+    TradeFillHistoryItem,
     TradeHistoryFilter,
 )
 from tiewtrade.trading.trade_history import BasketResult, TradeFill
@@ -19,6 +23,14 @@ from tiewtrade.ui.trade_history_presenter import (
 
 ListBaskets = Callable[[TradeHistoryFilter, PageRequest], BasketHistoryPage]
 ListFills = Callable[[UUID], tuple[TradeFill, ...]]
+ListBasketHistory = Callable[[TradeHistoryFilter], BasketHistoryResult]
+ListTradeFills = Callable[[TradeHistoryFilter], tuple[TradeFillHistoryItem, ...]]
+
+
+class HistoryTab(Enum):
+    BASKETS = auto()
+    TRADES = auto()
+
 
 BasketRequest = tuple[TradeHistoryFilter, PageRequest]
 PendingBasketRequest = tuple[int, BasketRequest]
@@ -35,20 +47,29 @@ class TradeHistoryWorkflow(QObject):
     fills_ready = Signal(object, object)
     fills_empty = Signal(object)
     fills_unavailable = Signal(object, str)
+    trades_ready = Signal(object)
+    trades_empty = Signal()
+    trades_unavailable = Signal(str)
+    trades_loading = Signal(bool)
 
     PAGE_SIZE = 50
 
     def __init__(
         self,
         *,
-        list_baskets: ListBaskets,
-        list_fills: ListFills,
+        list_baskets: ListBaskets | None = None,
+        list_fills: ListFills | None = None,
+        list_basket_history: ListBasketHistory | None = None,
+        list_trade_fills: ListTradeFills | None = None,
         thread_pool: QThreadPool | None = None,
         parent: QObject | None = None,
     ) -> None:
         super().__init__(parent)
         self._list_baskets = list_baskets
         self._list_fills = list_fills
+        self._list_basket_history = list_basket_history
+        self._list_trade_fills = list_trade_fills
+        self._active_tab = HistoryTab.BASKETS
         self._thread_pool = (
             thread_pool if thread_pool is not None else QThreadPool.globalInstance()
         )
@@ -78,8 +99,24 @@ class TradeHistoryWorkflow(QObject):
         self._fills_are_loading = False
         self._fill_context_before_basket_refresh: tuple[UUID, UUID | None] | None = None
 
+        self._modern_basket_generation = 0
+        self._modern_basket_tasks: dict[int, BackgroundTask] = {}
+        self._latest_modern_basket_filters: TradeHistoryFilter | None = None
+        self._pending_modern_basket_filters: TradeHistoryFilter | None = None
+        self._failed_modern_basket_filters: TradeHistoryFilter | None = None
+        self._trade_generation = 0
+        self._trade_tasks: dict[int, BackgroundTask] = {}
+        self._latest_trade_filters: TradeHistoryFilter | None = None
+        self._pending_trade_filters: TradeHistoryFilter | None = None
+        self._failed_trade_filters: TradeHistoryFilter | None = None
+
     @Slot()
     def start(self) -> None:
+        if self._list_basket_history is not None:
+            self._request_basket_history()
+            return
+        if self._list_baskets is None:
+            return
         self._request_baskets(
             (self._filters, PageRequest(page=1, page_size=self.PAGE_SIZE))
         )
@@ -97,6 +134,12 @@ class TradeHistoryWorkflow(QObject):
             return
 
         self._filters = filters
+        if self._active_tab is HistoryTab.TRADES:
+            self._request_trades()
+            return
+        if self._list_basket_history is not None:
+            self._request_basket_history()
+            return
         self._page = 1
         self._total_items = None
         self._request_baskets((filters, PageRequest(page=1, page_size=self.PAGE_SIZE)))
@@ -106,6 +149,12 @@ class TradeHistoryWorkflow(QObject):
         if self._closed:
             return
         self._filters = TradeHistoryFilter()
+        if self._active_tab is HistoryTab.TRADES:
+            self._request_trades()
+            return
+        if self._list_basket_history is not None:
+            self._request_basket_history()
+            return
         self._page = 1
         self._total_items = None
         self._request_baskets(
@@ -122,8 +171,188 @@ class TradeHistoryWorkflow(QObject):
         self._page = page
         self._request_baskets((self._filters, request))
 
-    def select_basket(self, basket_id: UUID) -> None:
+    def select_tab(self, tab: HistoryTab) -> None:
+        if self._closed or tab is self._active_tab:
+            return
+        self._active_tab = tab
+        if tab is HistoryTab.TRADES:
+            self._request_trades()
+        else:
+            self.start()
+
+    def _request_trades(self) -> None:
+        list_trade_fills = self._list_trade_fills
+        if list_trade_fills is None:
+            return
+        filters = replace(self._filters, status=None)
+        if self._trade_tasks:
+            if filters != self._latest_trade_filters:
+                self._trade_generation += 1
+                self._latest_trade_filters = filters
+                self._pending_trade_filters = filters
+            return
+        self._start_trade_task(filters)
+
+    def _start_trade_task(self, filters: TradeHistoryFilter) -> None:
+        list_trade_fills = self._list_trade_fills
+        assert list_trade_fills is not None
+        self._trade_generation += 1
+        generation = self._trade_generation
+        self._latest_trade_filters = filters
+        self._pending_trade_filters = None
+        self._failed_trade_filters = None
+        task = BackgroundTask(lambda: list_trade_fills(filters))
+        task.signals.succeeded.connect(
+            lambda result: self._trade_task_succeeded(generation, filters, result)
+        )
+        task.signals.failed.connect(
+            lambda error: self._trade_task_failed(generation, filters, error)
+        )
+        task.signals.finished.connect(lambda: self._trade_task_finished(generation))
+        self._trade_tasks[generation] = task
+        self.trades_loading.emit(True)
+        self._thread_pool.start(task)
+
+    def _trade_task_succeeded(
+        self, generation: int, filters: TradeHistoryFilter, result: object
+    ) -> None:
+        if not self._trade_result_is_current(generation, filters):
+            return
+        if isinstance(result, tuple) and all(
+            isinstance(item, TradeFillHistoryItem) for item in result
+        ):
+            if not result:
+                self.trades_empty.emit()
+                return
+            self.trades_ready.emit(result)
+            return
+        self._failed_trade_filters = filters
+        self.trades_unavailable.emit("Trade History unavailable")
+
+    def _trade_task_failed(
+        self, generation: int, filters: TradeHistoryFilter, error: object
+    ) -> None:
+        del error
+        if not self._trade_result_is_current(generation, filters):
+            return
+        self._failed_trade_filters = filters
+        self.trades_unavailable.emit("Trade History unavailable")
+
+    def _trade_task_finished(self, generation: int) -> None:
+        self._trade_tasks.pop(generation, None)
         if self._closed:
+            return
+        pending = self._pending_trade_filters
+        if pending is not None:
+            self._start_trade_task(pending)
+            return
+        if generation == self._trade_generation:
+            self.trades_loading.emit(False)
+
+    def _trade_result_is_current(
+        self, generation: int, filters: TradeHistoryFilter
+    ) -> bool:
+        return (
+            not self._closed
+            and self._active_tab is HistoryTab.TRADES
+            and generation == self._trade_generation
+            and filters == replace(self._filters, status=None)
+        )
+
+    def _request_basket_history(self) -> None:
+        list_basket_history = self._list_basket_history
+        if list_basket_history is None or self._closed:
+            return
+        filters = self._filters
+        if self._modern_basket_tasks and filters != self._latest_modern_basket_filters:
+            self._modern_basket_generation += 1
+            self._latest_modern_basket_filters = filters
+            self._pending_modern_basket_filters = filters
+            return
+        if self._modern_basket_tasks:
+            return
+        self._start_basket_history_task(filters)
+
+    def _start_basket_history_task(self, filters: TradeHistoryFilter) -> None:
+        list_basket_history = self._list_basket_history
+        assert list_basket_history is not None
+        self._modern_basket_generation += 1
+        generation = self._modern_basket_generation
+        self._latest_modern_basket_filters = filters
+        self._pending_modern_basket_filters = None
+        self._failed_modern_basket_filters = None
+        task = BackgroundTask(lambda: list_basket_history(filters))
+        task.signals.succeeded.connect(
+            lambda result: self._modern_basket_task_succeeded(
+                generation, filters, result
+            )
+        )
+        task.signals.failed.connect(
+            lambda error: self._modern_basket_task_failed(generation, filters, error)
+        )
+        task.signals.finished.connect(
+            lambda: self._modern_basket_task_finished(generation)
+        )
+        self._modern_basket_tasks[generation] = task
+        self._set_baskets_loading(True)
+        self._thread_pool.start(task)
+
+    def _modern_basket_task_succeeded(
+        self, generation: int, filters: TradeHistoryFilter, result: object
+    ) -> None:
+        if not self._modern_basket_result_is_current(generation, filters):
+            return
+        if not self._valid_modern_basket_result(result):
+            self._failed_modern_basket_filters = filters
+            self.baskets_unavailable.emit("Basket History unavailable")
+            return
+        if result.items:
+            self.baskets_ready.emit(result)
+        else:
+            self.baskets_empty.emit(result)
+
+    def _modern_basket_task_failed(
+        self, generation: int, filters: TradeHistoryFilter, error: object
+    ) -> None:
+        del error
+        if not self._modern_basket_result_is_current(generation, filters):
+            return
+        self._failed_modern_basket_filters = filters
+        self.baskets_unavailable.emit("Basket History unavailable")
+
+    def _modern_basket_task_finished(self, generation: int) -> None:
+        self._modern_basket_tasks.pop(generation, None)
+        if self._closed:
+            return
+        pending = self._pending_modern_basket_filters
+        if pending is not None:
+            self._start_basket_history_task(pending)
+            return
+        if generation == self._modern_basket_generation:
+            self._set_baskets_loading(False)
+
+    def _modern_basket_result_is_current(
+        self, generation: int, filters: TradeHistoryFilter
+    ) -> bool:
+        return (
+            not self._closed
+            and self._active_tab is HistoryTab.BASKETS
+            and generation == self._modern_basket_generation
+            and filters == self._filters
+        )
+
+    @staticmethod
+    def _valid_modern_basket_result(result: object) -> TypeGuard[BasketHistoryResult]:
+        return (
+            isinstance(result, BasketHistoryResult)
+            and isinstance(result.items, tuple)
+            and all(isinstance(item, BasketResult) for item in result.items)
+            and isinstance(result.net_realized_pnl, Decimal)
+            and result.net_realized_pnl.is_finite()
+        )
+
+    def select_basket(self, basket_id: UUID) -> None:
+        if self._closed or self._list_fills is None:
             return
         if self._baskets_are_loading:
             self._fill_context_before_basket_refresh = None
@@ -132,12 +361,26 @@ class TradeHistoryWorkflow(QObject):
 
     @Slot()
     def retry_baskets(self) -> None:
+        if (
+            not self._closed
+            and self._list_basket_history is not None
+            and self._failed_modern_basket_filters == self._filters
+        ):
+            self._request_basket_history()
+            return
         if self._closed or self._failed_basket_request is None:
             return
         self._request_baskets(self._failed_basket_request)
 
     @Slot()
     def retry_fills(self) -> None:
+        if (
+            not self._closed
+            and self._active_tab is HistoryTab.TRADES
+            and self._failed_trade_filters == replace(self._filters, status=None)
+        ):
+            self._request_trades()
+            return
         if (
             self._closed
             or self._failed_fill_request is None
@@ -153,12 +396,18 @@ class TradeHistoryWorkflow(QObject):
         self._closed = True
         self._basket_generation += 1
         self._fill_generation += 1
+        self._modern_basket_generation += 1
+        self._trade_generation += 1
         self._pending_basket_request = None
         self._pending_fill_request = None
         self._failed_basket_request = None
         self._failed_fill_request = None
         self._selected_basket_id = None
         self._fill_context_before_basket_refresh = None
+        self._failed_modern_basket_filters = None
+        self._failed_trade_filters = None
+        self._pending_modern_basket_filters = None
+        self._pending_trade_filters = None
 
     def _request_baskets(self, request: BasketRequest) -> None:
         if self._closed:
@@ -198,8 +447,10 @@ class TradeHistoryWorkflow(QObject):
     def _prepare_basket_task(
         self, generation: int, request: BasketRequest
     ) -> BackgroundTask:
+        list_baskets = self._list_baskets
+        assert list_baskets is not None
         filters, page_request = request
-        task = BackgroundTask(lambda: self._list_baskets(filters, page_request))
+        task = BackgroundTask(lambda: list_baskets(filters, page_request))
         task.signals.succeeded.connect(self._basket_task_succeeded)
         task.signals.failed.connect(self._basket_task_failed)
         task.signals.finished.connect(self._basket_task_finished)
@@ -353,7 +604,9 @@ class TradeHistoryWorkflow(QObject):
             self._thread_pool.start(task_to_start)
 
     def _prepare_fill_task(self, generation: int, basket_id: UUID) -> BackgroundTask:
-        task = BackgroundTask(lambda: self._list_fills(basket_id))
+        list_fills = self._list_fills
+        assert list_fills is not None
+        task = BackgroundTask(lambda: list_fills(basket_id))
         task.signals.succeeded.connect(self._fill_task_succeeded)
         task.signals.failed.connect(self._fill_task_failed)
         task.signals.finished.connect(self._fill_task_finished)
