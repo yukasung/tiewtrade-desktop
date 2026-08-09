@@ -264,18 +264,11 @@ def test_desktop_real_paper_runtime_starts_once_and_stops_without_closing_basket
     click(window.setup.create_button)
 
     qtbot.waitUntil(window.overview.isVisible)
-    qtbot.waitUntil(window.workspace.bot_control_widget.start_button.isEnabled)
-    session = active_sessions.get_active()
-    assert session is not None
-    assert window.workspace.header_runtime.text() == "Configured"
-    assert sources == []
-    assert initialize_calls == 1
-
-    click(window.workspace.bot_control_widget.start_button)
-    window.workspace.start_bot_requested.emit()
-
     qtbot.waitUntil(lambda: start_calls == 1)
     qtbot.waitUntil(lambda: window.workspace.header_runtime.text() == "Running")
+    session = active_sessions.get_active()
+    assert session is not None
+    assert initialize_calls == 0
     qtbot.waitUntil(lambda: window.workspace.position_basket.table.rowCount() == 1)
     assert len(sources) == 1
     source = sources[0]

@@ -126,27 +126,33 @@ class BotLifecycleWorkflow(QObject):
     def notification_store(self) -> NotificationStore:
         return self._notification_store
 
-    def configure(self, session: ConfiguredPaperSession) -> None:
+    def configure(
+        self,
+        session: ConfiguredPaperSession,
+        *,
+        inspect_startup: bool = True,
+    ) -> None:
         if self._closed:
             return
         active_task = self._active_task is not None
         self._invalidate_runtime_snapshots()
         self._generation += 1
         self._notification_store.reset_transition_identity()
+        initialize_bot = self._initialize_bot if inspect_startup else None
         configured = configured_bot_control(
             session,
             observed_at_utc=self._clock(),
             actions=(
                 frozenset()
-                if active_task or self._initialize_bot is not None
+                if active_task or initialize_bot is not None
                 else self._actions_for(BotRuntimeState.CONFIGURED, session)
             ),
         )
         self._publish(configured)
-        if not active_task and self._initialize_bot is not None:
+        if not active_task and initialize_bot is not None:
             self._start_task(
                 _LifecycleOperation.INITIALIZE,
-                self._initialize_bot,
+                initialize_bot,
                 configured,
             )
 
