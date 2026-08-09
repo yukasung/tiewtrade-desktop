@@ -1,5 +1,10 @@
 # Paper Trade History Design
 
+> **Superseded for Trade History UI/query behavior:**
+> `2026-08-09-binance-style-trade-history-design.md` replaces Basket-selected
+> fills and pagination with independent Basket History and cross-Basket Trade
+> History tabs. This document remains the historical design for persistence.
+
 **Date:** 2026-07-23
 **Status:** Approved design
 **Scope:** Phase 1 Paper Trading

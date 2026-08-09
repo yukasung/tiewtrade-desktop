@@ -1,5 +1,9 @@
 # Trade History Query and Pagination Implementation Plan
 
+> **Superseded:** `2026-08-09-binance-style-trade-history-design.md` replaces
+> this pagination-based read workflow with unpaginated Basket History and
+> cross-Basket Trade History queries for Internal Alpha.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** เพิ่ม application query สำหรับค้นหา Basket History แบบมีตัวกรอง การแบ่งหน้า จำนวนรายการทั้งหมด Net Realized PnL และ Trade Fills ตามลำดับ execution โดยรักษา Decimal และ UTC อย่างถูกต้อง

@@ -1,5 +1,9 @@
 # DEV-96 Trade History UI Design
 
+> **Superseded:** `2026-08-09-binance-style-trade-history-design.md` replaces
+> the Basket-selected fills UI and pagination behavior. This document remains
+> the historical implementation design.
+
 ## เป้าหมาย
 
 เพิ่มหน้า `Trade History` ใน Desktop UI เพื่อให้ผู้ใช้ตรวจสอบ Basket History และ
