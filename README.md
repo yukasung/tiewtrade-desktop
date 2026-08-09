@@ -16,6 +16,14 @@ python3 -m venv .venv
 .venv/bin/python -m pip install -e ".[dev]"
 ```
 
+## Run Desktop App
+
+จาก root ของโครงการ หลังติดตั้งตามขั้นตอนข้างต้นแล้ว ให้รัน:
+
+```bash
+make run
+```
+
 ## การตรวจซ้ำด้วย fixture
 
 เรียกใช้ deterministic Paper Spot replay จาก root ของโครงการ:
