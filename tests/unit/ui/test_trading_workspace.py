@@ -530,7 +530,10 @@ def test_bot_control_content_is_scrollable_at_minimum_window_size(
         workspace.setup.market_type.setCurrentIndex(
             workspace.setup.market_type.findData("futures")
         )
+        click(workspace.setup.advanced_toggle)
         target = workspace.setup.leverage
+    elif content == "spot":
+        click(workspace.setup.advanced_toggle)
     elif content == "advanced":
         workspace.setup.market_type.setCurrentIndex(
             workspace.setup.market_type.findData("futures")

@@ -220,6 +220,10 @@ Stop Session หมายถึง:
 - คง Basket Take Profit ที่มีอยู่
 - ไม่บังคับปิด Basket
 
+เมื่อ Stop สำเร็จและไม่มี Open Basket หรือ Open Order ระบบ retire Active Paper
+Session เดิม แล้วเปิด Session Setup พร้อม configuration เดิมให้ผู้ใช้แก้ไขและกด
+`Start Paper Bot` เพื่อสร้าง Session ใหม่ได้ทันที
+
 ### 12.2 Startup Recovery
 
 เมื่อเปิดโปรแกรมใหม่:
@@ -237,10 +241,9 @@ Stop Session หมายถึง:
 UI เป็นภาษาอังกฤษและใช้ Full Dark Theme ที่อ่านง่ายและน่าเชื่อถือ โดยใช้ TiewTrade
 Blue เป็นสี primary action งาน network, engine และ persistence ต้องไม่บล็อก UI thread
 
-การกด `Create Paper Session` หมายถึงตรวจสอบและบันทึก immutable Session
-configuration เท่านั้น ไม่เริ่ม Market Data, Strategy หรือ Execution หลังสร้างสำเร็จ UI
-ต้องแสดงสถานะ `Configured — Market Data Not Started` จนกว่าผู้ใช้จะเริ่ม runtime
-ผ่าน flow ที่ส่งมอบใน Issue ภายหลัง
+การกด `Start Paper Bot` หมายถึงตรวจสอบค่า สร้างและบันทึก immutable Paper Session
+configuration แล้วเริ่ม Market Data, Strategy และ Paper Execution ต่อเนื่องใน flow เดียว
+ระหว่างเริ่มและขณะ Runtime ทำงาน ค่า configuration ของ Session แก้ไขไม่ได้
 
 หน้าจอหลัก:
 

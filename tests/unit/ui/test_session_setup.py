@@ -19,7 +19,7 @@ def test_configuration_controls_have_explicit_accessible_names(qtbot: QtBot) -> 
     assert widget.advanced_toggle.accessibleName() == "Advanced Execution Costs"
     assert widget.fee_percent.accessibleName() == "Trading Fee (%)"
     assert widget.slippage_bps.accessibleName() == "Slippage (bps)"
-    assert widget.create_button.accessibleName() == "Create Paper Session"
+    assert widget.create_button.accessibleName() == "Start Paper Bot"
 
 
 def test_default_form_builds_paper_spot_values(qtbot: QtBot) -> None:
@@ -33,8 +33,8 @@ def test_default_form_builds_paper_spot_values(qtbot: QtBot) -> None:
     assert values.timeframe == "5m"
     assert values.available_capital == ""
     assert values.max_entries == "10"
-    assert values.fee_percent == ""
-    assert values.slippage_bps == ""
+    assert values.fee_percent == "0.05"
+    assert values.slippage_bps == "0.05"
     assert values.spot_trading_capital_percent == "80"
     assert values.futures_leverage is None
     assert widget.trade_mode_label.text() == "Paper"
@@ -48,6 +48,26 @@ def test_default_form_builds_paper_spot_values(qtbot: QtBot) -> None:
     assert widget.preset_label.text() == "RSI Step Grid v1"
 
 
+def test_primary_form_only_shows_start_inputs(qtbot: QtBot) -> None:
+    widget = SessionSetupWidget()
+    qtbot.addWidget(widget)
+    widget.show()
+
+    assert widget.create_button.text() == "Start Paper Bot"
+    assert widget.create_button.accessibleName() == "Start Paper Bot"
+    assert widget.market_type.isVisible()
+    assert widget.timeframe.isVisible()
+    assert widget.available_capital.isVisible()
+    assert widget.max_entries.isVisible() is False
+    assert widget.spot_fields.isVisible() is False
+    assert widget.futures_fields.isVisible() is False
+
+    click(widget.advanced_toggle)
+
+    assert widget.max_entries.isVisible()
+    assert widget.spot_fields.isVisible()
+
+
 def test_futures_selection_shows_futures_policy_and_hides_spot_ratio(
     qtbot: QtBot,
 ) -> None:
@@ -55,6 +75,7 @@ def test_futures_selection_shows_futures_policy_and_hides_spot_ratio(
     qtbot.addWidget(widget)
 
     widget.market_type.setCurrentIndex(widget.market_type.findData("futures"))
+    click(widget.advanced_toggle)
 
     assert widget.spot_fields.isHidden()
     assert widget.futures_fields.isHidden() is False
@@ -155,12 +176,12 @@ def test_loading_disables_repeated_submit(qtbot: QtBot) -> None:
     widget.set_loading(True)
 
     assert widget.create_button.isEnabled() is False
-    assert widget.create_button.text() == "Creating…"
+    assert widget.create_button.text() == "Starting…"
 
     widget.set_loading(False)
 
     assert widget.create_button.isEnabled() is True
-    assert widget.create_button.text() == "Create Paper Session"
+    assert widget.create_button.text() == "Start Paper Bot"
 
 
 def test_field_error_is_rendered_next_to_its_input(qtbot: QtBot) -> None:

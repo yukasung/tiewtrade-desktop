@@ -10,9 +10,9 @@ from typing import overload
 from uuid import UUID
 
 import pytest
-from PySide6.QtCore import QDeadlineTimer, QPoint, QRect, Qt, QThreadPool, QTimer
+from PySide6.QtCore import QDeadlineTimer, QPoint, QRect, Qt, QThreadPool
 from PySide6.QtTest import QTest
-from PySide6.QtWidgets import QApplication, QMessageBox, QWidget
+from PySide6.QtWidgets import QMessageBox, QWidget
 from pytestqt.qtbot import QtBot
 
 import tiewtrade.ui.main_window as main_window_module
@@ -978,6 +978,8 @@ def test_compact_required_advanced_validation_expands_and_reveals_field(
     assert not window.setup.advanced_toggle.isChecked()
 
     window.setup.available_capital.setText("200000")
+    window.setup.fee_percent.clear()
+    window.setup.slippage_bps.clear()
     if field == "slippage_bps":
         window.setup.fee_percent.setText("0.1")
     window.workspace.bot_control_scroll.ensureWidgetVisible(window.setup.create_button)
@@ -1745,21 +1747,108 @@ def test_new_session_reopens_an_editable_setup_form(qtbot: QtBot) -> None:
     click(stop_button)
     qtbot.waitUntil(lambda: control.state_value.text() == "Stopped")
 
-    def confirm_new_session() -> None:
-        dialog = QApplication.activeModalWidget()
-        assert isinstance(dialog, QMessageBox)
-        button = dialog.button(QMessageBox.StandardButton.Yes)
-        assert button is not None
-        click(button)
-
-    QTimer.singleShot(0, confirm_new_session)
-    click(control.new_session_button)
-
     qtbot.waitUntil(lambda: active is None)
     qtbot.waitUntil(window.setup.isVisible)
     qtbot.waitUntil(window.setup.timeframe.isEnabled)
     assert window.setup.timeframe.currentData() == "5m"
     assert window.setup.available_capital.isEnabled()
+
+
+def test_start_from_setup_creates_and_starts_paper_bot_in_one_action(
+    qtbot: QtBot,
+) -> None:
+    session = configured_spot_session()
+    created: list[PaperSessionSetupValues] = []
+    started: list[BotControlSnapshot] = []
+
+    def create(values: PaperSessionSetupValues) -> PaperSessionCreateOutcome:
+        created.append(values)
+        return PaperSessionCreateOutcome(session=session, created=True)
+
+    def start(snapshot: BotControlSnapshot) -> BotLifecycleResult:
+        started.append(snapshot)
+        return BotLifecycleResult(
+            workspace=workspace_with_runtime_state(
+                snapshot.workspace,
+                BotRuntimeState.RUNNING,
+                data_freshness=DataFreshness.FRESH,
+            )
+        )
+
+    window = MainWindow(
+        create_session=create,
+        load_active=no_active_session,
+        list_baskets=empty_basket_page,
+        list_fills=empty_fills,
+        start_bot=start,
+    )
+    qtbot.addWidget(window)
+    window.show()
+    qtbot.waitUntil(window.setup.create_button.isEnabled)
+    window.setup.available_capital.setText("1000")
+
+    click(window.setup.create_button)
+
+    qtbot.waitUntil(lambda: window.workspace.header_runtime.text() == "Running")
+    assert len(created) == 1
+    assert created[0].available_capital == "1000"
+    assert len(started) == 1
+
+
+def test_stop_without_exposure_retires_session_and_reopens_prefilled_form(
+    qtbot: QtBot,
+) -> None:
+    session = configured_spot_session()
+    retired: list[ConfiguredPaperSession] = []
+
+    def start(snapshot: BotControlSnapshot) -> BotLifecycleResult:
+        return BotLifecycleResult(
+            workspace=workspace_with_runtime_state(
+                snapshot.workspace,
+                BotRuntimeState.RUNNING,
+                data_freshness=DataFreshness.FRESH,
+            )
+        )
+
+    def stop(snapshot: BotControlSnapshot) -> BotLifecycleResult:
+        return BotLifecycleResult(
+            workspace=workspace_with_runtime_state(
+                snapshot.workspace, BotRuntimeState.STOPPED
+            )
+        )
+
+    def retire(value: ConfiguredPaperSession) -> None:
+        retired.append(value)
+
+    window = MainWindow(
+        create_session=unused_create,
+        load_active=lambda: session,
+        list_baskets=empty_basket_page,
+        list_fills=empty_fills,
+        start_bot=start,
+        stop_bot=stop,
+        retire_session=retire,
+    )
+    qtbot.addWidget(window)
+    window.show()
+    control = window.workspace.bot_control_widget
+    qtbot.waitUntil(control.start_button.isEnabled)
+    click(control.start_button)
+    qtbot.waitUntil(lambda: control.state_value.text() == "Running")
+    click(control.stop_button)
+    confirmation = window.findChild(QMessageBox)
+    assert confirmation is not None
+    stop_button = next(
+        button for button in confirmation.buttons() if button.text() == "Stop Session"
+    )
+    click(stop_button)
+
+    qtbot.waitUntil(window.setup.isVisible)
+    assert retired == [session]
+    assert window.setup.available_capital.text() == format(
+        session.config.available_capital, "f"
+    )
+    assert window.setup.timeframe.currentData() == "5m"
 
 
 def test_configured_session_does_not_auto_start_and_explains_missing_runtime(

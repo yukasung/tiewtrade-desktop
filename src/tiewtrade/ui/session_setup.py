@@ -16,6 +16,7 @@ from PySide6.QtWidgets import (
 )
 
 from tiewtrade.application.paper_session_setup import (
+    ConfiguredPaperSession,
     PaperSessionSetupValues,
     PaperSessionValidationError,
     spot_trading_policy_from_percent,
@@ -101,12 +102,12 @@ class SessionSetupWidget(QWidget):
         )
         self.collateral_buffer_value.setObjectName("readOnlyValue")
 
-        self.fee_percent = QLineEdit()
+        self.fee_percent = QLineEdit("0.05")
         self.fee_percent.setObjectName("feePercent")
         self.fee_percent.setPlaceholderText("Percent")
         self.fee_percent_error = self._error_label("fee_percent")
 
-        self.slippage_bps = QLineEdit()
+        self.slippage_bps = QLineEdit("0.05")
         self.slippage_bps.setObjectName("slippageBps")
         self.slippage_bps.setPlaceholderText("Basis points")
         self.slippage_bps_error = self._error_label("slippage_bps")
@@ -115,7 +116,7 @@ class SessionSetupWidget(QWidget):
         self.timeframe_error = self._error_label("timeframe")
         self.market_type_error = self._error_label("market_type")
 
-        self.create_button = QPushButton("Create Paper Session")
+        self.create_button = QPushButton("Start Paper Bot")
         self.create_button.setObjectName("primaryButton")
         self.create_button.clicked.connect(self._submit)
 
@@ -136,7 +137,7 @@ class SessionSetupWidget(QWidget):
         self.advanced_toggle.setAccessibleName("Advanced Execution Costs")
         self.fee_percent.setAccessibleName("Trading Fee (%)")
         self.slippage_bps.setAccessibleName("Slippage (bps)")
-        self.create_button.setAccessibleName("Create Paper Session")
+        self.create_button.setAccessibleName("Start Paper Bot")
 
         self._build_layout()
         self.market_type.currentIndexChanged.connect(self._sync_market_fields)
@@ -157,6 +158,26 @@ class SessionSetupWidget(QWidget):
             ),
             futures_leverage=str(self.leverage.value()) if futures else None,
         )
+
+    def set_values_from_session(self, session: ConfiguredPaperSession) -> None:
+        config = session.config
+        self.market_type.setCurrentIndex(
+            self.market_type.findData(config.market_type.value)
+        )
+        self.timeframe.setCurrentIndex(
+            self.timeframe.findData(session.market_data.timeframe)
+        )
+        self.available_capital.setText(format(config.available_capital, "f"))
+        self.max_entries.setValue(config.entry_policy.max_entries)
+        self.fee_percent.setText(format(config.fee_rate * Decimal("100"), "f"))
+        self.slippage_bps.setText(format(config.slippage_bps, "f"))
+        if config.spot_policy is not None:
+            self.spot_ratio.setText(
+                format(config.spot_policy.trading_capital_ratio * Decimal("100"), "f")
+            )
+        if config.futures_policy is not None:
+            self.leverage.setValue(config.futures_policy.leverage)
+        self.clear_errors()
 
     @Slot()
     def _submit(self) -> None:
@@ -179,7 +200,7 @@ class SessionSetupWidget(QWidget):
             self.create_button,
         ):
             control.setDisabled(loading)
-        self.create_button.setText("Creating…" if loading else "Create Paper Session")
+        self.create_button.setText("Starting…" if loading else "Start Paper Bot")
 
     def clear_errors(self) -> None:
         for error_label in self._field_errors.values():
@@ -219,11 +240,9 @@ class SessionSetupWidget(QWidget):
         root.setContentsMargins(0, 0, 0, 0)
         root.setSpacing(16)
 
-        heading = QLabel("Create Paper Session")
+        heading = QLabel("Start Paper Bot")
         heading.setObjectName("pageTitle")
-        description = QLabel(
-            "Configure an immutable Paper session. Trading does not start yet."
-        )
+        description = QLabel("Paper · BTCUSDT · RSI Step Grid v1")
         description.setObjectName("supportingText")
         root.addWidget(heading)
         root.addWidget(description)
@@ -234,11 +253,10 @@ class SessionSetupWidget(QWidget):
         card_layout.setContentsMargins(24, 24, 24, 24)
         card_layout.setSpacing(20)
 
-        identity_heading = QLabel("Session identity")
+        identity_heading = QLabel("Trading setup")
         identity_heading.setObjectName("sectionTitle")
         card_layout.addWidget(identity_heading)
         identity_form = self._form()
-        self._add_row(identity_form, "Trade Mode", self.trade_mode_label)
         self._add_row(
             identity_form,
             "Market Type",
@@ -247,20 +265,13 @@ class SessionSetupWidget(QWidget):
         )
         self._add_row(
             identity_form,
-            "Symbol",
-            self.symbol_field,
-            (self.symbol_error,),
-        )
-        self._add_row(
-            identity_form,
             "Timeframe",
             self.timeframe,
             (self.timeframe_error,),
         )
-        self._add_row(identity_form, "Strategy Preset", self.preset_label)
         card_layout.addLayout(identity_form)
 
-        capital_heading = QLabel("Capital and entry policy")
+        capital_heading = QLabel("Capital")
         capital_heading.setObjectName("sectionTitle")
         card_layout.addWidget(capital_heading)
         capital_form = self._form()
@@ -270,21 +281,12 @@ class SessionSetupWidget(QWidget):
             self.available_capital,
             (self.available_capital_error,),
         )
-        self._add_row(
-            capital_form,
-            "Max Entries",
-            self.max_entries,
-            (self.max_entries_error,),
-        )
         card_layout.addLayout(capital_form)
 
-        self.spot_fields = self._build_spot_fields()
-        card_layout.addWidget(self.spot_fields)
-        self.futures_fields = self._build_futures_fields()
-        card_layout.addWidget(self.futures_fields)
-
         card_layout.addWidget(self.advanced_toggle)
-        card_layout.addWidget(self.advanced_costs)
+        self.advanced_settings = self._build_advanced_settings()
+        card_layout.addWidget(self.advanced_settings)
+        self.advanced_settings.hide()
 
         actions = QHBoxLayout()
         actions.addStretch()
@@ -305,10 +307,34 @@ class SessionSetupWidget(QWidget):
 
     @Slot(bool)
     def _toggle_advanced(self, expanded: bool) -> None:
+        self.advanced_settings.setVisible(expanded)
         self.advanced_costs.setVisible(expanded)
+        self._sync_market_fields()
         self.advanced_toggle.setText(
             "Hide Advanced Settings" if expanded else "Show Advanced Settings"
         )
+
+    def _build_advanced_settings(self) -> QWidget:
+        container = QWidget()
+        layout = QVBoxLayout(container)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(20)
+
+        entry_policy = self._form()
+        self._add_row(
+            entry_policy,
+            "Max Entries",
+            self.max_entries,
+            (self.max_entries_error,),
+        )
+        layout.addLayout(entry_policy)
+
+        self.spot_fields = self._build_spot_fields()
+        layout.addWidget(self.spot_fields)
+        self.futures_fields = self._build_futures_fields()
+        layout.addWidget(self.futures_fields)
+        layout.addWidget(self.advanced_costs)
+        return container
 
     def _build_advanced_costs(self) -> QWidget:
         container = QWidget()
@@ -373,8 +399,9 @@ class SessionSetupWidget(QWidget):
     @Slot()
     def _sync_market_fields(self) -> None:
         futures = self.market_type.currentData() == "futures"
-        self.spot_fields.setVisible(not futures)
-        self.futures_fields.setVisible(futures)
+        advanced = self.advanced_toggle.isChecked()
+        self.spot_fields.setVisible(advanced and not futures)
+        self.futures_fields.setVisible(advanced and futures)
 
     @staticmethod
     def _form() -> QFormLayout:
