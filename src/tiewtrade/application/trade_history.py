@@ -3,7 +3,7 @@ from datetime import datetime, timedelta
 from decimal import Decimal
 
 from tiewtrade.trading.session_config import MarketType, TradeMode
-from tiewtrade.trading.trade_history import BasketResult, BasketStatus
+from tiewtrade.trading.trade_history import BasketResult, BasketStatus, TradeFill
 
 
 def _require_utc(value: datetime | None, field: str) -> None:
@@ -61,3 +61,18 @@ class BasketHistoryPage:
     page_size: int
     total_items: int
     net_realized_pnl: Decimal
+
+
+@dataclass(frozen=True, slots=True)
+class BasketHistoryResult:
+    items: tuple[BasketResult, ...]
+    net_realized_pnl: Decimal
+
+
+@dataclass(frozen=True, slots=True)
+class TradeFillHistoryItem:
+    fill: TradeFill
+    symbol: str
+    timeframe: str
+    market_type: MarketType
+    trade_mode: TradeMode

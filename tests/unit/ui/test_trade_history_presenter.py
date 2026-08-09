@@ -4,7 +4,10 @@ from decimal import Decimal
 import pytest
 
 from tests.support.trade_history_records import basket_result, trade_fill
-from tiewtrade.application.trade_history import TradeHistoryFilter
+from tiewtrade.application.trade_history import (
+    TradeFillHistoryItem,
+    TradeHistoryFilter,
+)
 from tiewtrade.trading.session_config import MarketType, TradeMode
 from tiewtrade.trading.trade_history import BasketStatus, FillSource
 from tiewtrade.ui.trade_history_presenter import (
@@ -14,6 +17,7 @@ from tiewtrade.ui.trade_history_presenter import (
     fill_rows,
     page_state,
     pnl_text,
+    trade_fill_rows,
     trade_history_filter,
 )
 
@@ -101,6 +105,28 @@ def test_fill_rows_formats_exit_entry_and_binance_source() -> None:
 
     assert fill_rows((fill,))[0].values[2] == "—"
     assert fill_rows((fill,))[0].values[-1] == "Binance"
+
+
+def test_trade_fill_rows_include_symbol_and_total_for_cross_basket_history() -> None:
+    item = TradeFillHistoryItem(
+        fill=trade_fill(),
+        symbol="BTCUSDT",
+        timeframe="5m",
+        market_type=MarketType.SPOT,
+        trade_mode=TradeMode.PAPER,
+    )
+
+    assert trade_fill_rows((item,))[0].values == (
+        "2026-01-01 00:00:00 UTC",
+        "BTCUSDT",
+        "Buy",
+        "100",
+        "2",
+        "0.2 USDT",
+        "200 USDT",
+        "0.00 USDT · Break-even",
+        "Paper Executor",
+    )
 
 
 @pytest.mark.parametrize(

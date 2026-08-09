@@ -1,9 +1,17 @@
 from collections.abc import Callable
 from datetime import UTC, datetime
+from decimal import Decimal
 
 import pytest
 
-from tiewtrade.application.trade_history import PageRequest, TradeHistoryFilter
+from tests.support.trade_history_records import trade_fill
+from tiewtrade.application.trade_history import (
+    BasketHistoryResult,
+    PageRequest,
+    TradeFillHistoryItem,
+    TradeHistoryFilter,
+)
+from tiewtrade.trading.session_config import MarketType, TradeMode
 
 
 @pytest.mark.parametrize(
@@ -55,3 +63,16 @@ def test_page_request_calculates_offset() -> None:
     request = PageRequest(page=3, page_size=25)
 
     assert request.offset == 50
+
+
+def test_history_read_models_preserve_durable_facts() -> None:
+    item = TradeFillHistoryItem(
+        fill=trade_fill(),
+        symbol="BTCUSDT",
+        timeframe="5m",
+        market_type=MarketType.SPOT,
+        trade_mode=TradeMode.PAPER,
+    )
+
+    assert item.fill.notional == Decimal("200")
+    assert BasketHistoryResult(items=(), net_realized_pnl=Decimal("0")).items == ()

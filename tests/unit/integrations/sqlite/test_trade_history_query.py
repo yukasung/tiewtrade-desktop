@@ -311,3 +311,38 @@ def test_list_fills_uses_execution_time_then_fill_id(
     history.record_entry_fill(opened, fill_a)
 
     assert history.list_fills(HIGH_ID) == (fill_a, fill_z)
+
+
+def test_list_basket_history_returns_all_matching_rows_without_pagination(
+    history: SQLiteTradeHistory,
+) -> None:
+    newest = basket(HIGH_ID, opened_at_utc=datetime(2026, 2, 2, tzinfo=UTC))
+    oldest = basket(LOW_ID, opened_at_utc=datetime(2026, 2, 1, tzinfo=UTC))
+    for result in (oldest, newest):
+        record(history, result)
+
+    result = history.list_basket_history(TradeHistoryFilter(symbol="BTCUSDT"))
+
+    assert result.items == (newest, oldest)
+    assert result.net_realized_pnl == Decimal("0")
+
+
+def test_list_trade_fills_filters_joined_baskets_and_orders_newest_first(
+    history: SQLiteTradeHistory,
+) -> None:
+    matching = basket(HIGH_ID, opened_at_utc=datetime(2026, 2, 2, tzinfo=UTC))
+    excluded = basket(
+        LOW_ID,
+        opened_at_utc=datetime(2026, 2, 1, tzinfo=UTC),
+        symbol="ETHUSDT",
+    )
+    for result in (excluded, matching):
+        record(history, result)
+
+    result = history.list_trade_fills(TradeHistoryFilter(symbol="BTCUSDT"))
+
+    assert tuple(item.fill.fill_id for item in result) == (
+        f"{HIGH_ID}-sell",
+        f"{HIGH_ID}-buy",
+    )
+    assert {item.symbol for item in result} == {"BTCUSDT"}

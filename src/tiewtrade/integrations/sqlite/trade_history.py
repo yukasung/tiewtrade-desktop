@@ -8,7 +8,9 @@ from uuid import UUID
 
 from tiewtrade.application.trade_history import (
     BasketHistoryPage,
+    BasketHistoryResult,
     PageRequest,
+    TradeFillHistoryItem,
     TradeHistoryFilter,
 )
 from tiewtrade.integrations.sqlite.database import SQLiteDatabase
@@ -215,6 +217,50 @@ class SQLiteTradeHistory:
                 total_items=total_items,
                 net_realized_pnl=net_realized_pnl,
             )
+
+        return self._run_read(operation)
+
+    def list_basket_history(
+        self,
+        filters: TradeHistoryFilter,
+    ) -> BasketHistoryResult:
+        def operation(connection: sqlite3.Connection) -> BasketHistoryResult:
+            where_sql, parameters = _basket_where(filters)
+            rows = connection.execute(
+                f"""
+                SELECT * FROM basket_results
+                {where_sql}
+                ORDER BY opened_at_utc DESC, basket_id DESC
+                """,
+                parameters,
+            ).fetchall()
+            return BasketHistoryResult(
+                items=tuple(_basket_from_row(row) for row in rows),
+                net_realized_pnl=_closed_net_realized_pnl(connection, filters),
+            )
+
+        return self._run_read(operation)
+
+    def list_trade_fills(
+        self,
+        filters: TradeHistoryFilter,
+    ) -> tuple[TradeFillHistoryItem, ...]:
+        def operation(
+            connection: sqlite3.Connection,
+        ) -> tuple[TradeFillHistoryItem, ...]:
+            where_sql, parameters = _basket_where(filters)
+            rows = connection.execute(
+                f"""
+                SELECT trade_fills.*, basket_results.symbol, basket_results.timeframe,
+                       basket_results.market_type, basket_results.trade_mode
+                FROM trade_fills
+                JOIN basket_results ON basket_results.basket_id = trade_fills.basket_id
+                {where_sql}
+                ORDER BY trade_fills.filled_at_utc DESC, trade_fills.fill_id DESC
+                """,
+                parameters,
+            ).fetchall()
+            return tuple(_trade_fill_history_item_from_row(row) for row in rows)
 
         return self._run_read(operation)
 
@@ -724,4 +770,14 @@ def _fill_from_row(row: sqlite3.Row) -> TradeFill:
         commission_asset=row["commission_asset"],
         realized_pnl=Decimal(row["realized_pnl"]),
         source=FillSource(row["source"]),
+    )
+
+
+def _trade_fill_history_item_from_row(row: sqlite3.Row) -> TradeFillHistoryItem:
+    return TradeFillHistoryItem(
+        fill=_fill_from_row(row),
+        symbol=row["symbol"],
+        timeframe=row["timeframe"],
+        market_type=MarketType(row["market_type"]),
+        trade_mode=TradeMode(row["trade_mode"]),
     )

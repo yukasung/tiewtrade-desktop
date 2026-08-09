@@ -3,7 +3,7 @@ from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from uuid import UUID
 
-from tiewtrade.application.trade_history import TradeHistoryFilter
+from tiewtrade.application.trade_history import TradeFillHistoryItem, TradeHistoryFilter
 from tiewtrade.trading.session_config import MarketType, TradeMode
 from tiewtrade.trading.trade_history import (
     BasketResult,
@@ -105,6 +105,27 @@ def fill_rows(fills: tuple[TradeFill, ...]) -> tuple[FillRow, ...]:
             )
         )
         for fill in fills
+    )
+
+
+def trade_fill_rows(
+    items: tuple[TradeFillHistoryItem, ...],
+) -> tuple[FillRow, ...]:
+    return tuple(
+        FillRow(
+            values=(
+                _utc_text(item.fill.filled_at_utc),
+                item.symbol,
+                _display_enum(item.fill.side.value),
+                _decimal_text(item.fill.price),
+                _decimal_text(item.fill.quantity),
+                _usdt_text(item.fill.commission),
+                _usdt_text(item.fill.notional),
+                pnl_text(item.fill.realized_pnl),
+                _display_enum(item.fill.source.value),
+            )
+        )
+        for item in items
     )
 
 
