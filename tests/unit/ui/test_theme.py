@@ -77,7 +77,7 @@ def test_workspace_and_session_setup_labels_render_readably_on_dark_surfaces(
     form_label = next(
         label
         for label in workspace.setup.findChildren(QLabel)
-        if label.text() == "Trade Mode"
+        if label.text() == "Trading setup"
     )
 
     assert _palette_color(

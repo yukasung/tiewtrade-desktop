@@ -5,11 +5,13 @@ from PySide6.QtCore import Qt, QThreadPool, Slot
 from PySide6.QtGui import QCloseEvent
 from PySide6.QtWidgets import QMainWindow
 
+from tiewtrade.application.bot_control import BotControlAction, BotControlSnapshot
 from tiewtrade.application.chart_data import ChartRange, ChartReadState, ChartSnapshot
 from tiewtrade.application.paper_session_setup import (
     ConfiguredPaperSession,
     PaperSessionSetupValues,
 )
+from tiewtrade.application.trading_workspace import BotRuntimeState
 from tiewtrade.ui.background_task import BackgroundTask
 from tiewtrade.ui.bot_lifecycle_workflow import (
     BotLifecycleWorkflow,
@@ -86,6 +88,9 @@ class MainWindow(QMainWindow):
         self.setMinimumSize(1024, 700)
         self.resize(1440, 900)
         self._pending_validation_field: str | None = None
+        self._start_after_create = False
+        self._pending_start_session: ConfiguredPaperSession | None = None
+        self._return_to_setup_after_stop = False
 
         self._workflow = SessionWorkflow(
             create_session=create_session,
@@ -112,14 +117,12 @@ class MainWindow(QMainWindow):
             thread_pool=self._thread_pool,
             parent=self,
         )
-        self._lifecycle_workflow.snapshot_changed.connect(
-            self.workspace.show_bot_control_snapshot
-        )
+        self._lifecycle_workflow.snapshot_changed.connect(self._bot_control_changed)
         self._lifecycle_workflow.notifications_changed.connect(
             self.workspace.show_notifications
         )
         self.workspace.start_bot_requested.connect(self._lifecycle_workflow.start_bot)
-        self.workspace.stop_bot_requested.connect(self._lifecycle_workflow.stop_bot)
+        self.workspace.stop_bot_requested.connect(self._stop_requested)
         self.workspace.recover_requested.connect(self._lifecycle_workflow.recover)
         self.workspace.new_session_requested.connect(self._new_session_requested)
 
@@ -172,6 +175,7 @@ class MainWindow(QMainWindow):
             return
 
         self._pending_validation_field = None
+        self._start_after_create = True
         self.setup.clear_errors()
         self._workflow.create(raw_values)
 
@@ -199,11 +203,50 @@ class MainWindow(QMainWindow):
     @Slot(object)
     def _show_session(self, session: ConfiguredPaperSession) -> None:
         self._pending_validation_field = None
+        if self._start_after_create:
+            self._pending_start_session = session
+        self._start_after_create = False
         self._lifecycle_workflow.configure(session)
         if self._load_chart is not None:
             self._chart_workflow.start(session)
         if self._start_chart_feed is not None:
             self._start_chart_feed(session)
+
+    @Slot(object)
+    def _bot_control_changed(self, value: object) -> None:
+        if not isinstance(value, BotControlSnapshot):
+            return
+        self.workspace.show_bot_control_snapshot(value)
+        if (
+            self._pending_start_session == value.session
+            and value.state is BotRuntimeState.CONFIGURED
+            and BotControlAction.START in value.available_actions
+        ):
+            self._pending_start_session = None
+            self._lifecycle_workflow.start_bot()
+            return
+        if self._return_to_setup_after_stop and value.state is BotRuntimeState.STOPPED:
+            self._return_to_setup_after_stop = False
+            self._show_editable_setup(value)
+
+    @Slot()
+    def _stop_requested(self) -> None:
+        self._return_to_setup_after_stop = True
+        self._lifecycle_workflow.stop_bot()
+
+    def _show_editable_setup(self, snapshot: BotControlSnapshot) -> None:
+        if snapshot.workspace.basket is not None or snapshot.workspace.orders:
+            return
+        retire_session = self._retire_session
+        if retire_session is None:
+            return
+        try:
+            retire_session(snapshot.session)
+        except Exception:
+            self._show_unavailable("Session storage is unavailable")
+            return
+        self.setup.set_values_from_session(snapshot.session)
+        self.workspace.show_setup()
 
     @Slot(object, int)
     def _chart_completed_candle(self, candle: object, generation: int) -> None:
@@ -236,10 +279,12 @@ class MainWindow(QMainWindow):
     @Slot(str, str)
     def _show_validation_error(self, field: str, message: str) -> None:
         self.setup.show_field_error(field, message)
+        self._start_after_create = False
         self._pending_validation_field = field
 
     def _show_unavailable(self, message: str) -> None:
         self._pending_validation_field = None
+        self._start_after_create = False
         self.workspace.show_unavailable(message)
 
     @Slot()

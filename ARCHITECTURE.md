@@ -95,8 +95,9 @@ import transport, SQLite, Strategy หรือ Execution adapter โดยต�
 เมื่อ session หรือ runtime generation ไม่ใช่ current
 
 Application layer เป็นเจ้าของ `Create Paper Session` use case ซึ่งสร้าง shared immutable
-Session/market configuration ก่อนเรียก concrete SQLite adapter การสร้าง Session เป็น
-durable configuration step และไม่เริ่ม Market Data, Strategy หรือ Execution
+Session/market configuration ก่อนเรียก concrete SQLite adapter. Desktop lifecycle
+orchestration เริ่ม Paper Runtime ต่อจากการสร้างสำเร็จใน action `Start Paper Bot` เดียว
+โดย UI รอผลผ่าน background worker และไม่เรียก adapter โดยตรง
 
 ## Persistence Boundary
 
