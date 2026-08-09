@@ -228,7 +228,6 @@ def test_rejected_notification_presentation_keeps_workspace_interactive(
     window.workspace.show_notifications(object())
 
     assert window.workspace.header_runtime.text() == "Running"
-    assert window.workspace.open_orders.table.rowCount() == 0
     assert window.workspace.position_basket.table.rowCount() == 0
     assert window.workspace.notification_button.text() == expected_notification_text
     window.workspace.tabs.setCurrentWidget(window.trade_history)

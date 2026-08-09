@@ -118,7 +118,6 @@ def test_refresh_failure_preserves_last_known_snapshot(qtbot: QtBot) -> None:
     failed = snapshots[-1]
 
     assert failed.header == ready.header
-    assert failed.orders == ready.orders
     assert failed.basket == ready.basket
     assert failed.data_as_of_utc == ready.data_as_of_utc
     assert failed.message == "Paper Session could not be loaded"

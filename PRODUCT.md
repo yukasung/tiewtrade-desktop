@@ -222,7 +222,7 @@ Stop Session หมายถึง:
 - ไม่บังคับปิด Basket
 
 เมื่อ Stop สำเร็จ ระบบเปิด Session Setup พร้อม configuration ล่าสุดเสมอ แม้มี Open
-Basket หรือ Open Order อยู่ และไม่ retire หรือปิด Position โดยอัตโนมัติ
+Basket อยู่ และไม่ retire หรือปิด Position โดยอัตโนมัติ
 
 `Start Paper Bot` เป็น action เดียวสำหรับสร้างหรือแทนที่ Session: ระบบต้อง validate
 configuration ก่อนทำ side effect; หาก Session เดิมมี Position ค้าง ให้ขอการยืนยันเพียงครั้ง

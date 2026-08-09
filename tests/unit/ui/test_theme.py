@@ -48,7 +48,6 @@ def test_dark_theme_keeps_confirmation_dialog_text_readable() -> None:
 
 def test_dark_theme_styles_scoped_trading_tab_states() -> None:
     for selector in (
-        "QLabel#openOrdersState",
         "QLabel#positionBasketState",
         "QLabel#basketState",
         "QLabel#fillState",

@@ -19,14 +19,10 @@ from tiewtrade.application.trading_workspace import (
     BasketSnapshot,
     BotRuntimeState,
     DataFreshness,
-    OpenOrderSnapshot,
     WorkspaceHeaderSnapshot,
     WorkspaceReadState,
-    empty_open_orders_tab,
     empty_position_basket_tab,
     empty_workspace_snapshot,
-    loading_open_orders_tab,
-    ready_open_orders_tab,
     ready_position_basket_tab,
 )
 from tiewtrade.trading.session_config import MarketType, TradeMode
@@ -318,33 +314,9 @@ def test_transition_accepts_only_state_diagram_edges() -> None:
         pytest.param(
             lambda workspace: replace(
                 workspace,
-                open_orders=empty_open_orders_tab(),
-            ),
-            id="orders",
-        ),
-        pytest.param(
-            lambda workspace: replace(
-                workspace,
                 position_basket=empty_position_basket_tab(),
             ),
             id="basket",
-        ),
-        pytest.param(
-            lambda workspace: replace(
-                workspace,
-                open_orders=ready_open_orders_tab(
-                    workspace.open_orders.orders,
-                    observed_at_utc=datetime(2026, 8, 1, 12, 1, tzinfo=UTC),
-                ),
-            ),
-            id="data-as-of",
-        ),
-        pytest.param(
-            lambda workspace: replace(
-                workspace,
-                open_orders=loading_open_orders_tab(workspace.open_orders),
-            ),
-            id="open-orders-state",
         ),
     ],
 )
@@ -413,7 +385,6 @@ def test_blocked_control_can_remain_blocked_through_application_transition() -> 
     )
 
     assert still_blocked.workspace is result_workspace
-    assert still_blocked.workspace.orders is blocked.workspace.orders
     assert still_blocked.workspace.basket is blocked.workspace.basket
     assert still_blocked.blocked_reason == "Paper Bot recovery failed"
 
@@ -430,7 +401,6 @@ def test_workspace_state_helper_preserves_workspace_facts() -> None:
     )
 
     assert changed.read_state is WorkspaceReadState.READY
-    assert changed.orders is configured.workspace.orders
     assert changed.basket is configured.workspace.basket
     assert changed.data_as_of_utc is configured.workspace.data_as_of_utc
     assert changed.header is not configured.workspace.header
@@ -484,22 +454,6 @@ def _running_control_with_workspace_facts() -> BotControlSnapshot:
     running = _running_control()
     workspace = replace(
         running.workspace,
-        open_orders=ready_open_orders_tab(
-            (
-                OpenOrderSnapshot(
-                    order_id="order-1",
-                    created_at_utc=OBSERVED_AT,
-                    symbol="BTCUSDT",
-                    side="SELL",
-                    order_type="LIMIT",
-                    price=Decimal("66000.123456789012345678"),
-                    quantity=Decimal("1"),
-                    filled_quantity=Decimal("0"),
-                    status="NEW",
-                ),
-            ),
-            observed_at_utc=OBSERVED_AT,
-        ),
         position_basket=ready_position_basket_tab(
             BasketSnapshot(
                 symbol="BTCUSDT",

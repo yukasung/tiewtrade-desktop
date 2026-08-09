@@ -26,6 +26,7 @@ from tiewtrade.application.paper_symbols import PAPER_SYMBOLS
 from tiewtrade.application.trade_history import BasketHistoryPage
 from tiewtrade.market_data.config import SUPPORTED_V1_TIMEFRAME_CHOICES
 from tiewtrade.trading.trade_history import TradeFill
+from tiewtrade.ui.table_empty_state import TableEmptyStateOverlay
 from tiewtrade.ui.trade_history_presenter import (
     TradeHistoryFilterValues,
     basket_rows,
@@ -137,6 +138,7 @@ class TradeHistoryPage(QWidget):
         self.basket_table = self._table(
             "basketHistoryTable", "Basket History", self.BASKET_HEADERS
         )
+        self.basket_empty_state = TableEmptyStateOverlay(self.basket_table)
         self.basket_table.itemSelectionChanged.connect(self._emit_basket_selection)
         self.basket_state = self._state_label("basketState", "Basket History status")
         self.retry_baskets_button = self._retry_button("retryBasketsButton")
@@ -157,6 +159,7 @@ class TradeHistoryPage(QWidget):
         self.fill_table = self._table(
             "tradeFillsTable", "Trade Fills", self.FILL_HEADERS
         )
+        self.fill_empty_state = TableEmptyStateOverlay(self.fill_table)
         self.fill_state = self._state_label("fillState", "Trade Fills status")
         self.retry_fills_button = self._retry_button("retryFillsButton")
         self.retry_fills_button.clicked.connect(self.fills_retry_requested)
@@ -228,6 +231,7 @@ class TradeHistoryPage(QWidget):
         self.total_items.setText(f"{result.total_items} total Baskets")
         self.retry_baskets_button.setVisible(False)
         if rows:
+            self.basket_empty_state.clear_message()
             self.basket_state.clear()
             self.basket_state.setVisible(False)
         else:
@@ -279,6 +283,7 @@ class TradeHistoryPage(QWidget):
                 )
         del blocker
         self._fill_result_basket_id = basket_id
+        self.fill_empty_state.clear_message()
         self.fill_state.clear()
         self.fill_state.setVisible(False)
         self.retry_fills_button.setVisible(False)
@@ -469,6 +474,7 @@ class TradeHistoryPage(QWidget):
     def _clear_fill_result(self) -> None:
         self._clear_table(self.fill_table)
         self._fill_result_basket_id = None
+        self.fill_empty_state.clear_message()
         self.fill_state.clear()
         self.fill_state.setVisible(False)
         self.retry_fills_button.setVisible(False)
@@ -481,6 +487,7 @@ class TradeHistoryPage(QWidget):
         if self.fill_table.rowCount() == 0:
             self._set_fill_state("No fills for this Basket")
             return
+        self.fill_empty_state.clear_message()
         self.fill_state.clear()
         self.fill_state.setVisible(False)
 
@@ -502,10 +509,20 @@ class TradeHistoryPage(QWidget):
 
     def _set_basket_state(self, message: str) -> None:
         self.basket_state.setText(message)
+        if message == "No trade history":
+            self.basket_empty_state.show_message(message)
+            self.basket_state.setVisible(False)
+            return
+        self.basket_empty_state.clear_message()
         self.basket_state.setVisible(True)
 
     def _set_fill_state(self, message: str) -> None:
         self.fill_state.setText(message)
+        if message == "No fills for this Basket":
+            self.fill_empty_state.show_message(message)
+            self.fill_state.setVisible(False)
+            return
+        self.fill_empty_state.clear_message()
         self.fill_state.setVisible(True)
 
     @staticmethod

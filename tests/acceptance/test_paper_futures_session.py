@@ -151,7 +151,6 @@ def test_interrupted_runtime_recovers_without_fabricating_strategy_state(
     assert startup.workspace.header is not None
     assert startup.workspace.header.runtime_state is BotRuntimeState.BLOCKED
     assert startup.blocked_reason == "Paper Bot recovery required"
-    assert startup.workspace.orders == ()
     assert startup.workspace.basket is None
     assert lifecycle.read(session.config.session_id) == PaperRuntimeLifecycleRecord(
         session_id=session.config.session_id,
@@ -163,7 +162,6 @@ def test_interrupted_runtime_recovers_without_fabricating_strategy_state(
 
     assert result.workspace.header is not None
     assert result.workspace.header.runtime_state is BotRuntimeState.STOPPED
-    assert result.workspace.orders == ()
     assert result.workspace.basket is None
     assert published_states == [BotRuntimeState.BLOCKED, BotRuntimeState.STOPPED]
     assert lifecycle.read(session.config.session_id) == PaperRuntimeLifecycleRecord(

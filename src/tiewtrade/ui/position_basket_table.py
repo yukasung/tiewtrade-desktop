@@ -16,6 +16,7 @@ from tiewtrade.application.trading_workspace import (
     PositionBasketTabSnapshot,
     WorkspaceTabState,
 )
+from tiewtrade.ui.table_empty_state import TableEmptyStateOverlay
 
 
 class PositionBasketTable(QWidget):
@@ -38,6 +39,7 @@ class PositionBasketTable(QWidget):
         self.setAccessibleName("Position / Basket")
 
         self.table = self._table()
+        self.empty_state = TableEmptyStateOverlay(self.table)
         self.state_label = QLabel("No open Position or Basket")
         self.state_label.setObjectName("positionBasketState")
         self.state_label.setAccessibleName("Position / Basket status")
@@ -72,6 +74,11 @@ class PositionBasketTable(QWidget):
     def _show_state(self, snapshot: PositionBasketTabSnapshot) -> None:
         text = self._state_text(snapshot)
         self.state_label.setText(text)
+        if snapshot.state is WorkspaceTabState.EMPTY:
+            self.empty_state.show_message(text)
+            self.state_label.setVisible(False)
+            return
+        self.empty_state.clear_message()
         self.state_label.setVisible(bool(text))
 
     @staticmethod

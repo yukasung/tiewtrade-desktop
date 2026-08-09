@@ -1985,7 +1985,6 @@ def test_stop_with_open_position_reopens_editable_setup_without_closing(
         BotLifecycleResult(
             workspace=paper_runtime_workspace_snapshot(
                 window._lifecycle_workflow.snapshot.workspace,
-                orders=(),
                 basket=basket,
                 observed_at_utc=observed_at,
             )

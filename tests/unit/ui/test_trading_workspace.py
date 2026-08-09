@@ -17,11 +17,8 @@ from tiewtrade.application.chart_data import ChartRange, ChartReadState, ChartSn
 from tiewtrade.application.trading_workspace import (
     BasketSnapshot,
     BotRuntimeState,
-    OpenOrderSnapshot,
     configured_workspace_snapshot,
     failed_workspace_snapshot,
-    loading_open_orders_tab,
-    ready_open_orders_tab,
     ready_position_basket_tab,
     stale_workspace_snapshot,
 )
@@ -38,10 +35,12 @@ def test_workspace_places_existing_features_in_one_screen(qtbot: QtBot) -> None:
 
     assert workspace.header_symbol.text() == "No Session"
     assert isinstance(workspace.chart, CandlestickChartWidget)
-    assert workspace.tabs.tabText(0) == "Open Orders"
-    assert workspace.tabs.tabText(1) == "Position / Basket"
-    assert workspace.tabs.tabText(2) == "Trade History"
-    assert workspace.open_orders.state_label.text() == "No open orders"
+    assert [
+        workspace.tabs.tabText(index) for index in range(workspace.tabs.count())
+    ] == [
+        "Position / Basket",
+        "Trade History",
+    ]
     assert workspace.position_basket.state_label.text() == (
         "No open Position or Basket"
     )
@@ -85,29 +84,12 @@ def test_chart_snapshot_changes_only_the_chart(qtbot: QtBot) -> None:
     assert workspace.chart._snapshot is snapshot
     assert workspace.setup.isVisible()
     assert workspace.bot_control.isVisible()
-    assert workspace.open_orders.state_label.text() == "No open orders"
 
 
 def test_workspace_tabs_render_independent_scoped_states(qtbot: QtBot) -> None:
     workspace = TradingWorkspace()
     qtbot.addWidget(workspace)
     observed_at = datetime(2026, 8, 2, 1, 2, 4, tzinfo=UTC)
-    ready_orders = ready_open_orders_tab(
-        (
-            OpenOrderSnapshot(
-                order_id="order-1",
-                created_at_utc=observed_at,
-                symbol="BTCUSDT",
-                side="buy",
-                order_type="limit",
-                price=Decimal("66321.1200"),
-                quantity=Decimal("0.00300000"),
-                filled_quantity=Decimal("0.00100000"),
-                status="partially_filled",
-            ),
-        ),
-        observed_at_utc=observed_at,
-    )
     basket = BasketSnapshot(
         symbol="BTCUSDT",
         market_type="spot",
@@ -125,14 +107,11 @@ def test_workspace_tabs_render_independent_scoped_states(qtbot: QtBot) -> None:
         configured_workspace_snapshot(
             configured_spot_session(), observed_at_utc=observed_at
         ),
-        open_orders=loading_open_orders_tab(ready_orders),
         position_basket=ready_position_basket_tab(basket, observed_at_utc=observed_at),
     )
 
     workspace.show_workspace_snapshot(snapshot)
 
-    assert workspace.open_orders.state_label.text() == "Loading Open Orders…"
-    assert workspace.open_orders.table.rowCount() == 1
     assert workspace.position_basket.state_label.text() == ""
     assert workspace.position_basket.table.rowCount() == 1
 

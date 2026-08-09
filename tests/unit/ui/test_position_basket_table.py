@@ -138,6 +138,28 @@ def test_position_basket_states_preserve_or_clear_application_facts(
     assert widget.state_label.text() == "No open Position or Basket"
 
 
+def test_empty_position_basket_state_is_centered_in_table_body(qtbot: QtBot) -> None:
+    widget = PositionBasketTable()
+    widget.resize(1200, 360)
+    qtbot.addWidget(widget)
+    widget.show()
+
+    widget.show_snapshot(empty_position_basket_tab())
+
+    qtbot.waitUntil(widget.empty_state.isVisible)
+    assert (
+        widget.empty_state.geometry().center()
+        == widget.table.viewport().rect().center()
+    )
+    assert widget.state_label.isHidden()
+
+    widget.show_snapshot(
+        ready_position_basket_tab(_futures_basket(), observed_at_utc=OBSERVED_AT)
+    )
+
+    assert widget.empty_state.isHidden()
+
+
 def test_position_basket_ignores_wrong_snapshot_type(qtbot: QtBot) -> None:
     widget = PositionBasketTable()
     qtbot.addWidget(widget)
