@@ -359,6 +359,26 @@ def test_empty_basket_result_preserves_exact_query_summary_and_page_state(
     assert page.fill_table.rowCount() == 0
 
 
+def test_empty_basket_history_state_is_centered_in_table_body(qtbot: QtBot) -> None:
+    page = TradeHistoryPage()
+    page.resize(1400, 1000)
+    qtbot.addWidget(page)
+    page.show()
+
+    page.show_baskets_empty(history_page(page=1, total_items=0))
+
+    qtbot.waitUntil(page.basket_empty_state.isVisible)
+    assert (
+        page.basket_empty_state.geometry().center()
+        == page.basket_table.viewport().rect().center()
+    )
+    assert page.basket_state.isHidden()
+
+    page.show_baskets(history_page(basket_result()))
+
+    assert page.basket_empty_state.isHidden()
+
+
 def test_initial_basket_failure_clears_only_trade_history_scope(qtbot: QtBot) -> None:
     page = TradeHistoryPage()
     qtbot.addWidget(page)
@@ -419,6 +439,28 @@ def test_fill_success_and_empty_state_keep_basket_selection(qtbot: QtBot) -> Non
     assert page.basket_table.currentRow() == 0
     assert page.fill_table.rowCount() == 0
     assert page.fill_state.text() == "No fills for this Basket"
+
+
+def test_empty_trade_fills_state_is_centered_in_table_body(qtbot: QtBot) -> None:
+    basket = basket_result()
+    page = TradeHistoryPage()
+    page.resize(1400, 1000)
+    qtbot.addWidget(page)
+    page.show()
+    page.show_baskets(history_page(basket))
+
+    page.show_fills_empty(basket.basket_id)
+
+    qtbot.waitUntil(page.fill_empty_state.isVisible)
+    assert (
+        page.fill_empty_state.geometry().center()
+        == page.fill_table.viewport().rect().center()
+    )
+    assert page.fill_state.isHidden()
+
+    page.show_fills(basket.basket_id, (trade_fill(),))
+
+    assert page.fill_empty_state.isHidden()
 
 
 def test_fill_refresh_loading_keeps_same_basket_durable_fills(
