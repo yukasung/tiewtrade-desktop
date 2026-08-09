@@ -22,6 +22,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from tiewtrade.application.paper_symbols import PAPER_SYMBOLS
 from tiewtrade.application.trade_history import BasketHistoryPage
 from tiewtrade.market_data.config import SUPPORTED_V1_TIMEFRAME_CHOICES
 from tiewtrade.trading.trade_history import TradeFill
@@ -81,7 +82,8 @@ class TradeHistoryPage(QWidget):
         self._next_page_available = False
 
         self.symbol = self._combo(
-            "historySymbol", (("All", None), ("BTCUSDT", "BTCUSDT"))
+            "historySymbol",
+            (("All", None),) + tuple((symbol, symbol) for symbol in PAPER_SYMBOLS),
         )
         self.timeframe = self._combo(
             "historyTimeframe",

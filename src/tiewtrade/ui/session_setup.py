@@ -21,6 +21,7 @@ from tiewtrade.application.paper_session_setup import (
     PaperSessionValidationError,
     spot_trading_policy_from_percent,
 )
+from tiewtrade.application.paper_symbols import PAPER_SYMBOLS
 from tiewtrade.market_data.config import SUPPORTED_V1_TIMEFRAME_CHOICES
 from tiewtrade.trading.futures_policy import FuturesTradingPolicy
 from tiewtrade.ui.preset_display import preset_display_name
@@ -42,9 +43,10 @@ class SessionSetupWidget(QWidget):
         self.market_type.addItem("Spot", "spot")
         self.market_type.addItem("Futures", "futures")
 
-        self.symbol_field = QLineEdit("BTCUSDT")
-        self.symbol_field.setObjectName("symbol")
-        self.symbol_field.setReadOnly(True)
+        self.symbol = QComboBox()
+        self.symbol.setObjectName("symbol")
+        for symbol in PAPER_SYMBOLS:
+            self.symbol.addItem(symbol, symbol)
 
         self.timeframe = QComboBox()
         self.timeframe.setObjectName("timeframe")
@@ -128,7 +130,7 @@ class SessionSetupWidget(QWidget):
         self.advanced_costs.setVisible(False)
 
         self.market_type.setAccessibleName("Market Type")
-        self.symbol_field.setAccessibleName("Symbol")
+        self.symbol.setAccessibleName("Symbol")
         self.timeframe.setAccessibleName("Timeframe")
         self.available_capital.setAccessibleName("Available Capital (USDT)")
         self.max_entries.setAccessibleName("Maximum Entries")
@@ -141,13 +143,14 @@ class SessionSetupWidget(QWidget):
 
         self._build_layout()
         self.market_type.currentIndexChanged.connect(self._sync_market_fields)
+        self.symbol.currentIndexChanged.connect(self._sync_description)
         self._sync_market_fields()
 
     def values(self) -> PaperSessionSetupValues:
         futures = self.market_type.currentData() == "futures"
         return PaperSessionSetupValues(
             market_type=str(self.market_type.currentData()),
-            symbol=self.symbol_field.text().strip(),
+            symbol=str(self.symbol.currentData()),
             timeframe=str(self.timeframe.currentData()),
             available_capital=self.available_capital.text().strip(),
             max_entries=str(self.max_entries.value()),
@@ -164,6 +167,7 @@ class SessionSetupWidget(QWidget):
         self.market_type.setCurrentIndex(
             self.market_type.findData(config.market_type.value)
         )
+        self.symbol.setCurrentIndex(self.symbol.findData(session.market_data.symbol))
         self.timeframe.setCurrentIndex(
             self.timeframe.findData(session.market_data.timeframe)
         )
@@ -187,7 +191,7 @@ class SessionSetupWidget(QWidget):
     def set_loading(self, loading: bool) -> None:
         for control in (
             self.market_type,
-            self.symbol_field,
+            self.symbol,
             self.timeframe,
             self.preset_label,
             self.available_capital,
@@ -230,7 +234,7 @@ class SessionSetupWidget(QWidget):
         if field == "spot_trading_capital_percent":
             return self.spot_ratio, self.spot_ratio_error
         if field == "symbol":
-            return self.symbol_field, self.symbol_error
+            return self.symbol, self.symbol_error
         if field == "timeframe":
             return self.timeframe, self.timeframe_error
         return None
@@ -242,10 +246,11 @@ class SessionSetupWidget(QWidget):
 
         heading = QLabel("Start Paper Bot")
         heading.setObjectName("pageTitle")
-        description = QLabel("Paper · BTCUSDT · RSI Step Grid v1")
-        description.setObjectName("supportingText")
+        self.description = QLabel()
+        self.description.setObjectName("supportingText")
+        self._sync_description()
         root.addWidget(heading)
-        root.addWidget(description)
+        root.addWidget(self.description)
 
         card = QFrame()
         card.setObjectName("card")
@@ -262,6 +267,12 @@ class SessionSetupWidget(QWidget):
             "Market Type",
             self.market_type,
             (self.market_type_error,),
+        )
+        self._add_row(
+            identity_form,
+            "Symbol",
+            self.symbol,
+            (self.symbol_error,),
         )
         self._add_row(
             identity_form,
@@ -304,6 +315,12 @@ class SessionSetupWidget(QWidget):
             return
         reserve_percent = policy.reserve_ratio * 100
         self.spot_reserve_ratio.setText(f"{format(reserve_percent.normalize(), 'f')}%")
+
+    @Slot()
+    def _sync_description(self) -> None:
+        self.description.setText(
+            f"Paper · {self.symbol.currentData()} · RSI Step Grid v1"
+        )
 
     @Slot(bool)
     def _toggle_advanced(self, expanded: bool) -> None:

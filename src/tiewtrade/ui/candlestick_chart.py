@@ -1,6 +1,13 @@
-from PySide6.QtCore import QEvent, QPointF, QRectF, Qt, Signal
+from PySide6.QtCore import QEvent, QPointF, QRectF, QSignalBlocker, Qt, Signal
 from PySide6.QtGui import QColor, QMouseEvent, QPainter, QPen, QPolygonF
-from PySide6.QtWidgets import QHBoxLayout, QLabel, QPushButton, QVBoxLayout, QWidget
+from PySide6.QtWidgets import (
+    QComboBox,
+    QHBoxLayout,
+    QLabel,
+    QPushButton,
+    QVBoxLayout,
+    QWidget,
+)
 
 from tiewtrade.application.chart_data import (
     ChartRange,
@@ -8,6 +15,9 @@ from tiewtrade.application.chart_data import (
     ChartSnapshot,
     latest_completed_boundary,
 )
+from tiewtrade.application.chart_view_selection import ChartViewSelection
+from tiewtrade.application.paper_symbols import PAPER_SYMBOLS
+from tiewtrade.market_data.config import SUPPORTED_V1_TIMEFRAME_CHOICES
 from tiewtrade.trading.trade_history import FillSide
 from tiewtrade.ui.chart_painter_model import (
     AxisTickGlyph,
@@ -22,6 +32,7 @@ class CandlestickChartWidget(QWidget):
 
     range_requested = Signal(object)
     retry_requested = Signal()
+    view_requested = Signal(object)
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -36,6 +47,17 @@ class CandlestickChartWidget(QWidget):
         self._header.setSpacing(0)
         self._facts = QLabel("Chart")
         self._facts.setObjectName("chartFacts")
+        self.symbol = QComboBox()
+        self.symbol.setObjectName("chartSymbol")
+        self.symbol.setAccessibleName("Chart Symbol")
+        for symbol in PAPER_SYMBOLS:
+            self.symbol.addItem(symbol, symbol)
+        self.timeframe = QComboBox()
+        self.timeframe.setObjectName("chartTimeframe")
+        self.timeframe.setAccessibleName("Chart Timeframe")
+        for timeframe in SUPPORTED_V1_TIMEFRAME_CHOICES:
+            self.timeframe.addItem(timeframe, timeframe)
+        self.timeframe.setCurrentIndex(self.timeframe.findData("5m"))
         self._range = QLabel()
         self._range.setObjectName("chartRange")
         controls = QHBoxLayout()
@@ -58,10 +80,16 @@ class CandlestickChartWidget(QWidget):
         self.previous_range_button.clicked.connect(self._request_previous_range)
         self.next_range_button.clicked.connect(self._request_next_range)
         self.retry_button.clicked.connect(self.retry_requested)
+        self.symbol.currentIndexChanged.connect(self._request_view)
+        self.timeframe.currentIndexChanged.connect(self._request_view)
         navigation.addWidget(self.previous_range_button)
         navigation.addWidget(self.next_range_button)
         controls.addLayout(navigation)
         controls.addWidget(self.retry_button)
+        self._header.addWidget(self.symbol)
+        self._header.addSpacing(12)
+        self._header.addWidget(self.timeframe)
+        self._header.addSpacing(16)
         self._header.addWidget(self._facts)
         self._header.addStretch()
         self._header.addLayout(controls)
@@ -97,6 +125,9 @@ class CandlestickChartWidget(QWidget):
             f"Candlestick chart for {snapshot.symbol} {snapshot.timeframe}"
         )
         self._facts.setText(f"{snapshot.symbol} · {snapshot.timeframe} · Paper")
+        with QSignalBlocker(self.symbol), QSignalBlocker(self.timeframe):
+            self.symbol.setCurrentIndex(self.symbol.findData(snapshot.symbol))
+            self.timeframe.setCurrentIndex(self.timeframe.findData(snapshot.timeframe))
         self._range.setText(_range_text(snapshot.chart_range))
         has_range = snapshot.state in {ChartReadState.READY, ChartReadState.EMPTY}
         self.previous_range_button.setEnabled(has_range)
@@ -110,6 +141,17 @@ class CandlestickChartWidget(QWidget):
         )
         self.retry_button.setVisible(snapshot.state is ChartReadState.UNAVAILABLE)
         self.update()
+
+    def set_view_loading(self, loading: bool) -> None:
+        self.symbol.setDisabled(loading)
+        self.timeframe.setDisabled(loading)
+
+    def _request_view(self) -> None:
+        symbol = self.symbol.currentData()
+        timeframe = self.timeframe.currentData()
+        if not isinstance(symbol, str) or not isinstance(timeframe, str):
+            return
+        self.view_requested.emit(ChartViewSelection(symbol, timeframe))
 
     def paintEvent(self, event: object) -> None:  # noqa: N802
         del event

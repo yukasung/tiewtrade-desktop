@@ -10,7 +10,7 @@ def test_configuration_controls_have_explicit_accessible_names(qtbot: QtBot) -> 
     qtbot.addWidget(widget)
 
     assert widget.market_type.accessibleName() == "Market Type"
-    assert widget.symbol_field.accessibleName() == "Symbol"
+    assert widget.symbol.accessibleName() == "Symbol"
     assert widget.timeframe.accessibleName() == "Timeframe"
     assert widget.available_capital.accessibleName() == "Available Capital (USDT)"
     assert widget.max_entries.accessibleName() == "Maximum Entries"
@@ -44,8 +44,34 @@ def test_default_form_builds_paper_spot_values(qtbot: QtBot) -> None:
         for index in range(widget.market_type.count())
     ] == ["spot", "futures"]
     assert widget.market_type.isEnabled()
-    assert widget.symbol_field.isReadOnly()
+    assert widget.symbol.isEnabled()
     assert widget.preset_label.text() == "RSI Step Grid v1"
+
+
+def test_symbol_combo_has_only_paper_symbols(qtbot: QtBot) -> None:
+    widget = SessionSetupWidget()
+    qtbot.addWidget(widget)
+
+    symbols = [widget.symbol.itemData(index) for index in range(widget.symbol.count())]
+
+    assert symbols == [
+        "BTCUSDT",
+        "ETHUSDT",
+        "BNBUSDT",
+    ]
+
+
+def test_selected_symbol_is_included_in_the_start_request(qtbot: QtBot) -> None:
+    widget = SessionSetupWidget()
+    qtbot.addWidget(widget)
+    requested = []
+    widget.create_requested.connect(requested.append)
+    widget.symbol.setCurrentIndex(widget.symbol.findData("ETHUSDT"))
+
+    click(widget.create_button)
+
+    assert requested[0].symbol == "ETHUSDT"
+    assert widget.description.text() == "Paper · ETHUSDT · RSI Step Grid v1"
 
 
 def test_primary_form_only_shows_start_inputs(qtbot: QtBot) -> None:
@@ -56,6 +82,7 @@ def test_primary_form_only_shows_start_inputs(qtbot: QtBot) -> None:
     assert widget.create_button.text() == "Start Paper Bot"
     assert widget.create_button.accessibleName() == "Start Paper Bot"
     assert widget.market_type.isVisible()
+    assert widget.symbol.isVisible()
     assert widget.timeframe.isVisible()
     assert widget.available_capital.isVisible()
     assert widget.max_entries.isVisible() is False
@@ -130,7 +157,7 @@ def test_timeframe_field_offers_every_supported_value(qtbot: QtBot) -> None:
         widget.timeframe.itemData(index) for index in range(widget.timeframe.count())
     ]
 
-    assert values == ["3m", "5m", "15m", "30m", "1h", "4h"]
+    assert values == ["1m", "3m", "5m", "15m", "30m", "1h", "4h"]
 
 
 def test_spot_reserve_ratio_updates_from_trading_capital_input(

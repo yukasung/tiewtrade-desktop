@@ -263,7 +263,7 @@ def test_desktop_real_paper_runtime_starts_once_and_stops_without_closing_basket
     _enter_form_values(window, case)
     click(window.setup.create_button)
 
-    qtbot.waitUntil(window.overview.isVisible)
+    qtbot.waitUntil(window.setup.isVisible)
     qtbot.waitUntil(lambda: start_calls == 1)
     qtbot.waitUntil(lambda: window.workspace.header_runtime.text() == "Running")
     session = active_sessions.get_active()
@@ -291,7 +291,7 @@ def test_desktop_real_paper_runtime_starts_once_and_stops_without_closing_basket
     confirmation = window.findChild(QMessageBox)
     assert confirmation is not None
     confirm_button = next(
-        button for button in confirmation.buttons() if button.text() == "Stop Session"
+        button for button in confirmation.buttons() if button.text() == "Stop Bot"
     )
     click(confirm_button)
     qtbot.waitUntil(lambda: window.workspace.header_runtime.text() == "Stopped")
@@ -312,7 +312,7 @@ def test_desktop_real_paper_runtime_starts_once_and_stops_without_closing_basket
     assert history_page.items[0].status is BasketStatus.OPEN
 
 
-def test_desktop_restart_blocks_interrupted_runtime_until_recovery(
+def test_desktop_restart_blocked_runtime_reopens_setup_form(
     monkeypatch: MonkeyPatch,
     qtbot: QtBot,
     tmp_path: Path,
@@ -339,7 +339,6 @@ def test_desktop_restart_blocks_interrupted_runtime_until_recovery(
         clock=lambda: _RUNTIME_NOW,
     )
     initialize_calls = 0
-    recover_calls = 0
 
     def initialize_bot(snapshot: BotControlSnapshot) -> BotLifecycleResult:
         nonlocal initialize_calls
@@ -351,20 +350,11 @@ def test_desktop_restart_blocks_interrupted_runtime_until_recovery(
         assert result.blocked_reason == "Paper Bot recovery required"
         return result
 
-    def recover_bot(snapshot: BotControlSnapshot) -> BotLifecycleResult:
-        nonlocal recover_calls
-        recover_calls += 1
-        return _paper_runtime_result_for_ui(
-            snapshot,
-            controller.recover(snapshot.session),
-        )
-
     window = MainWindow(
         create_session=lambda values: pytest.fail("create must not run"),
         load_active=active_sessions.get_active,
         list_baskets=empty_basket_page,
         list_fills=empty_fills,
-        recover_bot=recover_bot,
         initialize_bot=initialize_bot,
     )
     qtbot.addWidget(window)
@@ -372,11 +362,8 @@ def test_desktop_restart_blocks_interrupted_runtime_until_recovery(
 
     qtbot.waitUntil(lambda: window.workspace.header_runtime.text() == "Blocked")
     assert initialize_calls == 1
-    assert recover_calls == 0
-    assert window.workspace.bot_control_widget.supporting_text.text() == (
-        "Paper Bot recovery required"
-    )
-    assert window.workspace.bot_control_widget.recover_button.isEnabled()
+    qtbot.waitUntil(window.setup.isVisible)
+    assert window.setup.available_capital.isEnabled()
     marker = lifecycle.read(session.config.session_id)
     assert marker is not None
     assert marker.state is PaperRuntimeLifecycleState.RUNNING
@@ -386,16 +373,9 @@ def test_desktop_restart_blocks_interrupted_runtime_until_recovery(
         lambda: window.trade_history.basket_state.text() == "No trade history"
     )
     assert window.workspace.header_runtime.text() == "Blocked"
-    assert not window.workspace.bot_control_widget.start_button.isVisible()
-
-    click(window.workspace.bot_control_widget.recover_button)
-    click(window.workspace.bot_control_widget.recover_button)
-    qtbot.waitUntil(lambda: window.workspace.header_runtime.text() == "Stopped")
-
-    assert recover_calls == 1
     marker = lifecycle.read(session.config.session_id)
     assert marker is not None
-    assert marker.state is PaperRuntimeLifecycleState.STOPPED
+    assert marker.state is PaperRuntimeLifecycleState.RUNNING
     assert window.workspace.tabs.currentWidget() is window.trade_history
     assert window.workspace.open_orders.table.rowCount() == 0
     assert window.workspace.position_basket.table.rowCount() == 0
@@ -453,19 +433,13 @@ def test_desktop_fake_snapshots_render_orders_and_basket_without_manual_trading(
     )
     qtbot.addWidget(window)
     window.show()
-    qtbot.waitUntil(window.overview.isVisible)
-    qtbot.waitUntil(
-        window.workspace.bot_control_widget.start_button.isEnabled,
-        timeout=250,
-    )
-    click(window.workspace.bot_control_widget.start_button)
-    qtbot.waitUntil(lambda: window.workspace.header_runtime.text() == "Running")
+    qtbot.waitUntil(window.setup.isVisible)
 
     window.workspace.show_workspace_snapshot(
         _fake_running_workspace(session, observed_at=datetime(2026, 8, 2, tzinfo=UTC))
     )
 
-    assert start_calls == 1
+    assert start_calls == 0
     assert window.workspace.header_runtime.text() == "Running"
     assert window.workspace.open_orders.table.rowCount() == 1
     assert table_item(window.workspace.open_orders.table, 0, 0).text() == (
@@ -558,7 +532,7 @@ def test_spot_partial_fills_keep_one_order_and_basket_entry_across_tabs(
     )
     qtbot.addWidget(window)
     window.show()
-    qtbot.waitUntil(window.overview.isVisible)
+    qtbot.waitUntil(window.setup.isVisible)
     window.workspace.show_workspace_snapshot(
         _fake_running_workspace(session, observed_at=observed_at)
     )
@@ -661,7 +635,7 @@ def test_desktop_paper_session_create_overview_and_restart_restore(
 
     _enter_form_values(first_window, case)
     click(first_window.setup.create_button)
-    qtbot.waitUntil(first_window.overview.isVisible)
+    qtbot.waitUntil(lambda: create_calls == 1)
 
     durable_session = SQLiteActivePaperSessions(
         SQLiteDatabase(database_path)
@@ -676,12 +650,7 @@ def test_desktop_paper_session_create_overview_and_restart_restore(
         expected_session_id=expected_session_id,
         expected_created_at=expected_created_at,
     )
-    _assert_overview_matches_case(
-        first_window,
-        case,
-        expected_session_id=expected_session_id,
-        expected_created_at=expected_created_at,
-    )
+    assert first_window.setup.timeframe.currentData() == case.timeframe
     assert _active_session_count(database) == 1
     assert _trade_side_effect_counts(database) == initial_side_effect_counts
 
@@ -738,14 +707,11 @@ def test_desktop_paper_session_create_overview_and_restart_restore(
     )
     qtbot.addWidget(restarted_window)
     restarted_window.show()
-    qtbot.waitUntil(restarted_window.overview.isVisible)
-
-    _assert_overview_matches_case(
-        restarted_window,
-        case,
-        expected_session_id=expected_session_id,
-        expected_created_at=expected_created_at,
+    qtbot.waitUntil(
+        lambda: restarted_window.setup.timeframe.currentData() == case.timeframe
     )
+
+    assert restarted_window.setup.timeframe.currentData() == case.timeframe
     assert _active_session_count(database) == 1
     assert _trade_side_effect_counts(database) == initial_side_effect_counts
 
@@ -754,7 +720,7 @@ def test_desktop_paper_session_create_overview_and_restart_restore(
     qtbot.waitUntil(
         lambda: restarted_window.trade_history.basket_state.text() == "No trade history"
     )
-    assert restarted_window.overview.isVisible()
+    assert restarted_window.overview.isVisible() is False
     assert _trade_side_effect_counts(database) == restored_history_side_effect_counts
 
 
@@ -833,7 +799,7 @@ def test_desktop_fake_lifecycle_has_no_trade_storage_side_effects(
     release_start.set()
     qtbot.waitUntil(lambda: window.workspace.header_runtime.text() == "Running")
 
-    assert window.workspace.bot_control_widget.stop_button.text() == "Stop Session"
+    assert window.workspace.bot_control_widget.stop_button.text() == "Stop Bot"
     assert window.findChildren(QPushButton, "manualBuyButton") == []
     assert window.findChildren(QPushButton, "manualSellButton") == []
     assert _trade_side_effect_counts(database) == initial_counts
@@ -843,7 +809,7 @@ def test_desktop_fake_lifecycle_has_no_trade_storage_side_effects(
     assert confirmation is not None
     assert confirmation.defaultButton().text() == "Cancel"
     confirm_button = next(
-        button for button in confirmation.buttons() if button.text() == "Stop Session"
+        button for button in confirmation.buttons() if button.text() == "Stop Bot"
     )
     click(confirm_button)
     qtbot.waitUntil(stop_entered.is_set)

@@ -13,6 +13,7 @@ from tiewtrade.application.chart_data import (
     ChartReadState,
     ChartSnapshot,
 )
+from tiewtrade.application.chart_view_selection import ChartViewSelection
 from tiewtrade.application.paper_session_setup import ConfiguredPaperSession
 from tiewtrade.application.trading_workspace import (
     BotRuntimeState,
@@ -73,6 +74,23 @@ def test_start_loads_application_owned_default_visible_range() -> None:
             datetime(2026, 1, 1, 10, 0, tzinfo=UTC),
         )
     ]
+
+
+def test_select_view_loads_the_selected_market_data_identity() -> None:
+    session = configured_spot_session()
+    identities: list[tuple[str, str]] = []
+    workflow = ChartWorkflow(
+        load_chart=lambda configured, requested: load_snapshot_for_identity(
+            configured, requested, identities
+        ),
+        thread_pool=ImmediateThreadPool(),  # type: ignore[arg-type]
+        clock=lambda: datetime(2026, 1, 1, 10, 3, tzinfo=UTC),
+    )
+    workflow.start(session)
+
+    workflow.select_view(ChartViewSelection(symbol="ETHUSDT", timeframe="1m"))
+
+    assert identities == [("BTCUSDT", "5m"), ("ETHUSDT", "1m")]
 
 
 def test_configured_session_displays_valid_forming_candle() -> None:
@@ -731,6 +749,22 @@ async def load_snapshot(
         candles=(candle("5m", chart_range.start.minute),),
         fills=(),
         state=ChartReadState.READY,
+    )
+
+
+async def load_snapshot_for_identity(
+    session: ConfiguredPaperSession,
+    chart_range: ChartRange,
+    identities: list[tuple[str, str]],
+) -> ChartSnapshot:
+    identities.append((session.market_data.symbol, session.market_data.timeframe))
+    return ChartSnapshot(
+        session=session,
+        chart_range=chart_range,
+        observed_at_utc=max(datetime(2026, 1, 1, 11, tzinfo=UTC), chart_range.end),
+        candles=(),
+        fills=(),
+        state=ChartReadState.EMPTY,
     )
 
 

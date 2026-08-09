@@ -80,10 +80,12 @@ def test_page_exposes_filters_and_exact_table_columns(qtbot: QtBot) -> None:
     assert [page.symbol.itemText(index) for index in range(page.symbol.count())] == [
         "All",
         "BTCUSDT",
+        "ETHUSDT",
+        "BNBUSDT",
     ]
     assert [
         page.timeframe.itemText(index) for index in range(page.timeframe.count())
-    ] == ["All", "3m", "5m", "15m", "30m", "1h", "4h"]
+    ] == ["All", "1m", "3m", "5m", "15m", "30m", "1h", "4h"]
     assert [page.market.itemText(index) for index in range(page.market.count())] == [
         "All",
         "Spot",

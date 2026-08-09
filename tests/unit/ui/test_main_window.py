@@ -10,9 +10,9 @@ from typing import overload
 from uuid import UUID
 
 import pytest
-from PySide6.QtCore import QDeadlineTimer, QPoint, QRect, Qt, QThreadPool
+from PySide6.QtCore import QDeadlineTimer, QPoint, QRect, Qt, QThreadPool, QTimer
 from PySide6.QtTest import QTest
-from PySide6.QtWidgets import QMessageBox, QWidget
+from PySide6.QtWidgets import QApplication, QMessageBox, QWidget
 from pytestqt.qtbot import QtBot
 
 import tiewtrade.ui.main_window as main_window_module
@@ -29,6 +29,7 @@ from tiewtrade.application.bot_control import (
     workspace_with_runtime_state,
 )
 from tiewtrade.application.chart_data import ChartRange, ChartReadState, ChartSnapshot
+from tiewtrade.application.chart_view_selection import ChartViewSelection
 from tiewtrade.application.paper_session_setup import (
     ConfiguredPaperSession,
     CreatePaperSession,
@@ -42,7 +43,12 @@ from tiewtrade.application.trade_history import (
     PageRequest,
     TradeHistoryFilter,
 )
-from tiewtrade.application.trading_workspace import BotRuntimeState, DataFreshness
+from tiewtrade.application.trading_workspace import (
+    BasketSnapshot,
+    BotRuntimeState,
+    DataFreshness,
+    paper_runtime_workspace_snapshot,
+)
 from tiewtrade.integrations.sqlite.active_paper_sessions import (
     SQLiteActivePaperSessions,
 )
@@ -50,6 +56,7 @@ from tiewtrade.integrations.sqlite.database import SQLiteDatabase
 from tiewtrade.trading.futures_policy import FuturesTradingPolicy
 from tiewtrade.trading.spot_policy import SpotTradingPolicy
 from tiewtrade.trading.trade_history import TradeFill
+from tiewtrade.ui.bot_lifecycle_workflow import RuntimeSnapshotRelay
 from tiewtrade.ui.main_window import MainWindow
 from tiewtrade.ui.session_overview import SessionOverviewWidget
 
@@ -94,6 +101,48 @@ def test_session_ready_loads_chart_for_configured_session(qtbot: QtBot) -> None:
     assert chart_range.end - chart_range.start == session.market_data.interval * 120
 
 
+def test_chart_view_selection_reloads_chart_without_bot_lifecycle(
+    qtbot: QtBot,
+) -> None:
+    session = configured_spot_session()
+    requests: list[tuple[str, str]] = []
+    feed_selections: list[ChartViewSelection] = []
+
+    async def load_chart(
+        configured: ConfiguredPaperSession, chart_range: ChartRange
+    ) -> ChartSnapshot:
+        requests.append(
+            (configured.market_data.symbol, configured.market_data.timeframe)
+        )
+        return ChartSnapshot(
+            session=configured,
+            chart_range=chart_range,
+            observed_at_utc=chart_range.end,
+            candles=(),
+            fills=(),
+            state=ChartReadState.EMPTY,
+        )
+
+    window = MainWindow(
+        create_session=unused_create,
+        load_active=lambda: session,
+        list_baskets=empty_basket_page,
+        list_fills=empty_fills,
+        load_chart=load_chart,
+        select_chart_view=lambda _session, selection: feed_selections.append(selection),
+    )
+    qtbot.addWidget(window)
+    window.show()
+    qtbot.waitUntil(lambda: requests == [("BTCUSDT", "5m")])
+
+    window.workspace.chart.symbol.setCurrentIndex(
+        window.workspace.chart.symbol.findData("ETHUSDT")
+    )
+
+    qtbot.waitUntil(lambda: requests[-1] == ("ETHUSDT", "5m"))
+    assert feed_selections == [ChartViewSelection(symbol="ETHUSDT", timeframe="5m")]
+
+
 def test_chart_unavailable_does_not_disable_bot_control_or_trade_history(
     qtbot: QtBot,
 ) -> None:
@@ -134,7 +183,7 @@ def test_chart_unavailable_does_not_disable_bot_control_or_trade_history(
         )
     )
 
-    assert window.overview.isVisible()
+    assert window.setup.isVisible()
     assert window.workspace.bot_control.isEnabled()
     assert window.trade_history.isEnabled()
     assert window.workspace.chart.retry_button.isVisible()
@@ -168,7 +217,7 @@ def _session_configuration_controls(window: MainWindow) -> tuple[QWidget, ...]:
     setup = window.setup
     return (
         setup.market_type,
-        setup.symbol_field,
+        setup.symbol,
         setup.timeframe,
         setup.preset_label,
         setup.available_capital,
@@ -323,7 +372,7 @@ def test_session_load_finishing_does_not_navigate_away_from_history(
         )
     )
     assert window.trade_history.isVisible()
-    assert window.overview.isVisible()
+    assert window.overview.isVisible() is False
     assert window.workspace.header_runtime.text() == "Configured"
 
 
@@ -729,7 +778,7 @@ def test_workspace_header_keeps_ready_facts_when_retry_fails(qtbot: QtBot) -> No
     assert "/private/tmp" not in window.unavailable_message.text()
 
 
-def test_created_spot_session_replaces_form_with_durable_overview(
+def test_created_spot_session_returns_to_editable_form_without_runtime_actions(
     qtbot: QtBot,
 ) -> None:
     created = configured_spot_session()
@@ -746,15 +795,11 @@ def test_created_spot_session_replaces_form_with_durable_overview(
 
     click(window.setup.create_button)
 
-    qtbot.waitUntil(window.overview.isVisible)
-    assert window.overview.state_value.text() == (
-        "Configured — Market Data Not Started"
-    )
-    assert window.overview.market_value.text() == "Spot"
-    assert window.overview.session_id_value.text() == str(created.config.session_id)
-    assert window.overview.timeframe_value.text() == "5m"
-    assert window.overview.available_capital_value.text() == "200000 USDT"
-    assert window.overview.spot_reserve_ratio_value.text() == "20%"
+    qtbot.waitUntil(lambda: window._replacement_session == created)
+    assert window.setup.market_type.currentData() == "spot"
+    assert window.setup.timeframe.currentData() == "5m"
+    assert window.setup.available_capital.text() == "200000"
+    assert window.setup.spot_reserve_ratio.text() == "20%"
 
 
 def test_futures_overview_shows_immutable_policy(qtbot: QtBot) -> None:
@@ -865,7 +910,7 @@ def test_repeated_submit_while_worker_is_running_calls_create_once(
 
     assert len(calls) == 1
     release.set()
-    qtbot.waitUntil(window.overview.isVisible)
+    qtbot.waitUntil(window.setup.isVisible)
     qtbot.waitUntil(
         lambda: all(
             control.isEnabled() for control in _session_configuration_controls(window)
@@ -1193,7 +1238,7 @@ def test_unknown_create_failure_shows_sanitized_unavailable_state(qtbot: QtBot) 
     assert "/private/tmp" not in window.unavailable_message.text()
 
 
-def test_existing_create_outcome_opens_existing_session_overview(qtbot: QtBot) -> None:
+def test_existing_create_outcome_opens_editable_form(qtbot: QtBot) -> None:
     existing = configured_spot_session()
     window = MainWindow(
         create_session=lambda values: PaperSessionCreateOutcome(existing, False),
@@ -1208,11 +1253,11 @@ def test_existing_create_outcome_opens_existing_session_overview(qtbot: QtBot) -
 
     click(window.setup.create_button)
 
-    qtbot.waitUntil(window.overview.isVisible)
-    assert window.overview.session_id_value.text() == str(existing.config.session_id)
+    qtbot.waitUntil(window.setup.isVisible)
+    assert window.setup.timeframe.currentData() == existing.market_data.timeframe
 
 
-def test_existing_active_session_opens_overview_without_create_form(
+def test_existing_active_session_opens_editable_form_without_create(
     qtbot: QtBot,
 ) -> None:
     existing = configured_spot_session()
@@ -1225,9 +1270,9 @@ def test_existing_active_session_opens_overview_without_create_form(
     qtbot.addWidget(window)
     window.show()
 
-    qtbot.waitUntil(window.overview.isVisible)
+    qtbot.waitUntil(window.setup.isVisible)
 
-    assert window.overview.session_id_value.text() == str(existing.config.session_id)
+    assert window.setup.timeframe.currentData() == existing.market_data.timeframe
 
 
 def test_sqlite_failure_shows_unavailable_without_fake_overview(qtbot: QtBot) -> None:
@@ -1314,9 +1359,9 @@ def test_retry_after_startup_load_failure_reloads_existing_session(
 
     click(window.unavailable_retry_button)
 
-    qtbot.waitUntil(window.overview.isVisible)
+    qtbot.waitUntil(window.setup.isVisible)
     assert load_calls == 2
-    assert window.overview.session_id_value.text() == str(existing.config.session_id)
+    assert window.setup.timeframe.currentData() == existing.market_data.timeframe
 
 
 @pytest.mark.parametrize(
@@ -1641,7 +1686,7 @@ def test_lifecycle_actions_render_matching_header_and_control_snapshot(
     confirmation = window.findChild(QMessageBox)
     assert confirmation is not None
     confirm_button = next(
-        button for button in confirmation.buttons() if button.text() == "Stop Session"
+        button for button in confirmation.buttons() if button.text() == "Stop Bot"
     )
     click(confirm_button)
 
@@ -1650,19 +1695,11 @@ def test_lifecycle_actions_render_matching_header_and_control_snapshot(
     assert window.workspace.bot_control_widget.state_value.text() == "Stopped"
 
 
-def test_lifecycle_recovery_hides_raw_fake_exception(
+def test_blocked_runtime_reopens_the_editable_setup_form(
     qtbot: QtBot,
 ) -> None:
     def fail_start(snapshot: BotControlSnapshot) -> BotLifecycleResult:
         raise RuntimeError("raw fake exception must not reach the UI")
-
-    def recover(snapshot: BotControlSnapshot) -> BotLifecycleResult:
-        return BotLifecycleResult(
-            workspace=workspace_with_runtime_state(
-                snapshot.workspace,
-                BotRuntimeState.CONFIGURED,
-            )
-        )
 
     window = MainWindow(
         create_session=unused_create,
@@ -1670,7 +1707,6 @@ def test_lifecycle_recovery_hides_raw_fake_exception(
         list_baskets=empty_basket_page,
         list_fills=empty_fills,
         start_bot=fail_start,
-        recover_bot=recover,
     )
     qtbot.addWidget(window)
     window.show()
@@ -1681,18 +1717,11 @@ def test_lifecycle_recovery_hides_raw_fake_exception(
     click(window.workspace.bot_control_widget.start_button)
 
     qtbot.waitUntil(lambda: window.workspace.header_runtime.text() == "Blocked")
-    control = window.workspace.bot_control_widget
-    assert control.supporting_text.text() == "Paper Bot could not be started"
-    assert "raw fake exception" not in control.supporting_text.text()
-    assert control.recover_button.isEnabled()
-
-    click(control.recover_button)
-
-    qtbot.waitUntil(lambda: window.workspace.header_runtime.text() == "Configured")
-    assert control.state_value.text() == "Configured"
+    qtbot.waitUntil(window.setup.isVisible)
+    assert window.setup.available_capital.isEnabled()
 
 
-def test_new_session_reopens_an_editable_setup_form(qtbot: QtBot) -> None:
+def test_stop_reopens_an_editable_setup_form(qtbot: QtBot) -> None:
     active: ConfiguredPaperSession | None = configured_spot_session()
 
     def load_active() -> ConfiguredPaperSession | None:
@@ -1714,11 +1743,6 @@ def test_new_session_reopens_an_editable_setup_form(qtbot: QtBot) -> None:
             )
         )
 
-    def retire(session: ConfiguredPaperSession) -> None:
-        nonlocal active
-        assert session == active
-        active = None
-
     window = MainWindow(
         create_session=unused_create,
         load_active=load_active,
@@ -1726,8 +1750,6 @@ def test_new_session_reopens_an_editable_setup_form(qtbot: QtBot) -> None:
         list_fills=empty_fills,
         start_bot=start,
         stop_bot=stop,
-        retire_session=retire,
-        new_session_available=lambda _session: True,
     )
     qtbot.addWidget(window)
     window.show()
@@ -1740,14 +1762,11 @@ def test_new_session_reopens_an_editable_setup_form(qtbot: QtBot) -> None:
     stop_confirmation = window.findChild(QMessageBox)
     assert stop_confirmation is not None
     stop_button = next(
-        button
-        for button in stop_confirmation.buttons()
-        if button.text() == "Stop Session"
+        button for button in stop_confirmation.buttons() if button.text() == "Stop Bot"
     )
     click(stop_button)
     qtbot.waitUntil(lambda: control.state_value.text() == "Stopped")
 
-    qtbot.waitUntil(lambda: active is None)
     qtbot.waitUntil(window.setup.isVisible)
     qtbot.waitUntil(window.setup.timeframe.isEnabled)
     assert window.setup.timeframe.currentData() == "5m"
@@ -1844,7 +1863,7 @@ def test_start_from_setup_skips_recovery_inspection_for_new_session(
     assert len(start_calls) == 1
 
 
-def test_stop_without_exposure_retires_session_and_reopens_prefilled_form(
+def test_stop_without_exposure_keeps_session_and_reopens_prefilled_form(
     qtbot: QtBot,
 ) -> None:
     session = configured_spot_session()
@@ -1866,9 +1885,6 @@ def test_stop_without_exposure_retires_session_and_reopens_prefilled_form(
             )
         )
 
-    def retire(value: ConfiguredPaperSession) -> None:
-        retired.append(value)
-
     window = MainWindow(
         create_session=unused_create,
         load_active=lambda: session,
@@ -1876,7 +1892,6 @@ def test_stop_without_exposure_retires_session_and_reopens_prefilled_form(
         list_fills=empty_fills,
         start_bot=start,
         stop_bot=stop,
-        retire_session=retire,
     )
     qtbot.addWidget(window)
     window.show()
@@ -1888,16 +1903,137 @@ def test_stop_without_exposure_retires_session_and_reopens_prefilled_form(
     confirmation = window.findChild(QMessageBox)
     assert confirmation is not None
     stop_button = next(
-        button for button in confirmation.buttons() if button.text() == "Stop Session"
+        button for button in confirmation.buttons() if button.text() == "Stop Bot"
     )
     click(stop_button)
 
     qtbot.waitUntil(window.setup.isVisible)
-    assert retired == [session]
+    assert retired == []
     assert window.setup.available_capital.text() == format(
         session.config.available_capital, "f"
     )
     assert window.setup.timeframe.currentData() == "5m"
+
+
+def test_stop_with_open_position_reopens_editable_setup_without_closing(
+    qtbot: QtBot,
+) -> None:
+    session = configured_spot_session()
+    created: list[PaperSessionSetupValues] = []
+    events: list[str] = []
+    runtime_snapshots = RuntimeSnapshotRelay()
+    observed_at = datetime.now(UTC)
+    basket = BasketSnapshot(
+        symbol="BTCUSDT",
+        market_type="spot",
+        entry_count=1,
+        total_quantity=Decimal("1"),
+        average_entry_price=Decimal("100"),
+        current_price=Decimal("110"),
+        take_profit_price=Decimal("120"),
+        unrealized_pnl=Decimal("10"),
+        liquidation_price=None,
+        lifecycle="open",
+        updated_at_utc=observed_at,
+    )
+
+    def start(snapshot: BotControlSnapshot) -> BotLifecycleResult:
+        return BotLifecycleResult(
+            workspace=workspace_with_runtime_state(
+                snapshot.workspace,
+                BotRuntimeState.RUNNING,
+                data_freshness=DataFreshness.FRESH,
+            )
+        )
+
+    def stop(snapshot: BotControlSnapshot) -> BotLifecycleResult:
+        return BotLifecycleResult(
+            workspace=workspace_with_runtime_state(
+                snapshot.workspace, BotRuntimeState.STOPPED
+            )
+        )
+
+    def create(values: PaperSessionSetupValues) -> PaperSessionCreateOutcome:
+        created.append(values)
+        return PaperSessionCreateOutcome(session=session, created=True)
+
+    def close_position(_session: ConfiguredPaperSession) -> None:
+        events.append("close")
+
+    def retire_session(_session: ConfiguredPaperSession) -> None:
+        events.append("retire")
+
+    window = MainWindow(
+        create_session=create,
+        load_active=lambda: session,
+        list_baskets=empty_basket_page,
+        list_fills=empty_fills,
+        start_bot=start,
+        stop_bot=stop,
+        close_position=close_position,
+        has_open_position=lambda _session: True,
+        retire_session=retire_session,
+        runtime_snapshots=runtime_snapshots,
+    )
+    qtbot.addWidget(window)
+    window.show()
+    control = window.workspace.bot_control_widget
+    qtbot.waitUntil(control.start_button.isEnabled)
+    click(control.start_button)
+    qtbot.waitUntil(lambda: control.state_value.text() == "Running")
+    runtime_snapshots.new_generation()(
+        BotLifecycleResult(
+            workspace=paper_runtime_workspace_snapshot(
+                window._lifecycle_workflow.snapshot.workspace,
+                orders=(),
+                basket=basket,
+                observed_at_utc=observed_at,
+            )
+        )
+    )
+    qtbot.waitUntil(
+        lambda: window._lifecycle_workflow.snapshot.workspace.basket == basket
+    )
+    click(control.stop_button)
+    stop_dialog = window.findChild(QMessageBox)
+    assert stop_dialog is not None
+    click(
+        next(button for button in stop_dialog.buttons() if button.text() == "Stop Bot")
+    )
+    qtbot.waitUntil(window.setup.isVisible)
+    assert window._lifecycle_workflow.snapshot.workspace.basket == basket
+    assert events == []
+
+    def confirm_close() -> None:
+        dialog = QApplication.activeModalWidget()
+        assert isinstance(dialog, QMessageBox)
+        yes = dialog.button(QMessageBox.StandardButton.Yes)
+        assert yes is not None
+        click(yes)
+
+    QTimer.singleShot(0, confirm_close)
+    click(window.setup.create_button)
+    qtbot.waitUntil(lambda: events == ["close", "retire"])
+    qtbot.waitUntil(lambda: len(created) == 1)
+
+
+def test_start_from_active_session_reports_missing_replacement_service(
+    qtbot: QtBot,
+) -> None:
+    session = configured_spot_session()
+    window = MainWindow(
+        create_session=unused_create,
+        load_active=lambda: session,
+        list_baskets=empty_basket_page,
+        list_fills=empty_fills,
+    )
+    qtbot.addWidget(window)
+    window.show()
+    qtbot.waitUntil(lambda: window.setup.available_capital.text() != "")
+
+    click(window.setup.create_button)
+
+    assert "replacement is unavailable" in window.setup.available_capital_error.text()
 
 
 def test_configured_session_does_not_auto_start_and_explains_missing_runtime(
@@ -1911,14 +2047,11 @@ def test_configured_session_does_not_auto_start_and_explains_missing_runtime(
     )
     qtbot.addWidget(window)
     window.show()
-    qtbot.waitUntil(lambda: window.workspace.overview.isVisible())
+    qtbot.waitUntil(lambda: window._replacement_session is not None)
 
-    control = window.workspace.bot_control_widget
-    assert window.workspace.header_runtime.text() == "Configured"
-    assert control.state_value.text() == "Configured"
-    assert control.start_button.isVisible()
-    assert not control.start_button.isEnabled()
-    assert control.supporting_text.text() == "Runtime integration is not available yet"
+    assert window.setup.create_button.text() == "Start Paper Bot"
+    assert window.setup.create_button.isEnabled()
+    assert window.workspace.overview.isVisible() is False
 
 
 def _session_with_policy_changes(

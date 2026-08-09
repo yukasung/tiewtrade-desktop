@@ -167,6 +167,23 @@ class SQLiteTradeHistory:
     def get_basket(self, basket_id: UUID) -> BasketResult | None:
         return self._run_read(lambda connection: _find_basket(connection, basket_id))
 
+    def find_open_basket(self, session_id: UUID) -> BasketResult | None:
+        def operation(connection: sqlite3.Connection) -> BasketResult | None:
+            rows = connection.execute(
+                """
+                SELECT * FROM basket_results
+                WHERE session_id = ? AND status = ?
+                ORDER BY opened_at_utc, basket_id
+                LIMIT 2
+                """,
+                (str(session_id), BasketStatus.OPEN.value),
+            ).fetchall()
+            if len(rows) > 1:
+                raise TradeHistoryConflictError("Session has more than one open Basket")
+            return _basket_from_row(rows[0]) if rows else None
+
+        return self._run_read(operation)
+
     def list_baskets(
         self,
         filters: TradeHistoryFilter,

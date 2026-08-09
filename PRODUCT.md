@@ -21,8 +21,9 @@ TiewTrade V2 คือ Desktop Binance Trading Bot สำหรับใช้�
 ### 3.1 สิ่งที่รองรับ
 
 - macOS เป็นแพลตฟอร์มแรก โดยสถาปัตยกรรมต้องไม่ปิดทางการรองรับ Windows และ Linux ในอนาคต
-- BTCUSDT เพียง Symbol เดียว
-- completed candle รองรับช่วงเวลา `3m`, `5m`, `15m`, `30m`, `1h`, `4h`
+- Paper Trading รองรับ `BTCUSDT`, `ETHUSDT` และ `BNBUSDT`; Live ยังคงจำกัด
+  `BTCUSDT` จนกว่าจะผ่าน Live safety gate
+- completed candle รองรับช่วงเวลา `1m`, `3m`, `5m`, `15m`, `30m`, `1h`, `4h`
 - ผู้ใช้เลือก Timeframe ก่อนเริ่ม Session และค่า Timeframe ถูกตรึงตลอด Session
 - ใช้ UTC สำหรับเวลา candle, Entry Pair และ Cooldown Month
 - RSI Step Grid พร้อม Versioned Preset เพียงกลยุทธ์เดียว
@@ -90,7 +91,7 @@ Short = weighted_average_entry_price - (ATR(14) * 3)
 
 - ใช้ ATR จาก completed candle ล่าสุดของ Timeframe ที่ Session เลือก ณ เวลาที่ Entry ถูก Fill
 - คำนวณราคา Take Profit ใหม่หลังทุก Entry Fill
-- Long Take Profit ปัดลง และ Short Take Profit ปัดขึ้นตาม Binance tick size ของ BTCUSDT
+- Long Take Profit ปัดลง และ Short Take Profit ปัดขึ้นตาม tick size ของ Symbol และ Market Type ที่ตรึงใน Session
 - RSI Step Grid Preset v1 ยังสร้างเฉพาะ Long Entry Intent
 - Take Profit ครอบคลุมขนาด Position ที่ Bot เป็นเจ้าของทั้งหมดใน Basket
 - เมื่อ Take Profit ถูก Fill ให้ปิด Entries ทั้งหมดใน Basket พร้อมกัน
@@ -220,9 +221,15 @@ Stop Session หมายถึง:
 - คง Basket Take Profit ที่มีอยู่
 - ไม่บังคับปิด Basket
 
-เมื่อ Stop สำเร็จและไม่มี Open Basket หรือ Open Order ระบบ retire Active Paper
-Session เดิม แล้วเปิด Session Setup พร้อม configuration เดิมให้ผู้ใช้แก้ไขและกด
-`Start Paper Bot` เพื่อสร้าง Session ใหม่ได้ทันที
+เมื่อ Stop สำเร็จ ระบบเปิด Session Setup พร้อม configuration ล่าสุดเสมอ แม้มี Open
+Basket หรือ Open Order อยู่ และไม่ retire หรือปิด Position โดยอัตโนมัติ
+
+`Start Paper Bot` เป็น action เดียวสำหรับสร้างหรือแทนที่ Session: ระบบต้อง validate
+configuration ก่อนทำ side effect; หาก Session เดิมมี Position ค้าง ให้ขอการยืนยันเพียงครั้ง
+เดียวเพื่อบันทึก market close พร้อม fee, slippage และ `manual-close` audit Fill โดยใช้ราคา
+public market data ที่ fresh ไม่เกิน 30 วินาที จากนั้นจึง retire Session เดิม สร้าง immutable
+Session ใหม่ และเริ่ม Bot อัตโนมัติ หากราคาไม่สด, stop runtime, close, retire หรือ start
+ล้มเหลว ระบบต้องไม่สร้าง Session ใหม่ และคงฟอร์มไว้ให้ผู้ใช้แก้ไขหรือกด Start ซ้ำได้
 
 ### 12.2 Startup Recovery
 
@@ -241,15 +248,16 @@ Session เดิม แล้วเปิด Session Setup พร้อม conf
 UI เป็นภาษาอังกฤษและใช้ Full Dark Theme ที่อ่านง่ายและน่าเชื่อถือ โดยใช้ TiewTrade
 Blue เป็นสี primary action งาน network, engine และ persistence ต้องไม่บล็อก UI thread
 
-การกด `Start Paper Bot` หมายถึงตรวจสอบค่า สร้างและบันทึก immutable Paper Session
-configuration แล้วเริ่ม Market Data, Strategy และ Paper Execution ต่อเนื่องใน flow เดียว
+การกด `Start Paper Bot` หมายถึงตรวจสอบค่า และเมื่อมี Session เดิมต้องจัดการ Position/retire
+ตามกฎ Shutdown ก่อนสร้างและบันทึก immutable Paper Session configuration แล้วเริ่ม Market
+Data, Strategy และ Paper Execution ต่อเนื่องใน flow เดียว
 ระหว่างเริ่มและขณะ Runtime ทำงาน ค่า configuration ของ Session แก้ไขไม่ได้
 
 หน้าจอหลัก:
 
 - Session Setup และ Paper/Live Mode
 - Operations Dashboard
-- BTCUSDT Chart
+- Chart ของ Symbol ที่เลือกสำหรับ Paper Session
 - Orders
 - Positions และ Basket Lifecycle
 - Notifications
@@ -257,6 +265,11 @@ configuration แล้วเริ่ม Market Data, Strategy และ Paper 
 - Recovery/Reconciliation
 
 UI ต้องแยก Paper และ Live อย่างชัดเจน แสดง Market Type, Mode, Preset Version, data freshness และ Bot Session state ตลอดเวลาที่เกี่ยวข้องกับการตัดสินใจซื้อขาย
+
+Chart เป็น read-only view ที่ผู้ใช้เลือก Symbol และ Timeframe ที่รองรับได้อย่างอิสระ
+จาก immutable Bot Session การเลือก Chart ต้องไม่เปลี่ยน Session, Strategy, Position,
+Order หรือ Bot lifecycle และจะแสดง Fill marker เฉพาะเมื่อ Symbol และ Timeframe ของ
+Chart ตรงกับ Session เท่านั้น
 
 ## 14. Data และ Auditability
 
@@ -305,7 +318,7 @@ SQLite เก็บข้อมูลที่ไม่ใช่ secret ได�
 
 ## 16. สิ่งที่ไม่อยู่ใน Internal Alpha
 
-- Symbol อื่นนอกจาก BTCUSDT
+- Symbol Paper นอกเหนือจาก `BTCUSDT`, `ETHUSDT` และ `BNBUSDT`
 - หลายกลยุทธ์หรือ Strategy Plugin System
 - Generic base strategy/registry ที่ยังไม่มี consumer ตัวที่สอง
 - Master Account API

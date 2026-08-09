@@ -1,6 +1,5 @@
 from collections.abc import Callable
-from datetime import UTC, datetime
-from decimal import Decimal
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from threading import Event, Lock
 from uuid import UUID
@@ -16,14 +15,19 @@ from tiewtrade.application.chart_data import (
 )
 from tiewtrade.application.chart_history import ChartHistory
 from tiewtrade.application.chart_realtime_feed import ChartOnlyFeedController
+from tiewtrade.application.chart_view_selection import ChartViewSelection
 from tiewtrade.application.database_compatibility import DatabaseCompatibilityError
+from tiewtrade.application.latest_market_price import LatestMarketPrice
+from tiewtrade.application.paper_manual_close import ClosePaperPosition
 from tiewtrade.application.paper_runtime import PaperRuntimeController
 from tiewtrade.application.paper_session_setup import (
     ConfiguredPaperSession,
     CreatePaperSession,
     PaperSessionCreateOutcome,
     PaperSessionSetupValues,
+    validate_paper_session,
 )
+from tiewtrade.application.paper_symbols import paper_symbol_rules
 from tiewtrade.application.trade_history import (
     BasketHistoryPage,
     PageRequest,
@@ -41,11 +45,11 @@ from tiewtrade.integrations.sqlite.database import (
     UnsupportedDatabaseSchemaError,
 )
 from tiewtrade.integrations.sqlite.paper_runtime_lifecycle import (
+    PaperRuntimeLifecycleState,
     SQLitePaperRuntimeLifecycle,
 )
 from tiewtrade.integrations.sqlite.trade_history import SQLiteTradeHistory
 from tiewtrade.market_data.candle import Candle
-from tiewtrade.trading.session_config import MarketType
 from tiewtrade.trading.symbol_rules import SymbolRules
 from tiewtrade.trading.trade_history import TradeFill
 from tiewtrade.ui.bot_lifecycle_workflow import RuntimeSnapshotRelay
@@ -53,6 +57,7 @@ from tiewtrade.ui.chart_workflow import ChartFactRelay
 from tiewtrade.ui.desktop import run_desktop as run_desktop_ui
 
 _RUNTIME_SHUTDOWN_TIMEOUT_SECONDS = 30.0
+_MANUAL_CLOSE_PRICE_MAX_AGE = timedelta(seconds=30)
 
 
 class _PaperRuntimeActions:
@@ -126,6 +131,29 @@ class _PaperRuntimeActions:
                 session=snapshot.session,
             )
         return _lifecycle_result_for_ui(snapshot, result)
+
+    def stop_for_replacement(self, session: ConfiguredPaperSession) -> None:
+        with self._lock:
+            controller = self._controller if self._session == session else None
+        lifecycle = self._lifecycle.read(session.config.session_id)
+        if lifecycle is None or lifecycle.state is PaperRuntimeLifecycleState.STOPPED:
+            return
+        self._begin_operation("replace")
+        try:
+            if controller is not None and controller.owns_active_runtime(session):
+                result = controller.stop(session)
+            else:
+                if controller is None:
+                    controller = self._new_controller(session)
+                    with self._lock:
+                        self._controller = controller
+                        self._session = session
+                result = controller.recover(session)
+            header = result.workspace.header
+            if header is None or header.runtime_state is not BotRuntimeState.STOPPED:
+                raise RuntimeError("Paper Bot must stop before it can be replaced")
+        finally:
+            self._finish_operation("replace", controller=controller, session=session)
 
     def recover(self, snapshot: BotControlSnapshot) -> BotLifecycleResult:
         self._prepare_database()
@@ -285,15 +313,9 @@ def _lifecycle_result_for_ui(
 
 
 def _symbol_rules_for(session: ConfiguredPaperSession) -> SymbolRules:
-    return SymbolRules(
-        symbol=session.market_data.symbol,
-        tick_size=(
-            Decimal("0.01")
-            if session.config.market_type is MarketType.SPOT
-            else Decimal("0.1")
-        ),
-        step_size=Decimal("0.001"),
-        min_notional=Decimal("5"),
+    return paper_symbol_rules(
+        session.market_data.symbol,
+        session.config.market_type,
     )
 
 
@@ -303,6 +325,12 @@ def run_desktop(database_path: Path | None = None) -> int:
     database = SQLiteDatabase(resolved_database_path)
     store = SQLiteActivePaperSessions(database)
     history = SQLiteTradeHistory(database)
+    latest_market_price = LatestMarketPrice()
+    close_paper_position = ClosePaperPosition(
+        find_open_basket=history.find_open_basket,
+        list_fills=history.list_fills,
+        record_closed=history.record_closed_basket,
+    )
     create_session = CreatePaperSession(create_active=store.create)
     database_preparation_lock = Lock()
 
@@ -330,6 +358,17 @@ def run_desktop(database_path: Path | None = None) -> int:
             raise RuntimeError("Paper Runtime worker is still active")
         store.retire(session.config.session_id, datetime.now(UTC))
 
+    def close_position_after_migration(session: ConfiguredPaperSession) -> None:
+        prepare_database()
+        close_paper_position.execute(
+            session,
+            market_price=lambda: latest_market_price.get(
+                session.config.session_id,
+                max_age=_MANUAL_CLOSE_PRICE_MAX_AGE,
+            ),
+            tick_size=_symbol_rules_for(session).tick_size,
+        )
+
     def list_baskets_after_migration(
         filters: TradeHistoryFilter,
         page: PageRequest,
@@ -343,7 +382,10 @@ def run_desktop(database_path: Path | None = None) -> int:
 
     runtime_snapshots = RuntimeSnapshotRelay()
     chart_fact_relay = ChartFactRelay()
-    chart_feed = ChartOnlyFeedController(source_factory=BinancePublicMarketData)
+    chart_feed = ChartOnlyFeedController(
+        source_factory=BinancePublicMarketData,
+        latest_market_price=latest_market_price,
+    )
     runtime_actions = _PaperRuntimeActions(
         lifecycle=SQLitePaperRuntimeLifecycle(database),
         trade_history=history,
@@ -398,11 +440,24 @@ def run_desktop(database_path: Path | None = None) -> int:
         return await chart_history.refresh_completed(session, snapshot, candle)
 
     def start_chart_feed(session: ConfiguredPaperSession) -> None:
+        select_chart_view(
+            session,
+            ChartViewSelection(
+                symbol=session.market_data.symbol,
+                timeframe=session.market_data.timeframe,
+            ),
+        )
+
+    def select_chart_view(
+        session: ConfiguredPaperSession,
+        selection: ChartViewSelection,
+    ) -> None:
         publisher = chart_fact_relay.new_generation()
         chart_feed.start(
             session,
             publisher.completed_candle,
             publisher.in_progress_candle,
+            selection,
         )
 
     def shutdown_desktop_runtimes() -> None:
@@ -416,9 +471,13 @@ def run_desktop(database_path: Path | None = None) -> int:
         list_fills=list_fills_after_migration,
         start_bot=runtime_actions.start,
         stop_bot=runtime_actions.stop,
-        recover_bot=runtime_actions.recover,
+        stop_for_replacement=runtime_actions.stop_for_replacement,
+        validate_session=validate_paper_session,
+        close_position=close_position_after_migration,
+        has_open_position=lambda session: (
+            history.find_open_basket(session.config.session_id) is not None
+        ),
         retire_session=retire_after_migration,
-        new_session_available=runtime_actions.new_session_available,
         initialize_bot=runtime_actions.initialize,
         runtime_snapshots=runtime_snapshots,
         shutdown_runtime=shutdown_desktop_runtimes,
@@ -426,6 +485,7 @@ def run_desktop(database_path: Path | None = None) -> int:
         refresh_chart=refresh_chart,
         chart_fact_relay=chart_fact_relay,
         start_chart_feed=start_chart_feed,
+        select_chart_view=select_chart_view,
     )
 
 

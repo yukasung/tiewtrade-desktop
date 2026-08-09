@@ -1,10 +1,18 @@
-from datetime import UTC, datetime
+from collections.abc import Callable
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from threading import Event
+from typing import cast
+
+import pytest
 
 from tests.support.paper_session_setup import configured_spot_session
 from tiewtrade.application.chart_realtime_feed import ChartOnlyFeedController
+from tiewtrade.application.chart_view_selection import ChartViewSelection
+from tiewtrade.application.latest_market_price import LatestMarketPrice
 from tiewtrade.market_data.candle import Candle
+from tiewtrade.market_data.candle_pipeline import MarketDataCandleSink
+from tiewtrade.market_data.candle_source import MarketDataCandleSource
 
 
 def test_start_publishes_current_candle_without_bot_runtime() -> None:
@@ -17,7 +25,7 @@ def test_start_publishes_current_candle_without_bot_runtime() -> None:
         delivered.set()
 
     controller = ChartOnlyFeedController(
-        source_factory=lambda endpoints: object(),  # type: ignore[arg-type]
+        source_factory=lambda endpoints: cast(MarketDataCandleSource, object()),
         runtime_factory=lambda **kwargs: FakeRuntime(**kwargs),
     )
 
@@ -29,12 +37,65 @@ def test_start_publishes_current_candle_without_bot_runtime() -> None:
     assert completed == [candle(15)]
 
 
+def test_latest_price_requires_current_session_and_fresh_chart_fact() -> None:
+    observed_at = datetime(2026, 1, 1, 0, 21, tzinfo=UTC)
+    session = configured_spot_session()
+    delivered = Event()
+    latest_market_price = LatestMarketPrice(clock=lambda: observed_at)
+    controller = ChartOnlyFeedController(
+        source_factory=lambda endpoints: cast(MarketDataCandleSource, object()),
+        runtime_factory=lambda **kwargs: FakeRuntime(**kwargs),
+        latest_market_price=latest_market_price,
+    )
+
+    controller.start(session, lambda _candle: None, lambda _candle: delivered.set())
+    assert delivered.wait(timeout=1)
+
+    assert latest_market_price.get(
+        session.config.session_id,
+        max_age=timedelta(seconds=30),
+    ) == Decimal("100")
+
+    observed_at += timedelta(seconds=31)
+
+    with pytest.raises(RuntimeError, match="fresh market price"):
+        latest_market_price.get(
+            session.config.session_id,
+            max_age=timedelta(seconds=30),
+        )
+
+
+def test_different_chart_view_does_not_replace_session_market_price() -> None:
+    session = configured_spot_session()
+    delivered = Event()
+    latest_market_price = LatestMarketPrice()
+    controller = ChartOnlyFeedController(
+        source_factory=lambda endpoints: cast(MarketDataCandleSource, object()),
+        runtime_factory=lambda **kwargs: FakeRuntime(**kwargs),
+        latest_market_price=latest_market_price,
+    )
+
+    controller.start(
+        session,
+        lambda _candle: None,
+        lambda _candle: delivered.set(),
+        ChartViewSelection(symbol="ETHUSDT", timeframe="1m"),
+    )
+
+    assert delivered.wait(timeout=1)
+    with pytest.raises(RuntimeError, match="fresh market price"):
+        latest_market_price.get(
+            session.config.session_id,
+            max_age=timedelta(seconds=30),
+        )
+
+
 class FakeRuntime:
     def __init__(
         self,
         *,
-        sink: object,
-        on_open_candle: object,
+        sink: MarketDataCandleSink,
+        on_open_candle: Callable[[Candle], None],
         **kwargs: object,
     ) -> None:
         del kwargs

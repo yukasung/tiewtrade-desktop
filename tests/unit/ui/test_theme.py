@@ -34,6 +34,18 @@ def test_dark_theme_defines_focus_and_semantic_states() -> None:
     assert "border: 2px solid #4C7DFF" in DARK_THEME
 
 
+def test_chart_selector_theme_reserves_text_and_arrow_space() -> None:
+    assert "QComboBox#chartSymbol, QComboBox#chartTimeframe" in DARK_THEME
+    assert "padding: 0 40px 0 14px;" in DARK_THEME
+    assert "QComboBox#chartSymbol QAbstractItemView::item" in DARK_THEME
+    assert "padding: 6px 12px;" in DARK_THEME
+
+
+def test_dark_theme_keeps_confirmation_dialog_text_readable() -> None:
+    assert "QMessageBox" in DARK_THEME
+    assert "QMessageBox QLabel" in DARK_THEME
+
+
 def test_dark_theme_styles_scoped_trading_tab_states() -> None:
     for selector in (
         "QLabel#openOrdersState",

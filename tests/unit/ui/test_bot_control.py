@@ -44,18 +44,19 @@ def test_configured_shows_immutable_overview_and_disabled_start_without_runtime(
     assert widget.start_button.isVisible()
     assert not widget.start_button.isEnabled()
     assert widget.stop_button.isHidden()
-    assert widget.recover_button.isHidden()
     assert widget.supporting_text.text() == "Runtime integration is not available yet"
     assert widget.findChildren(QPushButton, "manualBuyButton") == []
     assert widget.findChildren(QPushButton, "manualSellButton") == []
 
 
-def test_initial_state_hides_recovery_requirement(qtbot: QtBot) -> None:
+def test_control_exposes_only_start_and_stop_actions(qtbot: QtBot) -> None:
     widget = BotControlWidget()
     qtbot.addWidget(widget)
-    widget.show()
 
-    assert widget.recovery_required.isHidden()
+    assert widget.start_button.text() == "Start Bot"
+    assert widget.stop_button.text() == "Stop Bot"
+    assert not hasattr(widget, "recover_button")
+    assert not hasattr(widget, "new_session_button")
 
 
 def test_running_shows_runtime_and_basket_facts_without_manual_order_controls(
@@ -109,7 +110,7 @@ def test_running_shows_runtime_and_basket_facts_without_manual_order_controls(
     assert widget.current_price_value.text() == "65000 USDT"
     assert widget.take_profit_value.text() == "66000 USDT"
     assert widget.stop_button.isVisible()
-    assert widget.stop_button.text() == "Stop Session"
+    assert widget.stop_button.text() == "Stop Bot"
     assert widget.findChildren(QPushButton, "manualBuyButton") == []
     assert widget.findChildren(QPushButton, "manualSellButton") == []
 
@@ -192,14 +193,12 @@ def test_progress_blocked_and_stopped_states_expose_only_their_allowed_actions(
         workspace=workspace_with_runtime_state(
             configured.workspace, BotRuntimeState.BLOCKED
         ),
-        available_actions=frozenset({BotControlAction.RECOVER}),
+        available_actions=frozenset(),
         blocked_reason="Paper Bot could not be started",
     )
     widget.show_snapshot(blocked)
     assert widget.state_value.text() == "Blocked"
     assert widget.supporting_text.text() == "Paper Bot could not be started"
-    assert widget.recovery_required.isVisible()
-    assert widget.recover_button.isVisible()
     assert widget.start_button.isHidden()
     assert widget.stop_button.isHidden()
 
@@ -215,7 +214,6 @@ def test_progress_blocked_and_stopped_states_expose_only_their_allowed_actions(
     assert widget.state_value.text() == "Stopped"
     assert widget.start_button.isHidden()
     assert widget.stop_button.isHidden()
-    assert widget.recover_button.isHidden()
 
 
 def test_enabled_action_emits_once_and_disables_repeated_submission(
@@ -315,7 +313,7 @@ def test_default_stop_confirmation_is_destructive_and_default_safe(
         button for button in dialog.buttons() if button.text() == "Cancel"
     )
     stop_button = next(
-        button for button in dialog.buttons() if button.text() == "Stop Session"
+        button for button in dialog.buttons() if button.text() == "Stop Bot"
     )
     assert dialog.defaultButton() is cancel_button
     assert dialog.buttonRole(stop_button) is QMessageBox.ButtonRole.DestructiveRole
@@ -324,33 +322,6 @@ def test_default_stop_confirmation_is_destructive_and_default_safe(
 
     assert emissions == []
     qtbot.waitUntil(widget.stop_button.hasFocus)
-
-
-def test_blocked_with_live_runtime_shows_disabled_new_session_action(
-    qtbot: QtBot,
-) -> None:
-    widget = BotControlWidget()
-    qtbot.addWidget(widget)
-    widget.show()
-    configured = configured_bot_control(
-        configured_spot_session(), observed_at_utc=datetime(2026, 8, 1, 12, tzinfo=UTC)
-    )
-
-    widget.show_snapshot(
-        BotControlSnapshot(
-            state=BotRuntimeState.BLOCKED,
-            session=configured.session,
-            workspace=workspace_with_runtime_state(
-                configured.workspace, BotRuntimeState.BLOCKED
-            ),
-            available_actions=frozenset({BotControlAction.RECOVER}),
-            blocked_reason="Paper Bot could not be stopped",
-        )
-    )
-
-    assert widget.new_session_button.isVisible()
-    assert not widget.new_session_button.isEnabled()
-    assert "Close and reopen" in widget.recovery_required.text()
 
 
 def test_decimal_text_is_context_independent_and_exact() -> None:
