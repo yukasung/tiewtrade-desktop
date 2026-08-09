@@ -1795,6 +1795,55 @@ def test_start_from_setup_creates_and_starts_paper_bot_in_one_action(
     assert len(started) == 1
 
 
+def test_start_from_setup_skips_recovery_inspection_for_new_session(
+    qtbot: QtBot,
+) -> None:
+    session = configured_spot_session()
+    initialize_calls: list[BotControlSnapshot] = []
+    start_calls: list[BotControlSnapshot] = []
+
+    def create(_values: PaperSessionSetupValues) -> PaperSessionCreateOutcome:
+        return PaperSessionCreateOutcome(session=session, created=True)
+
+    def initialize(snapshot: BotControlSnapshot) -> BotLifecycleResult:
+        initialize_calls.append(snapshot)
+        return BotLifecycleResult(
+            workspace=workspace_with_runtime_state(
+                snapshot.workspace, BotRuntimeState.BLOCKED
+            ),
+            blocked_reason="Paper Bot recovery failed",
+        )
+
+    def start(snapshot: BotControlSnapshot) -> BotLifecycleResult:
+        start_calls.append(snapshot)
+        return BotLifecycleResult(
+            workspace=workspace_with_runtime_state(
+                snapshot.workspace,
+                BotRuntimeState.RUNNING,
+                data_freshness=DataFreshness.FRESH,
+            )
+        )
+
+    window = MainWindow(
+        create_session=create,
+        load_active=no_active_session,
+        list_baskets=empty_basket_page,
+        list_fills=empty_fills,
+        start_bot=start,
+        initialize_bot=initialize,
+    )
+    qtbot.addWidget(window)
+    window.show()
+    qtbot.waitUntil(window.setup.create_button.isEnabled)
+    window.setup.available_capital.setText("1000")
+
+    click(window.setup.create_button)
+
+    qtbot.waitUntil(lambda: window.workspace.header_runtime.text() == "Running")
+    assert initialize_calls == []
+    assert len(start_calls) == 1
+
+
 def test_stop_without_exposure_retires_session_and_reopens_prefilled_form(
     qtbot: QtBot,
 ) -> None:

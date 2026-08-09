@@ -203,10 +203,14 @@ class MainWindow(QMainWindow):
     @Slot(object)
     def _show_session(self, session: ConfiguredPaperSession) -> None:
         self._pending_validation_field = None
-        if self._start_after_create:
+        start_after_create = self._start_after_create
+        if start_after_create:
             self._pending_start_session = session
         self._start_after_create = False
-        self._lifecycle_workflow.configure(session)
+        self._lifecycle_workflow.configure(
+            session,
+            inspect_startup=not start_after_create,
+        )
         if self._load_chart is not None:
             self._chart_workflow.start(session)
         if self._start_chart_feed is not None:
