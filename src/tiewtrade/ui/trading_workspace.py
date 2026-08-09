@@ -26,7 +26,6 @@ from tiewtrade.application.trading_workspace import (
 from tiewtrade.ui.bot_control import BotControlWidget
 from tiewtrade.ui.candlestick_chart import CandlestickChartWidget
 from tiewtrade.ui.notification_center import NotificationRecord, NotificationStore
-from tiewtrade.ui.open_orders_table import OpenOrdersTable
 from tiewtrade.ui.position_basket_table import PositionBasketTable
 from tiewtrade.ui.preset_display import preset_display_name
 from tiewtrade.ui.session_setup import SessionSetupWidget
@@ -72,7 +71,6 @@ class TradingWorkspace(QWidget):
         self.setup = SessionSetupWidget()
         self.bot_control_widget = BotControlWidget()
         self.overview = self.bot_control_widget.overview
-        self.open_orders = OpenOrdersTable()
         self.position_basket = PositionBasketTable()
         self.trade_history = TradeHistoryPage()
 
@@ -106,7 +104,6 @@ class TradingWorkspace(QWidget):
         self.bot_control_widget.stop_requested.connect(self.stop_bot_requested)
 
         self.tabs = QTabWidget()
-        self.tabs.addTab(self.open_orders, "Open Orders")
         self.tabs.addTab(self.position_basket, "Position / Basket")
         self.tabs.addTab(self.trade_history, "Trade History")
         self.tabs.currentChanged.connect(self._tab_changed)
@@ -146,7 +143,6 @@ class TradingWorkspace(QWidget):
         if not isinstance(value, TradingWorkspaceSnapshot):
             return
         self._show_header(value)
-        self.open_orders.show_snapshot(value.open_orders)
         self.position_basket.show_snapshot(value.position_basket)
 
     @Slot(str)

@@ -21,11 +21,9 @@ from tiewtrade.application.trading_workspace import (
     BasketSnapshot,
     BotRuntimeState,
     DataFreshness,
-    OpenOrderSnapshot,
     WorkspaceReadState,
     empty_position_basket_tab,
     paper_runtime_workspace_snapshot,
-    ready_open_orders_tab,
     ready_position_basket_tab,
     stale_workspace_snapshot,
 )
@@ -216,7 +214,6 @@ def test_runtime_snapshot_from_worker_is_published_on_qt_thread(
     runtime_result = BotLifecycleResult(
         workspace=paper_runtime_workspace_snapshot(
             workflow.snapshot.workspace,
-            orders=(_order(),),
             basket=_basket(),
             observed_at_utc=updated_at,
         )
@@ -231,7 +228,7 @@ def test_runtime_snapshot_from_worker_is_published_on_qt_thread(
     runtime_thread.start()
     runtime_thread.join(timeout=1)
 
-    qtbot.waitUntil(lambda: workflow.snapshot.workspace.orders == (_order(),))
+    qtbot.waitUntil(lambda: workflow.snapshot.workspace.basket == _basket())
 
     assert callback_thread == [runtime_thread.ident]
     assert recorder.threads[-1] is workflow.thread()
@@ -251,7 +248,6 @@ def test_runtime_snapshot_published_before_start_returns_is_not_lost(
             BotLifecycleResult(
                 workspace=paper_runtime_workspace_snapshot(
                     snapshot.workspace,
-                    orders=(_order(),),
                     basket=_basket(),
                     observed_at_utc=datetime(2026, 8, 1, 12, 5, tzinfo=UTC),
                 )
@@ -275,7 +271,6 @@ def test_runtime_snapshot_published_before_start_returns_is_not_lost(
     qtbot.waitUntil(lambda: workflow.snapshot.workspace.basket == _basket())
 
     assert workflow.snapshot.state is BotRuntimeState.RUNNING
-    assert workflow.snapshot.workspace.orders == (_order(),)
     assert thread_pool.waitForDone(1_000)
 
 
@@ -314,7 +309,6 @@ def test_stop_invalidates_late_runtime_callback_and_preserves_basket(
         BotLifecycleResult(
             workspace=paper_runtime_workspace_snapshot(
                 workflow.snapshot.workspace,
-                orders=(_order(),),
                 basket=_basket(),
                 observed_at_utc=datetime(2026, 8, 1, 12, 5, tzinfo=UTC),
             )
@@ -329,7 +323,6 @@ def test_stop_invalidates_late_runtime_callback_and_preserves_basket(
         BotLifecycleResult(
             workspace=paper_runtime_workspace_snapshot(
                 stopping_workspace,
-                orders=(),
                 basket=None,
                 observed_at_utc=datetime(2026, 8, 1, 12, 10, tzinfo=UTC),
             )
@@ -384,7 +377,6 @@ def test_runtime_callback_from_older_generation_is_ignored(qtbot: QtBot) -> None
         BotLifecycleResult(
             workspace=paper_runtime_workspace_snapshot(
                 configured_workspace,
-                orders=(_order(),),
                 basket=_basket(),
                 observed_at_utc=datetime(2026, 8, 1, 12, 5, tzinfo=UTC),
             )
@@ -406,7 +398,6 @@ def test_runtime_callback_from_older_generation_is_ignored(qtbot: QtBot) -> None
         BotLifecycleResult(
             workspace=paper_runtime_workspace_snapshot(
                 current_workspace,
-                orders=(_order(),),
                 basket=_basket(),
                 observed_at_utc=datetime(2026, 8, 1, 12, 10, tzinfo=UTC),
             )
@@ -419,7 +410,6 @@ def test_runtime_callback_from_older_generation_is_ignored(qtbot: QtBot) -> None
         BotLifecycleResult(
             workspace=paper_runtime_workspace_snapshot(
                 current_workspace,
-                orders=(_order(),),
                 basket=_basket(),
                 observed_at_utc=datetime(2026, 8, 1, 12, 15, tzinfo=UTC),
             )
@@ -650,7 +640,6 @@ def test_start_result_for_futures_header_is_blocked_with_spot_workspace_preserve
     qtbot.waitUntil(lambda: workflow.snapshot.state is BotRuntimeState.BLOCKED)
 
     assert workflow.snapshot.blocked_reason == "Paper Bot could not be started"
-    assert workflow.snapshot.workspace.orders is original.orders
     assert workflow.snapshot.workspace.basket is original.basket
     assert workflow.snapshot.workspace.data_as_of_utc is original.data_as_of_utc
     assert workflow.snapshot.workspace.read_state is original.read_state
@@ -708,15 +697,6 @@ def test_stop_result_dropping_basket_is_blocked_and_preserves_take_profit(
         pytest.param(
             lambda workspace: replace(
                 workspace,
-                open_orders=ready_open_orders_tab(
-                    (_order(),), observed_at_utc=OBSERVED_AT
-                ),
-            ),
-            id="orders",
-        ),
-        pytest.param(
-            lambda workspace: replace(
-                workspace,
                 data_as_of_utc=datetime(2026, 8, 1, 12, 1, tzinfo=UTC),
             ),
             id="data-as-of",
@@ -746,7 +726,6 @@ def test_start_result_altering_workspace_continuity_maps_to_blocked(
     qtbot.waitUntil(lambda: workflow.snapshot.state is BotRuntimeState.BLOCKED)
 
     assert workflow.snapshot.blocked_reason == "Paper Bot could not be started"
-    assert workflow.snapshot.workspace.orders is original.orders
     assert workflow.snapshot.workspace.data_as_of_utc is original.data_as_of_utc
     assert workflow.snapshot.workspace.read_state is original.read_state
     assert thread_pool.waitForDone(1_000)
@@ -1047,18 +1026,4 @@ def _basket() -> BasketSnapshot:
         liquidation_price=None,
         lifecycle="open",
         updated_at_utc=OBSERVED_AT,
-    )
-
-
-def _order() -> OpenOrderSnapshot:
-    return OpenOrderSnapshot(
-        order_id="order-1",
-        created_at_utc=OBSERVED_AT,
-        symbol="BTCUSDT",
-        side="SELL",
-        order_type="LIMIT",
-        price=Decimal("66000.123456789012345678"),
-        quantity=Decimal("1"),
-        filled_quantity=Decimal("0"),
-        status="NEW",
     )

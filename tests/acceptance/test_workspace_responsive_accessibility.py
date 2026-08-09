@@ -113,7 +113,6 @@ def test_trading_tables_are_named_and_scroll_horizontally(qtbot: QtBot) -> None:
     assert workspace.trade_history.total_net_pnl.text() == "-1.25 USDT · Loss"
 
     tables = (
-        workspace.open_orders.table,
         workspace.position_basket.table,
         workspace.trade_history.basket_table,
         workspace.trade_history.fill_table,

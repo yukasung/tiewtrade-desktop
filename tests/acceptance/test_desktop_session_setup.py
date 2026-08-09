@@ -35,11 +35,9 @@ from tiewtrade.application.trading_workspace import (
     BasketSnapshot,
     BotRuntimeState,
     DataFreshness,
-    OpenOrderSnapshot,
     TradingWorkspaceSnapshot,
     WorkspaceReadState,
     configured_workspace_snapshot,
-    ready_open_orders_tab,
     ready_position_basket_tab,
 )
 from tiewtrade.execution.paper_spot import PaperSpotEntryFill
@@ -377,7 +375,6 @@ def test_desktop_restart_blocked_runtime_reopens_setup_form(
     assert marker is not None
     assert marker.state is PaperRuntimeLifecycleState.RUNNING
     assert window.workspace.tabs.currentWidget() is window.trade_history
-    assert window.workspace.open_orders.table.rowCount() == 0
     assert window.workspace.position_basket.table.rowCount() == 0
 
 
@@ -441,14 +438,6 @@ def test_desktop_fake_snapshots_render_orders_and_basket_without_manual_trading(
 
     assert start_calls == 0
     assert window.workspace.header_runtime.text() == "Running"
-    assert window.workspace.open_orders.table.rowCount() == 1
-    assert table_item(window.workspace.open_orders.table, 0, 0).text() == (
-        "entry-order-1"
-    )
-    assert table_item(window.workspace.open_orders.table, 0, 7).text() == "0.00150000"
-    assert table_item(window.workspace.open_orders.table, 0, 8).text() == (
-        "Partially Filled"
-    )
     assert window.workspace.position_basket.table.rowCount() == 1
     assert table_item(window.workspace.position_basket.table, 0, 1).text() == (
         case.market_type.title()
@@ -537,10 +526,6 @@ def test_spot_partial_fills_keep_one_order_and_basket_entry_across_tabs(
         _fake_running_workspace(session, observed_at=observed_at)
     )
 
-    assert window.workspace.open_orders.table.rowCount() == 1
-    assert table_item(window.workspace.open_orders.table, 0, 0).text() == (
-        durable_fills[0].order_id
-    )
     assert window.workspace.position_basket.table.rowCount() == 1
     assert table_item(window.workspace.position_basket.table, 0, 2).text() == "1"
     window.workspace.tabs.setCurrentWidget(window.trade_history)
@@ -619,7 +604,6 @@ def test_desktop_paper_session_create_overview_and_restart_restore(
     assert first_window.findChildren(QPushButton, "manualBuyButton") == []
     assert first_window.findChildren(QPushButton, "manualSellButton") == []
     assert first_window.workspace.chart.objectName() == "candlestickChart"
-    assert first_window.workspace.open_orders.state_label.text() == "No open orders"
     assert first_window.workspace.position_basket.state_label.text() == (
         "No open Position or Basket"
     )
@@ -1072,22 +1056,6 @@ def _fake_running_workspace(
     configured = configured_workspace_snapshot(session, observed_at_utc=observed_at)
     with_facts = replace(
         configured,
-        open_orders=ready_open_orders_tab(
-            (
-                OpenOrderSnapshot(
-                    order_id="entry-order-1",
-                    created_at_utc=observed_at,
-                    symbol="BTCUSDT",
-                    side="buy",
-                    order_type="limit",
-                    price=Decimal("66321.1200"),
-                    quantity=Decimal("0.00300000"),
-                    filled_quantity=Decimal("0.00150000"),
-                    status="partially_filled",
-                ),
-            ),
-            observed_at_utc=observed_at,
-        ),
         position_basket=ready_position_basket_tab(
             BasketSnapshot(
                 symbol="BTCUSDT",

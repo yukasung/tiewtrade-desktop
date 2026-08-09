@@ -26,7 +26,6 @@ from tiewtrade.application.trading_workspace import (
     BasketSnapshot,
     BotRuntimeState,
     DataFreshness,
-    OpenOrderSnapshot,
     TradingWorkspaceSnapshot,
     WorkspaceReadState,
     configured_workspace_snapshot,
@@ -68,7 +67,6 @@ from tiewtrade.market_data.runtime_state import (
     MarketDataRuntimeState,
 )
 from tiewtrade.strategies.rsi_step_grid.preset import RsiStepGridPreset
-from tiewtrade.strategies.rsi_step_grid.strategy import EntryIntent
 from tiewtrade.trading.basket import average_entry_price_after_fill
 from tiewtrade.trading.position import PositionSide, unrealized_pnl
 from tiewtrade.trading.session_config import MarketType, TradeMode
@@ -413,7 +411,6 @@ class PaperRuntimeController:
                         BotLifecycleResult(
                             workspace=paper_runtime_workspace_snapshot(
                                 current,
-                                orders=current.orders,
                                 basket=current.basket,
                                 observed_at_utc=current.data_as_of_utc,
                             )
@@ -427,7 +424,6 @@ class PaperRuntimeController:
                 )
                 workspace = paper_runtime_workspace_snapshot(
                     self.current_workspace,
-                    orders=self.current_workspace.orders,
                     basket=self.current_workspace.basket,
                     observed_at_utc=snapshot.transitioned_at,
                 )
@@ -462,7 +458,6 @@ class PaperRuntimeController:
         observed_at_utc: datetime,
     ) -> None:
         current = self.current_workspace
-        orders = _pending_orders(snapshot.pending_intent)
         basket = _spot_basket_snapshot(
             snapshot,
             position,
@@ -473,7 +468,6 @@ class PaperRuntimeController:
             BotLifecycleResult(
                 workspace=paper_runtime_workspace_snapshot(
                     current,
-                    orders=orders,
                     basket=basket,
                     observed_at_utc=observed_at_utc,
                 )
@@ -489,7 +483,6 @@ class PaperRuntimeController:
         observed_at_utc: datetime,
     ) -> None:
         current = self.current_workspace
-        orders = _pending_orders(snapshot.pending_intent)
         basket = _futures_basket_snapshot(
             snapshot,
             position,
@@ -500,7 +493,6 @@ class PaperRuntimeController:
             BotLifecycleResult(
                 workspace=paper_runtime_workspace_snapshot(
                     current,
-                    orders=orders,
                     basket=basket,
                     observed_at_utc=observed_at_utc,
                 )
@@ -813,24 +805,6 @@ def _position_after_snapshot(
             current_quantity=current_quantity,
             fill_price=entry_fill.price,
             fill_quantity=entry_fill.quantity,
-        ),
-    )
-
-
-def _pending_orders(intent: EntryIntent | None) -> tuple[OpenOrderSnapshot, ...]:
-    if intent is None:
-        return ()
-    return (
-        OpenOrderSnapshot(
-            order_id=f"entry:{intent.intent_id}",
-            created_at_utc=intent.signal_candle.close_time,
-            symbol=intent.signal_candle.symbol,
-            side="BUY" if intent.side is PositionSide.LONG else "SELL",
-            order_type="MARKET",
-            price=None,
-            quantity=Decimal("0"),
-            filled_quantity=Decimal("0"),
-            status="PENDING_NEXT_CANDLE",
         ),
     )
 

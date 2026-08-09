@@ -402,14 +402,9 @@ def test_persistence_failure_blocks_and_preserves_last_known_workspace(
     session = configured_spot_session()
     database = _database_with_session(tmp_path, session)
     source = _source()
-    pending_ready = Event()
     blocked_ready = Event()
-    snapshots: list[TradingWorkspaceSnapshot] = []
 
     def publish(snapshot: TradingWorkspaceSnapshot) -> None:
-        snapshots.append(snapshot)
-        if snapshot.orders:
-            pending_ready.set()
         if (
             snapshot.header is not None
             and snapshot.header.runtime_state is BotRuntimeState.BLOCKED
@@ -430,16 +425,12 @@ def test_persistence_failure_blocks_and_preserves_last_known_workspace(
     assert started.workspace.header is not None
     assert started.workspace.header.runtime_state is BotRuntimeState.RUNNING
     assert started.blocked_reason is None
-    assert pending_ready.wait(2)
-    pending = next(snapshot for snapshot in snapshots if snapshot.orders)
     assert blocked_ready.wait(2)
     current = controller.current_workspace
     assert current.header is not None
     assert current.header.runtime_state is BotRuntimeState.BLOCKED
     assert current.read_state is WorkspaceReadState.STALE
-    assert current.orders == pending.orders
-    assert current.position_basket == pending.position_basket
-    assert current.data_as_of_utc == pending.data_as_of_utc
+    assert current.basket is None
     assert controller.current_result.blocked_reason == "Paper Bot could not be started"
     assert "api_key" not in (controller.current_result.blocked_reason or "")
     assert source.closed.wait(2)
@@ -634,7 +625,6 @@ def test_stop_closes_runtime_marks_stopped_and_preserves_basket(
     assert stopped.workspace.basket.take_profit_price == (
         running.basket.take_profit_price
     )
-    assert stopped.workspace.orders == running.orders
     assert source.closed.wait(1)
     marker = SQLitePaperRuntimeLifecycle(database).read(session.config.session_id)
     assert marker == PaperRuntimeLifecycleRecord(
@@ -713,7 +703,6 @@ def test_stop_lock_timeout_keeps_gate_closed_and_ignores_later_candle(
     assert len(snapshots) == snapshot_count
     assert controller.current_workspace.header is not None
     assert controller.current_workspace.header.runtime_state is BotRuntimeState.BLOCKED
-    assert controller.current_workspace.orders == ()
 
     monkeypatch.setattr(paper_runtime_module, "_STOP_TIMEOUT_SECONDS", 1.0)
     stopped = controller.stop(session)
@@ -892,7 +881,6 @@ def test_recover_clean_stopped_marker_returns_configured_without_market_data(
     assert result.workspace.header is not None
     assert result.workspace.header.runtime_state is BotRuntimeState.CONFIGURED
     assert result.workspace.header.data_freshness is DataFreshness.NOT_STARTED
-    assert result.workspace.orders == ()
     assert result.workspace.basket is None
 
 

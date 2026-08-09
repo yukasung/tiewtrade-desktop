@@ -40,7 +40,6 @@ class DataFreshness(StrEnum):
     UNAVAILABLE = "unavailable"
 
 
-_SAFE_OPEN_ORDERS_TAB_MESSAGES = frozenset({"Open orders are unavailable"})
 _SAFE_POSITION_BASKET_TAB_MESSAGES = frozenset(
     {"Position / Basket data is unavailable"}
 )
@@ -71,32 +70,6 @@ class WorkspaceHeaderSnapshot:
 
 
 @dataclass(frozen=True, slots=True)
-class OpenOrderSnapshot:
-    order_id: str
-    created_at_utc: datetime
-    symbol: str
-    side: str
-    order_type: str
-    price: Decimal | None
-    quantity: Decimal
-    filled_quantity: Decimal
-    status: str
-
-    def __post_init__(self) -> None:
-        _require_text(self.order_id, "order_id")
-        _require_utc(self.created_at_utc, "created_at_utc")
-        _require_text(self.symbol, "symbol")
-        _require_text(self.side, "side")
-        _require_text(self.order_type, "order_type")
-        _require_decimal(self.price, "price", allow_none=True)
-        _require_non_negative_decimal(self.quantity, "quantity")
-        _require_non_negative_decimal(self.filled_quantity, "filled_quantity")
-        if self.filled_quantity > self.quantity:
-            raise ValueError("filled_quantity must not exceed quantity")
-        _require_text(self.status, "status")
-
-
-@dataclass(frozen=True, slots=True)
 class BasketSnapshot:
     symbol: str
     market_type: str
@@ -123,54 +96,6 @@ class BasketSnapshot:
         _require_decimal(self.liquidation_price, "liquidation_price", allow_none=True)
         _require_text(self.lifecycle, "lifecycle")
         _require_utc(self.updated_at_utc, "updated_at_utc")
-
-
-@dataclass(frozen=True, slots=True)
-class OpenOrdersTabSnapshot:
-    state: WorkspaceTabState
-    orders: tuple[OpenOrderSnapshot, ...]
-    data_as_of_utc: datetime | None
-    message: str | None = None
-
-    def __post_init__(self) -> None:
-        if not isinstance(self.state, WorkspaceTabState):
-            raise ValueError("state must be a WorkspaceTabState")
-        if type(self.orders) is not tuple or not all(
-            isinstance(order, OpenOrderSnapshot) for order in self.orders
-        ):
-            raise ValueError("orders must be a tuple of OpenOrderSnapshot")
-        if self.data_as_of_utc is not None:
-            _require_utc(self.data_as_of_utc, "data_as_of_utc")
-        if self.message is not None:
-            _require_text(self.message, "message")
-        _require_unique_order_ids(self.orders)
-        self._validate_state_combination()
-
-    def _validate_state_combination(self) -> None:
-        if self.state is WorkspaceTabState.EMPTY:
-            if self.orders:
-                raise ValueError("EMPTY tab must not contain durable data")
-            if self.message is not None:
-                raise ValueError("EMPTY tab must not contain a message")
-        elif self.state is WorkspaceTabState.READY:
-            if not self.orders:
-                raise ValueError("READY tab requires durable data")
-            if self.data_as_of_utc is None:
-                raise ValueError("READY tab requires data_as_of_utc")
-            if self.message is not None:
-                raise ValueError("READY tab must not contain a message")
-        elif self.state is WorkspaceTabState.LOADING:
-            if self.message is not None:
-                raise ValueError("LOADING tab must not contain a message")
-        elif self.state is WorkspaceTabState.ERROR:
-            if self.message is None:
-                raise ValueError("ERROR tab requires a message")
-            _require_sanitized_open_orders_message(self.message)
-        elif self.state is WorkspaceTabState.STALE:
-            if self.data_as_of_utc is None:
-                raise ValueError("STALE tab requires data_as_of_utc")
-            if self.message is not None:
-                raise ValueError("STALE tab must not contain a message")
 
 
 @dataclass(frozen=True, slots=True)
@@ -222,7 +147,6 @@ class PositionBasketTabSnapshot:
 class TradingWorkspaceSnapshot:
     read_state: WorkspaceReadState
     header: WorkspaceHeaderSnapshot | None
-    open_orders: OpenOrdersTabSnapshot
     position_basket: PositionBasketTabSnapshot
     data_as_of_utc: datetime | None
     message: str | None = None
@@ -234,8 +158,6 @@ class TradingWorkspaceSnapshot:
             self.header, WorkspaceHeaderSnapshot
         ):
             raise ValueError("header must be a WorkspaceHeaderSnapshot")
-        if not isinstance(self.open_orders, OpenOrdersTabSnapshot):
-            raise ValueError("open_orders must be an OpenOrdersTabSnapshot")
         if not isinstance(self.position_basket, PositionBasketTabSnapshot):
             raise ValueError("position_basket must be a PositionBasketTabSnapshot")
         if self.data_as_of_utc is not None:
@@ -245,16 +167,12 @@ class TradingWorkspaceSnapshot:
         self._validate_state_combination()
 
     @property
-    def orders(self) -> tuple[OpenOrderSnapshot, ...]:
-        return self.open_orders.orders
-
-    @property
     def basket(self) -> BasketSnapshot | None:
         return self.position_basket.basket
 
     def _validate_state_combination(self) -> None:
         if self.read_state is WorkspaceReadState.EMPTY:
-            if self.header is not None or self.orders or self.basket is not None:
+            if self.header is not None or self.basket is not None:
                 raise ValueError("EMPTY snapshot must not contain durable data")
             if self.message is not None:
                 raise ValueError("EMPTY snapshot must not contain a message")
@@ -289,7 +207,6 @@ def empty_workspace_snapshot(
     return TradingWorkspaceSnapshot(
         read_state=WorkspaceReadState.EMPTY,
         header=None,
-        open_orders=empty_open_orders_tab(),
         position_basket=empty_position_basket_tab(),
         data_as_of_utc=observed_at_utc,
     )
@@ -309,7 +226,6 @@ def configured_workspace_snapshot(
             runtime_state=BotRuntimeState.CONFIGURED,
             data_freshness=DataFreshness.NOT_STARTED,
         ),
-        open_orders=empty_open_orders_tab(),
         position_basket=empty_position_basket_tab(),
         data_as_of_utc=observed_at_utc,
     )
@@ -343,23 +259,12 @@ def stale_workspace_snapshot(
 def paper_runtime_workspace_snapshot(
     last_known: TradingWorkspaceSnapshot,
     *,
-    orders: tuple[OpenOrderSnapshot, ...],
     basket: BasketSnapshot | None,
     observed_at_utc: datetime,
 ) -> TradingWorkspaceSnapshot:
     if last_known.header is None:
         raise ValueError("Paper Runtime workspace requires a header")
     _require_utc(observed_at_utc, "observed_at_utc")
-    _require_unique_order_ids(orders)
-    open_orders = (
-        OpenOrdersTabSnapshot(
-            state=WorkspaceTabState.EMPTY,
-            orders=(),
-            data_as_of_utc=observed_at_utc,
-        )
-        if not orders
-        else ready_open_orders_tab(orders, observed_at_utc=observed_at_utc)
-    )
     position_basket = (
         PositionBasketTabSnapshot(
             state=WorkspaceTabState.EMPTY,
@@ -376,7 +281,6 @@ def paper_runtime_workspace_snapshot(
             runtime_state=BotRuntimeState.RUNNING,
             data_freshness=DataFreshness.FRESH,
         ),
-        open_orders=open_orders,
         position_basket=position_basket,
         data_as_of_utc=observed_at_utc,
     )
@@ -399,49 +303,6 @@ def paper_runtime_blocked_workspace_snapshot(
         ),
         message=None,
     )
-
-
-def empty_open_orders_tab() -> OpenOrdersTabSnapshot:
-    return OpenOrdersTabSnapshot(
-        state=WorkspaceTabState.EMPTY,
-        orders=(),
-        data_as_of_utc=None,
-    )
-
-
-def ready_open_orders_tab(
-    orders: tuple[OpenOrderSnapshot, ...], *, observed_at_utc: datetime
-) -> OpenOrdersTabSnapshot:
-    _require_utc(observed_at_utc, "observed_at_utc")
-    _require_unique_order_ids(orders)
-    return OpenOrdersTabSnapshot(
-        state=WorkspaceTabState.READY,
-        orders=tuple(sorted(orders, key=_open_order_sort_key, reverse=True)),
-        data_as_of_utc=observed_at_utc,
-    )
-
-
-def loading_open_orders_tab(
-    last_known: OpenOrdersTabSnapshot,
-) -> OpenOrdersTabSnapshot:
-    _require_open_orders_tab(last_known, "last_known")
-    return replace(last_known, state=WorkspaceTabState.LOADING, message=None)
-
-
-def failed_open_orders_tab(
-    last_known: OpenOrdersTabSnapshot, message: str
-) -> OpenOrdersTabSnapshot:
-    _require_open_orders_tab(last_known, "last_known")
-    return replace(last_known, state=WorkspaceTabState.ERROR, message=message)
-
-
-def stale_open_orders_tab(
-    last_known: OpenOrdersTabSnapshot,
-) -> OpenOrdersTabSnapshot:
-    _require_open_orders_tab(last_known, "last_known")
-    if last_known.data_as_of_utc is None:
-        raise ValueError("STALE tab requires data_as_of_utc")
-    return replace(last_known, state=WorkspaceTabState.STALE, message=None)
 
 
 def empty_position_basket_tab() -> PositionBasketTabSnapshot:
@@ -515,29 +376,9 @@ def _require_non_negative_decimal(value: Decimal, name: str) -> None:
         raise ValueError(f"{name} must not be negative")
 
 
-def _require_unique_order_ids(orders: tuple[OpenOrderSnapshot, ...]) -> None:
-    order_ids = tuple(order.order_id for order in orders)
-    if len(order_ids) != len(set(order_ids)):
-        raise ValueError("order_id must be unique")
-
-
-def _open_order_sort_key(order: OpenOrderSnapshot) -> tuple[datetime, str]:
-    return order.created_at_utc, order.order_id
-
-
-def _require_open_orders_tab(value: object, name: str) -> None:
-    if not isinstance(value, OpenOrdersTabSnapshot):
-        raise ValueError(f"{name} must be an OpenOrdersTabSnapshot")
-
-
 def _require_position_basket_tab(value: object, name: str) -> None:
     if not isinstance(value, PositionBasketTabSnapshot):
         raise ValueError(f"{name} must be a PositionBasketTabSnapshot")
-
-
-def _require_sanitized_open_orders_message(message: str) -> None:
-    if message not in _SAFE_OPEN_ORDERS_TAB_MESSAGES:
-        raise ValueError("message must be sanitized")
 
 
 def _require_sanitized_position_basket_message(message: str) -> None:
