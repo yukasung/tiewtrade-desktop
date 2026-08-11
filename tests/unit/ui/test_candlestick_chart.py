@@ -42,7 +42,7 @@ def test_chart_renders_durable_buy_and_sell_markers_without_action_buttons(
 
     assert chart.accessibleName() == "Candlestick chart for BTCUSDT 5m"
     assert chart._facts.text() == "BTCUSDT · 5m · Paper"
-    assert chart.marker_labels == ("Buy", "Sell")
+    assert chart.marker_labels == ("B", "S")
     assert chart.findChildren(QPushButton, "manualOrderButton") == []
     assert not chart.grab().isNull()
 
@@ -165,9 +165,9 @@ def test_painter_model_contains_only_chart_presentation_facts() -> None:
         model.plot_surface.bottom()
     )
     buy, sell = model.markers
-    assert buy.label == "Buy"
+    assert buy.label == "B"
     assert buy.triangle[0].y() < buy.triangle[1].y()
-    assert sell.label == "Sell"
+    assert sell.label == "S"
     assert sell.triangle[0].y() > sell.triangle[1].y()
     assert all(glyph.body.width() > 0 for glyph in model.candles)
 
@@ -324,7 +324,7 @@ def test_marker_labels_stay_visible_at_price_extrema_at_minimum_height(
     model = chart_module.build_painter_model(snapshot, surface)
 
     visible_bounds = QRectF(chart.rect())
-    assert [marker.label for marker in model.markers] == ["Buy", "Sell"]
+    assert [marker.label for marker in model.markers] == ["B", "S"]
     for marker in model.markers:
         assert visible_bounds.contains(marker.label_rect), (
             f"{marker.label} label is outside the chart: {marker.label_rect}"

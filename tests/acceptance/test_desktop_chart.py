@@ -346,7 +346,7 @@ def test_runtime_candles_reach_chart_only_from_current_generation(
 
     qtbot.waitUntil(lambda: relayed == [completed])
     qtbot.waitUntil(lambda: refreshed == [completed])
-    qtbot.waitUntil(lambda: window.workspace.chart.marker_labels == ("Buy",))
+    qtbot.waitUntil(lambda: window.workspace.chart.marker_labels == ("B",))
     snapshot = window.workspace.chart._snapshot
     assert snapshot is not None
     assert snapshot.candles == (completed,)

@@ -26,8 +26,8 @@ from tiewtrade.application.chart_data import (
 from tiewtrade.application.chart_view_selection import ChartViewSelection
 from tiewtrade.application.paper_symbols import PAPER_SYMBOLS
 from tiewtrade.market_data.config import SUPPORTED_V1_TIMEFRAME_CHOICES
-from tiewtrade.trading.trade_history import FillSide
 from tiewtrade.ui.chart_painter_model import (
+    MARKER_BADGE_RADIUS,
     AxisTickGlyph,
     CandleReadout,
     ChartPainterModel,
@@ -35,6 +35,7 @@ from tiewtrade.ui.chart_painter_model import (
     build_painter_model,
     candle_at,
     crosshair_at,
+    marker_label,
 )
 
 _ALIGN_LEFT_TOP = int(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop)
@@ -129,10 +130,7 @@ class CandlestickChartWidget(QWidget):
     def marker_labels(self) -> tuple[str, ...]:
         if self._snapshot is None:
             return ()
-        return tuple(
-            "Buy" if marker.side is FillSide.BUY else "Sell"
-            for marker in self._snapshot.markers
-        )
+        return tuple(marker_label(marker.side) for marker in self._snapshot.markers)
 
     @property
     def crosshair(self) -> CrosshairGlyph | None:
@@ -328,7 +326,14 @@ class CandlestickChartWidget(QWidget):
             painter.setPen(QPen(marker.color, 2))
             painter.setBrush(marker.color)
             painter.drawPolygon(QPolygonF(marker.triangle))
+            painter.drawRoundedRect(
+                marker.label_rect,
+                MARKER_BADGE_RADIUS,
+                MARKER_BADGE_RADIUS,
+            )
+            painter.setPen(QPen(QColor("#0B1118"), 1))
             painter.drawText(marker.label_rect, 0x84, marker.label)
+        painter.setBrush(Qt.BrushStyle.NoBrush)
         current_price = model.current_price
         if current_price is not None:
             painter.setPen(QPen(current_price.color, 1, Qt.PenStyle.DotLine))

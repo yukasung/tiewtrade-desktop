@@ -21,6 +21,14 @@ _RSI_LOW = Decimal("0")
 _RSI_HIGH = Decimal("100")
 _AXIS_GUTTER = 6.0
 _AXIS_LABEL_HEIGHT = 18.0
+# Fill markers are single-letter badges so a run of entries stays readable
+# when candles are packed together.
+_MARKER_BADGE_SIZE = 18.0
+MARKER_BADGE_RADIUS = 5.0
+
+
+def marker_label(side: FillSide) -> str:
+    return "B" if side is FillSide.BUY else "S"
 
 
 @dataclass(frozen=True, slots=True)
@@ -161,7 +169,7 @@ def build_painter_model(
         x = _clamp_x(
             _marker_x(marker.filled_at_utc, snapshot.chart_range, price_surface),
             price_surface,
-            22.0,
+            _MARKER_BADGE_SIZE / 2,
         )
         y = _price_y(marker.price, low, high, price_surface)
         is_buy = marker.side is FillSide.BUY
@@ -171,29 +179,30 @@ def build_painter_model(
             QPointF(x - 6, y + 2 if is_buy else y - 2),
             QPointF(x + 6, y + 2 if is_buy else y - 2),
         )
-        label_height = 16.0
-        preferred_label_top = y - 28 if is_buy else y + 10
-        alternate_label_top = y + 10 if is_buy else y - 28
-        label_top = preferred_label_top
+        # The badge sits beyond the triangle's tip, flipping to the other side
+        # when that would push it out of the pane.
+        preferred_top = y - 30 if is_buy else y + 12
+        alternate_top = y + 12 if is_buy else y - 30
+        badge_top = preferred_top
         if not (
-            price_surface.top() <= label_top
-            and label_top + label_height <= price_surface.bottom()
+            price_surface.top() <= badge_top
+            and badge_top + _MARKER_BADGE_SIZE <= price_surface.bottom()
         ):
-            label_top = alternate_label_top
-        label_top = min(
-            max(label_top, price_surface.top()),
-            price_surface.bottom() - label_height,
+            badge_top = alternate_top
+        badge_top = min(
+            max(badge_top, price_surface.top()),
+            price_surface.bottom() - _MARKER_BADGE_SIZE,
         )
         markers.append(
             MarkerGlyph(
                 triangle=triangle,
                 label_rect=QRectF(
-                    _clamp_x(x, price_surface, 22.0) - 22,
-                    label_top,
-                    44,
-                    label_height,
+                    x - _MARKER_BADGE_SIZE / 2,
+                    badge_top,
+                    _MARKER_BADGE_SIZE,
+                    _MARKER_BADGE_SIZE,
                 ),
-                label="Buy" if is_buy else "Sell",
+                label=marker_label(marker.side),
                 color=color,
             )
         )
