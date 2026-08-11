@@ -4,6 +4,7 @@ from decimal import Decimal
 from enum import StrEnum
 from uuid import UUID
 
+from tiewtrade.application.chart_indicators import RsiSeries
 from tiewtrade.application.paper_session_setup import ConfiguredPaperSession
 from tiewtrade.market_data.candle import Candle
 from tiewtrade.market_data.config import timeframe_to_interval
@@ -132,6 +133,7 @@ class ChartSnapshot:
     state: ChartReadState
     in_progress_candle: Candle | None = None
     message: str | None = None
+    rsi: RsiSeries = field(default_factory=RsiSeries)
     session: InitVar[ConfiguredPaperSession | None] = None
     _session_facts: InitVar[tuple[UUID, str, str] | None] = None
     session_id: UUID = field(init=False)
@@ -238,11 +240,27 @@ class ChartSnapshot:
             markers.append(ChartMarker.from_fill(fill))
         object.__setattr__(self, "markers", tuple(markers))
 
+        if self.state in {ChartReadState.LOADING, ChartReadState.UNAVAILABLE} and (
+            self.rsi.values or self.rsi.state is not None
+        ):
+            raise ValueError("loading or unavailable ChartSnapshot cannot carry RSI")
+        if not {candle.open_time for candle in self.candles}.issuperset(
+            self.rsi.values
+        ):
+            raise ValueError("RSI open_time must match a ChartSnapshot candle")
+
     @property
     def display_candles(self) -> tuple[Candle, ...]:
         if self.in_progress_candle is None:
             return self.candles
         return (*self.candles, self.in_progress_candle)
+
+    def rsi_for(self, open_time: datetime) -> Decimal | None:
+        """RSI of any displayed candle, completed or forming."""
+        forming = self.in_progress_candle
+        if forming is not None and forming.open_time == open_time:
+            return self.rsi.value_for_close(forming.close)
+        return self.rsi.value_at(open_time)
 
 
 def append_completed_candle(snapshot: ChartSnapshot, candle: Candle) -> ChartSnapshot:
@@ -250,6 +268,13 @@ def append_completed_candle(snapshot: ChartSnapshot, candle: Candle) -> ChartSna
         raise ValueError("completed candles require a ready ChartSnapshot")
     candles_by_open_time = {item.open_time: item for item in snapshot.candles}
     candles_by_open_time[candle.open_time] = candle
+    # Wilder smoothing is path dependent, so only a candle newer than every
+    # candle held can extend the series; a restated one leaves it untouched.
+    rsi = (
+        snapshot.rsi.advanced(candle)
+        if follows(snapshot.candles, candle)
+        else (snapshot.rsi)
+    )
     return ChartSnapshot(
         candles=tuple(
             candles_by_open_time[open_time]
@@ -261,5 +286,11 @@ def append_completed_candle(snapshot: ChartSnapshot, candle: Candle) -> ChartSna
         state=snapshot.state,
         in_progress_candle=snapshot.in_progress_candle,
         message=snapshot.message,
+        rsi=rsi,
         _session_facts=(snapshot.session_id, snapshot.symbol, snapshot.timeframe),
     )
+
+
+def follows(candles: tuple[Candle, ...], candle: Candle) -> bool:
+    """Whether this candle comes after every candle in an ascending tuple."""
+    return not candles or candle.open_time > candles[-1].open_time

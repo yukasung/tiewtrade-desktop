@@ -16,6 +16,7 @@ from tiewtrade.application.chart_data import (
     ChartReadState,
     ChartSnapshot,
 )
+from tiewtrade.application.chart_indicators import RsiSeries
 from tiewtrade.application.chart_view_selection import ChartViewSelection
 from tiewtrade.market_data.candle import Candle
 from tiewtrade.trading.trade_history import FillSide, TradeFill
@@ -126,7 +127,7 @@ def test_chart_selector_header_leaves_readable_space_between_controls(
     assert chart._facts.geometry().left() - chart.timeframe.geometry().right() - 1 == 16
 
 
-def test_painter_model_contains_only_price_candles_and_fill_markers() -> None:
+def test_painter_model_contains_only_chart_presentation_facts() -> None:
     snapshot = ready_snapshot(
         candles=(
             candle(0, open_price="100", close_price="103"),
@@ -138,6 +139,8 @@ def test_painter_model_contains_only_price_candles_and_fill_markers() -> None:
     model = chart_module.build_painter_model(snapshot, QRectF(0, 0, 300, 200))
 
     assert [field.name for field in fields(chart_module.CandleGlyph)] == [
+        "open_time",
+        "x",
         "wick",
         "body",
         "color",
@@ -153,6 +156,7 @@ def test_painter_model_contains_only_price_candles_and_fill_markers() -> None:
         "candles",
         "markers",
         "current_price",
+        "rsi_pane",
     ]
     assert min(min(glyph.wick.y1(), glyph.wick.y2()) for glyph in model.candles) > (
         model.plot_surface.top()
@@ -468,11 +472,84 @@ def _send_wheel(chart: CandlestickChartWidget, *, delta: int) -> None:
     chart.wheelEvent(event)
 
 
+def test_rsi_pane_sits_below_the_price_pane_with_reference_levels() -> None:
+    snapshot = ready_snapshot(rsi=rsi_at((0, "45.5"), (5, "52.25"), (10, "61")))
+
+    model = chart_module.build_painter_model(snapshot, QRectF(0, 0, 600, 400))
+
+    pane = model.rsi_pane
+    assert pane.surface.top() > model.plot_surface.bottom()
+    assert [guide.label for guide in pane.guides] == ["30", "50", "70"]
+    assert [point.y() for point in pane.polylines[0]] == sorted(
+        (point.y() for point in pane.polylines[0]), reverse=True
+    )
+    assert all(
+        pane.surface.top() <= point.y() <= pane.surface.bottom()
+        for polyline in pane.polylines
+        for point in polyline
+    )
+
+
+def test_rsi_line_breaks_rather_than_bridging_the_warm_up_gap() -> None:
+    # Only the last two candles have a value, so no line may reach back to
+    # the first one as though it had been measured.
+    snapshot = ready_snapshot(rsi=rsi_at((5, "52.25"), (10, "61")))
+
+    model = chart_module.build_painter_model(snapshot, QRectF(0, 0, 600, 400))
+
+    assert len(model.rsi_pane.polylines) == 1
+    assert len(model.rsi_pane.polylines[0]) == 2
+
+
+def test_legend_reads_the_latest_candle_until_the_mouse_picks_one(
+    qtbot: QtBot,
+) -> None:
+    chart = CandlestickChartWidget()
+    qtbot.addWidget(chart)
+    chart.resize(600, 400)
+    chart.show_snapshot(
+        ready_snapshot(rsi=rsi_at((0, "45.5"), (5, "52.25"), (10, "61")))
+    )
+    chart.show()
+
+    latest = chart.readout
+    assert latest is not None
+    assert latest.candle.open_time == datetime(2026, 1, 1, 0, 10, tzinfo=UTC)
+    assert latest.rsi == Decimal("61")
+
+    model = chart_module.build_painter_model(ready_snapshot(), chart._chart_surface())
+    first = model.candles[0].body.center()
+    cast(Any, qtbot).mouseMove(
+        chart,
+        QPoint(int(first.x()), int(model.plot_surface.center().y())),
+    )
+
+    hovered = chart.readout
+    assert hovered is not None
+    assert hovered.candle.open_time == datetime(2026, 1, 1, 0, 0, tzinfo=UTC)
+    assert hovered.rsi == Decimal("45.5")
+
+
+def test_legend_marks_a_candle_still_inside_the_rsi_warm_up(qtbot: QtBot) -> None:
+    chart = CandlestickChartWidget()
+    qtbot.addWidget(chart)
+    chart.resize(600, 400)
+    chart.show_snapshot(ready_snapshot())
+    chart.show()
+
+    readout = chart.readout
+
+    assert readout is not None
+    assert readout.rsi is None
+    assert not chart.grab().isNull()
+
+
 def ready_snapshot(
     *,
     candles: tuple[Candle, ...] | None = None,
     fills: tuple[TradeFill, ...] | None = None,
     in_progress_candle: Candle | None = None,
+    rsi: RsiSeries | None = None,
 ) -> ChartSnapshot:
     session = configured_spot_session()
     chart_range = ChartRange(
@@ -489,6 +566,17 @@ def ready_snapshot(
         fills=fills or (buy, sell),
         state=ChartReadState.READY,
         in_progress_candle=in_progress_candle,
+        rsi=rsi or RsiSeries(),
+    )
+
+
+def rsi_at(*minute_values: tuple[int, str]) -> RsiSeries:
+    """A series holding exactly these values, as if the rest were warm-up."""
+    return RsiSeries(
+        values={
+            datetime(2026, 1, 1, 0, minute, tzinfo=UTC): Decimal(value)
+            for minute, value in minute_values
+        }
     )
 
 

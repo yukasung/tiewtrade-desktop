@@ -5,6 +5,7 @@ from uuid import UUID, uuid4
 
 import pytest
 
+from tests.support.chart_candles import candle_run, flat_candle
 from tiewtrade.application.chart_data import (
     MAXIMUM_VISIBLE_CANDLE_COUNT,
     MINIMUM_VISIBLE_CANDLE_COUNT,
@@ -17,6 +18,7 @@ from tiewtrade.application.chart_data import (
     visible_candle_count,
     zoomed_chart_range,
 )
+from tiewtrade.application.chart_indicators import RsiSeries, RsiState
 from tiewtrade.application.paper_session_setup import ConfiguredPaperSession
 from tiewtrade.market_data.candle import Candle
 from tiewtrade.market_data.config import MarketDataConfig
@@ -301,11 +303,90 @@ def test_ready_snapshot_rejects_fill_from_another_session_or_outside_range() -> 
         ready_chart_snapshot(fills=(out_of_range_fill,))
 
 
+def test_snapshot_rejects_rsi_for_a_candle_it_does_not_hold() -> None:
+    with pytest.raises(ValueError, match="RSI open_time must match"):
+        ready_chart_snapshot(
+            candles=(candle("5m", minute=0),),
+            rsi=RsiSeries(
+                values={datetime(2026, 1, 1, 0, 5, tzinfo=UTC): Decimal("55")}
+            ),
+        )
+
+
+def test_loading_snapshot_cannot_carry_rsi() -> None:
+    with pytest.raises(ValueError, match="cannot carry RSI"):
+        ChartSnapshot(
+            session=session(),
+            chart_range=chart_range(),
+            observed_at_utc=datetime(2026, 1, 1, 0, 20, tzinfo=UTC),
+            candles=(),
+            fills=(),
+            state=ChartReadState.LOADING,
+            rsi=RsiSeries(state=RsiState(period=14, previous_close=Decimal("100"))),
+        )
+
+
+def test_forming_candle_reads_rsi_without_committing_it() -> None:
+    warm_up = candle_run(20, last_open_time=datetime(2026, 1, 1, 0, 15, tzinfo=UTC))
+    series = RsiSeries.over(warm_up)
+    latest = warm_up[-1]
+    forming = flat_candle(datetime(2026, 1, 1, 0, 20, tzinfo=UTC), "140")
+
+    snapshot = ready_chart_snapshot(
+        candles=(latest,),
+        in_progress_candle=forming,
+        rsi=series.restricted_to((latest.open_time,)),
+    )
+
+    assert snapshot.rsi_for(forming.open_time) == series.value_for_close(forming.close)
+    assert snapshot.rsi_for(latest.open_time) == series.value_at(latest.open_time)
+    # The forming value is derived, never stored, so the committed series is
+    # untouched and stays ready for the candle that actually closes.
+    assert forming.open_time not in snapshot.rsi.values
+    assert snapshot.rsi.state == series.state
+
+
+def test_append_completed_candle_extends_the_rsi_series() -> None:
+    warm_up = candle_run(20, last_open_time=datetime(2026, 1, 1, 0, 5, tzinfo=UTC))
+    series = RsiSeries.over(warm_up)
+    latest = warm_up[-1]
+    snapshot = ready_chart_snapshot(
+        candles=(latest,),
+        rsi=series.restricted_to((latest.open_time,)),
+    )
+    closed = flat_candle(datetime(2026, 1, 1, 0, 10, tzinfo=UTC), "90")
+
+    appended = append_completed_candle(snapshot, closed)
+
+    expected = RsiSeries.over((*warm_up, closed))
+    assert appended.rsi.value_at(closed.open_time) == expected.value_at(
+        closed.open_time
+    )
+    assert appended.rsi.state == expected.state
+
+
+def test_append_completed_candle_leaves_rsi_alone_when_restating_a_candle() -> None:
+    warm_up = candle_run(20, last_open_time=datetime(2026, 1, 1, 0, 15, tzinfo=UTC))
+    series = RsiSeries.over(warm_up)
+    latest = warm_up[-1]
+    snapshot = ready_chart_snapshot(
+        candles=(latest,),
+        rsi=series.restricted_to((latest.open_time,)),
+    )
+
+    # Wilder smoothing is path dependent, so a restated candle must not be
+    # folded into the series a second time.
+    appended = append_completed_candle(snapshot, latest)
+
+    assert appended.rsi == snapshot.rsi
+
+
 def ready_chart_snapshot(
     *,
     candles: tuple[Candle, ...] = (),
     fills: tuple[TradeFill, ...] = (),
     in_progress_candle: Candle | None = None,
+    rsi: RsiSeries | None = None,
 ) -> ChartSnapshot:
     return ChartSnapshot(
         session=session(),
@@ -315,6 +396,7 @@ def ready_chart_snapshot(
         fills=fills,
         state=ChartReadState.READY,
         in_progress_candle=in_progress_candle,
+        rsi=rsi or RsiSeries(),
     )
 
 

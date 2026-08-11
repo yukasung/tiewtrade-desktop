@@ -1,3 +1,4 @@
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from decimal import Decimal
@@ -5,13 +6,27 @@ from decimal import Decimal
 from PySide6.QtCore import QLineF, QPointF, QRectF
 from PySide6.QtGui import QColor
 
-from tiewtrade.application.chart_data import ChartRange, ChartSnapshot
+from tiewtrade.application.chart_data import ChartCandle, ChartRange, ChartSnapshot
 from tiewtrade.market_data.config import timeframe_to_interval
 from tiewtrade.trading.trade_history import FillSide
+
+_PANE_GAP = 10.0
+_RSI_PANE_RATIO = 0.26
+_RSI_PANE_MINIMUM_HEIGHT = 56.0
+_RSI_GUIDE_LEVELS = (30, 50, 70)
+_RSI_LINE_COLOR = "#F0B90B"
+# The RSI pane is a fixed 0-100 scale, so it reuses the price projection
+# rather than carrying its own value-to-pixel mapping.
+_RSI_LOW = Decimal("0")
+_RSI_HIGH = Decimal("100")
+_AXIS_GUTTER = 6.0
+_AXIS_LABEL_HEIGHT = 18.0
 
 
 @dataclass(frozen=True, slots=True)
 class CandleGlyph:
+    open_time: datetime
+    x: float
     wick: QLineF
     body: QRectF
     color: QColor
@@ -51,6 +66,24 @@ class CurrentPriceGlyph:
 
 
 @dataclass(frozen=True, slots=True)
+class RsiPaneGlyph:
+    surface: QRectF
+    # One entry per unbroken run of candles that have an RSI value, so the
+    # warm-up gap is never bridged by a line that was not measured.
+    polylines: tuple[tuple[QPointF, ...], ...]
+    guides: tuple[AxisTickGlyph, ...]
+    color: QColor
+
+
+@dataclass(frozen=True, slots=True)
+class CandleReadout:
+    candle: ChartCandle
+    rsi: Decimal | None
+    rsi_period: int
+    is_in_progress: bool
+
+
+@dataclass(frozen=True, slots=True)
 class ChartPainterModel:
     plot_surface: QRectF
     price_low: Decimal
@@ -62,6 +95,7 @@ class ChartPainterModel:
     candles: tuple[CandleGlyph, ...]
     markers: tuple[MarkerGlyph, ...]
     current_price: CurrentPriceGlyph | None
+    rsi_pane: RsiPaneGlyph
 
 
 def build_painter_model(
@@ -79,7 +113,7 @@ def build_painter_model(
         price for candle in display_candles for price in (candle.high, candle.low)
     ] + [marker.price for marker in snapshot.markers]
     low, high = _padded_price_range(min(prices), max(prices))
-    price_surface = _plot_surface(surface)
+    price_surface, rsi_surface = _panes(surface)
     grid_lines = tuple(
         QLineF(
             price_surface.left(),
@@ -105,6 +139,8 @@ def build_painter_model(
         body_bottom = _price_y(min(candle.open, candle.close), low, high, price_surface)
         candles.append(
             CandleGlyph(
+                open_time=candle.open_time,
+                x=x,
                 wick=QLineF(
                     x,
                     _price_y(candle.high, low, high, price_surface),
@@ -162,6 +198,8 @@ def build_painter_model(
             )
         )
     current_price = _current_price_glyph(snapshot, low, high, price_surface, surface)
+    # Read once per build: the forming candle's RSI is derived on each call.
+    rsi_values = [snapshot.rsi_for(candle.open_time) for candle in display_candles]
     return ChartPainterModel(
         plot_surface=price_surface,
         price_low=low,
@@ -169,10 +207,75 @@ def build_painter_model(
         visual_range=visual_range,
         grid_lines=grid_lines,
         price_ticks=_price_ticks(low, high, price_surface, surface),
-        time_ticks=_time_ticks(visual_range, price_surface, surface),
+        time_ticks=_time_ticks(visual_range, rsi_surface, surface),
         candles=tuple(candles),
         markers=tuple(markers),
         current_price=current_price,
+        rsi_pane=_rsi_pane_glyph(rsi_values, candles, rsi_surface, surface),
+    )
+
+
+def _rsi_pane_glyph(
+    rsi_values: Sequence[Decimal | None],
+    candles: Sequence[CandleGlyph],
+    rsi_surface: QRectF,
+    surface: QRectF,
+) -> RsiPaneGlyph:
+    guides: list[AxisTickGlyph] = []
+    for level in _RSI_GUIDE_LEVELS:
+        y = _rsi_y(Decimal(level), rsi_surface)
+        guides.append(
+            AxisTickGlyph(
+                line=QLineF(rsi_surface.left(), y, rsi_surface.right(), y),
+                label_rect=_axis_label_rect(y, rsi_surface, surface),
+                label=str(level),
+                value=str(level),
+            )
+        )
+    runs: list[list[QPointF]] = [[]]
+    for value, glyph in zip(rsi_values, candles, strict=True):
+        if value is None:
+            runs.append([])
+            continue
+        runs[-1].append(QPointF(glyph.x, _rsi_y(value, rsi_surface)))
+    return RsiPaneGlyph(
+        surface=rsi_surface,
+        # A single point cannot be drawn as a line, so runs shorter than two
+        # points are dropped rather than bridged across the warm-up gap.
+        polylines=tuple(tuple(run) for run in runs if len(run) > 1),
+        guides=tuple(guides),
+        color=QColor(_RSI_LINE_COLOR),
+    )
+
+
+def candle_at(
+    position: QPointF | None,
+    snapshot: ChartSnapshot,
+    model: ChartPainterModel,
+) -> CandleReadout | None:
+    """Values of the candle nearest the cursor, else of the latest candle."""
+    display_candles = snapshot.display_candles
+    if not display_candles:
+        return None
+    if position is None or not _inside_panes(position, model):
+        candle = display_candles[-1]
+    else:
+        nearest = min(model.candles, key=lambda glyph: abs(glyph.x - position.x()))
+        candle = next(
+            item for item in display_candles if item.open_time == nearest.open_time
+        )
+    forming = snapshot.in_progress_candle
+    return CandleReadout(
+        candle=candle,
+        rsi=snapshot.rsi_for(candle.open_time),
+        rsi_period=snapshot.rsi.period,
+        is_in_progress=forming is not None and forming.open_time == candle.open_time,
+    )
+
+
+def _inside_panes(position: QPointF, model: ChartPainterModel) -> bool:
+    return model.plot_surface.contains(position) or model.rsi_pane.surface.contains(
+        position
     )
 
 
@@ -202,12 +305,45 @@ def _current_price_glyph(
     )
 
 
-def _plot_surface(surface: QRectF) -> QRectF:
-    return QRectF(
+def _panes(surface: QRectF) -> tuple[QRectF, QRectF]:
+    """Split the area left by the price and time axes into price and RSI panes.
+
+    Both rects come from one height calculation so they always abut.
+    """
+    body = QRectF(
         surface.left(),
         surface.top(),
         max(1.0, surface.width() - 72),
         max(1.0, surface.height() - 26),
+    )
+    available = max(0.0, body.height() - _PANE_GAP)
+    rsi_height = max(
+        1.0,
+        min(available, max(_RSI_PANE_MINIMUM_HEIGHT, available * _RSI_PANE_RATIO)),
+    )
+    price_height = max(1.0, body.height() - rsi_height - _PANE_GAP)
+    return (
+        QRectF(body.left(), body.top(), body.width(), price_height),
+        QRectF(body.left(), body.bottom() - rsi_height, body.width(), rsi_height),
+    )
+
+
+def _rsi_y(value: Decimal, surface: QRectF) -> float:
+    return _price_y(value, _RSI_LOW, _RSI_HIGH, surface)
+
+
+def _rsi_at(y: float, surface: QRectF) -> Decimal:
+    return _price_at(y, _RSI_LOW, _RSI_HIGH, surface)
+
+
+def _axis_label_rect(y: float, pane: QRectF, surface: QRectF) -> QRectF:
+    """Label slot in the right-hand axis gutter, vertically centred on y."""
+    left = pane.right() + _AXIS_GUTTER
+    return QRectF(
+        left,
+        y - _AXIS_LABEL_HEIGHT / 2,
+        max(1.0, surface.right() - left),
+        _AXIS_LABEL_HEIGHT,
     )
 
 
@@ -226,8 +362,6 @@ def _price_ticks(
     surface: QRectF,
 ) -> tuple[AxisTickGlyph, ...]:
     labels: list[AxisTickGlyph] = []
-    axis_left = plot_surface.right() + 6
-    axis_width = max(1.0, surface.right() - axis_left)
     for index in range(5):
         ratio = Decimal(index) / Decimal("4")
         value = low + (high - low) * ratio
@@ -235,7 +369,7 @@ def _price_ticks(
         labels.append(
             AxisTickGlyph(
                 line=QLineF(plot_surface.right(), y, plot_surface.right() + 4, y),
-                label_rect=QRectF(axis_left, y - 9, axis_width, 18),
+                label_rect=_axis_label_rect(y, plot_surface, surface),
                 label=_price_text(value),
                 value=str(value),
             )
@@ -282,9 +416,19 @@ def crosshair_at(
     model: ChartPainterModel,
 ) -> CrosshairGlyph | None:
     plot = model.plot_surface
-    if not plot.contains(position):
+    rsi_pane = model.rsi_pane.surface
+    # The cursor reads price in the upper pane and RSI in the lower one, so
+    # the right-axis label follows whichever pane it is over.
+    if plot.contains(position):
+        pane = plot
+        axis_value = _price_at(position.y(), model.price_low, model.price_high, plot)
+        axis_label = _price_text(axis_value)
+    elif rsi_pane.contains(position):
+        pane = rsi_pane
+        axis_value = _rsi_at(position.y(), rsi_pane)
+        axis_label = f"{axis_value:.2f}"
+    else:
         return None
-    price = _price_at(position.y(), model.price_low, model.price_high, plot)
     ratio = (position.x() - plot.left()) / plot.width()
     timestamp = (
         model.visual_range.start
@@ -293,8 +437,8 @@ def crosshair_at(
     price_axis = model.price_ticks[0].label_rect
     label_height = price_axis.height()
     price_label_top = min(
-        max(position.y() - label_height / 2, plot.top()),
-        plot.bottom() - label_height,
+        max(position.y() - label_height / 2, pane.top()),
+        pane.bottom() - label_height,
     )
     time_axis = model.time_ticks[0].label_rect
     time_label_width = min(144.0, plot.width())
@@ -303,8 +447,8 @@ def crosshair_at(
         plot.right() - time_label_width,
     )
     return CrosshairGlyph(
-        vertical=QLineF(position.x(), plot.top(), position.x(), plot.bottom()),
-        horizontal=QLineF(plot.left(), position.y(), plot.right(), position.y()),
+        vertical=QLineF(position.x(), plot.top(), position.x(), rsi_pane.bottom()),
+        horizontal=QLineF(pane.left(), position.y(), pane.right(), position.y()),
         price_label=AxisTickGlyph(
             line=QLineF(),
             label_rect=QRectF(
@@ -313,8 +457,8 @@ def crosshair_at(
                 price_axis.width(),
                 label_height,
             ),
-            label=_price_text(price),
-            value=str(price),
+            label=axis_label,
+            value=str(axis_value),
         ),
         time_label=AxisTickGlyph(
             line=QLineF(),

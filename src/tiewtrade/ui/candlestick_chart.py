@@ -29,10 +29,15 @@ from tiewtrade.market_data.config import SUPPORTED_V1_TIMEFRAME_CHOICES
 from tiewtrade.trading.trade_history import FillSide
 from tiewtrade.ui.chart_painter_model import (
     AxisTickGlyph,
+    CandleReadout,
+    ChartPainterModel,
     CrosshairGlyph,
     build_painter_model,
+    candle_at,
     crosshair_at,
 )
+
+_ALIGN_LEFT_TOP = int(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop)
 
 
 class CandlestickChartWidget(QWidget):
@@ -45,7 +50,7 @@ class CandlestickChartWidget(QWidget):
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.setObjectName("candlestickChart")
-        self.setMinimumHeight(280)
+        self.setMinimumHeight(360)
         self.setMouseTracking(True)
         self._snapshot: ChartSnapshot | None = None
         self._crosshair_position: QPointF | None = None
@@ -131,12 +136,36 @@ class CandlestickChartWidget(QWidget):
 
     @property
     def crosshair(self) -> CrosshairGlyph | None:
-        snapshot = self._snapshot
-        position = self._crosshair_position
-        if snapshot is None or position is None or not snapshot.display_candles:
+        model = self._painter_model()
+        if model is None:
             return None
-        model = build_painter_model(snapshot, self._chart_surface())
+        return self._crosshair_for(model)
+
+    @property
+    def readout(self) -> CandleReadout | None:
+        """Values shown in the legend: the hovered candle, else the latest."""
+        model = self._painter_model()
+        if model is None:
+            return None
+        return self._readout_for(model)
+
+    def _crosshair_for(self, model: ChartPainterModel) -> CrosshairGlyph | None:
+        position = self._crosshair_position
+        if position is None:
+            return None
         return crosshair_at(position, model)
+
+    def _readout_for(self, model: ChartPainterModel) -> CandleReadout | None:
+        if self._snapshot is None:
+            return None
+        return candle_at(self._crosshair_position, self._snapshot, model)
+
+    def _painter_model(self) -> ChartPainterModel | None:
+        """Build a model outside a paint. Painting reuses the one it built."""
+        snapshot = self._snapshot
+        if snapshot is None or not snapshot.display_candles:
+            return None
+        return build_painter_model(snapshot, self._chart_surface())
 
     def show_snapshot(self, snapshot: ChartSnapshot) -> None:
         self._snapshot = snapshot
@@ -311,14 +340,36 @@ class CandlestickChartWidget(QWidget):
                 0x84,
                 f"{current_price.price_text}\n{current_price.remaining_text}",
             )
-        crosshair = self.crosshair
-        if crosshair is None:
+        self._draw_rsi_pane(painter, model)
+        crosshair = self._crosshair_for(model)
+        if crosshair is not None:
+            painter.setPen(QPen(QColor("#64748B"), 1, Qt.PenStyle.DashLine))
+            painter.drawLine(crosshair.vertical)
+            painter.drawLine(crosshair.horizontal)
+            self._draw_crosshair_label(painter, crosshair.price_label)
+            self._draw_crosshair_label(painter, crosshair.time_label)
+        self._draw_legend(painter, model)
+
+    def _draw_rsi_pane(self, painter: QPainter, model: ChartPainterModel) -> None:
+        pane = model.rsi_pane
+        painter.setPen(QPen(QColor("#26313F"), 1, Qt.PenStyle.DashLine))
+        for guide in pane.guides:
+            painter.drawLine(guide.line)
+        painter.setPen(QPen(QColor("#94A3B8"), 1))
+        for guide in pane.guides:
+            painter.drawText(guide.label_rect, 0x84, guide.label)
+        painter.setPen(QPen(pane.color, 1))
+        for polyline in pane.polylines:
+            painter.drawPolyline(QPolygonF(polyline))
+
+    def _draw_legend(self, painter: QPainter, model: ChartPainterModel) -> None:
+        readout = self._readout_for(model)
+        if readout is None:
             return
-        painter.setPen(QPen(QColor("#64748B"), 1, Qt.PenStyle.DashLine))
-        painter.drawLine(crosshair.vertical)
-        painter.drawLine(crosshair.horizontal)
-        self._draw_crosshair_label(painter, crosshair.price_label)
-        self._draw_crosshair_label(painter, crosshair.time_label)
+        plot = model.plot_surface
+        rect = QRectF(plot.left() + 8, plot.top() + 4, max(1.0, plot.width() - 16), 34)
+        painter.setPen(QPen(QColor("#CBD5E1"), 1))
+        painter.drawText(rect, _ALIGN_LEFT_TOP, _legend_text(readout))
 
     def _chart_surface(self) -> QRectF:
         top = self._header.geometry().bottom() + 24
@@ -338,3 +389,15 @@ class CandlestickChartWidget(QWidget):
 
 def _range_text(chart_range: ChartRange) -> str:
     return f"{chart_range.start:%Y-%m-%d %H:%M}–{chart_range.end:%H:%M} UTC"
+
+
+def _legend_text(readout: CandleReadout) -> str:
+    candle = readout.candle
+    rsi = "—" if readout.rsi is None else f"{readout.rsi:,.2f}"
+    forming = "  · forming" if readout.is_in_progress else ""
+    return (
+        f"{candle.open_time:%Y-%m-%d %H:%M} UTC{forming}\n"
+        f"O {candle.open:,.2f}  H {candle.high:,.2f}  "
+        f"L {candle.low:,.2f}  C {candle.close:,.2f}  "
+        f"RSI({readout.rsi_period}) {rsi}"
+    )

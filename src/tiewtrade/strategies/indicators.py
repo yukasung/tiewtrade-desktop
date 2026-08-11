@@ -19,6 +19,36 @@ class IndicatorSnapshot:
     atr: Decimal
 
 
+def wilder_average(
+    previous_average: Decimal,
+    value: Decimal,
+    period: int,
+) -> Decimal:
+    """One Wilder smoothing step over a running average."""
+    divisor = Decimal(period)
+    return (previous_average * (divisor - Decimal("1")) + value) / divisor
+
+
+def wilder_rsi(average_gain: Decimal, average_loss: Decimal) -> Decimal:
+    if average_gain == 0 and average_loss == 0:
+        return Decimal("50")
+    if average_loss == 0:
+        return Decimal("100")
+    if average_gain == 0:
+        return Decimal("0")
+
+    relative_strength = average_gain / average_loss
+    return Decimal("100") - Decimal("100") / (Decimal("1") + relative_strength)
+
+
+def price_change_gain_loss(
+    previous_close: Decimal,
+    close: Decimal,
+) -> tuple[Decimal, Decimal]:
+    change = close - previous_close
+    return max(change, Decimal("0")), max(-change, Decimal("0"))
+
+
 class WilderIndicators:
     def __init__(self, preset: IndicatorPeriods) -> None:
         self._rsi_period = preset.rsi_period
@@ -44,7 +74,7 @@ class WilderIndicators:
             return None
 
         return IndicatorSnapshot(
-            rsi=self._calculate_rsi(self._average_gain, self._average_loss),
+            rsi=wilder_rsi(self._average_gain, self._average_loss),
             atr=self._atr,
         )
 
@@ -52,9 +82,7 @@ class WilderIndicators:
         if self._previous_close is None:
             return
 
-        change = close - self._previous_close
-        gain = max(change, Decimal("0"))
-        loss = max(-change, Decimal("0"))
+        gain, loss = price_change_gain_loss(self._previous_close, close)
         period = Decimal(self._rsi_period)
 
         if self._average_gain is None or self._average_loss is None:
@@ -65,12 +93,8 @@ class WilderIndicators:
                 self._average_loss = sum(self._losses, Decimal("0")) / period
             return
 
-        self._average_gain = (
-            self._average_gain * (period - Decimal("1")) + gain
-        ) / period
-        self._average_loss = (
-            self._average_loss * (period - Decimal("1")) + loss
-        ) / period
+        self._average_gain = wilder_average(self._average_gain, gain, self._rsi_period)
+        self._average_loss = wilder_average(self._average_loss, loss, self._rsi_period)
 
     def _update_atr(self, candle: Candle) -> None:
         true_range = candle.high - candle.low
@@ -88,16 +112,4 @@ class WilderIndicators:
                 self._atr = sum(self._true_ranges, Decimal("0")) / period
             return
 
-        self._atr = (self._atr * (period - Decimal("1")) + true_range) / period
-
-    @staticmethod
-    def _calculate_rsi(average_gain: Decimal, average_loss: Decimal) -> Decimal:
-        if average_gain == 0 and average_loss == 0:
-            return Decimal("50")
-        if average_loss == 0:
-            return Decimal("100")
-        if average_gain == 0:
-            return Decimal("0")
-
-        relative_strength = average_gain / average_loss
-        return Decimal("100") - Decimal("100") / (Decimal("1") + relative_strength)
+        self._atr = wilder_average(self._atr, true_range, self._atr_period)
