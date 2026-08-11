@@ -1,11 +1,11 @@
 from dataclasses import fields
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
 from typing import Any, cast
 
-from PySide6.QtCore import QPoint, QRectF, Qt
-from PySide6.QtGui import QColor
+from PySide6.QtCore import QPoint, QPointF, QRectF, Qt
+from PySide6.QtGui import QColor, QWheelEvent
 from PySide6.QtWidgets import QPushButton
 from pytestqt.qtbot import QtBot
 
@@ -56,6 +56,61 @@ def test_chart_header_emits_selected_read_only_view(qtbot: QtBot) -> None:
     chart.timeframe.setCurrentIndex(chart.timeframe.findData("1m"))
 
     assert selected[-1] == ChartViewSelection(symbol="BNBUSDT", timeframe="1m")
+
+
+def test_zoom_buttons_request_a_narrower_and_wider_range(qtbot: QtBot) -> None:
+    chart = CandlestickChartWidget()
+    qtbot.addWidget(chart)
+    snapshot = zoomable_snapshot()
+    chart.show_snapshot(snapshot)
+    requested: list[ChartRange] = []
+    chart.range_requested.connect(requested.append)
+
+    chart.zoom_in_button.click()
+    chart.zoom_out_button.click()
+
+    assert len(requested) == 2
+    zoomed_in, zoomed_out = requested
+    assert zoomed_in.end == snapshot.chart_range.end
+    assert zoomed_out.end == snapshot.chart_range.end
+    assert zoomed_in.end - zoomed_in.start < (
+        snapshot.chart_range.end - snapshot.chart_range.start
+    )
+    assert zoomed_out.end - zoomed_out.start > (
+        snapshot.chart_range.end - snapshot.chart_range.start
+    )
+
+
+def test_mouse_wheel_zooms_the_chart_range(qtbot: QtBot) -> None:
+    chart = CandlestickChartWidget()
+    qtbot.addWidget(chart)
+    snapshot = zoomable_snapshot()
+    chart.show_snapshot(snapshot)
+    requested: list[ChartRange] = []
+    chart.range_requested.connect(requested.append)
+
+    _send_wheel(chart, delta=120)
+    _send_wheel(chart, delta=-120)
+
+    assert len(requested) == 2
+    assert requested[0].end - requested[0].start < (
+        snapshot.chart_range.end - snapshot.chart_range.start
+    )
+    assert requested[1].end - requested[1].start > (
+        snapshot.chart_range.end - snapshot.chart_range.start
+    )
+
+
+def test_zoom_is_inert_without_a_readable_snapshot(qtbot: QtBot) -> None:
+    chart = CandlestickChartWidget()
+    qtbot.addWidget(chart)
+    requested: list[ChartRange] = []
+    chart.range_requested.connect(requested.append)
+
+    _send_wheel(chart, delta=120)
+    chart.zoom_in_button.click()
+
+    assert requested == []
 
 
 def test_chart_selector_header_leaves_readable_space_between_controls(
@@ -383,6 +438,34 @@ def test_unavailable_chart_exposes_chart_specific_retry(qtbot: QtBot) -> None:
     chart.retry_button.click()
 
     assert retries == [True]
+
+
+def zoomable_snapshot() -> ChartSnapshot:
+    """A window wide enough that both zoom directions stay within limits."""
+    end = datetime(2026, 1, 1, 10, 0, tzinfo=UTC)
+    chart_range = ChartRange(end - timedelta(minutes=5) * 120, end)
+    return ChartSnapshot(
+        session=configured_spot_session(),
+        chart_range=chart_range,
+        observed_at_utc=end,
+        candles=(),
+        fills=(),
+        state=ChartReadState.EMPTY,
+    )
+
+
+def _send_wheel(chart: CandlestickChartWidget, *, delta: int) -> None:
+    event = QWheelEvent(
+        QPointF(chart.rect().center()),
+        QPointF(chart.mapToGlobal(chart.rect().center())),
+        QPoint(0, 0),
+        QPoint(0, delta),
+        Qt.MouseButton.NoButton,
+        Qt.KeyboardModifier.NoModifier,
+        Qt.ScrollPhase.NoScrollPhase,
+        False,
+    )
+    chart.wheelEvent(event)
 
 
 def ready_snapshot(

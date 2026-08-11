@@ -1991,6 +1991,31 @@ def test_not_closed_live_candle_logs_discard_then_clock_skew(
     assert runtime.snapshot.state is MarketDataRuntimeState.STOPPED
 
 
+def test_live_candle_within_close_tolerance_is_accepted_without_clock_skew(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A candle Binance marked closed can arrive a moment before our wall
+    clock reaches the boundary due to ordinary network jitter. It must be
+    accepted directly, not discarded as clock skew and left to time out.
+    """
+    logger = logging.getLogger("tests.market_data.close_tolerance")
+    caplog.set_level(logging.INFO, logger=logger.name)
+    scheduler = FakeScheduler(now=candle_at(15).close_time - timedelta(milliseconds=69))
+    source = FakeSource(recent=warm_up_candles(), live=[candle_at(15)])
+    sink = RecordingSink()
+    runtime = runtime_for(source, sink, scheduler=scheduler, logger=logger)
+
+    asyncio.run(run_until_sink_receives(runtime, sink, count=1))
+
+    assert market_data_records(caplog.records) == []
+    assert sink.live_candles == [candle_at(15)]
+    assert runtime.snapshot.last_accepted_open_time == candle_at(15).open_time
+    assert (
+        runtime.observed_reasons.count(MarketDataRuntimeReason.LIVE_CANDLE_ACCEPTED)
+        == 1
+    )
+
+
 def test_pipeline_input_failure_logs_terminal_source_error_without_failure_kind(
     caplog: pytest.LogCaptureFixture,
 ) -> None:

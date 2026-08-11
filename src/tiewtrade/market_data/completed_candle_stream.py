@@ -16,9 +16,17 @@ class CandleAcceptance(StrEnum):
 
 
 class CompletedCandleStream:
-    def __init__(self, config: MarketDataConfig) -> None:
+    def __init__(
+        self,
+        config: MarketDataConfig,
+        *,
+        not_closed_tolerance: timedelta = timedelta(0),
+    ) -> None:
+        if not_closed_tolerance < timedelta(0):
+            raise ValueError("not_closed_tolerance must not be negative")
         self._config = config
         self._last_open_time: datetime | None = None
+        self._not_closed_tolerance = not_closed_tolerance
 
     def accept(self, candle: Candle, received_at: datetime) -> CandleAcceptance:
         if received_at.tzinfo is None or received_at.utcoffset() != timedelta(0):
@@ -29,7 +37,7 @@ class CompletedCandleStream:
             raise ValueError(
                 "candle timeframe does not match market data configuration"
             )
-        if received_at < candle.close_time:
+        if received_at < candle.close_time - self._not_closed_tolerance:
             return CandleAcceptance.NOT_CLOSED
         if self._last_open_time is not None:
             if candle.open_time <= self._last_open_time:

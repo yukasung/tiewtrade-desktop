@@ -22,17 +22,15 @@ class _PaperSpotSnapshotRecorder:
                 entry_number=snapshot.basket_entry_count,
                 fill=snapshot.entry_fill,
             )
-        if snapshot.take_profit_fill is None and snapshot.closed_basket is None:
+        if snapshot.exit_fill is None and snapshot.closed_basket is None:
             return
-        if snapshot.take_profit_fill is None or snapshot.closed_basket is None:
-            raise ValueError(
-                "Take Profit Fill and closed Basket must be present together"
-            )
+        if snapshot.exit_fill is None or snapshot.closed_basket is None:
+            raise ValueError("Exit Fill and closed Basket must be present together")
         if snapshot.basket_id != snapshot.closed_basket.basket_id:
             raise ValueError("closed Basket requires a matching Basket ID")
         self._history.record_close(
             basket_id=snapshot.closed_basket.basket_id,
-            fill=snapshot.take_profit_fill,
+            fill=snapshot.exit_fill,
             closed=snapshot.closed_basket,
         )
 

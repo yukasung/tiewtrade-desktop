@@ -46,6 +46,11 @@ _BACKFILL_TIMEOUT_SECONDS = 30.0
 _STALE_GRACE = timedelta(seconds=30)
 _RECONNECT_DELAYS_SECONDS = (1.0, 2.0, 4.0)
 _RATE_LIMIT_FALLBACK_SECONDS = 60.0
+# Binance marks a kline closed (k.x=true) authoritatively; local delivery can
+# still arrive a moment before our wall clock reaches the boundary due to
+# ordinary network/scheduling jitter. Tolerate a small window so that jitter
+# doesn't get misread as clock skew and discarded.
+_LIVE_CANDLE_CLOSE_TOLERANCE = timedelta(seconds=2)
 _LOGGER = logging.getLogger("tiewtrade.market_data.runtime")
 
 
@@ -110,6 +115,7 @@ class MarketDataRuntime:
             config=config,
             sink=sink,
             on_delivery=self._status.record_delivery,
+            not_closed_tolerance=_LIVE_CANDLE_CLOSE_TOLERANCE,
         )
         self._run_task: asyncio.Task[None] | None = None
         self._shutdown_task: asyncio.Task[None] | None = None

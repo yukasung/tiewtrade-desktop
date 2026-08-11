@@ -4,7 +4,7 @@ from decimal import Decimal
 import pytest
 
 from tiewtrade.market_data.candle import Candle
-from tiewtrade.strategies.rsi_step_grid.indicators import WilderIndicators
+from tiewtrade.strategies.indicators import WilderIndicators
 from tiewtrade.strategies.rsi_step_grid.preset import RsiStepGridPreset
 
 

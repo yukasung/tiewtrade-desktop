@@ -6,12 +6,16 @@ from uuid import UUID, uuid4
 import pytest
 
 from tiewtrade.application.chart_data import (
+    MAXIMUM_VISIBLE_CANDLE_COUNT,
+    MINIMUM_VISIBLE_CANDLE_COUNT,
     ChartRange,
     ChartReadState,
     ChartSnapshot,
     append_completed_candle,
     default_chart_range,
     latest_completed_boundary,
+    visible_candle_count,
+    zoomed_chart_range,
 )
 from tiewtrade.application.paper_session_setup import ConfiguredPaperSession
 from tiewtrade.market_data.candle import Candle
@@ -142,6 +146,83 @@ def test_default_chart_range_ends_at_latest_completed_timeframe_boundary() -> No
     assert default_chart_range(session(), observed_at_utc) == ChartRange(
         datetime(2026, 1, 1, 0, 0, tzinfo=UTC),
         completed_end,
+    )
+
+
+def test_zoom_keeps_the_range_end_anchored_so_live_candles_stay_visible() -> None:
+    end = datetime(2026, 1, 1, 10, 0, tzinfo=UTC)
+    chart_range = ChartRange(end - timedelta(minutes=5) * 120, end)
+
+    zoomed_in = zoomed_chart_range(chart_range, "5m", zoom_in=True)
+    zoomed_out = zoomed_chart_range(chart_range, "5m", zoom_in=False)
+
+    assert zoomed_in.end == end
+    assert zoomed_out.end == end
+    assert visible_candle_count(zoomed_in, "5m") == 96
+    assert visible_candle_count(zoomed_out, "5m") == 150
+
+
+def test_zoom_round_trip_returns_to_a_comparable_window() -> None:
+    end = datetime(2026, 1, 1, 10, 0, tzinfo=UTC)
+    chart_range = ChartRange(end - timedelta(minutes=5) * 120, end)
+
+    restored = zoomed_chart_range(
+        zoomed_chart_range(chart_range, "5m", zoom_in=True), "5m", zoom_in=False
+    )
+
+    assert visible_candle_count(restored, "5m") == 120
+
+
+def test_zoom_stops_at_the_minimum_and_maximum_window() -> None:
+    end = datetime(2026, 1, 1, 10, 0, tzinfo=UTC)
+    interval = timedelta(minutes=5)
+    narrowest = ChartRange(end - interval * MINIMUM_VISIBLE_CANDLE_COUNT, end)
+    widest = ChartRange(end - interval * MAXIMUM_VISIBLE_CANDLE_COUNT, end)
+
+    assert zoomed_chart_range(narrowest, "5m", zoom_in=True) == narrowest
+    assert zoomed_chart_range(widest, "5m", zoom_in=False) == widest
+
+
+def test_zoom_never_overshoots_the_configured_window_limits() -> None:
+    end = datetime(2026, 1, 1, 10, 0, tzinfo=UTC)
+    interval = timedelta(minutes=5)
+    near_minimum = ChartRange(end - interval * 22, end)
+    near_maximum = ChartRange(end - interval * 480, end)
+
+    assert (
+        visible_candle_count(zoomed_chart_range(near_minimum, "5m", zoom_in=True), "5m")
+        == MINIMUM_VISIBLE_CANDLE_COUNT
+    )
+    assert (
+        visible_candle_count(
+            zoomed_chart_range(near_maximum, "5m", zoom_in=False), "5m"
+        )
+        == MAXIMUM_VISIBLE_CANDLE_COUNT
+    )
+
+
+def test_zoom_in_never_widens_a_window_already_below_the_minimum() -> None:
+    end = datetime(2026, 1, 1, 10, 0, tzinfo=UTC)
+    narrow = ChartRange(end - timedelta(minutes=5) * 4, end)
+
+    assert zoomed_chart_range(narrow, "5m", zoom_in=True) == narrow
+    assert (
+        visible_candle_count(zoomed_chart_range(narrow, "5m", zoom_in=False), "5m") == 5
+    )
+
+
+def test_zoom_always_changes_the_window_by_at_least_one_candle() -> None:
+    end = datetime(2026, 1, 1, 10, 0, tzinfo=UTC)
+    # 4 candles would round back to itself with plain 1.25x integer math.
+    chart_range = ChartRange(end - timedelta(minutes=5) * 21, end)
+
+    assert (
+        visible_candle_count(zoomed_chart_range(chart_range, "5m", zoom_in=False), "5m")
+        == 26
+    )
+    assert (
+        visible_candle_count(zoomed_chart_range(chart_range, "5m", zoom_in=True), "5m")
+        == 20
     )
 
 

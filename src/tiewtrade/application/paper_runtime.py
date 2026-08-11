@@ -66,7 +66,8 @@ from tiewtrade.market_data.runtime_state import (
     MarketDataRuntimeSnapshot,
     MarketDataRuntimeState,
 )
-from tiewtrade.strategies.rsi_step_grid.preset import RsiStepGridPreset
+from tiewtrade.strategies.protocols import StrategyPreset
+from tiewtrade.strategies.registry import strategy_definition_for
 from tiewtrade.trading.basket import average_entry_price_after_fill
 from tiewtrade.trading.position import PositionSide, unrealized_pnl
 from tiewtrade.trading.session_config import MarketType, TradeMode
@@ -303,7 +304,7 @@ class PaperRuntimeController:
             }:
                 terminal.set()
 
-        preset = RsiStepGridPreset.v1()
+        preset = strategy_definition_for(session.config.preset_version).build_preset()
         sink = self._create_sink(session, preset)
         endpoints = BinancePublicEndpoints.for_market_type(session.config.market_type)
         source = self._source_factory(endpoints)
@@ -331,7 +332,7 @@ class PaperRuntimeController:
     def _create_sink(
         self,
         session: ConfiguredPaperSession,
-        preset: RsiStepGridPreset,
+        preset: StrategyPreset,
     ) -> _PaperSpotRuntimeSink | _PaperFuturesRuntimeSink:
         if session.config.market_type is MarketType.SPOT:
             spot_application = PaperSpotSession(

@@ -5,7 +5,7 @@ from uuid import UUID
 import pytest
 
 from tiewtrade.market_data.candle import Candle
-from tiewtrade.strategies.rsi_step_grid.indicators import IndicatorSnapshot
+from tiewtrade.strategies.indicators import IndicatorSnapshot
 from tiewtrade.strategies.rsi_step_grid.preset import RsiStepGridPreset
 from tiewtrade.strategies.rsi_step_grid.strategy import RsiStepGridStrategy
 from tiewtrade.trading.position import PositionSide

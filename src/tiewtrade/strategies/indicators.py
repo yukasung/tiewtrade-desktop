@@ -1,8 +1,16 @@
 from dataclasses import dataclass
 from decimal import Decimal
+from typing import Protocol
 
 from tiewtrade.market_data.candle import Candle
-from tiewtrade.strategies.rsi_step_grid.preset import RsiStepGridPreset
+
+
+class IndicatorPeriods(Protocol):
+    @property
+    def rsi_period(self) -> int: ...
+
+    @property
+    def atr_period(self) -> int: ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -12,7 +20,7 @@ class IndicatorSnapshot:
 
 
 class WilderIndicators:
-    def __init__(self, preset: RsiStepGridPreset) -> None:
+    def __init__(self, preset: IndicatorPeriods) -> None:
         self._rsi_period = preset.rsi_period
         self._atr_period = preset.atr_period
         self._previous_close: Decimal | None = None

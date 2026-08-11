@@ -1,5 +1,5 @@
 import asyncio
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from inspect import Parameter, signature
 from typing import get_type_hints
@@ -44,6 +44,7 @@ class RecordingSink:
         self._fail_warm_up = fail_warm_up
         self.live_attempts = 0
         self.events: list[str] = []
+        self.received_ats: list[datetime] = []
 
     async def warm_up(
         self,
@@ -65,16 +66,20 @@ class RecordingSink:
         if self.live_attempts == self._fail_at:
             raise RuntimeError("sink failed")
         self.events.append(f"sink:{candle.open_time.minute}")
+        self.received_ats.append(received_at)
 
 
 def pipeline_for(
     sink: RecordingSink,
     deliveries: list[datetime],
+    *,
+    not_closed_tolerance: timedelta = timedelta(0),
 ) -> CompletedCandlePipeline:
     return CompletedCandlePipeline(
         config=MarketDataConfig(symbol="BTCUSDT", timeframe="5m"),
         sink=sink,
         on_delivery=deliveries.append,
+        not_closed_tolerance=not_closed_tolerance,
     )
 
 
@@ -86,6 +91,28 @@ def test_backfill_requires_a_buffered_observation() -> None:
 
     assert parameter.default is Parameter.empty
     assert hints["observed"] is Candle
+
+
+def test_delivered_received_at_is_clamped_to_close_time_within_tolerance() -> None:
+    """A candle accepted early via not_closed_tolerance must still reach the
+    sink with received_at >= close_time. Downstream consumers (paper
+    sessions) keep their own zero-tolerance stream and would otherwise
+    silently reject an early received_at, dropping the candle without error.
+    """
+    sink = RecordingSink()
+    deliveries: list[datetime] = []
+    pipeline = pipeline_for(sink, deliveries, not_closed_tolerance=timedelta(seconds=2))
+    asyncio.run(
+        pipeline.warm_up((candle_at(0),), expected_count=1, received_at=RECEIVED_AT)
+    )
+
+    early_received_at = candle_at(5).close_time - timedelta(milliseconds=69)
+    decision = asyncio.run(
+        pipeline.process_live(candle_at(5), received_at=early_received_at)
+    )
+
+    assert decision is CandleAcceptance.ACCEPTED
+    assert sink.received_ats == [candle_at(5).close_time]
 
 
 def test_live_gap_does_not_reach_sink() -> None:

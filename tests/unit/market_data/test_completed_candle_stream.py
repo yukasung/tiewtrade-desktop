@@ -1,4 +1,4 @@
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
 import pytest
@@ -51,6 +51,55 @@ def test_accepts_only_closed_candles_and_deduplicates() -> None:
         )
         is CandleAcceptance.DUPLICATE_OR_OUT_OF_ORDER
     )
+
+
+def test_not_closed_tolerance_defaults_to_zero_for_exact_replay_semantics() -> None:
+    config = MarketDataConfig(symbol="BTCUSDT", timeframe="5m")
+    stream = CompletedCandleStream(config)
+    first = candle_at(0)
+
+    assert (
+        stream.accept(
+            first,
+            first.close_time - timedelta(milliseconds=1),
+        )
+        is CandleAcceptance.NOT_CLOSED
+    )
+
+
+def test_not_closed_tolerance_accepts_a_candle_that_arrives_slightly_early() -> None:
+    config = MarketDataConfig(symbol="BTCUSDT", timeframe="5m")
+    stream = CompletedCandleStream(config, not_closed_tolerance=timedelta(seconds=2))
+    first = candle_at(0)
+
+    assert (
+        stream.accept(
+            first,
+            first.close_time - timedelta(milliseconds=69),
+        )
+        is CandleAcceptance.ACCEPTED
+    )
+
+
+def test_not_closed_tolerance_still_rejects_a_candle_earlier_than_the_window() -> None:
+    config = MarketDataConfig(symbol="BTCUSDT", timeframe="5m")
+    stream = CompletedCandleStream(config, not_closed_tolerance=timedelta(seconds=2))
+    first = candle_at(0)
+
+    assert (
+        stream.accept(
+            first,
+            first.close_time - timedelta(seconds=3),
+        )
+        is CandleAcceptance.NOT_CLOSED
+    )
+
+
+def test_not_closed_tolerance_rejects_a_negative_window() -> None:
+    config = MarketDataConfig(symbol="BTCUSDT", timeframe="5m")
+
+    with pytest.raises(ValueError, match="not_closed_tolerance"):
+        CompletedCandleStream(config, not_closed_tolerance=timedelta(seconds=-1))
 
 
 def test_rejects_a_gap_until_backfill_supplies_missing_candle() -> None:

@@ -1,5 +1,12 @@
 from PySide6.QtCore import QEvent, QPointF, QRectF, QSignalBlocker, Qt, Signal
-from PySide6.QtGui import QColor, QMouseEvent, QPainter, QPen, QPolygonF
+from PySide6.QtGui import (
+    QColor,
+    QMouseEvent,
+    QPainter,
+    QPen,
+    QPolygonF,
+    QWheelEvent,
+)
 from PySide6.QtWidgets import (
     QComboBox,
     QHBoxLayout,
@@ -14,6 +21,7 @@ from tiewtrade.application.chart_data import (
     ChartReadState,
     ChartSnapshot,
     latest_completed_boundary,
+    zoomed_chart_range,
 )
 from tiewtrade.application.chart_view_selection import ChartViewSelection
 from tiewtrade.application.paper_symbols import PAPER_SYMBOLS
@@ -65,6 +73,14 @@ class CandlestickChartWidget(QWidget):
         controls.addWidget(self._range)
         navigation = QHBoxLayout()
         navigation.setSpacing(8)
+        self.zoom_out_button = QPushButton("−")
+        self.zoom_out_button.setObjectName("zoomOutButton")
+        self.zoom_out_button.setFixedWidth(44)
+        self.zoom_out_button.setAccessibleName("Zoom out chart")
+        self.zoom_in_button = QPushButton("+")
+        self.zoom_in_button.setObjectName("zoomInButton")
+        self.zoom_in_button.setFixedWidth(44)
+        self.zoom_in_button.setAccessibleName("Zoom in chart")
         self.previous_range_button = QPushButton("←")
         self.previous_range_button.setObjectName("previousRangeButton")
         self.previous_range_button.setFixedWidth(44)
@@ -79,11 +95,15 @@ class CandlestickChartWidget(QWidget):
         self.retry_button.hide()
         self.previous_range_button.clicked.connect(self._request_previous_range)
         self.next_range_button.clicked.connect(self._request_next_range)
+        self.zoom_out_button.clicked.connect(self._request_zoom_out)
+        self.zoom_in_button.clicked.connect(self._request_zoom_in)
         self.retry_button.clicked.connect(self.retry_requested)
         self.symbol.currentIndexChanged.connect(self._request_view)
         self.timeframe.currentIndexChanged.connect(self._request_view)
         navigation.addWidget(self.previous_range_button)
         navigation.addWidget(self.next_range_button)
+        navigation.addWidget(self.zoom_out_button)
+        navigation.addWidget(self.zoom_in_button)
         controls.addLayout(navigation)
         controls.addWidget(self.retry_button)
         self._header.addWidget(self.symbol)
@@ -130,6 +150,20 @@ class CandlestickChartWidget(QWidget):
             self.timeframe.setCurrentIndex(self.timeframe.findData(snapshot.timeframe))
         self._range.setText(_range_text(snapshot.chart_range))
         has_range = snapshot.state in {ChartReadState.READY, ChartReadState.EMPTY}
+        self.zoom_in_button.setEnabled(
+            has_range
+            and zoomed_chart_range(
+                snapshot.chart_range, snapshot.timeframe, zoom_in=True
+            )
+            != snapshot.chart_range
+        )
+        self.zoom_out_button.setEnabled(
+            has_range
+            and zoomed_chart_range(
+                snapshot.chart_range, snapshot.timeframe, zoom_in=False
+            )
+            != snapshot.chart_range
+        )
         self.previous_range_button.setEnabled(has_range)
         self.next_range_button.setEnabled(
             has_range
@@ -145,6 +179,8 @@ class CandlestickChartWidget(QWidget):
     def set_view_loading(self, loading: bool) -> None:
         self.symbol.setDisabled(loading)
         self.timeframe.setDisabled(loading)
+        self.zoom_in_button.setDisabled(loading)
+        self.zoom_out_button.setDisabled(loading)
 
     def _request_view(self) -> None:
         symbol = self.symbol.currentData()
@@ -183,6 +219,36 @@ class CandlestickChartWidget(QWidget):
         self._crosshair_position = None
         self.update()
         super().leaveEvent(event)
+
+    def wheelEvent(self, event: QWheelEvent) -> None:  # noqa: N802
+        if self._request_zoom(zoom_in=event.angleDelta().y() > 0):
+            event.accept()
+            return
+        super().wheelEvent(event)
+
+    def _request_zoom_in(self) -> None:
+        self._request_zoom(zoom_in=True)
+
+    def _request_zoom_out(self) -> None:
+        self._request_zoom(zoom_in=False)
+
+    def _request_zoom(self, *, zoom_in: bool) -> bool:
+        """Emit a narrower or wider range; report whether anything changed."""
+        snapshot = self._snapshot
+        if snapshot is None or snapshot.state not in {
+            ChartReadState.READY,
+            ChartReadState.EMPTY,
+        }:
+            return False
+        zoomed = zoomed_chart_range(
+            snapshot.chart_range,
+            snapshot.timeframe,
+            zoom_in=zoom_in,
+        )
+        if zoomed == snapshot.chart_range:
+            return False
+        self.range_requested.emit(zoomed)
+        return True
 
     def _request_previous_range(self) -> None:
         if self._snapshot is None:

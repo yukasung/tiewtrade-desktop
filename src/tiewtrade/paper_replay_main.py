@@ -9,7 +9,10 @@ from tiewtrade.decimal_context import configure_decimal_context
 from tiewtrade.market_data.config import MarketDataConfig
 from tiewtrade.replay.csv_candles import load_candles_csv
 from tiewtrade.replay.paper_spot import run_paper_spot_replay
-from tiewtrade.strategies.rsi_step_grid.preset import RsiStepGridPreset
+from tiewtrade.strategies.registry import (
+    strategy_definition_for,
+    strategy_definitions_for,
+)
 from tiewtrade.trading.entry_policy import EntryPolicy
 from tiewtrade.trading.session_config import MarketType, SessionConfig, TradeMode
 from tiewtrade.trading.spot_policy import SpotTradingPolicy
@@ -26,7 +29,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             symbol=arguments.symbol,
             timeframe=arguments.timeframe,
         )
-        preset = RsiStepGridPreset.v1()
+        preset = strategy_definition_for(arguments.strategy).build_preset()
         session = SessionConfig(
             session_id=_SESSION_ID,
             preset_version=preset.version,
@@ -68,6 +71,14 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--available-capital", required=True, type=_finite_decimal)
     parser.add_argument("--trading-capital-ratio", required=True, type=_finite_decimal)
     parser.add_argument("--max-entries", required=True, type=int)
+    parser.add_argument(
+        "--strategy",
+        choices=[
+            definition.preset_version
+            for definition in strategy_definitions_for(MarketType.SPOT)
+        ],
+        default="rsi-step-grid-v1",
+    )
     return parser
 
 

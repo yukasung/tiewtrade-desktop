@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Callable
+from concurrent.futures import CancelledError
 from datetime import datetime
 from threading import Lock, Thread, current_thread
 from typing import Protocol
@@ -126,7 +127,15 @@ class ChartOnlyFeedController:
             self._loop = None
             self._thread = None
         if runtime is not None and loop is not None and loop.is_running():
-            asyncio.run_coroutine_threadsafe(runtime.stop(), loop).result(timeout=30)
+            try:
+                asyncio.run_coroutine_threadsafe(runtime.stop(), loop).result(
+                    timeout=30
+                )
+            except CancelledError:
+                # The runtime's own run() already exited (e.g. it failed closed)
+                # and its event loop cancelled our stop() request during
+                # shutdown. The runtime is already stopped either way.
+                pass
         if thread is not None and thread is not current_thread():
             thread.join(timeout=30)
 

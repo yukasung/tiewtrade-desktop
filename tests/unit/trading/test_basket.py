@@ -162,6 +162,100 @@ def test_basket_requires_positive_take_profit_multiplier() -> None:
         )
 
 
+def test_stop_loss_price_defaults_to_none_when_multiplier_is_not_configured() -> None:
+    basket = Basket(
+        basket_id=basket_id(), policy=policy(), take_profit_atr_multiplier=Decimal("3")
+    )
+    basket.add_entry(
+        price=Decimal("100"),
+        quantity=Decimal("1"),
+        fee=Decimal("0.1"),
+        filled_at=datetime(2026, 1, 1, tzinfo=UTC),
+        atr=Decimal("2"),
+        tick_size=Decimal("0.1"),
+    )
+
+    assert basket.stop_loss_price is None
+
+
+def test_long_basket_reprices_stop_loss_below_average_and_rounds_up() -> None:
+    basket = Basket(
+        basket_id=basket_id(),
+        policy=policy(),
+        take_profit_atr_multiplier=Decimal("1.5"),
+        stop_loss_atr_multiplier=Decimal("1.5"),
+    )
+    basket.add_entry(
+        price=Decimal("100"),
+        quantity=Decimal("3"),
+        fee=Decimal("0.1"),
+        filled_at=datetime(2026, 1, 1, tzinfo=UTC),
+        atr=Decimal("2.03"),
+        tick_size=Decimal("0.1"),
+    )
+
+    assert basket.take_profit_price == Decimal("103.0")
+    assert basket.stop_loss_price == Decimal("97.0")
+
+
+def test_short_basket_reprices_stop_loss_above_average_and_rounds_down() -> None:
+    basket = Basket(
+        basket_id=basket_id(),
+        policy=policy(),
+        take_profit_atr_multiplier=Decimal("1.5"),
+        stop_loss_atr_multiplier=Decimal("1.5"),
+        position_side=PositionSide.SHORT,
+    )
+    basket.add_entry(
+        price=Decimal("100"),
+        quantity=Decimal("3"),
+        fee=Decimal("0.1"),
+        filled_at=datetime(2026, 1, 1, tzinfo=UTC),
+        atr=Decimal("2.03"),
+        tick_size=Decimal("0.1"),
+        position_side=PositionSide.SHORT,
+    )
+
+    assert basket.take_profit_price == Decimal("97.0")
+    assert basket.stop_loss_price == Decimal("103.0")
+
+
+def test_basket_requires_positive_stop_loss_multiplier() -> None:
+    with pytest.raises(ValueError, match="stop_loss_atr_multiplier"):
+        Basket(
+            basket_id=basket_id(),
+            policy=policy(),
+            take_profit_atr_multiplier=Decimal("3"),
+            stop_loss_atr_multiplier=Decimal("0"),
+        )
+
+
+def test_close_records_explicit_stop_loss_reason() -> None:
+    basket = Basket(
+        basket_id=basket_id(),
+        policy=policy(),
+        take_profit_atr_multiplier=Decimal("1.5"),
+        stop_loss_atr_multiplier=Decimal("1.5"),
+    )
+    basket.add_entry(
+        price=Decimal("100"),
+        quantity=Decimal("1"),
+        fee=Decimal("0.1"),
+        filled_at=datetime(2026, 1, 1, tzinfo=UTC),
+        atr=Decimal("2.03"),
+        tick_size=Decimal("0.1"),
+    )
+
+    closed = basket.close(
+        exit_price=Decimal("97"),
+        exit_fee=Decimal("0.1"),
+        closed_at=datetime(2026, 1, 2, tzinfo=UTC),
+        close_reason=BasketCloseReason.STOP_LOSS,
+    )
+
+    assert closed.close_reason is BasketCloseReason.STOP_LOSS
+
+
 def test_close_exposes_identity_and_pnl_accounting_components() -> None:
     expected_basket_id = basket_id()
     basket = Basket(

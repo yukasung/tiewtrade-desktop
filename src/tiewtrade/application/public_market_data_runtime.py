@@ -10,7 +10,7 @@ from tiewtrade.market_data.runtime import (
     MarketDataRuntime,
     RuntimeScheduler,
 )
-from tiewtrade.strategies.rsi_step_grid.preset import RsiStepGridPreset
+from tiewtrade.strategies.protocols import StrategyPreset
 from tiewtrade.trading.session_config import SessionConfig
 
 
@@ -18,7 +18,7 @@ def create_public_market_data_runtime(
     *,
     session: SessionConfig,
     market_data: MarketDataConfig,
-    preset: RsiStepGridPreset,
+    preset: StrategyPreset,
     sink: MarketDataCandleSink,
     scheduler: RuntimeScheduler | None = None,
     source_factory: Callable[

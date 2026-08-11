@@ -10,6 +10,7 @@ from tiewtrade.trading.position import PositionSide
 
 class BasketCloseReason(StrEnum):
     TAKE_PROFIT = "take_profit"
+    STOP_LOSS = "stop_loss"
     LIQUIDATION = "liquidation"
 
 
@@ -88,18 +89,23 @@ class Basket:
         policy: EntryPolicy,
         take_profit_atr_multiplier: Decimal,
         position_side: PositionSide = PositionSide.LONG,
+        stop_loss_atr_multiplier: Decimal | None = None,
     ) -> None:
         _require_positive(
             take_profit_atr_multiplier,
             "take_profit_atr_multiplier",
         )
+        if stop_loss_atr_multiplier is not None:
+            _require_positive(stop_loss_atr_multiplier, "stop_loss_atr_multiplier")
         self._basket_id = basket_id
         self._policy = policy
         self._take_profit_atr_multiplier = take_profit_atr_multiplier
+        self._stop_loss_atr_multiplier = stop_loss_atr_multiplier
         self._position_side = position_side
         self._entries: list[BasketEntry] = []
         self._is_closed = False
         self._take_profit_price: Decimal | None = None
+        self._stop_loss_price: Decimal | None = None
 
     @property
     def basket_id(self) -> UUID:
@@ -124,6 +130,10 @@ class Basket:
     @property
     def take_profit_price(self) -> Decimal | None:
         return self._take_profit_price
+
+    @property
+    def stop_loss_price(self) -> Decimal | None:
+        return self._stop_loss_price
 
     @property
     def total_quantity(self) -> Decimal:
@@ -187,8 +197,23 @@ class Basket:
             rounding=rounding
         ) * tick_size
 
+        stop_loss_price: Decimal | None = None
+        if self._stop_loss_atr_multiplier is not None:
+            if self.position_side is PositionSide.LONG:
+                raw_stop = average_entry_price - (atr * self._stop_loss_atr_multiplier)
+                stop_rounding = ROUND_CEILING
+            else:
+                raw_stop = average_entry_price + (atr * self._stop_loss_atr_multiplier)
+                stop_rounding = ROUND_DOWN
+            if raw_stop <= 0:
+                raise ValueError("stop loss price must be positive")
+            stop_loss_price = (raw_stop / tick_size).to_integral_value(
+                rounding=stop_rounding
+            ) * tick_size
+
         self._entries.append(BasketEntry(price, quantity, fee, filled_at))
         self._take_profit_price = take_profit_price
+        self._stop_loss_price = stop_loss_price
 
     def close(
         self,

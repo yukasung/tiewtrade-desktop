@@ -17,16 +17,11 @@ from tiewtrade.market_data.completed_candle_stream import (
     CompletedCandleStream,
 )
 from tiewtrade.market_data.config import MarketDataConfig
-from tiewtrade.strategies.rsi_step_grid.indicators import (
-    IndicatorSnapshot,
-    WilderIndicators,
-)
-from tiewtrade.strategies.rsi_step_grid.preset import RsiStepGridPreset
-from tiewtrade.strategies.rsi_step_grid.strategy import (
-    EntryIntent,
-    RsiStepGridStrategy,
-)
-from tiewtrade.trading.basket import Basket, ClosedBasket
+from tiewtrade.strategies.entry_intent import EntryIntent
+from tiewtrade.strategies.indicators import IndicatorSnapshot, WilderIndicators
+from tiewtrade.strategies.protocols import EntryStrategy, StrategyPreset
+from tiewtrade.strategies.registry import strategy_definition_for
+from tiewtrade.trading.basket import Basket, BasketCloseReason, ClosedBasket
 from tiewtrade.trading.entry_pair import EntryPairLifecycle
 from tiewtrade.trading.session_config import MarketType, SessionConfig, TradeMode
 from tiewtrade.trading.symbol_rules import SymbolRules
@@ -52,7 +47,7 @@ class PaperSpotSessionSnapshot:
     failure_reason: PaperSpotFailureReason | None
     pending_intent: EntryIntent | None
     entry_fill: PaperSpotEntryFill | None
-    take_profit_fill: PaperSpotExitFill | None
+    exit_fill: PaperSpotExitFill | None
     closed_basket: ClosedBasket | None
     closed_basket_count: int
     basket_id: UUID | None
@@ -71,7 +66,7 @@ class PaperSpotSessionIdentity:
 @dataclass(slots=True)
 class _PaperSpotTransition:
     indicators: WilderIndicators
-    strategy: RsiStepGridStrategy
+    strategy: EntryStrategy
     lifecycle: EntryPairLifecycle
     basket: Basket | None
     pending_intent: EntryIntent | None
@@ -84,7 +79,7 @@ class PaperSpotSession:
         session: SessionConfig,
         market_data: MarketDataConfig,
         symbol_rules: SymbolRules,
-        preset: RsiStepGridPreset,
+        preset: StrategyPreset,
     ) -> None:
         if (
             session.trade_mode is not TradeMode.PAPER
@@ -106,7 +101,9 @@ class PaperSpotSession:
         self._candles = CompletedCandleStream(market_data)
         self._executor = PaperSpotExecutor(session, symbol_rules)
         self._indicators = WilderIndicators(preset)
-        self._strategy = RsiStepGridStrategy(session.session_id, preset)
+        self._strategy = strategy_definition_for(preset.version).build_strategy(
+            session.session_id, preset
+        )
         self._lifecycle = EntryPairLifecycle(session.entry_policy)
         self._basket: Basket | None = None
         self._pending_intent: EntryIntent | None = None
@@ -135,13 +132,23 @@ class PaperSpotSession:
             basket_existed_at_candle_open = transition.basket is not None
             entry_fill = self._fill_pending_intent(transition, candle)
             entry_filled_on_current_candle = entry_fill is not None
-            take_profit_fill: PaperSpotExitFill | None = None
+            exit_fill: PaperSpotExitFill | None = None
             closed_basket: ClosedBasket | None = None
 
             if basket_existed_at_candle_open and not entry_filled_on_current_candle:
-                take_profit_fill = self._fill_take_profit(transition, candle)
-                if take_profit_fill is not None:
-                    closed_basket = self._close_basket(transition, take_profit_fill)
+                stop_loss_fill = self._fill_stop_loss(transition, candle)
+                if stop_loss_fill is not None:
+                    exit_fill = stop_loss_fill
+                    closed_basket = self._close_basket(
+                        transition, exit_fill, BasketCloseReason.STOP_LOSS
+                    )
+                else:
+                    take_profit_fill = self._fill_take_profit(transition, candle)
+                    if take_profit_fill is not None:
+                        exit_fill = take_profit_fill
+                        closed_basket = self._close_basket(
+                            transition, exit_fill, BasketCloseReason.TAKE_PROFIT
+                        )
 
             indicators = transition.indicators.update(candle)
             self._evaluate_strategy(transition, candle, indicators)
@@ -150,7 +157,7 @@ class PaperSpotSession:
             return self._snapshot(
                 accepted=True,
                 entry_fill=entry_fill,
-                take_profit_fill=take_profit_fill,
+                exit_fill=exit_fill,
                 closed_basket=closed_basket,
             )
         except PaperSpotSessionError:
@@ -217,6 +224,7 @@ class PaperSpotSession:
                 basket_id,
                 self._session.entry_policy,
                 self._preset.take_profit_atr_multiplier,
+                stop_loss_atr_multiplier=self._preset.stop_loss_atr_multiplier,
             )
         transition.basket.add_entry(
             price=fill.price,
@@ -235,7 +243,17 @@ class PaperSpotSession:
         self._state = PaperSpotSessionState.FAILED_CLOSED
         self._failure_reason = PaperSpotFailureReason.EXECUTION_ERROR
         self._pending_intent = None
-        self._strategy = RsiStepGridStrategy(self._session.session_id, self._preset)
+        self._strategy = strategy_definition_for(self._preset.version).build_strategy(
+            self._session.session_id, self._preset
+        )
+
+    def _fill_stop_loss(
+        self,
+        transition: _PaperSpotTransition,
+        candle: Candle,
+    ) -> PaperSpotExitFill | None:
+        assert transition.basket is not None
+        return self._executor.fill_stop_loss(transition.basket, candle)
 
     def _fill_take_profit(
         self,
@@ -249,12 +267,14 @@ class PaperSpotSession:
         self,
         transition: _PaperSpotTransition,
         exit_fill: PaperSpotExitFill,
+        close_reason: BasketCloseReason,
     ) -> ClosedBasket:
         assert transition.basket is not None
         closed = transition.basket.close(
             exit_price=exit_fill.price,
             exit_fee=exit_fill.fee,
             closed_at=exit_fill.filled_at,
+            close_reason=close_reason,
         )
         transition.basket = None
         transition.lifecycle.reset()
@@ -287,7 +307,7 @@ class PaperSpotSession:
         *,
         accepted: bool,
         entry_fill: PaperSpotEntryFill | None = None,
-        take_profit_fill: PaperSpotExitFill | None = None,
+        exit_fill: PaperSpotExitFill | None = None,
         closed_basket: ClosedBasket | None = None,
     ) -> PaperSpotSessionSnapshot:
         if self._basket is not None:
@@ -302,7 +322,7 @@ class PaperSpotSession:
             failure_reason=self._failure_reason,
             pending_intent=self._pending_intent,
             entry_fill=entry_fill,
-            take_profit_fill=take_profit_fill,
+            exit_fill=exit_fill,
             closed_basket=closed_basket,
             closed_basket_count=self._closed_basket_count,
             basket_id=basket_id,

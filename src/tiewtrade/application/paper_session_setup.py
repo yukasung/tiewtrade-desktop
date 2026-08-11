@@ -6,11 +6,35 @@ from uuid import UUID, uuid4
 
 from tiewtrade.application.paper_symbols import validate_paper_symbol
 from tiewtrade.market_data.config import MarketDataConfig
-from tiewtrade.strategies.rsi_step_grid.preset import RsiStepGridPreset
+from tiewtrade.strategies.registry import (
+    StrategyDefinition,
+    strategy_definition_for,
+    strategy_definitions_for,
+)
 from tiewtrade.trading.entry_policy import EntryPolicy
 from tiewtrade.trading.futures_policy import FuturesTradingPolicy
 from tiewtrade.trading.session_config import MarketType, SessionConfig, TradeMode
 from tiewtrade.trading.spot_policy import SpotTradingPolicy
+
+
+@dataclass(frozen=True, slots=True)
+class PresetChoice:
+    preset_version: str
+    display_name: str
+
+
+def preset_choices(market_type: MarketType) -> tuple[PresetChoice, ...]:
+    return tuple(
+        PresetChoice(definition.preset_version, definition.display_name)
+        for definition in strategy_definitions_for(market_type)
+    )
+
+
+def preset_display_name(preset_version: str) -> str:
+    try:
+        return strategy_definition_for(preset_version).display_name
+    except ValueError:
+        return preset_version
 
 
 @dataclass(frozen=True, slots=True)
@@ -24,6 +48,7 @@ class PaperSessionSetupValues:
     slippage_bps: str
     spot_trading_capital_percent: str | None
     futures_leverage: str | None
+    preset_version: str = "rsi-step-grid-v1"
 
 
 @dataclass(frozen=True, slots=True)
@@ -100,7 +125,12 @@ class CreatePaperSession:
                 "futures_leverage", lambda: FuturesTradingPolicy.v1(leverage)
             )
 
-        preset = RsiStepGridPreset.v1()
+        preset = _validate_field(
+            "preset_version",
+            lambda: _strategy_definition_for_market_type(
+                values.preset_version, market_type
+            ).build_preset(),
+        )
         entry_policy = _validate_field("max_entries", lambda: EntryPolicy(max_entries))
         market_data = _validate_field(
             "timeframe",
@@ -175,12 +205,29 @@ def validate_paper_session(values: PaperSessionSetupValues) -> None:
         "timeframe",
         lambda: MarketDataConfig(symbol=values.symbol, timeframe=values.timeframe),
     )
+    _validate_field(
+        "preset_version",
+        lambda: _strategy_definition_for_market_type(
+            values.preset_version, market_type
+        ),
+    )
 
 
 def spot_trading_policy_from_percent(value: str) -> SpotTradingPolicy:
     field = "spot_trading_capital_percent"
     ratio = _decimal(value, field) / Decimal("100")
     return _validate_field(field, lambda: SpotTradingPolicy(ratio))
+
+
+def _strategy_definition_for_market_type(
+    preset_version: str, market_type: MarketType
+) -> StrategyDefinition:
+    definition = strategy_definition_for(preset_version)
+    if market_type not in definition.market_types:
+        raise ValueError(
+            f"strategy {preset_version!r} is not available for {market_type.value}"
+        )
+    return definition
 
 
 def _required(value: str | None, field: str) -> str:

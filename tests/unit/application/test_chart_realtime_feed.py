@@ -1,7 +1,8 @@
+import asyncio
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
-from threading import Event
+from threading import Event, Thread
 from typing import cast
 
 import pytest
@@ -88,6 +89,38 @@ def test_different_chart_view_does_not_replace_session_market_price() -> None:
             session.config.session_id,
             max_age=timedelta(seconds=30),
         )
+
+
+def test_stop_swallows_cancelled_error_from_a_shutdown_race() -> None:
+    """runtime.stop() can lose a race with its own loop's shutdown teardown.
+
+    When the runtime's run() already exited (e.g. it failed closed), the
+    background loop can cancel a just-scheduled stop() task before it runs,
+    surfacing as concurrent.futures.CancelledError from result(). stop()
+    must treat that as "already stopped", not crash the caller.
+    """
+
+    class CancellingRuntime:
+        async def run(self) -> None:
+            pass
+
+        async def stop(self) -> None:
+            raise asyncio.CancelledError()
+
+    loop = asyncio.new_event_loop()
+    loop_thread = Thread(target=loop.run_forever, daemon=True)
+    loop_thread.start()
+    try:
+        controller = ChartOnlyFeedController(
+            source_factory=lambda endpoints: cast(MarketDataCandleSource, object()),
+        )
+        controller._runtime = CancellingRuntime()
+        controller._loop = loop
+
+        controller.stop()
+    finally:
+        loop.call_soon_threadsafe(loop.stop)
+        loop_thread.join(timeout=1)
 
 
 class FakeRuntime:

@@ -17,15 +17,10 @@ from tiewtrade.market_data.completed_candle_stream import (
     CompletedCandleStream,
 )
 from tiewtrade.market_data.config import MarketDataConfig
-from tiewtrade.strategies.rsi_step_grid.indicators import (
-    IndicatorSnapshot,
-    WilderIndicators,
-)
-from tiewtrade.strategies.rsi_step_grid.preset import RsiStepGridPreset
-from tiewtrade.strategies.rsi_step_grid.strategy import (
-    EntryIntent,
-    RsiStepGridStrategy,
-)
+from tiewtrade.strategies.entry_intent import EntryIntent
+from tiewtrade.strategies.indicators import IndicatorSnapshot, WilderIndicators
+from tiewtrade.strategies.protocols import StrategyPreset
+from tiewtrade.strategies.registry import strategy_definition_for
 from tiewtrade.trading.basket import Basket, ClosedBasket
 from tiewtrade.trading.capital import FuturesCapitalPlan
 from tiewtrade.trading.entry_pair import EntryPairLifecycle
@@ -82,7 +77,7 @@ class PaperFuturesSession:
         session: SessionConfig,
         market_data: MarketDataConfig,
         symbol_rules: SymbolRules,
-        preset: RsiStepGridPreset,
+        preset: StrategyPreset,
     ) -> None:
         if (
             session.trade_mode is not TradeMode.PAPER
@@ -116,7 +111,9 @@ class PaperFuturesSession:
             session.entry_policy,
         )
         self._indicators = WilderIndicators(preset)
-        self._strategy = RsiStepGridStrategy(session.session_id, preset)
+        self._strategy = strategy_definition_for(preset.version).build_strategy(
+            session.session_id, preset
+        )
         self._lifecycle = EntryPairLifecycle(session.entry_policy)
         self._state = PaperFuturesSessionState.ACTIVE
         self._failure_reason: PaperFuturesFailureReason | None = None
@@ -338,7 +335,9 @@ class PaperFuturesSession:
         self._state = PaperFuturesSessionState.FAILED_CLOSED
         self._failure_reason = PaperFuturesFailureReason.EXECUTION_ERROR
         self._pending_intent = None
-        self._strategy = RsiStepGridStrategy(self._session.session_id, self._preset)
+        self._strategy = strategy_definition_for(self._preset.version).build_strategy(
+            self._session.session_id, self._preset
+        )
 
     def _snapshot(
         self,

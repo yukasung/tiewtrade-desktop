@@ -1,6 +1,7 @@
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
+from typing import cast
 from uuid import UUID
 
 import pytest
@@ -14,8 +15,9 @@ from tiewtrade.application.paper_futures_session import (
 )
 from tiewtrade.market_data.candle import Candle
 from tiewtrade.market_data.config import MarketDataConfig
+from tiewtrade.strategies.entry_intent import EntryIntent
 from tiewtrade.strategies.rsi_step_grid.preset import RsiStepGridPreset
-from tiewtrade.strategies.rsi_step_grid.strategy import EntryIntent
+from tiewtrade.strategies.rsi_step_grid.strategy import RsiStepGridStrategy
 from tiewtrade.trading.basket import BasketCloseReason
 from tiewtrade.trading.entry_policy import EntryPolicy
 from tiewtrade.trading.futures_policy import FuturesTradingPolicy
@@ -212,7 +214,7 @@ def test_unexpected_execution_error_fails_closed(
     assert session.snapshot.state is PaperFuturesSessionState.FAILED_CLOSED
     assert session.snapshot.failure_reason is PaperFuturesFailureReason.EXECUTION_ERROR
     assert session.snapshot.pending_intent is None
-    assert session._strategy._pending_intent is None
+    assert cast(RsiStepGridStrategy, session._strategy)._pending_intent is None
 
     before = session.snapshot
     following_candle = next_candle(
@@ -268,7 +270,7 @@ def test_unexpected_margin_error_fails_closed(
     assert session.snapshot.account_equity == Decimal("1000")
     assert session._basket is None
     assert session._lifecycle.entry_count == 0
-    assert session._strategy._pending_intent is None
+    assert cast(RsiStepGridStrategy, session._strategy)._pending_intent is None
 
 
 @pytest.mark.parametrize("failure_path", ["executor", "margin"])
@@ -318,7 +320,7 @@ def test_failure_cleanup_cannot_prevent_terminal_fail_closed(
     ), actual
     assert session.snapshot.failure_reason is PaperFuturesFailureReason.EXECUTION_ERROR
     assert session.snapshot.pending_intent is None
-    assert session._strategy._pending_intent is None
+    assert cast(RsiStepGridStrategy, session._strategy)._pending_intent is None
 
 
 def test_rejected_entry_releases_strategy_to_rearm_pending_intent() -> None:
@@ -341,7 +343,10 @@ def test_rejected_entry_releases_strategy_to_rearm_pending_intent() -> None:
     assert snapshot.basket_id is None
     assert snapshot.pending_intent is not None
     assert snapshot.pending_intent.intent_id != pending.intent_id
-    assert session._strategy._pending_intent == snapshot.pending_intent
+    assert (
+        cast(RsiStepGridStrategy, session._strategy)._pending_intent
+        == snapshot.pending_intent
+    )
 
 
 def test_new_take_profit_cannot_fill_on_the_entry_candle() -> None:

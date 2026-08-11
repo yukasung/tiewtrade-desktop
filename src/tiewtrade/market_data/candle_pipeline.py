@@ -1,6 +1,6 @@
 from collections.abc import Callable
 from copy import deepcopy
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Protocol
 
 from tiewtrade.market_data.candle import Candle
@@ -43,11 +43,14 @@ class CompletedCandlePipeline:
         config: MarketDataConfig,
         sink: MarketDataCandleSink,
         on_delivery: Callable[[datetime], None],
+        not_closed_tolerance: timedelta = timedelta(0),
     ) -> None:
         self._config = config
         self._sink = sink
         self._on_delivery = on_delivery
-        self._candles = CompletedCandleStream(config)
+        self._candles = CompletedCandleStream(
+            config, not_closed_tolerance=not_closed_tolerance
+        )
 
     async def warm_up(
         self,
@@ -148,8 +151,14 @@ class CompletedCandlePipeline:
         *,
         received_at: datetime,
     ) -> None:
+        # A candle accepted here already passed the (possibly tolerant)
+        # not-closed gate above, so it is authoritatively closed. Downstream
+        # consumers keep their own zero-tolerance completed-candle stream and
+        # would otherwise reject a received_at that is still a moment before
+        # close_time, silently dropping the delivery.
+        delivered_at = max(received_at, candle.close_time)
         try:
-            await self._sink.process_completed(candle, received_at=received_at)
+            await self._sink.process_completed(candle, received_at=delivered_at)
         except Exception as error:
             raise CandlePipelineSinkError from error
         self._on_delivery(candle.open_time)

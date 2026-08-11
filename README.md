@@ -24,6 +24,14 @@ python3 -m venv .venv
 make run
 ```
 
+## ทดสอบบน branch ปัจจุบันก่อน merge
+
+```bash
+git switch feat/binance-style-trade-history
+git branch --show-current
+make run
+```
+
 ## การตรวจซ้ำด้วย fixture
 
 เรียกใช้ deterministic Paper Spot replay จาก root ของโครงการ:

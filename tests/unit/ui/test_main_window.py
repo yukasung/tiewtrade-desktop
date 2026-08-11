@@ -219,7 +219,7 @@ def _session_configuration_controls(window: MainWindow) -> tuple[QWidget, ...]:
         setup.market_type,
         setup.symbol,
         setup.timeframe,
-        setup.preset_label,
+        setup.strategy,
         setup.available_capital,
         setup.max_entries,
         setup.spot_ratio,

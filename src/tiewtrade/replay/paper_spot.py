@@ -6,7 +6,7 @@ from decimal import Decimal
 from tiewtrade.application.paper_spot_session import PaperSpotSession
 from tiewtrade.market_data.candle import Candle
 from tiewtrade.market_data.config import MarketDataConfig
-from tiewtrade.strategies.rsi_step_grid.preset import RsiStepGridPreset
+from tiewtrade.strategies.protocols import StrategyPreset
 from tiewtrade.trading.session_config import SessionConfig
 from tiewtrade.trading.symbol_rules import SymbolRules
 
@@ -36,7 +36,7 @@ def run_paper_spot_replay(
     session: SessionConfig,
     market_data: MarketDataConfig,
     symbol_rules: SymbolRules,
-    preset: RsiStepGridPreset,
+    preset: StrategyPreset,
 ) -> ReplayResult:
     paper_session = PaperSpotSession(session, market_data, symbol_rules, preset)
     accepted_candles = 0

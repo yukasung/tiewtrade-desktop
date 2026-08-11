@@ -11,6 +11,8 @@ from tiewtrade.trading.trade_history import FillSide, TradeFill
 
 _UTC_EPOCH = datetime(1970, 1, 1, tzinfo=UTC)
 _DEFAULT_VISIBLE_CANDLE_COUNT = 120
+MINIMUM_VISIBLE_CANDLE_COUNT = 20
+MAXIMUM_VISIBLE_CANDLE_COUNT = 500
 ChartCandle = Candle
 
 
@@ -56,6 +58,40 @@ def default_chart_range(
         start=completed_end - interval * _DEFAULT_VISIBLE_CANDLE_COUNT,
         end=completed_end,
     )
+
+
+def visible_candle_count(chart_range: ChartRange, timeframe: str) -> int:
+    """How many whole candles of `timeframe` the range spans."""
+    interval = timeframe_to_interval(timeframe)
+    return max(1, (chart_range.end - chart_range.start) // interval)
+
+
+def zoomed_chart_range(
+    chart_range: ChartRange,
+    timeframe: str,
+    *,
+    zoom_in: bool,
+) -> ChartRange:
+    """Widen or narrow the visible window by one 1.25x step.
+
+    The range end stays anchored so that zooming never drops the newest
+    candle out of view, which keeps a live session following the latest
+    boundary. Returns the same range when a zoom limit is already reached.
+    """
+    interval = timeframe_to_interval(timeframe)
+    visible = visible_candle_count(chart_range, timeframe)
+    target = (visible * 4) // 5 if zoom_in else (visible * 5) // 4
+    if target == visible:
+        target = visible - 1 if zoom_in else visible + 1
+    if zoom_in:
+        # Clamping must never flip the direction: a window already narrower
+        # than the limit stays put instead of widening.
+        target = min(max(target, MINIMUM_VISIBLE_CANDLE_COUNT), visible)
+    else:
+        target = max(min(target, MAXIMUM_VISIBLE_CANDLE_COUNT), visible)
+    if target == visible:
+        return chart_range
+    return ChartRange(chart_range.end - interval * target, chart_range.end)
 
 
 @dataclass(frozen=True, slots=True)

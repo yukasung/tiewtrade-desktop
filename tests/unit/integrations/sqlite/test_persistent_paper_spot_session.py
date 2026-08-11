@@ -90,7 +90,7 @@ def entry_snapshot() -> PaperSpotSessionSnapshot:
         failure_reason=None,
         pending_intent=None,
         entry_fill=entry_fill(),
-        take_profit_fill=None,
+        exit_fill=None,
         closed_basket=None,
         closed_basket_count=0,
         basket_id=BASKET_ID,
@@ -106,7 +106,7 @@ def close_snapshot() -> PaperSpotSessionSnapshot:
         failure_reason=None,
         pending_intent=None,
         entry_fill=None,
-        take_profit_fill=exit_fill(),
+        exit_fill=exit_fill(),
         closed_basket=closed_basket(),
         closed_basket_count=1,
         basket_id=BASKET_ID,
@@ -204,13 +204,13 @@ def test_successful_close_is_durable_before_ready_snapshot_returns() -> None:
     assert result.persistence_state is PersistenceState.READY
 
 
-def test_take_profit_fill_without_closed_basket_blocks_persistence() -> None:
+def test_exit_fill_without_closed_basket_blocks_persistence() -> None:
     session = create_autospec(PaperSpotSession, instance=True)
     history = create_autospec(PaperSpotSQLiteHistory, instance=True)
     session.process_completed_candle.return_value = replace(
         entry_snapshot(),
         entry_fill=None,
-        take_profit_fill=exit_fill(),
+        exit_fill=exit_fill(),
         closed_basket=None,
     )
     persistent = persistent_session(session, history)

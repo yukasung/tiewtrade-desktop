@@ -11,7 +11,7 @@ from tiewtrade.application.paper_session_setup import (
 from tiewtrade.application.paper_symbols import validate_paper_symbol
 from tiewtrade.integrations.sqlite.database import SQLiteDatabase
 from tiewtrade.market_data.config import MarketDataConfig
-from tiewtrade.strategies.rsi_step_grid.preset import RsiStepGridPreset
+from tiewtrade.strategies.registry import strategy_definition_for
 from tiewtrade.trading.entry_policy import EntryPolicy
 from tiewtrade.trading.futures_policy import (
     FuturesTradingPolicy,
@@ -123,8 +123,12 @@ def _session_from_row(row: sqlite3.Row) -> ConfiguredPaperSession:
         raise PaperSessionUnavailableError(
             "Active Paper Session read failed"
         ) from error
-    if row["preset_version"] != RsiStepGridPreset.v1().version:
-        raise PaperSessionUnavailableError("Active Paper Session read failed")
+    try:
+        strategy_definition_for(row["preset_version"])
+    except ValueError as error:
+        raise PaperSessionUnavailableError(
+            "Active Paper Session read failed"
+        ) from error
     market_type = MarketType(row["market_type"])
     spot_policy = (
         SpotTradingPolicy(Decimal(row["spot_trading_capital_ratio"]))

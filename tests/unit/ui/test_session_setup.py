@@ -37,6 +37,7 @@ def test_default_form_builds_paper_spot_values(qtbot: QtBot) -> None:
     assert values.slippage_bps == "0.05"
     assert values.spot_trading_capital_percent == "80"
     assert values.futures_leverage is None
+    assert values.preset_version == "rsi-step-grid-v1"
     assert widget.trade_mode_label.text() == "Paper"
     assert widget.market_type.currentData() == "spot"
     assert [
@@ -45,7 +46,10 @@ def test_default_form_builds_paper_spot_values(qtbot: QtBot) -> None:
     ] == ["spot", "futures"]
     assert widget.market_type.isEnabled()
     assert widget.symbol.isEnabled()
-    assert widget.preset_label.text() == "RSI Step Grid v1"
+    assert widget.strategy.currentText() == "RSI Step Grid v1"
+    assert [
+        widget.strategy.itemData(index) for index in range(widget.strategy.count())
+    ] == ["rsi-step-grid-v1", "rsi-buy-only-v1"]
 
 
 def test_symbol_combo_has_only_paper_symbols(qtbot: QtBot) -> None:

@@ -3,7 +3,7 @@ from datetime import datetime
 from decimal import Decimal
 
 from tiewtrade.market_data.candle import Candle
-from tiewtrade.strategies.rsi_step_grid.strategy import EntryIntent
+from tiewtrade.strategies.entry_intent import EntryIntent
 from tiewtrade.trading.basket import Basket, BasketCloseReason
 from tiewtrade.trading.capital import FuturesCapitalPlan
 from tiewtrade.trading.position import PositionSide

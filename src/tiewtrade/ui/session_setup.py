@@ -19,12 +19,13 @@ from tiewtrade.application.paper_session_setup import (
     ConfiguredPaperSession,
     PaperSessionSetupValues,
     PaperSessionValidationError,
+    preset_choices,
     spot_trading_policy_from_percent,
 )
 from tiewtrade.application.paper_symbols import PAPER_SYMBOLS
 from tiewtrade.market_data.config import SUPPORTED_V1_TIMEFRAME_CHOICES
 from tiewtrade.trading.futures_policy import FuturesTradingPolicy
-from tiewtrade.ui.preset_display import preset_display_name
+from tiewtrade.trading.session_config import MarketType
 
 
 class SessionSetupWidget(QWidget):
@@ -66,8 +67,9 @@ class SessionSetupWidget(QWidget):
         self.max_entries.setValue(10)
         self.max_entries_error = self._error_label("max_entries")
 
-        self.preset_label = QLabel(preset_display_name("rsi-step-grid-v1"))
-        self.preset_label.setObjectName("readOnlyValue")
+        self.strategy = QComboBox()
+        self.strategy.setObjectName("strategy")
+        self.strategy.currentIndexChanged.connect(self._sync_description)
 
         self.spot_ratio = QLineEdit("80")
         self.spot_ratio.setObjectName("spotTradingCapitalPercent")
@@ -117,6 +119,7 @@ class SessionSetupWidget(QWidget):
         self.symbol_error = self._error_label("symbol")
         self.timeframe_error = self._error_label("timeframe")
         self.market_type_error = self._error_label("market_type")
+        self.strategy_error = self._error_label("preset_version")
 
         self.create_button = QPushButton("Start Paper Bot")
         self.create_button.setObjectName("primaryButton")
@@ -132,6 +135,7 @@ class SessionSetupWidget(QWidget):
         self.market_type.setAccessibleName("Market Type")
         self.symbol.setAccessibleName("Symbol")
         self.timeframe.setAccessibleName("Timeframe")
+        self.strategy.setAccessibleName("Strategy")
         self.available_capital.setAccessibleName("Available Capital (USDT)")
         self.max_entries.setAccessibleName("Maximum Entries")
         self.spot_ratio.setAccessibleName("Spot Trading Capital (%)")
@@ -160,6 +164,7 @@ class SessionSetupWidget(QWidget):
                 None if futures else self.spot_ratio.text().strip()
             ),
             futures_leverage=str(self.leverage.value()) if futures else None,
+            preset_version=str(self.strategy.currentData()),
         )
 
     def set_values_from_session(self, session: ConfiguredPaperSession) -> None:
@@ -181,6 +186,10 @@ class SessionSetupWidget(QWidget):
             )
         if config.futures_policy is not None:
             self.leverage.setValue(config.futures_policy.leverage)
+        self._populate_strategy()
+        strategy_index = self.strategy.findData(config.preset_version)
+        if strategy_index >= 0:
+            self.strategy.setCurrentIndex(strategy_index)
         self.clear_errors()
 
     @Slot()
@@ -193,7 +202,7 @@ class SessionSetupWidget(QWidget):
             self.market_type,
             self.symbol,
             self.timeframe,
-            self.preset_label,
+            self.strategy,
             self.available_capital,
             self.max_entries,
             self.spot_ratio,
@@ -237,6 +246,8 @@ class SessionSetupWidget(QWidget):
             return self.symbol, self.symbol_error
         if field == "timeframe":
             return self.timeframe, self.timeframe_error
+        if field == "preset_version":
+            return self.strategy, self.strategy_error
         return None
 
     def _build_layout(self) -> None:
@@ -280,6 +291,12 @@ class SessionSetupWidget(QWidget):
             self.timeframe,
             (self.timeframe_error,),
         )
+        self._add_row(
+            identity_form,
+            "Strategy",
+            self.strategy,
+            (self.strategy_error,),
+        )
         card_layout.addLayout(identity_form)
 
         capital_heading = QLabel("Capital")
@@ -319,7 +336,7 @@ class SessionSetupWidget(QWidget):
     @Slot()
     def _sync_description(self) -> None:
         self.description.setText(
-            f"Paper · {self.symbol.currentData()} · RSI Step Grid v1"
+            f"Paper · {self.symbol.currentData()} · {self.strategy.currentText()}"
         )
 
     @Slot(bool)
@@ -419,6 +436,21 @@ class SessionSetupWidget(QWidget):
         advanced = self.advanced_toggle.isChecked()
         self.spot_fields.setVisible(advanced and not futures)
         self.futures_fields.setVisible(advanced and futures)
+        self._populate_strategy()
+
+    def _populate_strategy(self) -> None:
+        market_type = MarketType(self.market_type.currentData())
+        previous = self.strategy.currentData()
+        self.strategy.blockSignals(True)
+        self.strategy.clear()
+        for choice in preset_choices(market_type):
+            self.strategy.addItem(choice.display_name, choice.preset_version)
+        if previous is not None:
+            index = self.strategy.findData(previous)
+            if index >= 0:
+                self.strategy.setCurrentIndex(index)
+        self.strategy.blockSignals(False)
+        self._sync_description()
 
     @staticmethod
     def _form() -> QFormLayout:

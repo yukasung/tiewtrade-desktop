@@ -1,4 +1,3 @@
-def preset_display_name(version: str) -> str:
-    if version == "rsi-step-grid-v1":
-        return "RSI Step Grid v1"
-    return version
+from tiewtrade.application.paper_session_setup import preset_display_name
+
+__all__ = ["preset_display_name"]

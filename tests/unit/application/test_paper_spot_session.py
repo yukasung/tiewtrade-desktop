@@ -21,9 +21,12 @@ from tiewtrade.integrations.sqlite.persistent_paper_spot_session import (
 )
 from tiewtrade.market_data.candle import Candle
 from tiewtrade.market_data.config import MarketDataConfig
-from tiewtrade.strategies.rsi_step_grid.indicators import WilderIndicators
+from tiewtrade.strategies.entry_intent import EntryIntent
+from tiewtrade.strategies.indicators import WilderIndicators
+from tiewtrade.strategies.rsi_buy_only.preset import RsiBuyOnlyPreset
 from tiewtrade.strategies.rsi_step_grid.preset import RsiStepGridPreset
-from tiewtrade.strategies.rsi_step_grid.strategy import EntryIntent, RsiStepGridStrategy
+from tiewtrade.strategies.rsi_step_grid.strategy import RsiStepGridStrategy
+from tiewtrade.trading.basket import BasketCloseReason
 from tiewtrade.trading.entry_pair import EntryPairLifecycle
 from tiewtrade.trading.entry_policy import EntryPolicy
 from tiewtrade.trading.session_config import (
@@ -148,7 +151,7 @@ def test_take_profit_skips_entry_fill_candle_and_closes_on_following_candle() ->
 
     assert entry_snapshot.entry_fill is not None
     assert entry_snapshot.closed_basket is None
-    assert entry_snapshot.take_profit_fill is None
+    assert entry_snapshot.exit_fill is None
     assert entry_snapshot.closed_basket_count == 0
     assert entry_snapshot.basket_entry_count == 1
 
@@ -160,11 +163,58 @@ def test_take_profit_skips_entry_fill_candle_and_closes_on_following_candle() ->
     assert target_snapshot.closed_basket is not None
     assert target_snapshot.basket_id == target_snapshot.closed_basket.basket_id
     assert target_snapshot.closed_basket.entry_count == 1
-    assert target_snapshot.take_profit_fill is not None
-    assert target_snapshot.take_profit_fill.filled_at == target_candle.close_time
+    assert target_snapshot.exit_fill is not None
+    assert target_snapshot.exit_fill.filled_at == target_candle.close_time
     assert target_snapshot.closed_basket_count == 1
     assert target_snapshot.basket_entry_count == 0
     assert target_snapshot.take_profit_price is None
+
+
+def test_stop_loss_closes_the_basket_when_configured() -> None:
+    application = buy_only_paper_session()
+    entry_snapshot, next_minute = arm_and_fill_buy_only_entry(application)
+    assert entry_snapshot.entry_fill is not None
+    entry_price = entry_snapshot.entry_fill.price
+
+    stop_loss_candle = candle(
+        next_minute,
+        open_price=str(entry_price),
+        close_price=str(entry_price),
+        high=str(entry_price),
+        low=str(entry_price - Decimal("10")),
+    )
+    closed_snapshot = application.process_completed_candle(
+        stop_loss_candle, received_at=stop_loss_candle.close_time
+    )
+
+    assert closed_snapshot.closed_basket is not None
+    assert closed_snapshot.closed_basket.close_reason is BasketCloseReason.STOP_LOSS
+    assert closed_snapshot.exit_fill is not None
+    assert closed_snapshot.closed_basket_count == 1
+    assert closed_snapshot.basket_entry_count == 0
+
+
+def test_stop_loss_takes_precedence_over_take_profit_on_the_same_candle() -> None:
+    application = buy_only_paper_session()
+    entry_snapshot, next_minute = arm_and_fill_buy_only_entry(application)
+    assert entry_snapshot.entry_fill is not None
+    assert entry_snapshot.take_profit_price is not None
+    take_profit_price = entry_snapshot.take_profit_price
+    entry_price = entry_snapshot.entry_fill.price
+
+    both_touch_candle = candle(
+        next_minute,
+        open_price=str(entry_price),
+        close_price=str(entry_price),
+        high=str(take_profit_price + Decimal("5")),
+        low=str(entry_price - Decimal("10")),
+    )
+    closed_snapshot = application.process_completed_candle(
+        both_touch_candle, received_at=both_touch_candle.close_time
+    )
+
+    assert closed_snapshot.closed_basket is not None
+    assert closed_snapshot.closed_basket.close_reason is BasketCloseReason.STOP_LOSS
 
 
 def test_minimum_notional_rejection_releases_strategy_to_create_a_new_intent() -> None:
@@ -319,7 +369,7 @@ def test_strategy_callback_failure_does_not_commit_candidate_transition(
         start_minute=minute_after(first_intent) + 5,
         downtrend_candles=60,
     )
-    original_strategy = application._strategy
+    original_strategy = cast(RsiStepGridStrategy, application._strategy)
     original_callback = RsiStepGridStrategy.on_entry_filled
 
     def mutate_then_raise(
@@ -426,7 +476,7 @@ def test_closed_two_entry_basket_resets_lifecycle_for_a_new_basket() -> None:
     )
     assert closed.closed_basket is not None
     assert closed.closed_basket.entry_count == 2
-    assert closed.take_profit_fill is not None
+    assert closed.exit_fill is not None
     assert closed.closed_basket_count == 1
 
     new_intent = arm_entry_intent(
@@ -443,7 +493,7 @@ def test_closed_two_entry_basket_resets_lifecycle_for_a_new_basket() -> None:
 
     assert new_fill.entry_fill is not None
     assert new_fill.basket_entry_count == 1
-    assert new_fill.take_profit_fill is None
+    assert new_fill.exit_fill is None
     assert new_fill.closed_basket is None
     assert new_fill.closed_basket_count == 1
 
@@ -458,7 +508,7 @@ def test_closed_two_entry_basket_resets_lifecycle_for_a_new_basket() -> None:
     )
 
     assert second_closed.closed_basket is not None
-    assert second_closed.take_profit_fill is not None
+    assert second_closed.exit_fill is not None
     assert second_closed.closed_basket_count == 2
 
 
@@ -474,6 +524,50 @@ def paper_session(*, min_notional: Decimal = Decimal("5")) -> PaperSpotSession:
         ),
         RsiStepGridPreset.v1(),
     )
+
+
+def buy_only_paper_session(*, min_notional: Decimal = Decimal("5")) -> PaperSpotSession:
+    return PaperSpotSession(
+        session_config(preset_version="rsi-buy-only-v1"),
+        MarketDataConfig(symbol="BTCUSDT", timeframe="5m"),
+        SymbolRules(
+            symbol="BTCUSDT",
+            tick_size=Decimal("0.01"),
+            step_size=Decimal("0.001"),
+            min_notional=min_notional,
+        ),
+        RsiBuyOnlyPreset.v1(),
+    )
+
+
+def arm_and_fill_buy_only_entry(
+    application: PaperSpotSession,
+) -> tuple[PaperSpotSessionSnapshot, int]:
+    """Feed an uptrend into a Buy Only session until entry fills.
+
+    Returns the fill snapshot and the next unused candle minute offset.
+    """
+    close = Decimal("100")
+    minute = 0
+    snapshot: PaperSpotSessionSnapshot | None = None
+    for _ in range(30):
+        candle_value = candle(minute, open_price=str(close), close_price=str(close + 1))
+        snapshot = application.process_completed_candle(
+            candle_value, received_at=candle_value.close_time
+        )
+        minute += 5
+        if snapshot.pending_intent is not None:
+            break
+        close += 1
+    else:
+        raise AssertionError("expected a pending entry intent")
+
+    fill_candle = candle(minute, open_price=str(close + 1), close_price=str(close + 2))
+    snapshot = application.process_completed_candle(
+        fill_candle, received_at=fill_candle.close_time
+    )
+    assert snapshot.entry_fill is not None
+    return snapshot, minute + 5
 
 
 def persistent_spot_session(
@@ -518,6 +612,7 @@ def candle(
     open_price: str,
     close_price: str,
     high: str | None = None,
+    low: str | None = None,
 ) -> Candle:
     open_decimal = Decimal(open_price)
     close_decimal = Decimal(close_price)
@@ -531,7 +626,11 @@ def candle(
             if high is None
             else Decimal(high)
         ),
-        low=min(open_decimal, close_decimal) - Decimal("1"),
+        low=(
+            min(open_decimal, close_decimal) - Decimal("1")
+            if low is None
+            else Decimal(low)
+        ),
         close=close_decimal,
     )
 
