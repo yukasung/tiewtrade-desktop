@@ -6,7 +6,12 @@ from decimal import Decimal
 from PySide6.QtCore import QLineF, QPointF, QRectF
 from PySide6.QtGui import QColor
 
-from tiewtrade.application.chart_data import ChartCandle, ChartRange, ChartSnapshot
+from tiewtrade.application.chart_data import (
+    ChartCandle,
+    ChartRange,
+    ChartSnapshot,
+    latest_completed_boundary,
+)
 from tiewtrade.market_data.config import timeframe_to_interval
 from tiewtrade.trading.trade_history import FillSide
 
@@ -24,7 +29,18 @@ _AXIS_LABEL_HEIGHT = 18.0
 # Fill markers are single-letter badges so a run of entries stays readable
 # when candles are packed together.
 _MARKER_BADGE_SIZE = 18.0
+_MARKER_BADGE_EXTENT = (_MARKER_BADGE_SIZE, _MARKER_BADGE_SIZE)
+_MARKER_ANCHOR_GAP = 7.0
+_MARKER_STACK_GAP = 3.0
+_MARKER_STACK_LIMIT = 6
+_MARKER_HEADROOM = _MARKER_ANCHOR_GAP + _MARKER_BADGE_SIZE + 2.0
+_BASE_PRICE_PADDING = Decimal("0.05")
+_MAXIMUM_PRICE_PADDING = Decimal("0.2")
 MARKER_BADGE_RADIUS = 5.0
+# Badges carry a ring in the surface color so they stay legible where they
+# cross a candle or another badge, instead of a border adding data-weight ink.
+MARKER_RING_WIDTH = 2.0
+CHART_SURFACE_COLOR = "#10151C"
 
 
 def marker_label(side: FillSide) -> str:
@@ -42,8 +58,10 @@ class CandleGlyph:
 
 @dataclass(frozen=True, slots=True)
 class MarkerGlyph:
-    triangle: tuple[QPointF, QPointF, QPointF]
-    label_rect: QRectF
+    # A thin connector from the candle's outer edge to the badge, so the badge
+    # can sit clear of the price ink and still name the candle it belongs to.
+    leader: QLineF
+    badge: QRectF
     label: str
     color: QColor
 
@@ -120,8 +138,15 @@ def build_painter_model(
     prices = [
         price for candle in display_candles for price in (candle.high, candle.low)
     ] + [marker.price for marker in snapshot.markers]
-    low, high = _padded_price_range(min(prices), max(prices))
     price_surface, rsi_surface = _panes(surface)
+    low, high = _padded_price_range(
+        min(prices),
+        max(prices),
+        # Reserve room outside the extreme candles for their badges, so the
+        # annotation layer never has to sit on the price ink.
+        headroom=_MARKER_HEADROOM if snapshot.markers else 0.0,
+        pane_height=price_surface.height(),
+    )
     grid_lines = tuple(
         QLineF(
             price_surface.left(),
@@ -164,48 +189,7 @@ def build_painter_model(
                 color=color,
             )
         )
-    markers: list[MarkerGlyph] = []
-    for marker in snapshot.markers:
-        x = _clamp_x(
-            _marker_x(marker.filled_at_utc, snapshot.chart_range, price_surface),
-            price_surface,
-            _MARKER_BADGE_SIZE / 2,
-        )
-        y = _price_y(marker.price, low, high, price_surface)
-        is_buy = marker.side is FillSide.BUY
-        color = QColor("#0ECB81" if is_buy else "#F6465D")
-        triangle = (
-            QPointF(x, y - 8 if is_buy else y + 8),
-            QPointF(x - 6, y + 2 if is_buy else y - 2),
-            QPointF(x + 6, y + 2 if is_buy else y - 2),
-        )
-        # The badge sits beyond the triangle's tip, flipping to the other side
-        # when that would push it out of the pane.
-        preferred_top = y - 30 if is_buy else y + 12
-        alternate_top = y + 12 if is_buy else y - 30
-        badge_top = preferred_top
-        if not (
-            price_surface.top() <= badge_top
-            and badge_top + _MARKER_BADGE_SIZE <= price_surface.bottom()
-        ):
-            badge_top = alternate_top
-        badge_top = min(
-            max(badge_top, price_surface.top()),
-            price_surface.bottom() - _MARKER_BADGE_SIZE,
-        )
-        markers.append(
-            MarkerGlyph(
-                triangle=triangle,
-                label_rect=QRectF(
-                    x - _MARKER_BADGE_SIZE / 2,
-                    badge_top,
-                    _MARKER_BADGE_SIZE,
-                    _MARKER_BADGE_SIZE,
-                ),
-                label=marker_label(marker.side),
-                color=color,
-            )
-        )
+    markers = _marker_glyphs(snapshot, display_candles, low, high, price_surface)
     current_price = _current_price_glyph(snapshot, low, high, price_surface, surface)
     # Read once per build: the forming candle's RSI is derived on each call.
     rsi_values = [snapshot.rsi_for(candle.open_time) for candle in display_candles]
@@ -218,10 +202,126 @@ def build_painter_model(
         price_ticks=_price_ticks(low, high, price_surface, surface),
         time_ticks=_time_ticks(visual_range, rsi_surface, surface),
         candles=tuple(candles),
-        markers=tuple(markers),
+        markers=markers,
         current_price=current_price,
         rsi_pane=_rsi_pane_glyph(rsi_values, candles, rsi_surface, surface),
     )
+
+
+def _marker_glyphs(
+    snapshot: ChartSnapshot,
+    display_candles: Sequence[ChartCandle],
+    low: Decimal,
+    high: Decimal,
+    price_surface: QRectF,
+) -> tuple[MarkerGlyph, ...]:
+    """Place fill badges outside the price ink, clear of one another.
+
+    A fill happens at a price inside its candle's range, so a badge drawn at
+    that price always lands on the candle. Anchoring to the candle's outer
+    edge instead — low for a buy, high for a sell — keeps the body and wick
+    readable, and a leader line preserves which candle the badge names.
+    """
+    candle_by_open_time = {candle.open_time: candle for candle in display_candles}
+    half = _MARKER_BADGE_SIZE / 2
+    placed: list[QRectF] = []
+    glyphs: list[MarkerGlyph] = []
+    for marker in sorted(snapshot.markers, key=lambda item: item.filled_at_utc):
+        is_buy = marker.side is FillSide.BUY
+        x = _clamp_x(
+            _marker_x(marker.filled_at_utc, snapshot.chart_range, price_surface),
+            price_surface,
+            half,
+        )
+        candle = candle_by_open_time.get(
+            latest_completed_boundary(snapshot.timeframe, marker.filled_at_utc)
+        )
+        if candle is None:
+            # The candle scrolled out of view; the fill price is all that is left.
+            below_y = above_y = _price_y(marker.price, low, high, price_surface)
+        else:
+            below_y = _price_y(candle.low, low, high, price_surface)
+            above_y = _price_y(candle.high, low, high, price_surface)
+        badge, below = _free_badge(
+            x,
+            below_y=below_y,
+            above_y=above_y,
+            prefer_below=is_buy,
+            placed=placed,
+            pane=price_surface,
+        )
+        placed.append(badge)
+        glyphs.append(
+            MarkerGlyph(
+                leader=QLineF(
+                    x,
+                    below_y if below else above_y,
+                    x,
+                    badge.top() if below else badge.bottom(),
+                ),
+                badge=badge,
+                label=marker_label(marker.side),
+                color=QColor("#0ECB81" if is_buy else "#F6465D"),
+            )
+        )
+    return tuple(glyphs)
+
+
+def _free_badge(
+    x: float,
+    *,
+    below_y: float,
+    above_y: float,
+    prefer_below: bool,
+    placed: Sequence[QRectF],
+    pane: QRectF,
+) -> tuple[QRectF, bool]:
+    """Find a spot for the badge that is off the candle and off other badges.
+
+    Buys hang under the candle's low and sells ride over its high. When that
+    side has no room left in the pane, the badge flips to the other side of
+    the same candle rather than being clamped back onto the price ink.
+    """
+    for below in (prefer_below, not prefer_below):
+        badge = _stacked_badge(x, below_y if below else above_y, below, placed)
+        if pane.top() <= badge.top() and badge.bottom() <= pane.bottom():
+            return badge, below
+    badge = _stacked_badge(
+        x,
+        below_y if prefer_below else above_y,
+        prefer_below,
+        placed,
+    )
+    return (
+        QRectF(
+            badge.left(),
+            min(max(badge.top(), pane.top()), pane.bottom() - _MARKER_BADGE_SIZE),
+            *_MARKER_BADGE_EXTENT,
+        ),
+        prefer_below,
+    )
+
+
+def _stacked_badge(
+    x: float,
+    anchor_y: float,
+    below: bool,
+    placed: Sequence[QRectF],
+) -> QRectF:
+    """Step further from the candle until the badge clears the earlier ones."""
+    outward = 1.0 if below else -1.0
+    step = _MARKER_BADGE_SIZE + _MARKER_STACK_GAP
+    top = (
+        anchor_y + _MARKER_ANCHOR_GAP
+        if below
+        else anchor_y - _MARKER_ANCHOR_GAP - _MARKER_BADGE_SIZE
+    )
+    badge = QRectF(x - _MARKER_BADGE_SIZE / 2, top, *_MARKER_BADGE_EXTENT)
+    for _ in range(_MARKER_STACK_LIMIT):
+        if not any(badge.intersects(other) for other in placed):
+            break
+        badge = badge.translated(0.0, outward * step)
+    return badge
 
 
 def _rsi_pane_glyph(
@@ -356,11 +456,26 @@ def _axis_label_rect(y: float, pane: QRectF, surface: QRectF) -> QRectF:
     )
 
 
-def _padded_price_range(low: Decimal, high: Decimal) -> tuple[Decimal, Decimal]:
+def _padded_price_range(
+    low: Decimal,
+    high: Decimal,
+    *,
+    headroom: float = 0.0,
+    pane_height: float = 1.0,
+) -> tuple[Decimal, Decimal]:
+    """Pad the price range, widening it to keep `headroom` pixels at each end.
+
+    Padding is a fraction of the *padded* span, so the fraction that buys
+    `headroom` pixels is solved for rather than applied to the raw span.
+    """
     if low == high:
         low -= Decimal("1")
         high += Decimal("1")
-    padding = (high - low) * Decimal("0.05")
+    fraction = max(
+        _BASE_PRICE_PADDING,
+        min(_MAXIMUM_PRICE_PADDING, Decimal(str(headroom / max(pane_height, 1.0)))),
+    )
+    padding = (high - low) * fraction / (Decimal("1") - fraction * Decimal("2"))
     return low - padding, high + padding
 
 

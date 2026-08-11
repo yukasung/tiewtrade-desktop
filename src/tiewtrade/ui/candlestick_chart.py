@@ -27,7 +27,9 @@ from tiewtrade.application.chart_view_selection import ChartViewSelection
 from tiewtrade.application.paper_symbols import PAPER_SYMBOLS
 from tiewtrade.market_data.config import SUPPORTED_V1_TIMEFRAME_CHOICES
 from tiewtrade.ui.chart_painter_model import (
+    CHART_SURFACE_COLOR,
     MARKER_BADGE_RADIUS,
+    MARKER_RING_WIDTH,
     AxisTickGlyph,
     CandleReadout,
     ChartPainterModel,
@@ -219,7 +221,7 @@ class CandlestickChartWidget(QWidget):
     def paintEvent(self, event: object) -> None:  # noqa: N802
         del event
         painter = QPainter(self)
-        painter.fillRect(self.rect(), QColor("#10151C"))
+        painter.fillRect(self.rect(), QColor(CHART_SURFACE_COLOR))
         snapshot = self._snapshot
         if snapshot is None:
             painter.end()
@@ -323,16 +325,18 @@ class CandlestickChartWidget(QWidget):
             painter.drawLine(candle.wick)
             painter.fillRect(candle.body, candle.color)
         for marker in model.markers:
-            painter.setPen(QPen(marker.color, 2))
+            painter.setPen(QPen(marker.color, 1))
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+            painter.drawLine(marker.leader)
+            painter.setPen(QPen(QColor(CHART_SURFACE_COLOR), MARKER_RING_WIDTH))
             painter.setBrush(marker.color)
-            painter.drawPolygon(QPolygonF(marker.triangle))
             painter.drawRoundedRect(
-                marker.label_rect,
+                marker.badge,
                 MARKER_BADGE_RADIUS,
                 MARKER_BADGE_RADIUS,
             )
             painter.setPen(QPen(QColor("#0B1118"), 1))
-            painter.drawText(marker.label_rect, 0x84, marker.label)
+            painter.drawText(marker.badge, 0x84, marker.label)
         painter.setBrush(Qt.BrushStyle.NoBrush)
         current_price = model.current_price
         if current_price is not None:

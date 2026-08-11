@@ -166,10 +166,50 @@ def test_painter_model_contains_only_chart_presentation_facts() -> None:
     )
     buy, sell = model.markers
     assert buy.label == "B"
-    assert buy.triangle[0].y() < buy.triangle[1].y()
     assert sell.label == "S"
-    assert sell.triangle[0].y() > sell.triangle[1].y()
     assert all(glyph.body.width() > 0 for glyph in model.candles)
+
+
+def test_fill_badges_never_cover_candle_bodies_or_wicks() -> None:
+    """A fill's price sits inside its candle, so the badge must not use it."""
+    model = chart_module.build_painter_model(ready_snapshot(), QRectF(0, 0, 600, 400))
+
+    assert model.markers
+    for marker in model.markers:
+        for glyph in model.candles:
+            assert not marker.badge.intersects(glyph.body), (
+                f"{marker.label} badge covers a candle body"
+            )
+            wick = QRectF(
+                glyph.wick.x1() - 0.5,
+                min(glyph.wick.y1(), glyph.wick.y2()),
+                1.0,
+                abs(glyph.wick.y2() - glyph.wick.y1()),
+            )
+            assert not marker.badge.intersects(wick), (
+                f"{marker.label} badge covers a candle wick"
+            )
+
+
+def test_badges_on_neighbouring_fills_do_not_overlap_each_other() -> None:
+    fills = tuple(
+        fill(
+            f"f{minute}",
+            FillSide.BUY if minute % 10 == 0 else FillSide.SELL,
+            datetime(2026, 1, 1, 0, minute, tzinfo=UTC),
+        )
+        for minute in (0, 5, 10, 15)
+    )
+
+    model = chart_module.build_painter_model(
+        ready_snapshot(fills=fills), QRectF(0, 0, 600, 400)
+    )
+
+    badges = [marker.badge for marker in model.markers]
+    assert len(badges) == 4
+    for index, badge in enumerate(badges):
+        for other in badges[index + 1 :]:
+            assert not badge.intersects(other), f"badges overlap: {badge} {other}"
 
 
 def test_painter_model_reserves_axis_space_and_exposes_ticks() -> None:
@@ -222,8 +262,7 @@ def test_candles_and_markers_remain_inside_plot_not_axis_space() -> None:
         model.plot_surface.contains(glyph.body.center()) for glyph in model.candles
     )
     assert all(
-        model.plot_surface.contains(marker.label_rect.center())
-        for marker in model.markers
+        model.plot_surface.contains(marker.badge.center()) for marker in model.markers
     )
 
 
@@ -326,8 +365,8 @@ def test_marker_labels_stay_visible_at_price_extrema_at_minimum_height(
     visible_bounds = QRectF(chart.rect())
     assert [marker.label for marker in model.markers] == ["B", "S"]
     for marker in model.markers:
-        assert visible_bounds.contains(marker.label_rect), (
-            f"{marker.label} label is outside the chart: {marker.label_rect}"
+        assert visible_bounds.contains(marker.badge), (
+            f"{marker.label} badge is outside the chart: {marker.badge}"
         )
 
 
