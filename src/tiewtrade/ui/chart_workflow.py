@@ -19,12 +19,18 @@ from tiewtrade.application.chart_data import (
 )
 from tiewtrade.application.chart_view_selection import ChartViewSelection
 from tiewtrade.application.paper_session_setup import ConfiguredPaperSession
+from tiewtrade.trading.trade_history import TradeFill
 from tiewtrade.ui.background_task import BackgroundTask
 
 LoadChart = Callable[[ConfiguredPaperSession, ChartRange], Awaitable[ChartSnapshot]]
 RefreshChart = Callable[
     [ConfiguredPaperSession, ChartSnapshot, ChartCandle],
     Awaitable[ChartSnapshot],
+]
+_NO_BASKET: tuple[object, ...] = (None,)
+LoadChartFills = Callable[
+    [ConfiguredPaperSession, ChartRange],
+    Awaitable[tuple[TradeFill, ...]],
 ]
 
 
@@ -76,6 +82,7 @@ class ChartWorkflow(QObject):
         *,
         load_chart: LoadChart,
         refresh_chart: RefreshChart | None = None,
+        load_fills: LoadChartFills | None = None,
         thread_pool: QThreadPool | None = None,
         clock: Callable[[], datetime] = lambda: datetime.now(UTC),
         parent: QObject | None = None,
@@ -83,6 +90,7 @@ class ChartWorkflow(QObject):
         super().__init__(parent)
         self._load_chart = load_chart
         self._refresh_chart = refresh_chart
+        self._load_fills = load_fills
         self._thread_pool = thread_pool or QThreadPool.globalInstance()
         self._clock = clock
         self._session: ConfiguredPaperSession | None = None
@@ -96,6 +104,9 @@ class ChartWorkflow(QObject):
         self._last_safe_range: ChartRange | None = None
         self._following_latest = True
         self._closed = False
+        self._basket_facts: tuple[object, ...] | None = None
+        self._fills_task: BackgroundTask | None = None
+        self._fills_refresh_pending = False
 
     def configure(self, session: ConfiguredPaperSession) -> None:
         if self._closed:
@@ -112,6 +123,8 @@ class ChartWorkflow(QObject):
         self._pending_in_progress_candle = None
         self._last_safe_range = None
         self._following_latest = True
+        self._basket_facts = None
+        self._fills_refresh_pending = False
 
     def start(self, session: ConfiguredPaperSession) -> None:
         self.configure(session)
@@ -162,7 +175,94 @@ class ChartWorkflow(QObject):
             or snapshot.session.config.session_id != self._session.config.session_id
         ):
             return
-        del snapshot
+        # Runtime snapshots arrive on every tick, but only a basket that grew
+        # or closed means a fill the chart has not drawn yet.
+        facts = _basket_facts(snapshot)
+        if facts == self._basket_facts:
+            return
+        first_sighting = self._basket_facts is None
+        self._basket_facts = facts
+        if facts == _NO_BASKET and first_sighting:
+            # Nothing has traded yet, so the loaded fills are already current.
+            return
+        self.refresh_fills()
+
+    def refresh_fills(self) -> None:
+        """Re-read the fills of the visible range, off the Qt thread."""
+        snapshot = self._snapshot
+        session = self._session
+        selection = self._selection
+        if (
+            self._closed
+            or self._load_fills is None
+            or session is None
+            or selection is None
+            or snapshot is None
+            or snapshot.state not in {ChartReadState.READY, ChartReadState.EMPTY}
+            # A chart-only view of another market never shows session fills.
+            or selection.market_data_config() != session.market_data
+        ):
+            return
+        if self._fills_task is not None:
+            self._fills_refresh_pending = True
+            return
+        load_fills = self._load_fills
+        generation = self._generation
+        chart_range = snapshot.chart_range
+        visible_range = snapshot.visible_range
+        task = BackgroundTask(
+            lambda: asyncio.run(
+                self._fills_in_background(
+                    load_fills,
+                    self._view_session(),
+                    visible_range,
+                )
+            )
+        )
+        task.signals.succeeded.connect(
+            lambda result: self._fills_loaded(generation, chart_range, result)
+        )
+        task.signals.finished.connect(lambda: self._fills_finished(task))
+        self._fills_task = task
+        self._thread_pool.start(task)
+
+    def _fills_loaded(
+        self,
+        generation: int,
+        chart_range: ChartRange,
+        result: object,
+    ) -> None:
+        snapshot = self._snapshot
+        if (
+            self._closed
+            or generation != self._generation
+            or not isinstance(result, tuple)
+            or snapshot is None
+            or snapshot.chart_range != chart_range
+        ):
+            return
+        fills = _fills_inside(result, snapshot.visible_range)
+        if fills == snapshot.fills:
+            return
+        try:
+            updated = self._copy_snapshot(
+                snapshot,
+                in_progress_candle=snapshot.in_progress_candle,
+                fills=fills,
+            )
+        except ValueError:
+            return
+        self._snapshot = updated
+        self.snapshot_changed.emit(updated)
+
+    def _fills_finished(self, task: BackgroundTask) -> None:
+        if task is not self._fills_task:
+            return
+        self._fills_task = None
+        if not self._fills_refresh_pending or self._closed:
+            return
+        self._fills_refresh_pending = False
+        self.refresh_fills()
 
     def in_progress_candle(self, candle: object) -> None:
         if (
@@ -420,6 +520,14 @@ class ChartWorkflow(QObject):
     ) -> ChartSnapshot:
         return await self._load_chart(session, chart_range)
 
+    async def _fills_in_background(
+        self,
+        load_fills: LoadChartFills,
+        session: ConfiguredPaperSession,
+        visible_range: ChartRange,
+    ) -> tuple[TradeFill, ...]:
+        return await load_fills(session, visible_range)
+
     async def _refresh_in_background(
         self,
         refresh_chart: RefreshChart,
@@ -505,12 +613,23 @@ class ChartWorkflow(QObject):
         snapshot: ChartSnapshot,
         *,
         in_progress_candle: ChartCandle | None,
+        fills: tuple[TradeFill, ...] | None = None,
     ) -> ChartSnapshot:
         return ChartSnapshot(
             chart_range=snapshot.chart_range,
             observed_at_utc=max(self._clock(), snapshot.chart_range.end),
             candles=snapshot.candles,
-            fills=snapshot.fills,
+            fills=_fills_inside(
+                snapshot.fills if fills is None else fills,
+                # Dropping the forming candle shortens the visible span, so a
+                # fill inside it has to go with it.
+                ChartRange(
+                    snapshot.chart_range.start,
+                    snapshot.chart_range.end
+                    if in_progress_candle is None
+                    else in_progress_candle.close_time,
+                ),
+            ),
             state=snapshot.state,
             in_progress_candle=in_progress_candle,
             message=snapshot.message,
@@ -567,3 +686,22 @@ class ChartWorkflow(QObject):
         self._pending_completed_candle = None
         if pending is not None:
             self.completed_candle(pending)
+
+
+def _basket_facts(snapshot: BotControlSnapshot) -> tuple[object, ...]:
+    """What identifies a basket across ticks, ignoring its moving price."""
+    basket = snapshot.workspace.basket
+    if basket is None:
+        return _NO_BASKET
+    return (basket.symbol, basket.entry_count, basket.total_quantity, basket.lifecycle)
+
+
+def _fills_inside(
+    fills: tuple[object, ...],
+    visible_range: ChartRange,
+) -> tuple[TradeFill, ...]:
+    return tuple(
+        fill
+        for fill in fills
+        if isinstance(fill, TradeFill) and visible_range.contains(fill.filled_at_utc)
+    )

@@ -440,6 +440,13 @@ def run_desktop(database_path: Path | None = None) -> int:
         prepare_database()
         return await chart_history.refresh_completed(session, snapshot, candle)
 
+    async def load_chart_fills(
+        session: ConfiguredPaperSession,
+        chart_range: ChartRange,
+    ) -> tuple[TradeFill, ...]:
+        prepare_database()
+        return list_chart_fills(session.config.session_id, chart_range)
+
     def start_chart_feed(session: ConfiguredPaperSession) -> None:
         select_chart_view(
             session,
@@ -484,6 +491,7 @@ def run_desktop(database_path: Path | None = None) -> int:
         shutdown_runtime=shutdown_desktop_runtimes,
         load_chart=load_chart,
         refresh_chart=refresh_chart,
+        load_chart_fills=load_chart_fills,
         chart_fact_relay=chart_fact_relay,
         start_chart_feed=start_chart_feed,
         select_chart_view=select_chart_view,

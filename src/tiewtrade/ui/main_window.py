@@ -25,6 +25,7 @@ from tiewtrade.ui.chart_workflow import (
     ChartFactRelay,
     ChartWorkflow,
     LoadChart,
+    LoadChartFills,
     RefreshChart,
 )
 from tiewtrade.ui.session_workflow import (
@@ -68,6 +69,7 @@ class MainWindow(QMainWindow):
         shutdown_runtime: Callable[[], None] | None = None,
         load_chart: LoadChart | None = None,
         refresh_chart: RefreshChart | None = None,
+        load_chart_fills: LoadChartFills | None = None,
         chart_fact_relay: ChartFactRelay | None = None,
         start_chart_feed: Callable[[ConfiguredPaperSession], None] | None = None,
         select_chart_view: Callable[[ConfiguredPaperSession, ChartViewSelection], None]
@@ -150,6 +152,7 @@ class MainWindow(QMainWindow):
         self._chart_workflow = ChartWorkflow(
             load_chart=load_chart or _unused_chart_loader,
             refresh_chart=refresh_chart,
+            load_fills=load_chart_fills,
             thread_pool=self._thread_pool,
             clock=chart_clock,
             parent=self,
@@ -340,6 +343,7 @@ class MainWindow(QMainWindow):
         if not isinstance(value, BotControlSnapshot):
             return
         self.workspace.show_bot_control_snapshot(value)
+        self._chart_workflow.runtime_snapshot(value)
         if (
             self._pending_start_session == value.session
             and value.state is BotRuntimeState.CONFIGURED

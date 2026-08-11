@@ -1,3 +1,4 @@
+from dataclasses import replace
 from datetime import UTC, datetime
 from decimal import Decimal
 
@@ -16,13 +17,15 @@ from tiewtrade.application.chart_data import (
 from tiewtrade.application.chart_view_selection import ChartViewSelection
 from tiewtrade.application.paper_session_setup import ConfiguredPaperSession
 from tiewtrade.application.trading_workspace import (
+    BasketSnapshot,
     BotRuntimeState,
     DataFreshness,
     TradingWorkspaceSnapshot,
     configured_workspace_snapshot,
+    ready_position_basket_tab,
 )
 from tiewtrade.market_data.candle import Candle
-from tiewtrade.trading.trade_history import FillSide
+from tiewtrade.trading.trade_history import FillSide, TradeFill
 from tiewtrade.ui.background_task import BackgroundTask
 from tiewtrade.ui.chart_workflow import ChartWorkflow
 
@@ -548,6 +551,58 @@ def test_previous_range_freezes_until_next_returns_to_latest() -> None:
     assert snapshots[-1].in_progress_candle == candle("5m", 40)
 
 
+def test_new_entry_badges_its_fill_before_the_candle_completes() -> None:
+    session = configured_spot_session()
+    snapshots: list[ChartSnapshot] = []
+    fill_ranges: list[ChartRange] = []
+    entry = trade_fill(
+        session_id=session.config.session_id,
+        filled_at_utc=datetime(2026, 1, 1, 0, 41, tzinfo=UTC),
+    )
+    workflow = latest_workflow(
+        session=session,
+        snapshots=snapshots,
+        fills=(entry,),
+        fill_ranges=fill_ranges,
+    )
+    workflow.runtime_snapshot(runtime_snapshot(session, BotRuntimeState.RUNNING))
+    workflow.in_progress_candle(candle("5m", 40))
+
+    workflow.runtime_snapshot(
+        runtime_snapshot(session, BotRuntimeState.RUNNING, entry_count=1)
+    )
+
+    # The fill sits in the forming candle, so the range read has to reach past
+    # the completed candles the chart holds.
+    assert fill_ranges == [chart_range(20, 45)]
+    assert snapshots[-1].fills == (entry,)
+    assert [marker.fill_id for marker in snapshots[-1].markers] == [entry.fill_id]
+    assert snapshots[-1].in_progress_candle == candle("5m", 40)
+
+
+def test_unchanged_basket_leaves_the_chart_fills_alone() -> None:
+    session = configured_spot_session()
+    snapshots: list[ChartSnapshot] = []
+    fill_ranges: list[ChartRange] = []
+    workflow = latest_workflow(
+        session=session,
+        snapshots=snapshots,
+        fill_ranges=fill_ranges,
+    )
+    workflow.runtime_snapshot(
+        runtime_snapshot(session, BotRuntimeState.RUNNING, entry_count=1)
+    )
+    reads = len(fill_ranges)
+    published = len(snapshots)
+
+    workflow.runtime_snapshot(
+        runtime_snapshot(session, BotRuntimeState.RUNNING, entry_count=1)
+    )
+
+    assert len(fill_ranges) == reads
+    assert len(snapshots) == published
+
+
 def test_stop_keeps_forming_candle_for_chart_only_feed() -> None:
     session = configured_spot_session()
     snapshots: list[ChartSnapshot] = []
@@ -656,8 +711,19 @@ def latest_workflow(
     pool: ImmediateThreadPool | DeferredThreadPool | None = None,
     clock: MutableClock | None = None,
     run_load: bool = True,
+    fills: tuple[TradeFill, ...] = (),
+    fill_ranges: list[ChartRange] | None = None,
 ) -> ChartWorkflow:
     selected_pool = pool or ImmediateThreadPool()
+
+    async def load_fills(
+        configured: ConfiguredPaperSession,
+        requested: ChartRange,
+    ) -> tuple[TradeFill, ...]:
+        assert configured is session
+        if fill_ranges is not None:
+            fill_ranges.append(requested)
+        return fills
 
     async def refresh_chart(
         configured: ConfiguredPaperSession,
@@ -687,6 +753,7 @@ def latest_workflow(
             [],
         ),
         refresh_chart=refresh_chart,
+        load_fills=load_fills,
         thread_pool=selected_pool,  # type: ignore[arg-type]
         clock=(
             clock
@@ -705,9 +772,20 @@ def latest_workflow(
 def runtime_snapshot(
     session: ConfiguredPaperSession,
     state: BotRuntimeState,
+    *,
+    entry_count: int | None = None,
 ) -> BotControlSnapshot:
+    workspace = _configured_workspace(session)
+    if entry_count is not None:
+        workspace = replace(
+            workspace,
+            position_basket=ready_position_basket_tab(
+                open_basket(session, entry_count),
+                observed_at_utc=datetime(2026, 1, 1, 0, 0, tzinfo=UTC),
+            ),
+        )
     configured = workspace_with_runtime_state(
-        _configured_workspace(session),
+        workspace,
         state,
         data_freshness=(
             DataFreshness.FRESH
@@ -724,6 +802,22 @@ def runtime_snapshot(
             if state is BotRuntimeState.RUNNING
             else frozenset()
         ),
+    )
+
+
+def open_basket(session: ConfiguredPaperSession, entry_count: int) -> BasketSnapshot:
+    return BasketSnapshot(
+        symbol=session.market_data.symbol,
+        market_type=session.config.market_type,
+        entry_count=entry_count,
+        total_quantity=Decimal(entry_count),
+        average_entry_price=Decimal("100"),
+        current_price=Decimal("101"),
+        take_profit_price=Decimal("110"),
+        unrealized_pnl=Decimal("1"),
+        liquidation_price=None,
+        lifecycle="open",
+        updated_at_utc=datetime(2026, 1, 1, 0, 0, tzinfo=UTC),
     )
 
 

@@ -217,6 +217,40 @@ def test_stop_loss_takes_precedence_over_take_profit_on_the_same_candle() -> Non
     assert closed_snapshot.closed_basket.close_reason is BasketCloseReason.STOP_LOSS
 
 
+def test_sell_candle_cannot_signal_the_next_entry() -> None:
+    """A re-entry has to wait for the candle after the one that sold."""
+    application = buy_only_paper_session()
+    entry_snapshot, next_minute = arm_and_fill_buy_only_entry(application)
+    assert entry_snapshot.entry_fill is not None
+    assert entry_snapshot.take_profit_price is not None
+    target = entry_snapshot.take_profit_price
+
+    sell_candle = candle(
+        next_minute,
+        open_price=str(target),
+        close_price=str(target + Decimal("2")),
+        high=str(target + Decimal("5")),
+    )
+    sell_snapshot = application.process_completed_candle(
+        sell_candle, received_at=sell_candle.close_time
+    )
+
+    assert sell_snapshot.exit_fill is not None
+    assert sell_snapshot.pending_intent is None
+
+    following_candle = candle(
+        next_minute + 5,
+        open_price=str(target + Decimal("2")),
+        close_price=str(target + Decimal("4")),
+    )
+    following_snapshot = application.process_completed_candle(
+        following_candle, received_at=following_candle.close_time
+    )
+
+    assert following_snapshot.pending_intent is not None
+    assert following_snapshot.pending_intent.signal_candle == following_candle
+
+
 def test_minimum_notional_rejection_releases_strategy_to_create_a_new_intent() -> None:
     application = paper_session(min_notional=Decimal("200"))
     first_intent = arm_entry_intent(application)

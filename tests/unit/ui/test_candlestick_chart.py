@@ -170,25 +170,63 @@ def test_painter_model_contains_only_chart_presentation_facts() -> None:
     assert all(glyph.body.width() > 0 for glyph in model.candles)
 
 
-def test_fill_badges_never_cover_candle_bodies_or_wicks() -> None:
+def test_fill_badges_never_cover_the_candle_they_name() -> None:
     """A fill's price sits inside its candle, so the badge must not use it."""
     model = chart_module.build_painter_model(ready_snapshot(), QRectF(0, 0, 600, 400))
 
     assert model.markers
     for marker in model.markers:
+        ink = _badge_bounds(marker)
         for glyph in model.candles:
-            assert not marker.badge.intersects(glyph.body), (
+            assert not ink.intersects(glyph.body), (
                 f"{marker.label} badge covers a candle body"
             )
-            wick = QRectF(
-                glyph.wick.x1() - 0.5,
-                min(glyph.wick.y1(), glyph.wick.y2()),
-                1.0,
-                abs(glyph.wick.y2() - glyph.wick.y1()),
-            )
-            assert not marker.badge.intersects(wick), (
+            assert not ink.intersects(_wick_bounds(glyph)), (
                 f"{marker.label} badge covers a candle wick"
             )
+
+
+def test_badge_stays_beside_its_fill_even_over_a_longer_neighbour() -> None:
+    """Only the named candle earns room; neighbours may sit under the badge."""
+    entry = fill("buy-1", FillSide.BUY, datetime(2026, 1, 1, 0, 5, tzinfo=UTC))
+    model = chart_module.build_painter_model(
+        ready_snapshot(
+            # The candle beside the fill reaches far below the one it names.
+            candles=(
+                candle(0, low_price="80"),
+                candle(5),
+                candle(10),
+            ),
+            fills=(entry,),
+        ),
+        # Narrow enough that the badge is wider than the gap between candles.
+        QRectF(0, 0, 180, 400),
+    )
+
+    own = model.candles[1]
+    ink = _badge_bounds(model.markers[0])
+    assert own.open_time == entry.filled_at_utc
+    assert not ink.intersects(own.body)
+    assert not ink.intersects(_wick_bounds(own))
+    # It hangs off its own candle rather than below the long neighbour.
+    assert ink.top() < max(model.candles[0].wick.y1(), model.candles[0].wick.y2())
+
+
+def test_badges_point_at_the_candle_they_name() -> None:
+    model = chart_module.build_painter_model(ready_snapshot(), QRectF(0, 0, 600, 400))
+
+    buy, sell = model.markers
+    # A buy hangs under its candle, so its tip rises out of the badge's top
+    # edge; a sell rides above and points back down.
+    assert buy.pointer[-1].y() < buy.badge.top()
+    assert sell.pointer[-1].y() > sell.badge.bottom()
+    for marker in (buy, sell):
+        base_left, base_right, tip = marker.pointer
+        assert base_left.y() == base_right.y()
+        assert marker.badge.contains(QPointF(base_left.x(), base_left.y()))
+        assert marker.badge.contains(QPointF(base_right.x(), base_right.y()))
+        assert base_left.x() < tip.x() < base_right.x()
+        assert tip.x() == marker.badge.center().x()
 
 
 def test_badges_on_neighbouring_fills_do_not_overlap_each_other() -> None:
@@ -255,6 +293,20 @@ def test_crosshair_hides_outside_plot_area(qtbot: QtBot) -> None:
     assert chart.crosshair is None
 
 
+def test_fill_inside_the_forming_candle_is_badged_on_that_candle() -> None:
+    forming = candle(20, close_price="103")
+    entry = fill("buy-2", FillSide.BUY, datetime(2026, 1, 1, 0, 22, tzinfo=UTC))
+    model = chart_module.build_painter_model(
+        ready_snapshot(fills=(entry,), in_progress_candle=forming),
+        QRectF(0, 0, 600, 400),
+    )
+
+    forming_glyph = model.candles[-1]
+    badge = model.markers[0].badge
+    assert forming_glyph.open_time == forming.open_time
+    assert abs(badge.center().x() - forming_glyph.x) < forming_glyph.body.width()
+
+
 def test_candles_and_markers_remain_inside_plot_not_axis_space() -> None:
     model = chart_module.build_painter_model(ready_snapshot(), QRectF(0, 0, 600, 300))
 
@@ -286,7 +338,7 @@ def test_chart_geometry_pads_extrema_and_keeps_end_candle_inside_plot() -> None:
     )
 
 
-def test_snapshot_change_clears_crosshair(qtbot: QtBot) -> None:
+def test_crosshair_survives_live_refresh_but_not_a_view_change(qtbot: QtBot) -> None:
     chart = CandlestickChartWidget()
     qtbot.addWidget(chart)
     chart.resize(640, 360)
@@ -295,7 +347,22 @@ def test_snapshot_change_clears_crosshair(qtbot: QtBot) -> None:
     cast(Any, qtbot).mouseMove(chart, QPoint(280, 180))
     assert chart.crosshair is not None
 
-    chart.show_snapshot(ready_snapshot())
+    chart.show_snapshot(
+        ready_snapshot(
+            in_progress_candle=candle(20, close_price="103"),
+        )
+    )
+
+    assert chart.crosshair is not None
+
+    chart.show_snapshot(
+        ready_snapshot(
+            chart_range=ChartRange(
+                datetime(2026, 1, 1, 0, 0, tzinfo=UTC),
+                datetime(2026, 1, 1, 0, 25, tzinfo=UTC),
+            )
+        )
+    )
 
     assert chart.crosshair is None
 
@@ -589,9 +656,10 @@ def ready_snapshot(
     fills: tuple[TradeFill, ...] | None = None,
     in_progress_candle: Candle | None = None,
     rsi: RsiSeries | None = None,
+    chart_range: ChartRange | None = None,
 ) -> ChartSnapshot:
     session = configured_spot_session()
-    chart_range = ChartRange(
+    chart_range = chart_range or ChartRange(
         datetime(2026, 1, 1, 0, 0, tzinfo=UTC),
         datetime(2026, 1, 1, 0, 20, tzinfo=UTC),
     )
@@ -640,6 +708,21 @@ def candle(
         low=Decimal(low_price),
         close=close_value,
     )
+
+
+def _wick_bounds(glyph: chart_module.CandleGlyph) -> QRectF:
+    return QRectF(
+        glyph.wick.x1() - 0.5,
+        min(glyph.wick.y1(), glyph.wick.y2()),
+        1.0,
+        abs(glyph.wick.y2() - glyph.wick.y1()),
+    )
+
+
+def _badge_bounds(marker: chart_module.MarkerGlyph) -> QRectF:
+    """Every pixel the badge paints: its body plus its tip."""
+    tip = marker.pointer[-1]
+    return marker.badge.united(QRectF(tip.x(), tip.y(), 0.0, 0.0))
 
 
 def fill(

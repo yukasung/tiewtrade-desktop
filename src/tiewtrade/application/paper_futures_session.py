@@ -174,7 +174,11 @@ class PaperFuturesSession:
                     self._lifecycle.reset()
 
             indicators = self._indicators.update(candle)
-            self._evaluate_strategy(candle, indicators)
+            self._evaluate_strategy(
+                candle,
+                indicators,
+                exited_on_this_candle=take_profit_fill is not None,
+            )
             if entry_fill is None:
                 self._mark_open_basket()
             return self._snapshot(
@@ -299,12 +303,21 @@ class PaperFuturesSession:
         self,
         candle: Candle,
         indicators: IndicatorSnapshot | None,
+        *,
+        exited_on_this_candle: bool = False,
     ) -> None:
         if indicators is None:
             return
-        can_enter = self._lifecycle.can_enter(candle.close_time) and (
-            self._basket is None
-            or self._basket.entry_count < self._session.entry_policy.max_entries
+        # A signal read from the candle that closed the basket would fill at
+        # the very next open, re-entering on the back of its own exit. The
+        # earliest a new entry can be signalled is the candle after the sell.
+        can_enter = (
+            not exited_on_this_candle
+            and self._lifecycle.can_enter(candle.close_time)
+            and (
+                self._basket is None
+                or self._basket.entry_count < self._session.entry_policy.max_entries
+            )
         )
         intent = self._strategy.evaluate(
             candle,

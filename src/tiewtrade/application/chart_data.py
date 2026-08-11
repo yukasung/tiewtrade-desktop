@@ -232,8 +232,8 @@ class ChartSnapshot:
         for fill in self.fills:
             if fill.session_id != self.session_id:
                 raise ValueError("fill session must match Session")
-            if not self.chart_range.contains(fill.filled_at_utc):
-                raise ValueError("fill must be inside ChartRange")
+            if not self.visible_range.contains(fill.filled_at_utc):
+                raise ValueError("fill must be inside the visible range")
             if fill.fill_id in fill_ids:
                 raise ValueError("fills must have unique fill_id values")
             fill_ids.add(fill.fill_id)
@@ -248,6 +248,18 @@ class ChartSnapshot:
             self.rsi.values
         ):
             raise ValueError("RSI open_time must match a ChartSnapshot candle")
+
+    @property
+    def visible_range(self) -> ChartRange:
+        """The span the chart draws: ChartRange plus any forming candle.
+
+        A fill lands on the chart the moment it happens, so it can sit inside
+        the candle still forming past the completed range.
+        """
+        forming = self.in_progress_candle
+        if forming is None:
+            return self.chart_range
+        return ChartRange(self.chart_range.start, forming.close_time)
 
     @property
     def display_candles(self) -> tuple[Candle, ...]:

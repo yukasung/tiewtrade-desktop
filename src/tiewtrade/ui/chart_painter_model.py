@@ -12,7 +12,6 @@ from tiewtrade.application.chart_data import (
     ChartSnapshot,
     latest_completed_boundary,
 )
-from tiewtrade.market_data.config import timeframe_to_interval
 from tiewtrade.trading.trade_history import FillSide
 
 _PANE_GAP = 10.0
@@ -30,7 +29,16 @@ _AXIS_LABEL_HEIGHT = 18.0
 # when candles are packed together.
 _MARKER_BADGE_SIZE = 18.0
 _MARKER_BADGE_EXTENT = (_MARKER_BADGE_SIZE, _MARKER_BADGE_SIZE)
-_MARKER_ANCHOR_GAP = 7.0
+# The badge carries a tip on the side facing its candle, so it reads as a
+# pin aimed at one candle rather than a chip floating near several.
+_MARKER_TIP_HEIGHT = 5.0
+_MARKER_TIP_WIDTH = 9.0
+# The tip starts inside the badge so the two merge into one outline.
+_MARKER_TIP_OVERLAP = 2.0
+# Clear air between the tip and the candles, so the pin never reads as ink
+# attached to a candle.
+_MARKER_TIP_CLEARANCE = 9.0
+_MARKER_ANCHOR_GAP = _MARKER_TIP_HEIGHT + _MARKER_TIP_CLEARANCE
 _MARKER_STACK_GAP = 3.0
 _MARKER_STACK_LIMIT = 6
 _MARKER_HEADROOM = _MARKER_ANCHOR_GAP + _MARKER_BADGE_SIZE + 2.0
@@ -58,10 +66,11 @@ class CandleGlyph:
 
 @dataclass(frozen=True, slots=True)
 class MarkerGlyph:
-    # A thin connector from the candle's outer edge to the badge, so the badge
-    # can sit clear of the price ink and still name the candle it belongs to.
-    leader: QLineF
     badge: QRectF
+    # The tip that aims the badge at its candle, as a triangle whose base sits
+    # inside the badge body so the two paint as one shape. `badge` stays the
+    # body alone: it is what the label centers in and what badges stack against.
+    pointer: tuple[QPointF, ...]
     label: str
     color: QColor
 
@@ -129,12 +138,7 @@ def build_painter_model(
     surface: QRectF,
 ) -> ChartPainterModel:
     display_candles = snapshot.display_candles
-    visual_range = snapshot.chart_range
-    if snapshot.in_progress_candle is not None:
-        visual_range = ChartRange(
-            start=snapshot.chart_range.start,
-            end=snapshot.chart_range.end + timeframe_to_interval(snapshot.timeframe),
-        )
+    visual_range = snapshot.visible_range
     prices = [
         price for candle in display_candles for price in (candle.high, candle.low)
     ] + [marker.price for marker in snapshot.markers]
@@ -189,7 +193,7 @@ def build_painter_model(
                 color=color,
             )
         )
-    markers = _marker_glyphs(snapshot, display_candles, low, high, price_surface)
+    markers = _marker_glyphs(snapshot, candles, low, high, price_surface)
     current_price = _current_price_glyph(snapshot, low, high, price_surface, surface)
     # Read once per build: the forming candle's RSI is derived on each call.
     rsi_values = [snapshot.rsi_for(candle.open_time) for candle in display_candles]
@@ -210,38 +214,43 @@ def build_painter_model(
 
 def _marker_glyphs(
     snapshot: ChartSnapshot,
-    display_candles: Sequence[ChartCandle],
+    candles: Sequence[CandleGlyph],
     low: Decimal,
     high: Decimal,
     price_surface: QRectF,
 ) -> tuple[MarkerGlyph, ...]:
-    """Place fill badges outside the price ink, clear of one another.
+    """Place fill badges off their own candle, clear of one another.
 
     A fill happens at a price inside its candle's range, so a badge drawn at
     that price always lands on the candle. Anchoring to the candle's outer
     edge instead — low for a buy, high for a sell — keeps the body and wick
-    readable, and a leader line preserves which candle the badge names.
+    readable, and the badge's tip names the candle it belongs to.
+
+    Only the named candle is kept clear: a badge is wider than a candle, so
+    demanding room from every neighbour it spans would fling it far from the
+    fill it marks. It may sit over the candles beside it.
     """
-    candle_by_open_time = {candle.open_time: candle for candle in display_candles}
+    glyph_by_open_time = {glyph.open_time: glyph for glyph in candles}
     half = _MARKER_BADGE_SIZE / 2
     placed: list[QRectF] = []
     glyphs: list[MarkerGlyph] = []
     for marker in sorted(snapshot.markers, key=lambda item: item.filled_at_utc):
         is_buy = marker.side is FillSide.BUY
         x = _clamp_x(
-            _marker_x(marker.filled_at_utc, snapshot.chart_range, price_surface),
+            _marker_x(marker.filled_at_utc, snapshot.visible_range, price_surface),
             price_surface,
             half,
         )
-        candle = candle_by_open_time.get(
+        candle = glyph_by_open_time.get(
             latest_completed_boundary(snapshot.timeframe, marker.filled_at_utc)
         )
         if candle is None:
             # The candle scrolled out of view; the fill price is all that is left.
-            below_y = above_y = _price_y(marker.price, low, high, price_surface)
+            fill_y = _price_y(marker.price, low, high, price_surface)
+            below_y = above_y = fill_y
         else:
-            below_y = _price_y(candle.low, low, high, price_surface)
-            above_y = _price_y(candle.high, low, high, price_surface)
+            below_y = max(candle.wick.y1(), candle.wick.y2())
+            above_y = min(candle.wick.y1(), candle.wick.y2())
         badge, below = _free_badge(
             x,
             below_y=below_y,
@@ -253,18 +262,26 @@ def _marker_glyphs(
         placed.append(badge)
         glyphs.append(
             MarkerGlyph(
-                leader=QLineF(
-                    x,
-                    below_y if below else above_y,
-                    x,
-                    badge.top() if below else badge.bottom(),
-                ),
                 badge=badge,
+                pointer=_badge_pointer(badge, below=below),
                 label=marker_label(marker.side),
                 color=QColor("#0ECB81" if is_buy else "#F6465D"),
             )
         )
     return tuple(glyphs)
+
+
+def _badge_pointer(badge: QRectF, *, below: bool) -> tuple[QPointF, ...]:
+    """The badge's tip, aimed at the candle it names."""
+    center_x = badge.center().x()
+    edge = badge.top() if below else badge.bottom()
+    outward = -1.0 if below else 1.0
+    base_y = edge - outward * _MARKER_TIP_OVERLAP
+    return (
+        QPointF(center_x - _MARKER_TIP_WIDTH / 2, base_y),
+        QPointF(center_x + _MARKER_TIP_WIDTH / 2, base_y),
+        QPointF(center_x, edge + outward * _MARKER_TIP_HEIGHT),
+    )
 
 
 def _free_badge(

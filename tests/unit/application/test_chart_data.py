@@ -291,6 +291,22 @@ def test_ready_snapshot_derives_session_scoped_markers_from_durable_fills() -> N
     assert snapshot.markers[0].filled_at_utc == fill.filled_at_utc
 
 
+def test_ready_snapshot_marks_a_fill_inside_the_forming_candle() -> None:
+    fill = trade_fill(filled_at_utc=datetime(2026, 1, 1, 0, 22, tzinfo=UTC))
+
+    snapshot = ready_chart_snapshot(
+        candles=(candle("5m", minute=10),),
+        fills=(fill,),
+        in_progress_candle=candle("5m", minute=20),
+    )
+
+    assert snapshot.visible_range == ChartRange(
+        datetime(2026, 1, 1, 0, 0, tzinfo=UTC),
+        datetime(2026, 1, 1, 0, 25, tzinfo=UTC),
+    )
+    assert [marker.fill_id for marker in snapshot.markers] == [fill.fill_id]
+
+
 def test_ready_snapshot_rejects_fill_from_another_session_or_outside_range() -> None:
     other_session_fill = trade_fill(session_id=uuid4())
     out_of_range_fill = trade_fill(
@@ -299,7 +315,7 @@ def test_ready_snapshot_rejects_fill_from_another_session_or_outside_range() -> 
 
     with pytest.raises(ValueError, match="fill session must match Session"):
         ready_chart_snapshot(fills=(other_session_fill,))
-    with pytest.raises(ValueError, match="fill must be inside ChartRange"):
+    with pytest.raises(ValueError, match="fill must be inside the visible range"):
         ready_chart_snapshot(fills=(out_of_range_fill,))
 
 

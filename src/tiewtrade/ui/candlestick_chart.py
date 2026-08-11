@@ -3,6 +3,7 @@ from PySide6.QtGui import (
     QColor,
     QMouseEvent,
     QPainter,
+    QPainterPath,
     QPen,
     QPolygonF,
     QWheelEvent,
@@ -34,6 +35,7 @@ from tiewtrade.ui.chart_painter_model import (
     CandleReadout,
     ChartPainterModel,
     CrosshairGlyph,
+    MarkerGlyph,
     build_painter_model,
     candle_at,
     crosshair_at,
@@ -168,8 +170,11 @@ class CandlestickChartWidget(QWidget):
         return build_painter_model(snapshot, self._chart_surface())
 
     def show_snapshot(self, snapshot: ChartSnapshot) -> None:
+        # A live refresh repaints the same view under the cursor, so the
+        # crosshair stays put; only a different view invalidates its position.
+        if _view_key(snapshot) != _view_key(self._snapshot):
+            self._crosshair_position = None
         self._snapshot = snapshot
-        self._crosshair_position = None
         self.setAccessibleName(
             f"Candlestick chart for {snapshot.symbol} {snapshot.timeframe}"
         )
@@ -325,16 +330,9 @@ class CandlestickChartWidget(QWidget):
             painter.drawLine(candle.wick)
             painter.fillRect(candle.body, candle.color)
         for marker in model.markers:
-            painter.setPen(QPen(marker.color, 1))
-            painter.setBrush(Qt.BrushStyle.NoBrush)
-            painter.drawLine(marker.leader)
             painter.setPen(QPen(QColor(CHART_SURFACE_COLOR), MARKER_RING_WIDTH))
             painter.setBrush(marker.color)
-            painter.drawRoundedRect(
-                marker.badge,
-                MARKER_BADGE_RADIUS,
-                MARKER_BADGE_RADIUS,
-            )
+            painter.drawPath(_marker_path(marker))
             painter.setPen(QPen(QColor("#0B1118"), 1))
             painter.drawText(marker.badge, 0x84, marker.label)
         painter.setBrush(Qt.BrushStyle.NoBrush)
@@ -394,6 +392,23 @@ class CandlestickChartWidget(QWidget):
         painter.fillRect(label.label_rect, QColor("#334155"))
         painter.setPen(QPen(QColor("#F8FAFC"), 1))
         painter.drawText(label.label_rect, 0x84, label.label)
+
+
+def _marker_path(marker: MarkerGlyph) -> QPainterPath:
+    """The badge body and its tip as one outline, so the ring traces both."""
+    path = QPainterPath()
+    path.addRoundedRect(marker.badge, MARKER_BADGE_RADIUS, MARKER_BADGE_RADIUS)
+    tip = QPainterPath()
+    tip.addPolygon(QPolygonF(marker.pointer))
+    tip.closeSubpath()
+    return path.united(tip)
+
+
+def _view_key(snapshot: ChartSnapshot | None) -> tuple[str, str, ChartRange] | None:
+    """What the cursor is pointing at: same key means the same axes."""
+    if snapshot is None:
+        return None
+    return (snapshot.symbol, snapshot.timeframe, snapshot.chart_range)
 
 
 def _range_text(chart_range: ChartRange) -> str:

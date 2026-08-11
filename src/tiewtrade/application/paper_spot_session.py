@@ -151,7 +151,12 @@ class PaperSpotSession:
                         )
 
             indicators = transition.indicators.update(candle)
-            self._evaluate_strategy(transition, candle, indicators)
+            self._evaluate_strategy(
+                transition,
+                candle,
+                indicators,
+                exited_on_this_candle=exit_fill is not None,
+            )
             self._commit_transition(transition)
 
             return self._snapshot(
@@ -286,12 +291,22 @@ class PaperSpotSession:
         transition: _PaperSpotTransition,
         candle: Candle,
         indicators: IndicatorSnapshot | None,
+        *,
+        exited_on_this_candle: bool = False,
     ) -> None:
         if indicators is None:
             return
-        can_enter = transition.lifecycle.can_enter(candle.close_time) and (
-            transition.basket is None
-            or transition.basket.entry_count < self._session.entry_policy.max_entries
+        # A signal read from the candle that closed the basket would fill at
+        # the very next open, re-entering on the back of its own exit. The
+        # earliest a new entry can be signalled is the candle after the sell.
+        can_enter = (
+            not exited_on_this_candle
+            and transition.lifecycle.can_enter(candle.close_time)
+            and (
+                transition.basket is None
+                or transition.basket.entry_count
+                < self._session.entry_policy.max_entries
+            )
         )
         intent = transition.strategy.evaluate(
             candle,
