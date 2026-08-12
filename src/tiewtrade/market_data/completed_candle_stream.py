@@ -28,6 +28,17 @@ class CompletedCandleStream:
         self._last_open_time: datetime | None = None
         self._not_closed_tolerance = not_closed_tolerance
 
+    @property
+    def last_close_time(self) -> datetime | None:
+        """When the last accepted candle closed, or None before the first.
+
+        The stream is what decides a candle was accepted, so it is also what
+        answers which moment its reader has reached.
+        """
+        if self._last_open_time is None:
+            return None
+        return self._last_open_time + self._config.interval
+
     def accept(self, candle: Candle, received_at: datetime) -> CandleAcceptance:
         if received_at.tzinfo is None or received_at.utcoffset() != timedelta(0):
             raise ValueError("received_at must use UTC")

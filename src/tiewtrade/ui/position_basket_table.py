@@ -1,6 +1,7 @@
 from decimal import Decimal
 
 from PySide6.QtCore import QSignalBlocker, Qt
+from PySide6.QtGui import QBrush, QColor
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QHeaderView,
@@ -17,22 +18,31 @@ from tiewtrade.application.trading_workspace import (
     WorkspaceTabState,
 )
 from tiewtrade.ui.display_time import display_timestamp
+from tiewtrade.ui.entry_gate_display import blocked_entry_reason
 from tiewtrade.ui.table_empty_state import TableEmptyStateOverlay
+from tiewtrade.ui.theme import NEGATIVE_COLOR, POSITIVE_COLOR
+
+_LEFT = Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter
+_CENTER = Qt.AlignmentFlag.AlignCenter
+_RIGHT = Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
 
 
 class PositionBasketTable(QWidget):
-    HEADERS = (
-        "Symbol",
-        "Market Type",
-        "Entry Count",
-        "Total Quantity",
-        "Average Entry Price",
-        "Current Price",
-        "Basket Take Profit",
-        "Unrealized PnL",
-        "Liquidation Price",
-        "Basket Lifecycle",
+    # Measured numbers hang on the right so their digits line up and a minus
+    # sign cannot hide; short labels sit centred; text that changes length
+    # stays left so its edge does not move under the reader.
+    COLUMNS = (
+        ("Symbol", _LEFT),
+        ("Market Type", _CENTER),
+        ("Entry Count", _CENTER),
+        ("Total Quantity", _RIGHT),
+        ("Average Entry Price", _RIGHT),
+        ("Basket Take Profit", _RIGHT),
+        ("Unrealized PnL", _RIGHT),
+        ("Basket Lifecycle", _LEFT),
     )
+    HEADERS = tuple(header for header, _alignment in COLUMNS)
+    ALIGNMENTS = tuple(alignment for _header, alignment in COLUMNS)
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -69,7 +79,12 @@ class PositionBasketTable(QWidget):
         self.table.setRowCount(0 if basket is None else 1)
         if basket is not None:
             for column_index, text in enumerate(self._basket_row(basket)):
-                self.table.setItem(0, column_index, self._table_item(text))
+                self.table.setItem(
+                    0,
+                    column_index,
+                    self._table_item(text, self.ALIGNMENTS[column_index]),
+                )
+            self._colour_pnl(basket.unrealized_pnl)
         del blocker
 
     def _show_state(self, snapshot: PositionBasketTabSnapshot) -> None:
@@ -90,12 +105,18 @@ class PositionBasketTable(QWidget):
             str(basket.entry_count),
             format(basket.total_quantity, "f"),
             format(basket.average_entry_price, "f"),
-            format(basket.current_price, "f"),
             format(basket.take_profit_price, "f"),
             _pnl_text(basket.unrealized_pnl),
-            _liquidation_text(basket),
-            _enum_text(basket.lifecycle),
+            _entry_gate_text(basket),
         )
+
+    def _colour_pnl(self, value: Decimal) -> None:
+        """Let the figure's own colour say gain or loss, so no word has to."""
+        colour = _pnl_colour(value)
+        item = self.table.item(0, self.HEADERS.index("Unrealized PnL"))
+        if colour is None or item is None:
+            return
+        item.setForeground(QBrush(QColor(colour)))
 
     @staticmethod
     def _state_text(snapshot: PositionBasketTabSnapshot) -> str:
@@ -118,6 +139,11 @@ class PositionBasketTable(QWidget):
         table.setObjectName("positionBasketGrid")
         table.setAccessibleName("Position / Basket")
         table.setHorizontalHeaderLabels(list(self.HEADERS))
+        # A header that does not follow its column reads as a different column.
+        for column_index, alignment in enumerate(self.ALIGNMENTS):
+            header_item = table.horizontalHeaderItem(column_index)
+            if header_item is not None:
+                header_item.setTextAlignment(alignment)
         table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
@@ -133,9 +159,10 @@ class PositionBasketTable(QWidget):
         return table
 
     @staticmethod
-    def _table_item(text: str) -> QTableWidgetItem:
+    def _table_item(text: str, alignment: Qt.AlignmentFlag) -> QTableWidgetItem:
         item = QTableWidgetItem(text)
         item.setFlags(Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable)
+        item.setTextAlignment(alignment)
         return item
 
 
@@ -143,16 +170,18 @@ def _enum_text(value: str) -> str:
     return value.replace("_", " ").title()
 
 
+def _entry_gate_text(basket: BasketSnapshot) -> str:
+    return blocked_entry_reason(basket) or "Active"
+
+
 def _pnl_text(value: Decimal) -> str:
-    label = "Break-even"
+    return f"{format(value, '.2f')} USDT"
+
+
+def _pnl_colour(value: Decimal) -> str | None:
+    """No colour at break-even: neither reading is true, so the row stays plain."""
     if value > 0:
-        label = "Profit"
-    elif value < 0:
-        label = "Loss"
-    return f"{format(value, 'f')} USDT · {label}"
-
-
-def _liquidation_text(basket: BasketSnapshot) -> str:
-    if basket.market_type.casefold() == "spot" or basket.liquidation_price is None:
-        return "—"
-    return format(basket.liquidation_price, "f")
+        return POSITIVE_COLOR
+    if value < 0:
+        return NEGATIVE_COLOR
+    return None

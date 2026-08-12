@@ -478,6 +478,11 @@ class RejectingWarmUpSink:
     async def process_completed(self, candle: Candle, *, received_at: datetime) -> None:
         raise AssertionError("timed-out source must not reach the sink")
 
+    async def process_in_progress(
+        self, candle: Candle, *, received_at: datetime
+    ) -> None:
+        del candle, received_at
+
 
 def test_binance_timeout_exhaustion_remains_warm_up_timeout_in_runtime() -> None:
     source, session = source_with(

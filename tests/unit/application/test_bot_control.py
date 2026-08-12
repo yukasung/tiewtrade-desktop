@@ -16,6 +16,7 @@ from tiewtrade.application.bot_control import (
     workspace_with_runtime_state,
 )
 from tiewtrade.application.trading_workspace import (
+    BasketEntryGate,
     BasketSnapshot,
     BotRuntimeState,
     DataFreshness,
@@ -465,7 +466,8 @@ def _running_control_with_workspace_facts() -> BotControlSnapshot:
                 take_profit_price=Decimal("66000.123456789012345678"),
                 unrealized_pnl=Decimal("1000"),
                 liquidation_price=None,
-                lifecycle="open",
+                entry_gate=BasketEntryGate.OPEN,
+                cooldown_until=None,
                 updated_at_utc=OBSERVED_AT,
             ),
             observed_at_utc=OBSERVED_AT,

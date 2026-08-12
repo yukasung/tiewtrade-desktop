@@ -35,6 +35,13 @@ class MarketDataCandleSink(Protocol):
         received_at: datetime,
     ) -> None: ...
 
+    async def process_in_progress(
+        self,
+        candle: Candle,
+        *,
+        received_at: datetime,
+    ) -> None: ...
+
 
 class CompletedCandlePipeline:
     def __init__(
@@ -77,6 +84,18 @@ class CompletedCandlePipeline:
         except Exception as error:
             raise CandlePipelineSinkError from error
         self._on_delivery(candles[-1].open_time)
+
+    async def process_in_progress(
+        self,
+        candle: Candle,
+        *,
+        received_at: datetime,
+    ) -> None:
+        """Hand the forming candle to the sink, which may act on its price."""
+        try:
+            await self._sink.process_in_progress(candle, received_at=received_at)
+        except Exception as error:
+            raise CandlePipelineSinkError from error
 
     async def process_live(
         self,

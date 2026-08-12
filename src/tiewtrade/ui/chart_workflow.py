@@ -693,7 +693,13 @@ def _basket_facts(snapshot: BotControlSnapshot) -> tuple[object, ...]:
     basket = snapshot.workspace.basket
     if basket is None:
         return _NO_BASKET
-    return (basket.symbol, basket.entry_count, basket.total_quantity, basket.lifecycle)
+    return (
+        basket.symbol,
+        basket.entry_count,
+        basket.total_quantity,
+        basket.entry_gate,
+        basket.cooldown_until,
+    )
 
 
 def _fills_inside(

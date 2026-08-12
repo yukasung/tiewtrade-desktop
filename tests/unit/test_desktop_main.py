@@ -528,9 +528,7 @@ def test_runtime_shutdown_during_start_stops_controller_after_readiness(
     assert controller.stop_calls == 1
 
 
-@pytest.mark.parametrize("operation", ["stop", "recover"])
 def test_runtime_shutdown_waits_for_active_lifecycle_operation_without_duplicate(
-    operation: str,
     tmp_path: Path,
     monkeypatch: MonkeyPatch,
 ) -> None:
@@ -543,7 +541,6 @@ def test_runtime_shutdown_waits_for_active_lifecycle_operation_without_duplicate
             del dependencies
             self.result: BotLifecycleResult | None = None
             self.stop_calls = 0
-            self.recover_calls = 0
             controllers.append(self)
 
         @property
@@ -566,31 +563,15 @@ def test_runtime_shutdown_waits_for_active_lifecycle_operation_without_duplicate
 
         def stop(self, session: ConfiguredPaperSession) -> BotLifecycleResult:
             self.stop_calls += 1
-            if operation == "stop":
-                operation_started.set()
-                if not release_operation.wait(timeout=2):
-                    raise TimeoutError("test did not release Stop")
+            operation_started.set()
+            if not release_operation.wait(timeout=2):
+                raise TimeoutError("test did not release Stop")
             assert self.result is not None
             self.result = BotLifecycleResult(
                 workspace=workspace_with_runtime_state(
                     self.result.workspace,
                     BotRuntimeState.STOPPED,
                 )
-            )
-            return self.result
-
-        def recover(self, session: ConfiguredPaperSession) -> BotLifecycleResult:
-            self.recover_calls += 1
-            operation_started.set()
-            if not release_operation.wait(timeout=2):
-                raise TimeoutError("test did not release Recover")
-            assert self.result is not None
-            self.result = BotLifecycleResult(
-                workspace=workspace_with_runtime_state(
-                    self.result.workspace,
-                    BotRuntimeState.BLOCKED,
-                ),
-                blocked_reason="Paper Bot recovery failed",
             )
             return self.result
 
@@ -618,24 +599,7 @@ def test_runtime_shutdown_waits_for_active_lifecycle_operation_without_duplicate
         workspace=running_result.workspace,
         available_actions=frozenset({BotControlAction.STOP}),
     )
-    if operation == "stop":
-        lifecycle_snapshot = running
-        lifecycle_action = actions.stop
-    else:
-        blocked_workspace = workspace_with_runtime_state(
-            running.workspace,
-            BotRuntimeState.BLOCKED,
-        )
-        lifecycle_snapshot = BotControlSnapshot(
-            state=BotRuntimeState.BLOCKED,
-            session=session,
-            workspace=blocked_workspace,
-            available_actions=frozenset(),
-            blocked_reason="Paper Bot recovery failed",
-        )
-        lifecycle_action = actions.recover
-
-    action_worker = Thread(target=lambda: lifecycle_action(lifecycle_snapshot))
+    action_worker = Thread(target=lambda: actions.stop(running))
     action_worker.start()
     assert operation_started.wait(timeout=1)
     shutdown_worker = Thread(target=actions.shutdown)
@@ -650,7 +614,6 @@ def test_runtime_shutdown_waits_for_active_lifecycle_operation_without_duplicate
     controller = cast(BlockingPaperRuntimeController, controllers[0])
     assert not action_worker.is_alive()
     assert not shutdown_worker.is_alive()
-    assert controller.recover_calls == (1 if operation == "recover" else 0)
     assert controller.stop_calls == 1
 
 

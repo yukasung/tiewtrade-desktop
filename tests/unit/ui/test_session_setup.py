@@ -1,6 +1,7 @@
 from pytestqt.qtbot import QtBot
 
 from tests.support.qt_interactions import click
+from tiewtrade.application.paper_session_setup import PaperSessionSetupValues
 from tiewtrade.trading.futures_policy import FuturesTradingPolicy
 from tiewtrade.ui.session_setup import SessionSetupWidget
 
@@ -68,7 +69,7 @@ def test_symbol_combo_has_only_paper_symbols(qtbot: QtBot) -> None:
 def test_selected_symbol_is_included_in_the_start_request(qtbot: QtBot) -> None:
     widget = SessionSetupWidget()
     qtbot.addWidget(widget)
-    requested = []
+    requested: list[PaperSessionSetupValues] = []
     widget.create_requested.connect(requested.append)
     widget.symbol.setCurrentIndex(widget.symbol.findData("ETHUSDT"))
 

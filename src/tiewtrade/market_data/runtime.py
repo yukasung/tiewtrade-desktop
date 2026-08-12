@@ -331,6 +331,8 @@ class MarketDataRuntime:
             else:
                 if not update.is_closed:
                     self._publish_open_candle(update.candle)
+                    if not await self._deliver_open_candle(update.candle):
+                        return
                     continue
                 if not await self._accept_live_candle(update.candle):
                     return
@@ -364,6 +366,23 @@ class MarketDataRuntime:
             + self._config.interval
         )
         return next_boundary + _STALE_GRACE
+
+    async def _deliver_open_candle(self, candle: Candle) -> bool:
+        """Let the sink act on the forming candle; a sink failure fails closed.
+
+        The chart callback above swallows its own errors because a read model
+        cannot stop trading. This delivery can place an order, so it is held
+        to the same terms as a completed candle.
+        """
+        try:
+            await self._pipeline.process_in_progress(
+                candle,
+                received_at=self._scheduler.now(),
+            )
+        except CandlePipelineSinkError:
+            self._fail_closed(MarketDataRuntimeReason.SINK_ERROR)
+            return False
+        return True
 
     def _publish_open_candle(self, candle: Candle) -> None:
         callback = self._on_open_candle

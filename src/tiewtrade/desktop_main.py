@@ -155,29 +155,6 @@ class _PaperRuntimeActions:
         finally:
             self._finish_operation("replace", controller=controller, session=session)
 
-    def recover(self, snapshot: BotControlSnapshot) -> BotLifecycleResult:
-        self._prepare_database()
-        self._begin_operation("recover")
-        controller: PaperRuntimeController | None = None
-        try:
-            with self._lock:
-                controller = (
-                    self._controller if self._session == snapshot.session else None
-                )
-            if controller is None:
-                controller = self._new_controller(snapshot.session)
-                with self._lock:
-                    self._controller = controller
-                    self._session = snapshot.session
-            result = controller.recover(snapshot.session)
-        finally:
-            self._finish_operation(
-                "recover",
-                controller=controller,
-                session=snapshot.session,
-            )
-        return _lifecycle_result_for_ui(snapshot, result)
-
     def shutdown(self) -> None:
         with self._lock:
             self._shutdown_requested = True

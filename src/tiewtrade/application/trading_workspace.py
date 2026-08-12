@@ -1,5 +1,5 @@
 from dataclasses import dataclass, replace
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from decimal import Decimal
 from enum import StrEnum
 
@@ -31,6 +31,19 @@ class BotRuntimeState(StrEnum):
     STOPPING = "stopping"
     STOPPED = "stopped"
     BLOCKED = "blocked"
+
+
+class BasketEntryGate(StrEnum):
+    """Why a Basket may or may not take another Entry, as the workspace reads it.
+
+    A view-facing echo of the domain's EntryGateState, member for member: the
+    UI is kept out of the Entry Pair rules, so the gate crosses this layer as
+    plain facts. Producers restate a domain gate as BasketEntryGate(state).
+    """
+
+    OPEN = "open"
+    COOLDOWN = "cooldown"
+    MAX_ENTRIES_REACHED = "max_entries_reached"
 
 
 class DataFreshness(StrEnum):
@@ -80,7 +93,8 @@ class BasketSnapshot:
     take_profit_price: Decimal
     unrealized_pnl: Decimal
     liquidation_price: Decimal | None
-    lifecycle: str
+    entry_gate: BasketEntryGate
+    cooldown_until: date | None
     updated_at_utc: datetime
 
     def __post_init__(self) -> None:
@@ -94,7 +108,12 @@ class BasketSnapshot:
         _require_decimal(self.take_profit_price, "take_profit_price")
         _require_decimal(self.unrealized_pnl, "unrealized_pnl")
         _require_decimal(self.liquidation_price, "liquidation_price", allow_none=True)
-        _require_text(self.lifecycle, "lifecycle")
+        if not isinstance(self.entry_gate, BasketEntryGate):
+            raise ValueError("entry_gate must be a BasketEntryGate")
+        if (self.entry_gate is BasketEntryGate.COOLDOWN) != (
+            self.cooldown_until is not None
+        ):
+            raise ValueError("cooldown_until belongs to a Cooldown Month and only one")
         _require_utc(self.updated_at_utc, "updated_at_utc")
 
 

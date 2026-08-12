@@ -44,6 +44,7 @@ from tiewtrade.application.trade_history import (
     TradeHistoryFilter,
 )
 from tiewtrade.application.trading_workspace import (
+    BasketEntryGate,
     BasketSnapshot,
     BotRuntimeState,
     DataFreshness,
@@ -1850,7 +1851,8 @@ def test_stop_with_open_position_reopens_editable_setup_without_closing(
         take_profit_price=Decimal("120"),
         unrealized_pnl=Decimal("10"),
         liquidation_price=None,
-        lifecycle="open",
+        entry_gate=BasketEntryGate.OPEN,
+        cooldown_until=None,
         updated_at_utc=observed_at,
     )
 

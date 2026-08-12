@@ -35,3 +35,16 @@ class PaperSpotMarketDataSink:
             received_at=received_at,
         )
         self.live_candle_count += 1
+
+    async def process_in_progress(
+        self,
+        candle: Candle,
+        *,
+        received_at: datetime,
+    ) -> None:
+        snapshot = self._session.process_in_progress_candle(
+            candle,
+            observed_at=received_at,
+        )
+        if snapshot.accepted:
+            self.last_snapshot = snapshot

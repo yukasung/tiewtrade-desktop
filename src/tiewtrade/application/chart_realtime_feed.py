@@ -48,6 +48,19 @@ class _ChartOnlySink(MarketDataCandleSink):
         del received_at
         self._publish_completed(candle)
 
+    async def process_in_progress(
+        self,
+        candle: Candle,
+        *,
+        received_at: datetime,
+    ) -> None:
+        """A chart-only feed never trades, so a forming candle is nothing to act on.
+
+        Its own live candle reaches the chart through the runtime's open-candle
+        callback, not through this sink.
+        """
+        del candle, received_at
+
 
 class ChartOnlyFeedController:
     """Owns public candle facts for the chart without trading side effects."""

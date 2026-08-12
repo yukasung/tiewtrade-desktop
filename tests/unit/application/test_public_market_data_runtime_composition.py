@@ -68,6 +68,11 @@ class RecordingSink:
     async def process_completed(self, candle: Candle, *, received_at: datetime) -> None:
         return None
 
+    async def process_in_progress(
+        self, candle: Candle, *, received_at: datetime
+    ) -> None:
+        del candle, received_at
+
 
 @pytest.mark.parametrize(
     ("market_type", "expected_rest_url", "expected_websocket_url"),

@@ -29,3 +29,11 @@ class SessionPersistenceCoordinator[SessionSnapshotT](Protocol):
         received_at: datetime,
     ) -> PersistentSessionSnapshot[SessionSnapshotT]:
         pass
+
+    def process_in_progress_candle(
+        self,
+        candle: Candle,
+        *,
+        observed_at: datetime,
+    ) -> PersistentSessionSnapshot[SessionSnapshotT]:
+        pass

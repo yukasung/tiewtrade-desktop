@@ -10,6 +10,7 @@ from pytestqt.qtbot import QtBot
 from tests.support.paper_session_setup import configured_spot_session
 from tiewtrade.application.chart_data import ChartRange, ChartReadState, ChartSnapshot
 from tiewtrade.application.trading_workspace import (
+    BasketEntryGate,
     BasketSnapshot,
     configured_workspace_snapshot,
     ready_position_basket_tab,
@@ -90,7 +91,8 @@ def test_workspace_tabs_render_independent_scoped_states(qtbot: QtBot) -> None:
         take_profit_price=Decimal("67000.0000"),
         unrealized_pnl=Decimal("0.96336000"),
         liquidation_price=None,
-        lifecycle="active_pair",
+        entry_gate=BasketEntryGate.OPEN,
+        cooldown_until=None,
         updated_at_utc=observed_at,
     )
     snapshot = replace(

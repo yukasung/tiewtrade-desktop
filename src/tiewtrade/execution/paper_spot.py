@@ -76,7 +76,7 @@ class PaperSpotExecutor:
         )
 
     def fill_take_profit(
-        self, basket: Basket, candle: Candle
+        self, basket: Basket, candle: Candle, *, filled_at: datetime
     ) -> PaperSpotExitFill | None:
         self._require_matching_symbol(candle)
 
@@ -99,11 +99,11 @@ class PaperSpotExecutor:
             price=price,
             quantity=quantity,
             fee=notional * self._session.fee_rate,
-            filled_at=candle.close_time,
+            filled_at=filled_at,
         )
 
     def fill_stop_loss(
-        self, basket: Basket, candle: Candle
+        self, basket: Basket, candle: Candle, *, filled_at: datetime
     ) -> PaperSpotExitFill | None:
         self._require_matching_symbol(candle)
 
@@ -126,7 +126,7 @@ class PaperSpotExecutor:
             price=price,
             quantity=quantity,
             fee=notional * self._session.fee_rate,
-            filled_at=candle.close_time,
+            filled_at=filled_at,
         )
 
     def _log_entry_rejected(self, *, price: Decimal, quantity: Decimal) -> None:

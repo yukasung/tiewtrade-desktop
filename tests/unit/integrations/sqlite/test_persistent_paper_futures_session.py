@@ -34,6 +34,7 @@ from tiewtrade.integrations.sqlite.trade_history import (
 from tiewtrade.market_data.candle import Candle
 from tiewtrade.trading.basket import BasketCloseReason, ClosedBasket
 from tiewtrade.trading.capital import FuturesCapitalPlan
+from tiewtrade.trading.entry_pair import EntryGate, EntryGateState
 from tiewtrade.trading.position import PositionSide
 
 SESSION_ID = UUID("00000000-0000-0000-0000-000000000108")
@@ -131,6 +132,7 @@ def snapshot(
         account_equity=Decimal("200000"),
         capital_plan=capital_plan(),
         failure_reason=None,
+        entry_gate=EntryGate(EntryGateState.OPEN),
     )
 
 

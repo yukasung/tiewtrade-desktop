@@ -32,6 +32,7 @@ from tiewtrade.application.paper_session_setup import (
 )
 from tiewtrade.application.trade_history import PageRequest, TradeHistoryFilter
 from tiewtrade.application.trading_workspace import (
+    BasketEntryGate,
     BasketSnapshot,
     BotRuntimeState,
     DataFreshness,
@@ -455,8 +456,8 @@ def test_desktop_fake_snapshots_render_orders_and_basket_without_manual_trading(
         case.market_type.title()
     )
     assert table_item(window.workspace.position_basket.table, 0, 2).text() == "1"
-    assert table_item(window.workspace.position_basket.table, 0, 8).text() == (
-        "—" if case.market_type == "spot" else "44000.5000"
+    assert table_item(window.workspace.position_basket.table, 0, 7).text() == (
+        "Active"
     )
     assert _manual_order_buttons(window) == ()
     assert _trade_side_effect_counts(database) == initial_counts
@@ -1087,7 +1088,8 @@ def _fake_running_workspace(
                     if session.config.market_type is MarketType.SPOT
                     else Decimal("44000.5000")
                 ),
-                lifecycle="active_pair",
+                entry_gate=BasketEntryGate.OPEN,
+                cooldown_until=None,
                 updated_at_utc=observed_at,
             ),
             observed_at_utc=observed_at,

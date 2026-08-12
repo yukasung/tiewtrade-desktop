@@ -223,7 +223,9 @@ def test_take_profit_target_touch_uses_sell_floor_price_and_exact_fee() -> None:
     )
     touch_candle = candle_at(5, open_price="100", high="101", low="99", close="100")
 
-    fill = PaperSpotExecutor(session, rules).fill_take_profit(basket, touch_candle)
+    fill = PaperSpotExecutor(session, rules).fill_take_profit(
+        basket, touch_candle, filled_at=touch_candle.close_time
+    )
 
     assert fill is not None
     assert fill.price == Decimal("100.74")
@@ -256,7 +258,9 @@ def test_take_profit_rejects_a_padded_near_match() -> None:
     )
 
     with pytest.raises(ValueError) as error:
-        PaperSpotExecutor(spot_session(), rules).fill_take_profit(basket, candle)
+        PaperSpotExecutor(spot_session(), rules).fill_take_profit(
+            basket, candle, filled_at=candle.close_time
+        )
 
     assert str(error.value) == (
         "candle symbol must match SymbolRules.symbol: "
@@ -298,7 +302,10 @@ def test_take_profit_rejects_a_non_positive_sell_price_after_quantization() -> N
     touch_candle = candle_at(5, open_price="1", high="1", low="0.01", close="1")
 
     assert (
-        PaperSpotExecutor(session, rules).fill_take_profit(basket, touch_candle) is None
+        PaperSpotExecutor(session, rules).fill_take_profit(
+            basket, touch_candle, filled_at=touch_candle.close_time
+        )
+        is None
     )
 
 
@@ -336,7 +343,9 @@ def test_stop_loss_target_touch_uses_sell_floor_price_and_exact_fee() -> None:
     )
     touch_candle = candle_at(5, open_price="99", high="100", low="98", close="99")
 
-    fill = PaperSpotExecutor(session, rules).fill_stop_loss(basket, touch_candle)
+    fill = PaperSpotExecutor(session, rules).fill_stop_loss(
+        basket, touch_candle, filled_at=touch_candle.close_time
+    )
 
     assert fill is not None
     assert fill.price == Decimal("98.75")
@@ -365,7 +374,9 @@ def test_stop_loss_does_not_trigger_when_basket_has_no_multiplier_configured() -
     )
     touch_candle = candle_at(5, open_price="90", high="91", low="80", close="90")
 
-    fill = PaperSpotExecutor(spot_session(), rules).fill_stop_loss(basket, touch_candle)
+    fill = PaperSpotExecutor(spot_session(), rules).fill_stop_loss(
+        basket, touch_candle, filled_at=touch_candle.close_time
+    )
 
     assert fill is None
 
@@ -391,7 +402,7 @@ def test_stop_loss_does_not_trigger_when_candle_low_stays_above_target() -> None
     )
 
     fill = PaperSpotExecutor(spot_session(), rules).fill_stop_loss(
-        basket, above_target_candle
+        basket, above_target_candle, filled_at=above_target_candle.close_time
     )
 
     assert fill is None
@@ -419,7 +430,9 @@ def test_stop_loss_rejects_a_padded_near_match() -> None:
     )
 
     with pytest.raises(ValueError) as error:
-        PaperSpotExecutor(spot_session(), rules).fill_stop_loss(basket, candle)
+        PaperSpotExecutor(spot_session(), rules).fill_stop_loss(
+            basket, candle, filled_at=candle.close_time
+        )
 
     assert str(error.value) == (
         "candle symbol must match SymbolRules.symbol: "

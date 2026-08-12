@@ -32,7 +32,6 @@ def run_desktop(
     list_trade_fills: ListTradeFills | None = None,
     start_bot: LifecycleAction | None = None,
     stop_bot: LifecycleAction | None = None,
-    recover_bot: LifecycleAction | None = None,
     stop_for_replacement: Callable[[ConfiguredPaperSession], None] | None = None,
     validate_session: Callable[[PaperSessionSetupValues], None] | None = None,
     close_position: Callable[[ConfiguredPaperSession], None] | None = None,

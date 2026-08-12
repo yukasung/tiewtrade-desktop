@@ -10,7 +10,7 @@ from tiewtrade.application.session_persistence import (
 from tiewtrade.market_data.candle import Candle
 
 
-class _CompletedCandleProcessor[ProcessorSnapshotT](Protocol):
+class _CandleProcessor[ProcessorSnapshotT](Protocol):
     def process_completed_candle(
         self,
         candle: Candle,
@@ -19,11 +19,19 @@ class _CompletedCandleProcessor[ProcessorSnapshotT](Protocol):
     ) -> ProcessorSnapshotT:
         pass
 
+    def process_in_progress_candle(
+        self,
+        candle: Candle,
+        *,
+        observed_at: datetime,
+    ) -> ProcessorSnapshotT:
+        pass
+
 
 class SQLiteSessionPersistenceCoordinator[CoordinatorSnapshotT]:
     def __init__(
         self,
-        session: _CompletedCandleProcessor[CoordinatorSnapshotT],
+        session: _CandleProcessor[CoordinatorSnapshotT],
         record_snapshot: Callable[[CoordinatorSnapshotT], None],
     ) -> None:
         self._session = session
@@ -36,15 +44,39 @@ class SQLiteSessionPersistenceCoordinator[CoordinatorSnapshotT]:
         *,
         received_at: datetime,
     ) -> PersistentSessionSnapshot[CoordinatorSnapshotT]:
+        return self._recorded(
+            lambda: self._session.process_completed_candle(
+                candle,
+                received_at=received_at,
+            )
+        )
+
+    def process_in_progress_candle(
+        self,
+        candle: Candle,
+        *,
+        observed_at: datetime,
+    ) -> PersistentSessionSnapshot[CoordinatorSnapshotT]:
+        return self._recorded(
+            lambda: self._session.process_in_progress_candle(
+                candle,
+                observed_at=observed_at,
+            )
+        )
+
+    def _recorded(
+        self,
+        process: Callable[[], CoordinatorSnapshotT],
+    ) -> PersistentSessionSnapshot[CoordinatorSnapshotT]:
+        """An exit taken between candles is durable on the same terms as one
+        taken at a close: recorded before it is published, or the Session is
+        blocked."""
         if self._state is PersistenceState.BLOCKED:
             raise SessionPersistenceBlockedError(
                 "Session is blocked because Trade History persistence failed"
             )
 
-        snapshot = self._session.process_completed_candle(
-            candle,
-            received_at=received_at,
-        )
+        snapshot = process()
         try:
             self._record_snapshot(snapshot)
         except Exception:

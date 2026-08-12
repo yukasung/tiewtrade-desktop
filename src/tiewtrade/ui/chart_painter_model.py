@@ -10,7 +10,6 @@ from tiewtrade.application.chart_data import (
     ChartCandle,
     ChartRange,
     ChartSnapshot,
-    latest_completed_boundary,
 )
 from tiewtrade.trading.trade_history import FillSide
 from tiewtrade.ui.display_time import in_display_timezone
@@ -236,21 +235,20 @@ def _marker_glyphs(
     glyphs: list[MarkerGlyph] = []
     for marker in sorted(snapshot.markers, key=lambda item: item.filled_at_utc):
         is_buy = marker.side is FillSide.BUY
-        x = _clamp_x(
-            _marker_x(marker.filled_at_utc, snapshot.visible_range, price_surface),
-            price_surface,
-            half,
-        )
-        candle = glyph_by_open_time.get(
-            latest_completed_boundary(snapshot.timeframe, marker.filled_at_utc)
-        )
+        candle = glyph_by_open_time.get(marker.candle_open_time)
         if candle is None:
             # The candle scrolled out of view; the fill price is all that is left.
             fill_y = _price_y(marker.price, low, high, price_surface)
             below_y = above_y = fill_y
+            unclamped_x = _marker_x(
+                marker.filled_at_utc, snapshot.visible_range, price_surface
+            )
         else:
             below_y = max(candle.wick.y1(), candle.wick.y2())
             above_y = min(candle.wick.y1(), candle.wick.y2())
+            # Over the candle it marks, not the instant it was stamped with.
+            unclamped_x = candle.x
+        x = _clamp_x(unclamped_x, price_surface, half)
         badge, below = _free_badge(
             x,
             below_y=below_y,

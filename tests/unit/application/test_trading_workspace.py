@@ -1,11 +1,12 @@
 from dataclasses import fields, replace
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from decimal import Decimal
 
 import pytest
 
 from tests.support.paper_session_setup import configured_spot_session
 from tiewtrade.application.trading_workspace import (
+    BasketEntryGate,
     BasketSnapshot,
     BotRuntimeState,
     DataFreshness,
@@ -26,6 +27,7 @@ from tiewtrade.application.trading_workspace import (
     stale_position_basket_tab,
     stale_workspace_snapshot,
 )
+from tiewtrade.trading.entry_pair import EntryGateState
 
 OBSERVED_AT = datetime(2026, 8, 1, 12, tzinfo=UTC)
 
@@ -128,6 +130,29 @@ def test_position_basket_tab_rejects_invalid_ready_state() -> None:
         )
 
 
+def test_workspace_gate_mirrors_every_domain_gate_state() -> None:
+    """Producers restate a domain gate as BasketEntryGate(state)."""
+    assert {gate.value for gate in BasketEntryGate} == {
+        state.value for state in EntryGateState
+    }
+
+
+@pytest.mark.parametrize(
+    ("entry_gate", "cooldown_until"),
+    [
+        (BasketEntryGate.COOLDOWN, None),
+        (BasketEntryGate.OPEN, date(2026, 3, 1)),
+        (BasketEntryGate.MAX_ENTRIES_REACHED, date(2026, 3, 1)),
+    ],
+)
+def test_basket_rejects_a_cooldown_month_that_contradicts_its_gate(
+    entry_gate: BasketEntryGate,
+    cooldown_until: date | None,
+) -> None:
+    with pytest.raises(ValueError, match="Cooldown Month"):
+        replace(_basket(), entry_gate=entry_gate, cooldown_until=cooldown_until)
+
+
 def _basket() -> BasketSnapshot:
     return BasketSnapshot(
         symbol="BTCUSDT",
@@ -139,6 +164,7 @@ def _basket() -> BasketSnapshot:
         take_profit_price=Decimal("67000"),
         unrealized_pnl=Decimal("1.926"),
         liquidation_price=None,
-        lifecycle="active_pair",
+        entry_gate=BasketEntryGate.OPEN,
+        cooldown_until=None,
         updated_at_utc=OBSERVED_AT,
     )

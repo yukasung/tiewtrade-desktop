@@ -1,3 +1,8 @@
+# The gain/loss pair the whole app reads by colour: chart candles, fill badges
+# and any figure that can go either way.
+POSITIVE_COLOR = "#0ECB81"
+NEGATIVE_COLOR = "#F6465D"
+
 DARK_THEME = """
 QMainWindow, QWidget#workspace, QWidget#workspaceContent {
     background: #0B0E11;

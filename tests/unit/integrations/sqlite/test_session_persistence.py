@@ -35,6 +35,17 @@ class FakeSession:
             raise self.error
         return FakeSnapshot(self.calls)
 
+    def process_in_progress_candle(
+        self,
+        candle: Candle,
+        *,
+        observed_at: datetime,
+    ) -> FakeSnapshot:
+        self.calls += 1
+        if self.error is not None:
+            raise self.error
+        return FakeSnapshot(self.calls)
+
 
 def candle() -> Candle:
     return Candle(

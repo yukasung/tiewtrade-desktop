@@ -649,8 +649,10 @@ class RecordingSink:
         fail_warm_up: bool = False,
         fail_live: bool = False,
         fail_live_at: int | None = None,
+        fail_in_progress: bool = False,
         scheduler: FakeScheduler | None = None,
     ) -> None:
+        self._fail_in_progress = fail_in_progress
         self._fail_warm_up = fail_warm_up
         self._fail_live = fail_live
         self._fail_live_at = fail_live_at
@@ -659,6 +661,7 @@ class RecordingSink:
         self._scheduler = scheduler
         self.calls: list[tuple[str, tuple[Candle, ...] | Candle]] = []
         self.live_candles: list[Candle] = []
+        self.in_progress_candles: list[Candle] = []
         self.states_at_calls: list[MarketDataRuntimeState] = []
         self.warm_up_within_deadline = False
         self.runtime: MarketDataRuntime | None = None
@@ -683,6 +686,13 @@ class RecordingSink:
         self.live_candles.append(candle)
         self._live_received.set()
 
+    async def process_in_progress(
+        self, candle: Candle, *, received_at: datetime
+    ) -> None:
+        self.in_progress_candles.append(candle)
+        if self._fail_in_progress:
+            raise RuntimeError("in-progress sink failed")
+
     async def wait_for_live_candle_count(self, count: int) -> None:
         while len(self.live_candles) < count:
             self._live_received.clear()
@@ -698,6 +708,13 @@ class BlockingDeliveryWaitSink(RecordingSink):
         super().__init__()
         self.wait_finished = False
 
+    async def process_in_progress(
+        self, candle: Candle, *, received_at: datetime
+    ) -> None:
+        self.in_progress_candles.append(candle)
+        if self._fail_in_progress:
+            raise RuntimeError("in-progress sink failed")
+
     async def wait_for_live_candle_count(self, count: int) -> None:
         try:
             await asyncio.Event().wait()
@@ -706,6 +723,13 @@ class BlockingDeliveryWaitSink(RecordingSink):
 
 
 class FailingDeliveryWaitSink(RecordingSink):
+    async def process_in_progress(
+        self, candle: Candle, *, received_at: datetime
+    ) -> None:
+        self.in_progress_candles.append(candle)
+        if self._fail_in_progress:
+            raise RuntimeError("in-progress sink failed")
+
     async def wait_for_live_candle_count(self, count: int) -> None:
         await asyncio.sleep(0)
         raise RuntimeError("sink wait crashed")

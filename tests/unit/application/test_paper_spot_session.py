@@ -1,4 +1,4 @@
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from typing import cast
 from unittest.mock import Mock, create_autospec
@@ -27,7 +27,11 @@ from tiewtrade.strategies.rsi_buy_only.preset import RsiBuyOnlyPreset
 from tiewtrade.strategies.rsi_step_grid.preset import RsiStepGridPreset
 from tiewtrade.strategies.rsi_step_grid.strategy import RsiStepGridStrategy
 from tiewtrade.trading.basket import BasketCloseReason
-from tiewtrade.trading.entry_pair import EntryPairLifecycle
+from tiewtrade.trading.entry_pair import (
+    EntryGate,
+    EntryGateState,
+    EntryPairLifecycle,
+)
 from tiewtrade.trading.entry_policy import EntryPolicy
 from tiewtrade.trading.session_config import (
     MarketType,
@@ -106,6 +110,47 @@ def test_snapshot_has_no_basket_id_before_first_entry() -> None:
 
     assert snapshot.accepted is True
     assert snapshot.basket_id is None
+
+
+def test_entry_gate_waits_for_a_candle_to_date_it() -> None:
+    application = paper_session()
+
+    assert application.snapshot.entry_gate is None
+
+    first_candle = candle(0, open_price="100", close_price="101")
+    snapshot = application.process_completed_candle(
+        first_candle,
+        received_at=first_candle.close_time,
+    )
+
+    assert snapshot.entry_gate == EntryGate(EntryGateState.OPEN)
+
+
+def test_completed_pair_reports_its_cooldown_month_in_the_snapshot() -> None:
+    application = paper_session()
+    first_intent = arm_entry_intent(application)
+    first_fill_candle = candle(
+        minute_after(first_intent), open_price="120", close_price="121"
+    )
+    application.process_completed_candle(
+        first_fill_candle, received_at=first_fill_candle.close_time
+    )
+    second_intent = arm_entry_intent(
+        application,
+        start_minute=minute_after(first_intent) + 5,
+        downtrend_candles=60,
+    )
+    second_fill_candle = candle(
+        minute_after(second_intent), open_price="100", close_price="101"
+    )
+
+    snapshot = application.process_completed_candle(
+        second_fill_candle, received_at=second_fill_candle.close_time
+    )
+
+    # Both Entries filled in January, so the pair reopens in March.
+    assert snapshot.basket_entry_count == 2
+    assert snapshot.entry_gate == EntryGate(EntryGateState.COOLDOWN, date(2026, 3, 1))
 
 
 def test_incomplete_candle_is_not_processed() -> None:
@@ -192,6 +237,112 @@ def test_stop_loss_closes_the_basket_when_configured() -> None:
     assert closed_snapshot.exit_fill is not None
     assert closed_snapshot.closed_basket_count == 1
     assert closed_snapshot.basket_entry_count == 0
+
+
+def test_take_profit_fills_the_moment_the_forming_candle_reaches_it() -> None:
+    """The price is at the target now; waiting for the close would report a
+    fill the market has already moved past."""
+    application = buy_only_paper_session()
+    entry_snapshot, next_minute = arm_and_fill_buy_only_entry(application)
+    assert entry_snapshot.take_profit_price is not None
+    target = entry_snapshot.take_profit_price
+    forming = candle(
+        next_minute,
+        open_price=str(target - Decimal("5")),
+        close_price=str(target - Decimal("1")),
+        high=str(target),
+        low=str(target - Decimal("5")),
+    )
+    observed_at = forming.open_time + timedelta(minutes=2)
+
+    snapshot = application.process_in_progress_candle(forming, observed_at=observed_at)
+
+    assert snapshot.accepted is True
+    assert snapshot.closed_basket is not None
+    assert snapshot.closed_basket.close_reason is BasketCloseReason.TAKE_PROFIT
+    assert snapshot.exit_fill is not None
+    # Stamped when it happened, not at a close that has not come.
+    assert snapshot.exit_fill.filled_at == observed_at
+    assert snapshot.basket_entry_count == 0
+
+
+def test_stop_loss_fills_the_moment_the_forming_candle_reaches_it() -> None:
+    application = buy_only_paper_session()
+    entry_snapshot, next_minute = arm_and_fill_buy_only_entry(application)
+    assert entry_snapshot.entry_fill is not None
+    entry_price = entry_snapshot.entry_fill.price
+    forming = candle(
+        next_minute,
+        open_price=str(entry_price),
+        close_price=str(entry_price),
+        high=str(entry_price),
+        low=str(entry_price - Decimal("10")),
+    )
+
+    snapshot = application.process_in_progress_candle(
+        forming, observed_at=forming.open_time + timedelta(minutes=1)
+    )
+
+    assert snapshot.closed_basket is not None
+    assert snapshot.closed_basket.close_reason is BasketCloseReason.STOP_LOSS
+
+
+def test_a_forming_candle_short_of_both_targets_leaves_the_basket_open() -> None:
+    application = buy_only_paper_session()
+    entry_snapshot, next_minute = arm_and_fill_buy_only_entry(application)
+    assert entry_snapshot.entry_fill is not None
+    entry_price = entry_snapshot.entry_fill.price
+    forming = candle(
+        next_minute,
+        open_price=str(entry_price),
+        close_price=str(entry_price),
+        high=str(entry_price + Decimal("1")),
+        low=str(entry_price - Decimal("1")),
+    )
+
+    snapshot = application.process_in_progress_candle(
+        forming, observed_at=forming.open_time + timedelta(minutes=1)
+    )
+
+    assert snapshot.accepted is False
+    assert snapshot.closed_basket is None
+    assert snapshot.basket_entry_count == 1
+
+
+def test_only_the_candle_forming_after_the_last_close_is_acted_on() -> None:
+    """A candle that is not the one now forming is not a live price."""
+    application = buy_only_paper_session()
+    entry_snapshot, next_minute = arm_and_fill_buy_only_entry(application)
+    assert entry_snapshot.take_profit_price is not None
+    target = entry_snapshot.take_profit_price
+    stale = candle(
+        next_minute + 5,
+        open_price=str(target),
+        close_price=str(target),
+        high=str(target),
+        low=str(target),
+    )
+
+    snapshot = application.process_in_progress_candle(
+        stale, observed_at=stale.open_time
+    )
+
+    assert snapshot.accepted is False
+    assert snapshot.basket_entry_count == 1
+
+
+def test_no_basket_means_nothing_to_close_between_candles() -> None:
+    application = buy_only_paper_session()
+    first = candle(0, open_price="100", close_price="101")
+    application.process_completed_candle(first, received_at=first.close_time)
+    forming = candle(5, open_price="101", close_price="900", high="900", low="101")
+
+    snapshot = application.process_in_progress_candle(
+        forming, observed_at=forming.open_time
+    )
+
+    assert snapshot.accepted is False
+    assert snapshot.exit_fill is None
 
 
 def test_stop_loss_takes_precedence_over_take_profit_on_the_same_candle() -> None:

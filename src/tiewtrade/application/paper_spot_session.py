@@ -22,7 +22,7 @@ from tiewtrade.strategies.indicators import IndicatorSnapshot, WilderIndicators
 from tiewtrade.strategies.protocols import EntryStrategy, StrategyPreset
 from tiewtrade.strategies.registry import strategy_definition_for
 from tiewtrade.trading.basket import Basket, BasketCloseReason, ClosedBasket
-from tiewtrade.trading.entry_pair import EntryPairLifecycle
+from tiewtrade.trading.entry_pair import EntryGate, EntryPairLifecycle
 from tiewtrade.trading.session_config import MarketType, SessionConfig, TradeMode
 from tiewtrade.trading.symbol_rules import SymbolRules
 
@@ -53,6 +53,9 @@ class PaperSpotSessionSnapshot:
     basket_id: UUID | None
     basket_entry_count: int
     take_profit_price: Decimal | None
+    # Read against the last candle the Session accepted, so it answers for the
+    # same moment the Session used to decide entries. None until one arrives.
+    entry_gate: EntryGate | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -136,14 +139,18 @@ class PaperSpotSession:
             closed_basket: ClosedBasket | None = None
 
             if basket_existed_at_candle_open and not entry_filled_on_current_candle:
-                stop_loss_fill = self._fill_stop_loss(transition, candle)
+                stop_loss_fill = self._fill_stop_loss(
+                    transition, candle, candle.close_time
+                )
                 if stop_loss_fill is not None:
                     exit_fill = stop_loss_fill
                     closed_basket = self._close_basket(
                         transition, exit_fill, BasketCloseReason.STOP_LOSS
                     )
                 else:
-                    take_profit_fill = self._fill_take_profit(transition, candle)
+                    take_profit_fill = self._fill_take_profit(
+                        transition, candle, candle.close_time
+                    )
                     if take_profit_fill is not None:
                         exit_fill = take_profit_fill
                         closed_basket = self._close_basket(
@@ -170,6 +177,55 @@ class PaperSpotSession:
         except Exception as error:
             self._fail_closed()
             raise PaperSpotSessionError("Paper Spot execution failed") from error
+
+    def process_in_progress_candle(
+        self, candle: Candle, *, observed_at: datetime
+    ) -> PaperSpotSessionSnapshot:
+        """Close an open Basket the moment the forming candle reaches its exit.
+
+        Entries still wait for a completed candle — a signal read from a candle
+        that is still moving would be read again as it moves. An exit is not a
+        reading: the price is at the level now, and a real exchange would have
+        filled it, so waiting for the close would report a fill the market
+        already moved past.
+        """
+        if self._state is not PaperSpotSessionState.ACTIVE or self._basket is None:
+            return self._snapshot(accepted=False)
+        if not self._is_forming_candle(candle):
+            return self._snapshot(accepted=False)
+
+        try:
+            transition = self._new_transition()
+            exit_fill = self._fill_stop_loss(transition, candle, observed_at)
+            close_reason = BasketCloseReason.STOP_LOSS
+            if exit_fill is None:
+                exit_fill = self._fill_take_profit(transition, candle, observed_at)
+                close_reason = BasketCloseReason.TAKE_PROFIT
+            if exit_fill is None:
+                return self._snapshot(accepted=False)
+
+            closed_basket = self._close_basket(transition, exit_fill, close_reason)
+            self._commit_transition(transition)
+            return self._snapshot(
+                accepted=True,
+                exit_fill=exit_fill,
+                closed_basket=closed_basket,
+            )
+        except PaperSpotSessionError:
+            raise
+        except Exception as error:
+            self._fail_closed()
+            raise PaperSpotSessionError("Paper Spot execution failed") from error
+
+    def _is_forming_candle(self, candle: Candle) -> bool:
+        """Only the candle that opened after the last completed one is forming."""
+        closed_at = self._candles.last_close_time
+        return (
+            candle.symbol == self._identity.symbol
+            and candle.timeframe == self._identity.timeframe
+            and closed_at is not None
+            and candle.open_time == closed_at
+        )
 
     def warm_up_completed_candles(
         self,
@@ -256,17 +312,23 @@ class PaperSpotSession:
         self,
         transition: _PaperSpotTransition,
         candle: Candle,
+        filled_at: datetime,
     ) -> PaperSpotExitFill | None:
         assert transition.basket is not None
-        return self._executor.fill_stop_loss(transition.basket, candle)
+        return self._executor.fill_stop_loss(
+            transition.basket, candle, filled_at=filled_at
+        )
 
     def _fill_take_profit(
         self,
         transition: _PaperSpotTransition,
         candle: Candle,
+        filled_at: datetime,
     ) -> PaperSpotExitFill | None:
         assert transition.basket is not None
-        return self._executor.fill_take_profit(transition.basket, candle)
+        return self._executor.fill_take_profit(
+            transition.basket, candle, filled_at=filled_at
+        )
 
     def _close_basket(
         self,
@@ -317,6 +379,11 @@ class PaperSpotSession:
         if intent is not None:
             transition.pending_intent = intent
 
+    def _entry_gate(self) -> EntryGate | None:
+        """Read the gate against the last candle, the clock entries are judged on."""
+        closed_at = self._candles.last_close_time
+        return None if closed_at is None else self._lifecycle.entry_gate(closed_at)
+
     def _snapshot(
         self,
         *,
@@ -345,4 +412,5 @@ class PaperSpotSession:
             take_profit_price=(
                 None if self._basket is None else self._basket.take_profit_price
             ),
+            entry_gate=self._entry_gate(),
         )

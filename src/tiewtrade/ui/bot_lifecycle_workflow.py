@@ -71,7 +71,6 @@ class _LifecycleOperation(Enum):
     INITIALIZE = "initialize"
     START = "start"
     STOP = "stop"
-    RECOVER = "recover"
 
 
 class BotLifecycleWorkflow(QObject):
@@ -83,7 +82,6 @@ class BotLifecycleWorkflow(QObject):
         *,
         start_bot: LifecycleAction | None,
         stop_bot: LifecycleAction | None,
-        recover: LifecycleAction | None,
         new_session_available: NewSessionAvailability | None = None,
         initialize_bot: LifecycleAction | None = None,
         runtime_snapshots: RuntimeSnapshotRelay | None = None,
@@ -94,7 +92,6 @@ class BotLifecycleWorkflow(QObject):
         super().__init__(parent)
         self._start_bot = start_bot
         self._stop_bot = stop_bot
-        self._recover = recover
         self._new_session_available = new_session_available
         self._initialize_bot = initialize_bot
         self._runtime_snapshots = runtime_snapshots
@@ -329,7 +326,6 @@ class BotLifecycleWorkflow(QObject):
             _LifecycleOperation.INITIALIZE: "Paper Bot recovery failed",
             _LifecycleOperation.START: "Paper Bot could not be started",
             _LifecycleOperation.STOP: "Paper Bot could not be stopped",
-            _LifecycleOperation.RECOVER: "Paper Bot recovery failed",
         }[operation]
         blocked = blocked_bot_control(
             snapshot,
@@ -436,13 +432,6 @@ class BotLifecycleWorkflow(QObject):
                 ),
                 _LifecycleOperation.STOP: frozenset(
                     {BotRuntimeState.STOPPED, BotRuntimeState.BLOCKED}
-                ),
-                _LifecycleOperation.RECOVER: frozenset(
-                    {
-                        BotRuntimeState.CONFIGURED,
-                        BotRuntimeState.STOPPED,
-                        BotRuntimeState.BLOCKED,
-                    }
                 ),
             }[operation]
         )

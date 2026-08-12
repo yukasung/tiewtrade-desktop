@@ -23,6 +23,7 @@ from tiewtrade.application.paper_spot_session import (
 )
 from tiewtrade.application.session_persistence import SessionPersistenceCoordinator
 from tiewtrade.application.trading_workspace import (
+    BasketEntryGate,
     BasketSnapshot,
     BotRuntimeState,
     DataFreshness,
@@ -69,6 +70,7 @@ from tiewtrade.market_data.runtime_state import (
 from tiewtrade.strategies.protocols import StrategyPreset
 from tiewtrade.strategies.registry import strategy_definition_for
 from tiewtrade.trading.basket import average_entry_price_after_fill
+from tiewtrade.trading.entry_pair import EntryGate
 from tiewtrade.trading.position import PositionSide, unrealized_pnl
 from tiewtrade.trading.session_config import MarketType, TradeMode
 from tiewtrade.trading.symbol_rules import SymbolRules
@@ -723,8 +725,33 @@ class _PaperSpotRuntimeSink:
             if self._entries_enabled():
                 self._publish(snapshot, self._position, candle, candle.close_time)
 
+    async def process_in_progress(
+        self,
+        candle: Candle,
+        *,
+        received_at: datetime,
+    ) -> None:
+        """Close the Basket the moment the forming candle reaches its exit."""
+        with self._entry_lock:
+            if not self._entries_enabled():
+                return
+            snapshot = self._persistent.process_in_progress_candle(
+                candle, observed_at=received_at
+            ).session
+            if not snapshot.accepted:
+                return
+            self._position = _position_after_snapshot(
+                self._position,
+                entry_fill=snapshot.entry_fill,
+                basket_entry_count=snapshot.basket_entry_count,
+            )
+            if self._entries_enabled():
+                self._publish(snapshot, self._position, candle, received_at)
+
 
 class _PaperFuturesRuntimeSink:
+    """Futures acts only on completed candles; see PaperFuturesSession."""
+
     def __init__(
         self,
         *,
@@ -777,6 +804,15 @@ class _PaperFuturesRuntimeSink:
             if self._entries_enabled():
                 self._publish(snapshot, self._position, candle, candle.close_time)
 
+    async def process_in_progress(
+        self,
+        candle: Candle,
+        *,
+        received_at: datetime,
+    ) -> None:
+        """Futures does not act between candles; see PaperFuturesSession."""
+        del candle, received_at
+
 
 @dataclass(frozen=True, slots=True)
 class _OpenBasketPosition:
@@ -827,6 +863,7 @@ def _spot_basket_snapshot(
         take_profit_price=snapshot.take_profit_price,
         position_side=PositionSide.LONG,
         liquidation_price=None,
+        entry_gate=snapshot.entry_gate,
         observed_at_utc=observed_at_utc,
     )
 
@@ -850,6 +887,7 @@ def _futures_basket_snapshot(
         take_profit_price=snapshot.take_profit_price,
         position_side=snapshot.position_side,
         liquidation_price=snapshot.liquidation_price,
+        entry_gate=snapshot.entry_gate,
         observed_at_utc=observed_at_utc,
     )
 
@@ -864,10 +902,13 @@ def _updated_basket_snapshot(
     take_profit_price: Decimal | None,
     position_side: PositionSide,
     liquidation_price: Decimal | None,
+    entry_gate: EntryGate | None,
     observed_at_utc: datetime,
 ) -> BasketSnapshot:
     if position is None:
         raise ValueError("open Basket requires authoritative position facts")
+    if entry_gate is None:
+        raise ValueError("open Basket requires an entry_gate")
     total_quantity = position.total_quantity
     average_entry_price = position.average_entry_price
     if take_profit_price is None:
@@ -888,7 +929,8 @@ def _updated_basket_snapshot(
         take_profit_price=take_profit_price,
         unrealized_pnl=marked_pnl,
         liquidation_price=liquidation_price,
-        lifecycle="ACTIVE",
+        entry_gate=BasketEntryGate(entry_gate.state),
+        cooldown_until=entry_gate.reopens_at,
         updated_at_utc=observed_at_utc,
     )
 

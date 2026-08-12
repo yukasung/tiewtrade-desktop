@@ -18,6 +18,7 @@ from tiewtrade.application.bot_control import (
 )
 from tiewtrade.application.chart_data import ChartCandle
 from tiewtrade.application.trading_workspace import (
+    BasketEntryGate,
     BasketSnapshot,
     BotRuntimeState,
     DataFreshness,
@@ -65,7 +66,6 @@ def _workflow(
     *,
     start_bot: LifecycleAction | None,
     stop_bot: LifecycleAction | None,
-    recover: LifecycleAction | None,
     runtime_snapshots: RuntimeSnapshotRelay | None = None,
 ) -> tuple[BotLifecycleWorkflow, QThreadPool]:
     thread_pool = QThreadPool()
@@ -74,7 +74,6 @@ def _workflow(
         BotLifecycleWorkflow(
             start_bot=start_bot,
             stop_bot=stop_bot,
-            recover=recover,
             runtime_snapshots=runtime_snapshots,
             thread_pool=thread_pool,
             clock=lambda: OBSERVED_AT,
@@ -125,7 +124,7 @@ def test_start_emits_starting_then_running_off_ui_thread(qtbot: QtBot) -> None:
             data_freshness=DataFreshness.FRESH,
         )
 
-    workflow, thread_pool = _workflow(start_bot=start, stop_bot=None, recover=None)
+    workflow, thread_pool = _workflow(start_bot=start, stop_bot=None)
     emitted: list[BotControlSnapshot] = []
     workflow.snapshot_changed.connect(emitted.append)
 
@@ -159,7 +158,7 @@ def test_reconfigure_after_blocked_labels_new_session_running_as_runtime(
             )
         return _result(snapshot, BotRuntimeState.RUNNING)
 
-    workflow, thread_pool = _workflow(start_bot=start, stop_bot=None, recover=None)
+    workflow, thread_pool = _workflow(start_bot=start, stop_bot=None)
     workflow.configure(configured_spot_session())
     workflow.start_bot()
     qtbot.waitUntil(lambda: workflow.snapshot.state is BotRuntimeState.BLOCKED)
@@ -196,7 +195,6 @@ def test_runtime_snapshot_from_worker_is_published_on_qt_thread(
     workflow, thread_pool = _workflow(
         start_bot=start,
         stop_bot=None,
-        recover=None,
         runtime_snapshots=relay,
     )
     recorder = _SnapshotThreadRecorder()
@@ -257,7 +255,6 @@ def test_runtime_snapshot_published_before_start_returns_is_not_lost(
     workflow, thread_pool = _workflow(
         start_bot=start,
         stop_bot=None,
-        recover=None,
         runtime_snapshots=relay,
     )
     workflow.configure(configured_spot_session())
@@ -294,7 +291,6 @@ def test_stop_invalidates_late_runtime_callback_and_preserves_basket(
     workflow, thread_pool = _workflow(
         start_bot=start,
         stop_bot=stop,
-        recover=None,
         runtime_snapshots=relay,
     )
     workflow.configure(configured_spot_session())
@@ -350,7 +346,6 @@ def test_runtime_callback_from_older_generation_is_ignored(qtbot: QtBot) -> None
     workflow, thread_pool = _workflow(
         start_bot=start,
         stop_bot=None,
-        recover=None,
         runtime_snapshots=relay,
     )
     first_session = configured_spot_session()
@@ -427,7 +422,6 @@ def test_repeated_runtime_event_keeps_running_without_blocking_ui(qtbot: QtBot) 
     workflow, thread_pool = _workflow(
         start_bot=start,
         stop_bot=None,
-        recover=None,
         runtime_snapshots=relay,
     )
     workflow.configure(configured_spot_session())
@@ -461,7 +455,7 @@ def test_repeated_start_does_not_submit_a_second_task(qtbot: QtBot) -> None:
             raise TimeoutError("test did not release worker")
         return _result(snapshot, BotRuntimeState.RUNNING)
 
-    workflow, thread_pool = _workflow(start_bot=start, stop_bot=None, recover=None)
+    workflow, thread_pool = _workflow(start_bot=start, stop_bot=None)
     workflow.configure(configured_spot_session())
     workflow.start_bot()
     qtbot.waitUntil(started.is_set)
@@ -491,7 +485,7 @@ def test_stop_emits_stopping_then_stopped_and_rejects_repeats(qtbot: QtBot) -> N
             raise TimeoutError("test did not release worker")
         return _result(snapshot, BotRuntimeState.STOPPED)
 
-    workflow, thread_pool = _workflow(start_bot=start, stop_bot=stop, recover=None)
+    workflow, thread_pool = _workflow(start_bot=start, stop_bot=stop)
     emitted: list[BotControlSnapshot] = []
     workflow.snapshot_changed.connect(emitted.append)
     workflow.configure(configured_spot_session())
@@ -530,7 +524,7 @@ def test_start_result_for_futures_header_is_blocked_with_spot_workspace_preserve
             )
         )
 
-    workflow, thread_pool = _workflow(start_bot=start, stop_bot=None, recover=None)
+    workflow, thread_pool = _workflow(start_bot=start, stop_bot=None)
     workflow.configure(configured_spot_session())
     original = workflow.snapshot.workspace
     workflow.start_bot()
@@ -562,7 +556,7 @@ def test_stop_result_dropping_basket_is_blocked_and_preserves_take_profit(
             )
         )
 
-    workflow, thread_pool = _workflow(start_bot=start, stop_bot=stop, recover=None)
+    workflow, thread_pool = _workflow(start_bot=start, stop_bot=stop)
     workflow.configure(configured_spot_session())
     workflow.start_bot()
     qtbot.waitUntil(lambda: workflow.snapshot.state is BotRuntimeState.RUNNING)
@@ -616,7 +610,7 @@ def test_start_result_altering_workspace_continuity_maps_to_blocked(
         assert callable(alter_workspace)
         return BotLifecycleResult(workspace=alter_workspace(workspace))
 
-    workflow, thread_pool = _workflow(start_bot=start, stop_bot=None, recover=None)
+    workflow, thread_pool = _workflow(start_bot=start, stop_bot=None)
     workflow.configure(configured_spot_session())
     original = workflow.snapshot.workspace
     workflow.start_bot()
@@ -645,7 +639,7 @@ def test_start_invalid_result_or_exception_maps_to_safe_blocked_reason(
             raise start_result
         return start_result  # type: ignore[return-value]
 
-    workflow, thread_pool = _workflow(start_bot=start, stop_bot=None, recover=None)
+    workflow, thread_pool = _workflow(start_bot=start, stop_bot=None)
     workflow.configure(configured_spot_session())
     workflow.start_bot()
 
@@ -657,146 +651,6 @@ def test_start_invalid_result_or_exception_maps_to_safe_blocked_reason(
     assert thread_pool.waitForDone(1_000)
 
 
-@pytest.mark.parametrize("state", [BotRuntimeState.CONFIGURED, BotRuntimeState.STOPPED])
-@pytest.mark.skip(reason="Recovery is not a UI lifecycle action")
-def test_recover_accepts_configured_or_stopped_result(
-    qtbot: QtBot, state: BotRuntimeState
-) -> None:
-    def start(snapshot: BotControlSnapshot) -> BotLifecycleResult:
-        return _result(
-            snapshot,
-            BotRuntimeState.BLOCKED,
-            blocked_reason="Paper Bot could not be started",
-        )
-
-    def recover(snapshot: BotControlSnapshot) -> BotLifecycleResult:
-        return _result(snapshot, state)
-
-    workflow, thread_pool = _workflow(
-        start_bot=start,
-        stop_bot=None,
-        recover=recover,
-    )
-    workflow.configure(configured_spot_session())
-    workflow.start_bot()
-    qtbot.waitUntil(lambda: workflow.snapshot.state is BotRuntimeState.BLOCKED)
-    workflow.recover()
-
-    qtbot.waitUntil(lambda: workflow.snapshot.state is state)
-
-    expected_actions = (
-        frozenset({BotControlAction.START})
-        if state is BotRuntimeState.CONFIGURED
-        else frozenset()
-    )
-    assert workflow.snapshot.available_actions == expected_actions
-    assert thread_pool.waitForDone(1_000)
-
-
-@pytest.mark.skip(reason="Recovery is not a UI lifecycle action")
-def test_recover_invalid_result_maps_to_safe_blocked_reason(qtbot: QtBot) -> None:
-    def start(snapshot: BotControlSnapshot) -> BotLifecycleResult:
-        return _result(
-            snapshot,
-            BotRuntimeState.BLOCKED,
-            blocked_reason="Paper Bot could not be started",
-        )
-
-    def recover(snapshot: BotControlSnapshot) -> BotLifecycleResult:
-        return None  # type: ignore[return-value]
-
-    workflow, thread_pool = _workflow(
-        start_bot=start,
-        stop_bot=None,
-        recover=recover,
-    )
-    workflow.configure(configured_spot_session())
-    workflow.start_bot()
-    qtbot.waitUntil(lambda: workflow.snapshot.state is BotRuntimeState.BLOCKED)
-    workflow.recover()
-
-    qtbot.waitUntil(
-        lambda: workflow.snapshot.blocked_reason == "Paper Bot recovery failed"
-    )
-
-    assert workflow.snapshot.available_actions == frozenset()
-    assert thread_pool.waitForDone(1_000)
-
-
-@pytest.mark.skip(reason="Recovery is not a UI lifecycle action")
-def test_recover_accepts_blocked_result_with_its_safe_reason(qtbot: QtBot) -> None:
-    def start(snapshot: BotControlSnapshot) -> BotLifecycleResult:
-        return _result(
-            snapshot,
-            BotRuntimeState.BLOCKED,
-            blocked_reason="Paper Bot could not be started",
-        )
-
-    def recover(snapshot: BotControlSnapshot) -> BotLifecycleResult:
-        return _result(
-            snapshot,
-            BotRuntimeState.BLOCKED,
-            blocked_reason="Paper Bot could not be stopped",
-        )
-
-    workflow, thread_pool = _workflow(
-        start_bot=start,
-        stop_bot=None,
-        recover=recover,
-    )
-    workflow.configure(configured_spot_session())
-    workflow.start_bot()
-    qtbot.waitUntil(lambda: workflow.snapshot.state is BotRuntimeState.BLOCKED)
-    workflow.recover()
-
-    qtbot.waitUntil(
-        lambda: workflow.snapshot.blocked_reason == "Paper Bot could not be stopped"
-    )
-
-    assert workflow.snapshot.available_actions == frozenset()
-    assert thread_pool.waitForDone(1_000)
-
-
-@pytest.mark.skip(reason="Recovery is not a UI lifecycle action")
-def test_repeated_recover_does_not_submit_a_second_task(qtbot: QtBot) -> None:
-    recover_started = threading.Event()
-    release_recover = threading.Event()
-    recover_calls = 0
-
-    def start(snapshot: BotControlSnapshot) -> BotLifecycleResult:
-        return _result(
-            snapshot,
-            BotRuntimeState.BLOCKED,
-            blocked_reason="Paper Bot could not be started",
-        )
-
-    def recover(snapshot: BotControlSnapshot) -> BotLifecycleResult:
-        nonlocal recover_calls
-        recover_calls += 1
-        recover_started.set()
-        if not release_recover.wait(timeout=2):
-            raise TimeoutError("test did not release worker")
-        return _result(snapshot, BotRuntimeState.STOPPED)
-
-    workflow, thread_pool = _workflow(
-        start_bot=start,
-        stop_bot=None,
-        recover=recover,
-    )
-    workflow.configure(configured_spot_session())
-    workflow.start_bot()
-    qtbot.waitUntil(lambda: workflow.snapshot.state is BotRuntimeState.BLOCKED)
-    workflow.recover()
-    qtbot.waitUntil(recover_started.is_set)
-    workflow.recover()
-    release_recover.set()
-
-    qtbot.waitUntil(lambda: workflow.snapshot.state is BotRuntimeState.STOPPED)
-
-    assert recover_calls == 1
-    assert thread_pool.waitForDone(1_000)
-
-
 def test_stop_exception_maps_to_safe_blocked_reason(qtbot: QtBot) -> None:
     def start(snapshot: BotControlSnapshot) -> BotLifecycleResult:
         return _result(snapshot, BotRuntimeState.RUNNING)
@@ -804,7 +658,7 @@ def test_stop_exception_maps_to_safe_blocked_reason(qtbot: QtBot) -> None:
     def stop(snapshot: BotControlSnapshot) -> BotLifecycleResult:
         raise RuntimeError("request_id=abc123 payload=order")
 
-    workflow, thread_pool = _workflow(start_bot=start, stop_bot=stop, recover=None)
+    workflow, thread_pool = _workflow(start_bot=start, stop_bot=stop)
     workflow.configure(configured_spot_session())
     workflow.start_bot()
     qtbot.waitUntil(lambda: workflow.snapshot.state is BotRuntimeState.RUNNING)
@@ -829,7 +683,7 @@ def test_reconfigure_discards_late_callback_from_older_generation(qtbot: QtBot) 
                 raise TimeoutError("test did not release worker")
         return _result(snapshot, BotRuntimeState.RUNNING)
 
-    workflow, thread_pool = _workflow(start_bot=start, stop_bot=None, recover=None)
+    workflow, thread_pool = _workflow(start_bot=start, stop_bot=None)
     emitted: list[BotControlSnapshot] = []
     busy_events: list[bool] = []
     workflow.snapshot_changed.connect(emitted.append)
@@ -890,7 +744,7 @@ def test_close_discards_late_callback_and_busy_false(qtbot: QtBot) -> None:
             raise TimeoutError("test did not release worker")
         return _result(snapshot, BotRuntimeState.RUNNING)
 
-    workflow, thread_pool = _workflow(start_bot=start, stop_bot=None, recover=None)
+    workflow, thread_pool = _workflow(start_bot=start, stop_bot=None)
     emitted: list[BotControlSnapshot] = []
     busy_events: list[bool] = []
     workflow.snapshot_changed.connect(emitted.append)
@@ -922,6 +776,7 @@ def _basket() -> BasketSnapshot:
         take_profit_price=Decimal("66000.123456789012345678"),
         unrealized_pnl=Decimal("1000"),
         liquidation_price=None,
-        lifecycle="open",
+        entry_gate=BasketEntryGate.OPEN,
+        cooldown_until=None,
         updated_at_utc=OBSERVED_AT,
     )

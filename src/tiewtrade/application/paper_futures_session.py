@@ -23,7 +23,7 @@ from tiewtrade.strategies.protocols import StrategyPreset
 from tiewtrade.strategies.registry import strategy_definition_for
 from tiewtrade.trading.basket import Basket, ClosedBasket
 from tiewtrade.trading.capital import FuturesCapitalPlan
-from tiewtrade.trading.entry_pair import EntryPairLifecycle
+from tiewtrade.trading.entry_pair import EntryGate, EntryPairLifecycle
 from tiewtrade.trading.futures_margin import FuturesMarginModel
 from tiewtrade.trading.position import PositionSide
 from tiewtrade.trading.session_config import MarketType, SessionConfig, TradeMode
@@ -69,6 +69,9 @@ class PaperFuturesSessionSnapshot:
     account_equity: Decimal
     capital_plan: FuturesCapitalPlan
     failure_reason: PaperFuturesFailureReason | None
+    # Read against the last candle the Session accepted, so it answers for the
+    # same moment the Session used to decide entries. None until one arrives.
+    entry_gate: EntryGate | None
 
 
 class PaperFuturesSession:
@@ -192,6 +195,18 @@ class PaperFuturesSession:
         except Exception as error:
             self._fail_closed()
             raise PaperFuturesSessionError("Paper Futures execution failed") from error
+
+    def process_in_progress_candle(
+        self, candle: Candle, *, observed_at: datetime
+    ) -> PaperFuturesSessionSnapshot:
+        """Paper Futures does not act between candles, and reports nothing here.
+
+        Taking Take Profit the moment price reaches it while Liquidation still
+        waits for the close would book every win early and every wipe-out late.
+        Futures moves intra-candle only once Liquidation moves with it.
+        """
+        del candle, observed_at
+        return self._snapshot(accepted=False)
 
     def warm_up_completed_candles(
         self,
@@ -352,6 +367,11 @@ class PaperFuturesSession:
             self._session.session_id, self._preset
         )
 
+    def _entry_gate(self) -> EntryGate | None:
+        """Read the gate against the last candle, the clock entries are judged on."""
+        closed_at = self._candles.last_close_time
+        return None if closed_at is None else self._lifecycle.entry_gate(closed_at)
+
     def _snapshot(
         self,
         *,
@@ -395,4 +415,5 @@ class PaperFuturesSession:
             account_equity=self._account_equity,
             capital_plan=self._capital_plan,
             failure_reason=self._failure_reason,
+            entry_gate=self._entry_gate(),
         )

@@ -8,6 +8,7 @@ from pytestqt.qtbot import QtBot
 
 from tests.support.paper_session_setup import configured_spot_session
 from tests.support.qt_interactions import click
+from tests.support.workspace_snapshots import OBSERVED_AT
 from tiewtrade.application.bot_control import (
     BotControlAction,
     BotControlSnapshot,
@@ -15,9 +16,11 @@ from tiewtrade.application.bot_control import (
     workspace_with_runtime_state,
 )
 from tiewtrade.application.trading_workspace import (
+    BasketEntryGate,
     BasketSnapshot,
     BotRuntimeState,
     DataFreshness,
+    empty_position_basket_tab,
     ready_position_basket_tab,
 )
 from tiewtrade.ui.bot_control import BotControlWidget
@@ -84,7 +87,8 @@ def test_running_shows_runtime_and_basket_facts_without_manual_order_controls(
                 take_profit_price=Decimal("66000"),
                 unrealized_pnl=Decimal("1000"),
                 liquidation_price=None,
-                lifecycle="open",
+                entry_gate=BasketEntryGate.OPEN,
+                cooldown_until=None,
                 updated_at_utc=datetime(2026, 8, 1, 12, tzinfo=UTC),
             ),
             observed_at_utc=datetime(2026, 8, 1, 12, tzinfo=UTC),
@@ -134,7 +138,6 @@ def test_configured_and_blocked_show_readable_data_freshness(qtbot: QtBot) -> No
         blocked_reason="Paper Bot recovery failed",
     )
     widget.show_snapshot(blocked)
-
 
 
 def test_progress_blocked_and_stopped_states_expose_only_their_allowed_actions(
@@ -306,6 +309,21 @@ def test_default_stop_confirmation_is_destructive_and_default_safe(
 
     assert emissions == []
     qtbot.waitUntil(widget.stop_button.hasFocus)
+
+
+def _running(basket: BasketSnapshot | None = None) -> BotControlSnapshot:
+    snapshot = _running_snapshot()
+    return replace(
+        snapshot,
+        workspace=replace(
+            snapshot.workspace,
+            position_basket=(
+                empty_position_basket_tab()
+                if basket is None
+                else ready_position_basket_tab(basket, observed_at_utc=OBSERVED_AT)
+            ),
+        ),
+    )
 
 
 def _running_snapshot() -> BotControlSnapshot:

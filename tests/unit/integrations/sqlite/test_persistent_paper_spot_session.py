@@ -28,6 +28,7 @@ from tiewtrade.integrations.sqlite.trade_history import (
 )
 from tiewtrade.market_data.candle import Candle
 from tiewtrade.trading.basket import ClosedBasket
+from tiewtrade.trading.entry_pair import EntryGate, EntryGateState
 
 SESSION_ID = UUID("00000000-0000-0000-0000-000000000101")
 BASKET_ID = UUID("00000000-0000-0000-0000-000000000102")
@@ -96,6 +97,7 @@ def entry_snapshot() -> PaperSpotSessionSnapshot:
         basket_id=BASKET_ID,
         basket_entry_count=1,
         take_profit_price=Decimal("105"),
+        entry_gate=EntryGate(EntryGateState.OPEN),
     )
 
 
@@ -112,6 +114,7 @@ def close_snapshot() -> PaperSpotSessionSnapshot:
         basket_id=BASKET_ID,
         basket_entry_count=0,
         take_profit_price=None,
+        entry_gate=EntryGate(EntryGateState.OPEN),
     )
 
 
@@ -202,6 +205,45 @@ def test_successful_close_is_durable_before_ready_snapshot_returns() -> None:
     )
     assert result.session == close_snapshot()
     assert result.persistence_state is PersistenceState.READY
+
+
+def test_close_taken_between_candles_is_durable_before_it_is_published() -> None:
+    """An exit that did not wait for the close is recorded on the same terms."""
+    session = create_autospec(PaperSpotSession, instance=True)
+    history = create_autospec(PaperSpotSQLiteHistory, instance=True)
+    session.process_in_progress_candle.return_value = close_snapshot()
+    history.record_close.return_value = True
+    persistent = persistent_session(session, history)
+    candle = completed_candle()
+    observed_at = candle.open_time
+
+    result = persistent.process_in_progress_candle(candle, observed_at=observed_at)
+
+    session.process_in_progress_candle.assert_called_once_with(
+        candle, observed_at=observed_at
+    )
+    history.record_close.assert_called_once_with(
+        basket_id=BASKET_ID,
+        fill=exit_fill(),
+        closed=closed_basket(),
+    )
+    assert result.session == close_snapshot()
+    assert result.persistence_state is PersistenceState.READY
+
+
+def test_a_failed_close_between_candles_blocks_the_session() -> None:
+    session = create_autospec(PaperSpotSession, instance=True)
+    history = create_autospec(PaperSpotSQLiteHistory, instance=True)
+    session.process_in_progress_candle.return_value = close_snapshot()
+    history.record_close.side_effect = TradeHistoryUnavailableError("write failed")
+    persistent = persistent_session(session, history)
+    candle = completed_candle()
+
+    with pytest.raises(TradeHistoryUnavailableError):
+        persistent.process_in_progress_candle(candle, observed_at=candle.open_time)
+
+    with pytest.raises(SessionPersistenceBlockedError):
+        persistent.process_completed_candle(candle, received_at=candle.close_time)
 
 
 def test_exit_fill_without_closed_basket_blocks_persistence() -> None:

@@ -1,3 +1,4 @@
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from typing import cast
@@ -289,6 +290,73 @@ def test_ready_snapshot_derives_session_scoped_markers_from_durable_fills() -> N
     assert snapshot.markers[0].side is FillSide.BUY
     assert snapshot.markers[0].price == fill.price
     assert snapshot.markers[0].filled_at_utc == fill.filled_at_utc
+
+
+def test_entry_marks_the_candle_it_filled_on() -> None:
+    fill = trade_fill(filled_at_utc=datetime(2026, 1, 1, 0, 10, tzinfo=UTC))
+
+    snapshot = ready_chart_snapshot(candles=(candle("5m", minute=10),), fills=(fill,))
+
+    assert fill.entry_number is not None
+    assert snapshot.markers[0].candle_open_time == datetime(
+        2026, 1, 1, 0, 10, tzinfo=UTC
+    )
+
+
+def test_exit_marks_the_candle_that_reached_its_target_not_the_one_after() -> None:
+    """An exit is stamped at its candle's close, which is the next candle's open."""
+    exit_fill = replace(
+        trade_fill(filled_at_utc=datetime(2026, 1, 1, 0, 15, tzinfo=UTC)),
+        side=FillSide.SELL,
+        entry_number=None,
+    )
+
+    snapshot = ready_chart_snapshot(
+        candles=(candle("5m", minute=10),),
+        fills=(exit_fill,),
+    )
+
+    assert snapshot.markers[0].candle_open_time == datetime(
+        2026, 1, 1, 0, 10, tzinfo=UTC
+    )
+
+
+def test_exit_taken_mid_candle_marks_the_candle_it_filled_in() -> None:
+    """An exit that did not wait for the close is stamped where it happened."""
+    exit_fill = replace(
+        trade_fill(filled_at_utc=datetime(2026, 1, 1, 0, 22, tzinfo=UTC)),
+        side=FillSide.SELL,
+        entry_number=None,
+    )
+
+    snapshot = ready_chart_snapshot(
+        candles=(candle("5m", minute=10),),
+        fills=(exit_fill,),
+        in_progress_candle=candle("5m", minute=20),
+    )
+
+    # The forming candle it filled in, not the completed one before it.
+    assert snapshot.markers[0].candle_open_time == datetime(
+        2026, 1, 1, 0, 20, tzinfo=UTC
+    )
+
+
+def test_short_entry_sells_without_being_read_as_an_exit() -> None:
+    """Side cannot tell Entry from exit: a Futures short opens with a SELL."""
+    short_entry = replace(
+        trade_fill(filled_at_utc=datetime(2026, 1, 1, 0, 10, tzinfo=UTC)),
+        side=FillSide.SELL,
+        entry_number=2,
+    )
+
+    snapshot = ready_chart_snapshot(
+        candles=(candle("5m", minute=10),),
+        fills=(short_entry,),
+    )
+
+    assert snapshot.markers[0].candle_open_time == datetime(
+        2026, 1, 1, 0, 10, tzinfo=UTC
+    )
 
 
 def test_ready_snapshot_marks_a_fill_inside_the_forming_candle() -> None:

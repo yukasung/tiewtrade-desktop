@@ -101,20 +101,42 @@ class ChartMarker:
     side: FillSide
     price: Decimal
     filled_at_utc: datetime
+    # Which candle the fill belongs to. A timestamp alone cannot say: an Entry
+    # fills at its candle's open and an exit at its candle's close, and a close
+    # instant is also the next candle's open.
+    candle_open_time: datetime
 
     @classmethod
-    def from_fill(cls, fill: TradeFill) -> "ChartMarker":
+    def from_fill(cls, fill: TradeFill, timeframe: str) -> "ChartMarker":
         return cls(
             fill_id=fill.fill_id,
             side=fill.side,
             price=fill.price,
             filled_at_utc=fill.filled_at_utc,
+            candle_open_time=_filled_candle_open_time(fill, timeframe),
         )
 
     def __post_init__(self) -> None:
         if not self.fill_id:
             raise ValueError("fill_id must not be empty")
         _require_utc(self.filled_at_utc, "filled_at_utc")
+        _require_utc(self.candle_open_time, "candle_open_time")
+
+
+def _filled_candle_open_time(fill: TradeFill, timeframe: str) -> datetime:
+    """The candle that produced this fill.
+
+    An exit taken at a candle's close is stamped with that close, which is
+    also the next candle's open, so it belongs to the candle before the
+    boundary — the one whose high or low reached the target. An exit taken
+    while the candle was still forming is stamped mid-candle and belongs
+    where it falls, as does an Entry, which is stamped at its candle's open.
+    """
+    boundary = latest_completed_boundary(timeframe, fill.filled_at_utc)
+    stamped_on_a_boundary = boundary == fill.filled_at_utc
+    if fill.entry_number is not None or not stamped_on_a_boundary:
+        return boundary
+    return boundary - timeframe_to_interval(timeframe)
 
 
 class ChartReadState(StrEnum):
@@ -237,7 +259,7 @@ class ChartSnapshot:
             if fill.fill_id in fill_ids:
                 raise ValueError("fills must have unique fill_id values")
             fill_ids.add(fill.fill_id)
-            markers.append(ChartMarker.from_fill(fill))
+            markers.append(ChartMarker.from_fill(fill, self.timeframe))
         object.__setattr__(self, "markers", tuple(markers))
 
         if self.state in {ChartReadState.LOADING, ChartReadState.UNAVAILABLE} and (

@@ -68,6 +68,11 @@ class RecordingSink:
         self.events.append(f"sink:{candle.open_time.minute}")
         self.received_ats.append(received_at)
 
+    async def process_in_progress(
+        self, candle: Candle, *, received_at: datetime
+    ) -> None:
+        del candle, received_at
+
 
 def pipeline_for(
     sink: RecordingSink,

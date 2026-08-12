@@ -95,6 +95,11 @@ Short = weighted_average_entry_price - (ATR(14) * 3)
 - RSI Step Grid Preset v1 ยังสร้างเฉพาะ Long Entry Intent
 - Take Profit ครอบคลุมขนาด Position ที่ Bot เป็นเจ้าของทั้งหมดใน Basket
 - เมื่อ Take Profit ถูก Fill ให้ปิด Entries ทั้งหมดใน Basket พร้อมกัน
+- Paper Spot ตรวจ Take Profit และ Stop Loss จากราคาที่วิ่งอยู่ระหว่าง candle และ Fill
+  ทันทีที่ราคาถึงระดับ โดยไม่รอ candle ปิด ส่วน Entry ยังคงประเมินจาก completed candle
+  เท่านั้นตามข้อ 4.2
+- Paper Futures ยังตรวจทั้ง Take Profit และ Liquidation ที่ candle ปิด เพราะการ Fill
+  Take Profit ทันทีขณะที่ Liquidation ยังรอ candle ปิด จะทำให้ผลการเทรดดูดีเกินจริง
 - เมื่อ Basket ปิดสมบูรณ์ สามารถเริ่ม Basket ใหม่ในเดือน UTC เดียวกันได้ทันที
 - ค่าธรรมเนียมไม่ถูกบวกเข้าไปในราคา Take Profit แต่ต้องถูกนำไปคำนวณ realized PnL
 

@@ -1,4 +1,4 @@
-from dataclasses import fields
+from dataclasses import fields, replace
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
@@ -222,6 +222,32 @@ def test_badge_stays_beside_its_fill_even_over_a_longer_neighbour() -> None:
     assert not ink.intersects(_wick_bounds(own))
     # It hangs off its own candle rather than below the long neighbour.
     assert ink.top() < max(model.candles[0].wick.y1(), model.candles[0].wick.y2())
+
+
+def test_exit_badge_sits_over_the_candle_that_reached_its_target() -> None:
+    """An exit is stamped with its candle's close, which is the next candle's
+    open. The badge belongs to the candle whose high or low reached the target,
+    not to the one that opened as it filled."""
+    exit_fill = replace(
+        fill("sell-1", FillSide.SELL, datetime(2026, 1, 1, 0, 10, tzinfo=UTC)),
+        entry_number=None,
+    )
+
+    model = chart_module.build_painter_model(
+        ready_snapshot(
+            candles=(candle(0), candle(5), candle(10)),
+            fills=(exit_fill,),
+        ),
+        QRectF(0, 0, 600, 400),
+    )
+
+    target, later = model.candles[1], model.candles[2]
+    badge = model.markers[0].badge
+    assert target.open_time == datetime(2026, 1, 1, 0, 5, tzinfo=UTC)
+    assert badge.center().x() == target.x
+    assert badge.center().x() != later.x
+    # It rides above the candle it marks, clear of that candle's own wick.
+    assert badge.bottom() <= min(target.wick.y1(), target.wick.y2())
 
 
 def test_badges_point_at_the_candle_they_name() -> None:
