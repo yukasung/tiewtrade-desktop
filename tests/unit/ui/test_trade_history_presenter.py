@@ -9,14 +9,30 @@ from tiewtrade.application.trade_history import (
     TradeHistoryFilter,
 )
 from tiewtrade.trading.session_config import MarketType, TradeMode
-from tiewtrade.trading.trade_history import BasketStatus, FillSource
+from tiewtrade.trading.trade_history import BasketStatus, FillSide, FillSource
+from tiewtrade.ui.table_column import Column
+from tiewtrade.ui.theme import NEGATIVE_COLOR, POSITIVE_COLOR
 from tiewtrade.ui.trade_history_presenter import (
+    BASKET_COLUMNS,
+    FILL_COLUMNS,
     TradeHistoryFilterValues,
-    basket_rows,
     pnl_text,
-    trade_fill_rows,
     trade_history_filter,
 )
+
+
+def read[Record](
+    columns: tuple[Column[Record], ...], record: Record
+) -> tuple[str, ...]:
+    """Every column's reading of one record, in column order."""
+    return tuple(column.text(record) for column in columns)
+
+
+def colour_of[Record](
+    columns: tuple[Column[Record], ...], header: str, record: Record
+) -> str | None:
+    column = next(column for column in columns if column.header == header)
+    return column.colour(record)
 
 
 def test_filter_values_build_inclusive_utc_date_range() -> None:
@@ -66,11 +82,10 @@ def test_pnl_text_preserves_decimal_and_adds_semantic_label(
     assert pnl_text(value) == expected
 
 
-def test_basket_rows_format_utc_and_all_columns() -> None:
+def test_basket_columns_format_utc_and_every_column() -> None:
     basket = basket_result()
 
-    assert basket_rows((basket,))[0].basket_id == basket.basket_id
-    assert basket_rows((basket,))[0].values == (
+    assert read(BASKET_COLUMNS, basket) == (
         "2026-01-01 07:00:00",
         "Paper",
         "Spot",
@@ -86,7 +101,7 @@ def test_basket_rows_format_utc_and_all_columns() -> None:
     )
 
 
-def test_trade_fill_rows_name_a_binance_source() -> None:
+def test_fill_columns_name_a_binance_source() -> None:
     item = TradeFillHistoryItem(
         fill=trade_fill(source=FillSource.BINANCE),
         symbol="BTCUSDT",
@@ -95,10 +110,10 @@ def test_trade_fill_rows_name_a_binance_source() -> None:
         trade_mode=TradeMode.PAPER,
     )
 
-    assert trade_fill_rows((item,))[0].values[-1] == "Binance"
+    assert read(FILL_COLUMNS, item)[-1] == "Binance"
 
 
-def test_trade_fill_rows_include_symbol_and_total_for_cross_basket_history() -> None:
+def test_fill_columns_include_symbol_and_total_for_cross_basket_history() -> None:
     item = TradeFillHistoryItem(
         fill=trade_fill(),
         symbol="BTCUSDT",
@@ -107,7 +122,7 @@ def test_trade_fill_rows_include_symbol_and_total_for_cross_basket_history() -> 
         trade_mode=TradeMode.PAPER,
     )
 
-    assert trade_fill_rows((item,))[0].values == (
+    assert read(FILL_COLUMNS, item) == (
         "2026-01-01 07:00:00",
         "BTCUSDT",
         "Buy",
@@ -118,3 +133,46 @@ def test_trade_fill_rows_include_symbol_and_total_for_cross_basket_history() -> 
         "0.00 USDT · Break-even",
         "Paper Executor",
     )
+
+
+@pytest.mark.parametrize(
+    ("net_realized_pnl", "expected"),
+    [
+        pytest.param(Decimal("1"), POSITIVE_COLOR, id="profit"),
+        pytest.param(Decimal("-1"), NEGATIVE_COLOR, id="loss"),
+        pytest.param(Decimal("0"), None, id="break-even"),
+    ],
+)
+def test_pnl_colour_is_read_from_the_figure_not_from_its_label(
+    net_realized_pnl: Decimal, expected: str | None
+) -> None:
+    """Rewording the label cannot silently drop the colour that goes with it."""
+    basket = basket_result(
+        gross_realized_pnl=net_realized_pnl,
+        trading_fees=Decimal("0"),
+        funding_fee=Decimal("0"),
+        net_realized_pnl=net_realized_pnl,
+    )
+
+    assert colour_of(BASKET_COLUMNS, "Net PnL", basket) == expected
+
+
+@pytest.mark.parametrize(
+    ("side", "expected"),
+    [
+        pytest.param(FillSide.BUY, POSITIVE_COLOR, id="buy"),
+        pytest.param(FillSide.SELL, NEGATIVE_COLOR, id="sell"),
+    ],
+)
+def test_side_colour_is_read_from_the_side_itself(
+    side: FillSide, expected: str
+) -> None:
+    item = TradeFillHistoryItem(
+        fill=trade_fill(side=side),
+        symbol="BTCUSDT",
+        timeframe="5m",
+        market_type=MarketType.SPOT,
+        trade_mode=TradeMode.PAPER,
+    )
+
+    assert colour_of(FILL_COLUMNS, "Side", item) == expected

@@ -1,12 +1,13 @@
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
-from uuid import UUID
 
 from tiewtrade.application.trade_history import TradeFillHistoryItem, TradeHistoryFilter
 from tiewtrade.trading.session_config import MarketType, TradeMode
-from tiewtrade.trading.trade_history import BasketResult, BasketStatus
+from tiewtrade.trading.trade_history import BasketResult, BasketStatus, FillSide
 from tiewtrade.ui.display_time import DISPLAY_TIMEZONE, display_timestamp
+from tiewtrade.ui.table_column import CENTER, LEFT, RIGHT, Column
+from tiewtrade.ui.theme import NEGATIVE_COLOR, POSITIVE_COLOR
 
 
 @dataclass(frozen=True, slots=True)
@@ -18,17 +19,6 @@ class TradeHistoryFilterValues:
     status: str | None = None
     from_date: date | None = None
     to_date: date | None = None
-
-
-@dataclass(frozen=True, slots=True)
-class BasketRow:
-    basket_id: UUID
-    values: tuple[str, ...]
-
-
-@dataclass(frozen=True, slots=True)
-class FillRow:
-    values: tuple[str, ...]
 
 
 def trade_history_filter(values: TradeHistoryFilterValues) -> TradeHistoryFilter:
@@ -55,48 +45,61 @@ def trade_history_filter(values: TradeHistoryFilterValues) -> TradeHistoryFilter
     )
 
 
-def basket_rows(baskets: tuple[BasketResult, ...]) -> tuple[BasketRow, ...]:
-    return tuple(
-        BasketRow(
-            basket_id=basket.basket_id,
-            values=(
-                _local_text(basket.opened_at_utc),
-                _display_enum(basket.trade_mode.value),
-                _display_enum(basket.market_type.value),
-                basket.symbol,
-                basket.timeframe,
-                str(basket.entry_count),
-                _usdt_text(basket.invested_notional),
-                _usdt_text(basket.gross_realized_pnl),
-                _usdt_text(basket.trading_fees),
-                _usdt_text(basket.funding_fee),
-                pnl_text(basket.net_realized_pnl),
-                _display_enum(basket.status.value),
-            ),
-        )
-        for basket in baskets
-    )
+BASKET_COLUMNS: tuple[Column[BasketResult], ...] = (
+    Column("Opened At", LEFT, lambda basket: local_text(basket.opened_at_utc)),
+    Column("Mode", CENTER, lambda basket: display_enum(basket.trade_mode.value)),
+    Column("Market", CENTER, lambda basket: display_enum(basket.market_type.value)),
+    Column("Symbol", LEFT, lambda basket: basket.symbol),
+    Column("Timeframe", CENTER, lambda basket: basket.timeframe),
+    Column("Entries", CENTER, lambda basket: str(basket.entry_count)),
+    Column("Notional", RIGHT, lambda basket: usdt_text(basket.invested_notional)),
+    Column("Gross PnL", RIGHT, lambda basket: usdt_text(basket.gross_realized_pnl)),
+    Column("Fees", RIGHT, lambda basket: usdt_text(basket.trading_fees)),
+    Column("Funding Fee", RIGHT, lambda basket: usdt_text(basket.funding_fee)),
+    Column(
+        "Net PnL",
+        RIGHT,
+        lambda basket: pnl_text(basket.net_realized_pnl),
+        lambda basket: sign_colour(basket.net_realized_pnl),
+    ),
+    Column("Status", LEFT, lambda basket: display_enum(basket.status.value)),
+)
+
+FILL_COLUMNS: tuple[Column[TradeFillHistoryItem], ...] = (
+    Column("Filled At", LEFT, lambda item: local_text(item.fill.filled_at_utc)),
+    Column("Symbol", LEFT, lambda item: item.symbol),
+    Column(
+        "Side",
+        CENTER,
+        lambda item: display_enum(item.fill.side.value),
+        lambda item: _side_colour(item.fill.side),
+    ),
+    Column("Price", RIGHT, lambda item: decimal_text(item.fill.price)),
+    Column("Quantity", RIGHT, lambda item: decimal_text(item.fill.quantity)),
+    Column("Fee", RIGHT, lambda item: usdt_text(item.fill.commission)),
+    Column("Total", RIGHT, lambda item: usdt_text(item.fill.notional)),
+    Column(
+        "Realized PnL",
+        RIGHT,
+        lambda item: pnl_text(item.fill.realized_pnl),
+        lambda item: sign_colour(item.fill.realized_pnl),
+    ),
+    Column("Source", LEFT, lambda item: display_enum(item.fill.source.value)),
+)
 
 
-def trade_fill_rows(
-    items: tuple[TradeFillHistoryItem, ...],
-) -> tuple[FillRow, ...]:
-    return tuple(
-        FillRow(
-            values=(
-                _local_text(item.fill.filled_at_utc),
-                item.symbol,
-                _display_enum(item.fill.side.value),
-                _decimal_text(item.fill.price),
-                _decimal_text(item.fill.quantity),
-                _usdt_text(item.fill.commission),
-                _usdt_text(item.fill.notional),
-                pnl_text(item.fill.realized_pnl),
-                _display_enum(item.fill.source.value),
-            )
-        )
-        for item in items
-    )
+def sign_colour(value: Decimal) -> str | None:
+    """No colour at break-even: neither reading is true, so the cell stays plain."""
+    if value > 0:
+        return POSITIVE_COLOR
+    if value < 0:
+        return NEGATIVE_COLOR
+    return None
+
+
+def _side_colour(side: FillSide) -> str:
+    """Buying and selling read as the two directions a price can move."""
+    return POSITIVE_COLOR if side is FillSide.BUY else NEGATIVE_COLOR
 
 
 def pnl_text(value: Decimal) -> str:
@@ -106,7 +109,7 @@ def pnl_text(value: Decimal) -> str:
         label = "Loss"
     else:
         label = "Break-even"
-    return f"{_decimal_text(value)} USDT · {label}"
+    return f"{decimal_text(value)} USDT · {label}"
 
 
 def _utc_start(value: date | None) -> datetime | None:
@@ -122,19 +125,19 @@ def _utc_start(value: date | None) -> datetime | None:
     return local.astimezone(UTC)
 
 
-def _local_text(value: datetime) -> str:
+def local_text(value: datetime) -> str:
     return display_timestamp(value)
 
 
-def _usdt_text(value: Decimal) -> str:
-    return f"{_decimal_text(value)} USDT"
+def usdt_text(value: Decimal) -> str:
+    return f"{decimal_text(value)} USDT"
 
 
-def _decimal_text(value: Decimal) -> str:
+def decimal_text(value: Decimal) -> str:
     if value == 0:
         return "0.00"
     return format(value, "f")
 
 
-def _display_enum(value: str) -> str:
+def display_enum(value: str) -> str:
     return value.replace("_", " ").title()

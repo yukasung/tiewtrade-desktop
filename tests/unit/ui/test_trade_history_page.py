@@ -3,8 +3,14 @@ from decimal import Decimal
 
 import pytest
 from PySide6.QtCore import QPoint, QRect, Qt
+from PySide6.QtGui import QBrush, QColor
 from PySide6.QtTest import QTest
-from PySide6.QtWidgets import QAbstractItemView, QWidget
+from PySide6.QtWidgets import (
+    QAbstractItemView,
+    QTableWidget,
+    QTableWidgetItem,
+    QWidget,
+)
 from pytestqt.qtbot import QtBot
 
 from tests.support.qt_interactions import click, qdate, table_item
@@ -14,8 +20,14 @@ from tiewtrade.application.trade_history import (
     TradeFillHistoryItem,
 )
 from tiewtrade.trading.session_config import MarketType, TradeMode
+from tiewtrade.ui.table_column import Column
+from tiewtrade.ui.theme import POSITIVE_COLOR
 from tiewtrade.ui.trade_history_page import TradeHistoryPage
-from tiewtrade.ui.trade_history_presenter import TradeHistoryFilterValues
+from tiewtrade.ui.trade_history_presenter import (
+    BASKET_COLUMNS,
+    FILL_COLUMNS,
+    TradeHistoryFilterValues,
+)
 
 
 def history_result(
@@ -30,6 +42,26 @@ def history_result(
 
 def widget_rect_in_parent(widget: QWidget, parent: QWidget) -> QRect:
     return QRect(widget.mapTo(parent, QPoint(0, 0)), widget.size())
+
+
+def cell(
+    table: QTableWidget, headers: tuple[str, ...], row: int, header: str
+) -> QTableWidgetItem:
+    """A cell read by its heading, so a moved column cannot pass by luck."""
+    return table_item(table, row, headers.index(header))
+
+
+def assert_headers_match[Record](
+    table: QTableWidget, columns: tuple[Column[Record], ...]
+) -> None:
+    assert table.columnCount() == len(columns)
+    for index, column in enumerate(columns):
+        header = table.horizontalHeaderItem(index)
+        body = table.item(0, index)
+        assert header is not None and body is not None
+        assert header.text() == column.header
+        assert header.textAlignment() == column.alignment
+        assert body.textAlignment() == column.alignment
 
 
 def test_page_exposes_filters_and_exact_table_columns(qtbot: QtBot) -> None:
@@ -143,9 +175,15 @@ def test_basket_and_trade_results_render_independently(
 
     assert page.total_items.text() == "1 total Baskets"
     assert page.fill_table.rowCount() == 1
-    assert table_item(page.fill_table, 0, 1).text() == "ETHUSDT"
-    assert table_item(page.fill_table, 0, 6).text().endswith(" USDT")
-    assert table_item(page.fill_table, 0, 2).foreground().color().name() == "#0ecb81"
+    assert cell(page.fill_table, page.fill_headers, 0, "Symbol").text() == "ETHUSDT"
+    assert cell(page.fill_table, page.fill_headers, 0, "Total").text().endswith(" USDT")
+    # The colour follows the side itself, not the word the column prints for it.
+    assert cell(page.fill_table, page.fill_headers, 0, "Side").foreground() == QBrush(
+        QColor(POSITIVE_COLOR)
+    )
+    assert cell(
+        page.basket_table, page.basket_headers, 0, "Net PnL"
+    ).foreground() == QBrush(QColor(POSITIVE_COLOR))
 
     page.history_tabs.setCurrentIndex(0)
     page.show_baskets(BasketHistoryResult((basket,), Decimal("19.58")))
@@ -497,3 +535,22 @@ def test_retry_buttons_and_filter_error_are_scoped(qtbot: QtBot) -> None:
 
     assert basket_retries == [None]
     assert fill_retries == [None]
+
+
+def test_headers_stay_in_step_with_the_columns_they_name(qtbot: QtBot) -> None:
+    """A heading out of step with its column reads as a different column."""
+    item = TradeFillHistoryItem(
+        fill=trade_fill(),
+        symbol="BTCUSDT",
+        timeframe="5m",
+        market_type=MarketType.SPOT,
+        trade_mode=TradeMode.PAPER,
+    )
+    page = TradeHistoryPage()
+    qtbot.addWidget(page)
+
+    page.show_baskets(history_result(basket_result()))
+    page.show_trades((item,))
+
+    assert_headers_match(page.basket_table, BASKET_COLUMNS)
+    assert_headers_match(page.fill_table, FILL_COLUMNS)

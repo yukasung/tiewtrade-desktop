@@ -1,7 +1,7 @@
 from datetime import date
+from typing import Any
 
 from PySide6.QtCore import QDate, QSignalBlocker, Qt, Signal, Slot
-from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QCheckBox,
@@ -19,7 +19,6 @@ from PySide6.QtWidgets import (
     QStackedWidget,
     QTabBar,
     QTableWidget,
-    QTableWidgetItem,
     QVBoxLayout,
     QWidget,
 )
@@ -30,12 +29,13 @@ from tiewtrade.application.trade_history import (
     TradeFillHistoryItem,
 )
 from tiewtrade.market_data.config import SUPPORTED_V1_TIMEFRAME_CHOICES
+from tiewtrade.ui.table_column import Column, headers, table_item
 from tiewtrade.ui.table_empty_state import TableEmptyStateOverlay
 from tiewtrade.ui.trade_history_presenter import (
+    BASKET_COLUMNS,
+    FILL_COLUMNS,
     TradeHistoryFilterValues,
-    basket_rows,
     pnl_text,
-    trade_fill_rows,
 )
 from tiewtrade.ui.trade_history_workflow import HistoryTab
 
@@ -47,31 +47,8 @@ class TradeHistoryPage(QWidget):
     fills_retry_requested = Signal()
     history_tab_changed = Signal(object)
 
-    BASKET_HEADERS = (
-        "Opened At",
-        "Mode",
-        "Market",
-        "Symbol",
-        "Timeframe",
-        "Entries",
-        "Notional",
-        "Gross PnL",
-        "Fees",
-        "Funding Fee",
-        "Net PnL",
-        "Status",
-    )
-    FILL_HEADERS = (
-        "Filled At",
-        "Symbol",
-        "Side",
-        "Price",
-        "Quantity",
-        "Fee",
-        "Total",
-        "Realized PnL",
-        "Source",
-    )
+    BASKET_HEADERS = headers(BASKET_COLUMNS)
+    FILL_HEADERS = headers(FILL_COLUMNS)
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -136,7 +113,7 @@ class TradeHistoryPage(QWidget):
         self.total_items.setObjectName("supportingText")
 
         self.basket_table = self._table(
-            "basketHistoryTable", "Basket History", self.BASKET_HEADERS
+            "basketHistoryTable", "Basket History", BASKET_COLUMNS
         )
         self.basket_empty_state = TableEmptyStateOverlay(self.basket_table)
         self.basket_table.setSelectionMode(QAbstractItemView.SelectionMode.NoSelection)
@@ -144,9 +121,7 @@ class TradeHistoryPage(QWidget):
         self.retry_baskets_button = self._retry_button("retryBasketsButton")
         self.retry_baskets_button.clicked.connect(self.baskets_retry_requested)
 
-        self.fill_table = self._table(
-            "tradeFillsTable", "Trade Fills", self.FILL_HEADERS
-        )
+        self.fill_table = self._table("tradeFillsTable", "Trade Fills", FILL_COLUMNS)
         self.fill_empty_state = TableEmptyStateOverlay(self.fill_table)
         self.fill_state = self._state_label("fillState", "Trade Fills status")
         self.retry_fills_button = self._retry_button("retryFillsButton")
@@ -204,15 +179,13 @@ class TradeHistoryPage(QWidget):
     @Slot(object)
     def show_baskets(self, result: BasketHistoryResult) -> None:
         self._show_basket_tab()
-        rows = basket_rows(result.items)
         blocker = QSignalBlocker(self.basket_table)
-        self.basket_table.setRowCount(len(rows))
-        for row_index, row in enumerate(rows):
-            for column_index, value in enumerate(row.values):
-                item = self._table_item(value)
-                if column_index == 10:
-                    self._apply_pnl_color(item, value)
-                self.basket_table.setItem(row_index, column_index, item)
+        self.basket_table.setRowCount(len(result.items))
+        for row_index, basket in enumerate(result.items):
+            for column_index, column in enumerate(BASKET_COLUMNS):
+                self.basket_table.setItem(
+                    row_index, column_index, table_item(column, basket)
+                )
         del blocker
 
         self._has_basket_result = True
@@ -221,7 +194,7 @@ class TradeHistoryPage(QWidget):
         self.total_net_pnl.setVisible(True)
         self.total_items.setText(f"{len(result.items)} total Baskets")
         self.retry_baskets_button.setVisible(False)
-        if rows:
+        if result.items:
             self.basket_empty_state.clear_message()
             self.basket_state.clear()
             self.basket_state.setVisible(False)
@@ -250,17 +223,13 @@ class TradeHistoryPage(QWidget):
     @Slot(object)
     def show_trades(self, items: tuple[TradeFillHistoryItem, ...]) -> None:
         self._fills_loading = False
-        rows = trade_fill_rows(items)
         blocker = QSignalBlocker(self.fill_table)
-        self.fill_table.setRowCount(len(rows))
-        for row_index, row in enumerate(rows):
-            for column_index, value in enumerate(row.values):
-                item = self._table_item(value)
-                if column_index == 2:
-                    self._apply_side_color(item, value)
-                elif column_index == 7:
-                    self._apply_pnl_color(item, value)
-                self.fill_table.setItem(row_index, column_index, item)
+        self.fill_table.setRowCount(len(items))
+        for row_index, item in enumerate(items):
+            for column_index, column in enumerate(FILL_COLUMNS):
+                self.fill_table.setItem(
+                    row_index, column_index, table_item(column, item)
+                )
         del blocker
         self.fill_empty_state.clear_message()
         self.fill_state.clear()
@@ -510,12 +479,19 @@ class TradeHistoryPage(QWidget):
 
     @staticmethod
     def _table(
-        object_name: str, accessible_name: str, headers: tuple[str, ...]
+        object_name: str,
+        accessible_name: str,
+        columns: tuple[Column[Any], ...],
     ) -> QTableWidget:
-        table = QTableWidget(0, len(headers))
+        table = QTableWidget(0, len(columns))
         table.setObjectName(object_name)
         table.setAccessibleName(accessible_name)
-        table.setHorizontalHeaderLabels(list(headers))
+        table.setHorizontalHeaderLabels(list(headers(columns)))
+        # A header that does not follow its column reads as a different column.
+        for index, column in enumerate(columns):
+            header_item = table.horizontalHeaderItem(index)
+            if header_item is not None:
+                header_item.setTextAlignment(column.alignment)
         table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
@@ -528,26 +504,6 @@ class TradeHistoryPage(QWidget):
         )
         table.horizontalHeader().setStretchLastSection(True)
         return table
-
-    @staticmethod
-    def _table_item(value: str) -> QTableWidgetItem:
-        item = QTableWidgetItem(value)
-        item.setFlags(Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable)
-        return item
-
-    @staticmethod
-    def _apply_side_color(item: QTableWidgetItem, value: str) -> None:
-        if value == "Buy":
-            item.setForeground(QColor("#0ECB81"))
-        elif value == "Sell":
-            item.setForeground(QColor("#F6465D"))
-
-    @staticmethod
-    def _apply_pnl_color(item: QTableWidgetItem, value: str) -> None:
-        if value.endswith("· Profit"):
-            item.setForeground(QColor("#0ECB81"))
-        elif value.endswith("· Loss"):
-            item.setForeground(QColor("#F6465D"))
 
     @staticmethod
     def _state_label(object_name: str, accessible_name: str) -> QLabel:

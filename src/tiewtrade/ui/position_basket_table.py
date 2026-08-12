@@ -1,15 +1,13 @@
-from collections.abc import Callable
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from decimal import Decimal
 
 from PySide6.QtCore import QSignalBlocker, Qt
-from PySide6.QtGui import QBrush, QColor
+from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QHeaderView,
     QLabel,
     QTableWidget,
-    QTableWidgetItem,
     QVBoxLayout,
     QWidget,
 )
@@ -22,12 +20,16 @@ from tiewtrade.application.trading_workspace import (
 )
 from tiewtrade.ui.display_time import display_timestamp
 from tiewtrade.ui.entry_gate_display import blocked_entry_reason
+from tiewtrade.ui.table_column import (
+    CENTER,
+    LEFT,
+    RIGHT,
+    Column,
+    headers,
+    table_item,
+)
 from tiewtrade.ui.table_empty_state import TableEmptyStateOverlay
 from tiewtrade.ui.theme import NEGATIVE_COLOR, POSITIVE_COLOR
-
-_LEFT = Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter
-_CENTER = Qt.AlignmentFlag.AlignCenter
-_RIGHT = Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
 
 
 @dataclass(frozen=True, slots=True)
@@ -89,25 +91,6 @@ def _sign_colour(value: Decimal) -> str | None:
     return None
 
 
-def _no_colour(row: _Row) -> str | None:
-    del row
-    return None
-
-
-@dataclass(frozen=True, slots=True)
-class _Column:
-    """A column carries its own heading, alignment and reading of a row.
-
-    Stating the three together is what keeps them in step: a column moved or
-    added cannot leave its values under a different heading.
-    """
-
-    header: str
-    alignment: Qt.AlignmentFlag
-    text: Callable[[_Row], str]
-    colour: Callable[[_Row], str | None] = field(default=_no_colour)
-
-
 class PositionBasketTable(QWidget):
     """Every Entry of the open Basket, one row each.
 
@@ -121,18 +104,18 @@ class PositionBasketTable(QWidget):
     # Measured numbers hang on the right so their digits line up and a minus
     # sign cannot hide; short labels sit centred; text that changes length
     # stays left so its edge does not move under the reader.
-    COLUMNS = (
-        _Column("Entry", _CENTER, lambda row: f"#{row.entry.entry_number}"),
-        _Column("Filled At", _LEFT, _filled_at),
-        _Column("Entry Price", _RIGHT, _price),
+    COLUMNS: tuple[Column[_Row], ...] = (
+        Column("Entry", CENTER, lambda row: f"#{row.entry.entry_number}"),
+        Column("Filled At", LEFT, _filled_at),
+        Column("Entry Price", RIGHT, _price),
         # Beside the price paid, so the distance left to run reads at a glance.
-        _Column("Take Profit", _RIGHT, _take_profit_price),
-        _Column("Quantity", _RIGHT, _quantity),
-        _Column("Notional", _RIGHT, _notional),
-        _Column("Unrealized PnL", _RIGHT, _pnl, _pnl_colour),
-        _Column("Basket Lifecycle", _LEFT, _entry_gate),
+        Column("Take Profit", RIGHT, _take_profit_price),
+        Column("Quantity", RIGHT, _quantity),
+        Column("Notional", RIGHT, _notional),
+        Column("Unrealized PnL", RIGHT, _pnl, _pnl_colour),
+        Column("Basket Lifecycle", LEFT, _entry_gate),
     )
-    HEADERS = tuple(column.header for column in COLUMNS)
+    HEADERS = headers(COLUMNS)
     ALIGNMENTS = tuple(column.alignment for column in COLUMNS)
 
     def __init__(self, parent: QWidget | None = None) -> None:
@@ -181,7 +164,7 @@ class PositionBasketTable(QWidget):
             self.table.setRowCount(len(rows))
             for index, row in enumerate(rows):
                 for position, column in enumerate(self.COLUMNS):
-                    self.table.setItem(index, position, _table_item(column, row))
+                    self.table.setItem(index, position, table_item(column, row))
         self._show_basket_total(basket)
 
     def _show_basket_total(self, basket: BasketSnapshot | None) -> None:
@@ -253,17 +236,6 @@ class PositionBasketTable(QWidget):
         )
         table.horizontalHeader().setStretchLastSection(True)
         return table
-
-
-def _table_item(column: _Column, row: _Row) -> QTableWidgetItem:
-    """One cell, read and dressed by the column that owns it."""
-    item = QTableWidgetItem(column.text(row))
-    item.setFlags(Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable)
-    item.setTextAlignment(column.alignment)
-    colour = column.colour(row)
-    if colour is not None:
-        item.setForeground(QBrush(QColor(colour)))
-    return item
 
 
 def _paint(label: QLabel, colour: str | None) -> None:
