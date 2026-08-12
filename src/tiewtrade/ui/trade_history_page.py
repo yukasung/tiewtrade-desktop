@@ -29,13 +29,14 @@ from tiewtrade.application.trade_history import (
     TradeFillHistoryItem,
 )
 from tiewtrade.market_data.config import SUPPORTED_V1_TIMEFRAME_CHOICES
+from tiewtrade.ui.sign_state import paint_by_sign
 from tiewtrade.ui.table_column import Column, headers, table_item
 from tiewtrade.ui.table_empty_state import TableEmptyStateOverlay
 from tiewtrade.ui.trade_history_presenter import (
     BASKET_COLUMNS,
     FILL_COLUMNS,
     TradeHistoryFilterValues,
-    pnl_text,
+    usdt_text,
 )
 from tiewtrade.ui.trade_history_workflow import HistoryTab
 
@@ -190,7 +191,8 @@ class TradeHistoryPage(QWidget):
 
         self._has_basket_result = True
         self.total_net_pnl_label.setVisible(True)
-        self.total_net_pnl.setText(pnl_text(result.net_realized_pnl))
+        self.total_net_pnl.setText(usdt_text(result.net_realized_pnl))
+        paint_by_sign(self.total_net_pnl, result.net_realized_pnl)
         self.total_net_pnl.setVisible(True)
         self.total_items.setText(f"{len(result.items)} total Baskets")
         self.retry_baskets_button.setVisible(False)

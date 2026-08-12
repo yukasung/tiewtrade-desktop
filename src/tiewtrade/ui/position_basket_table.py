@@ -2,7 +2,6 @@ from dataclasses import dataclass
 from decimal import Decimal
 
 from PySide6.QtCore import QSignalBlocker, Qt
-from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QHeaderView,
@@ -20,6 +19,7 @@ from tiewtrade.application.trading_workspace import (
 )
 from tiewtrade.ui.display_time import display_timestamp
 from tiewtrade.ui.entry_gate_display import blocked_entry_reason
+from tiewtrade.ui.sign_state import paint_by_sign, sign_colour
 from tiewtrade.ui.table_column import (
     CENTER,
     LEFT,
@@ -29,7 +29,6 @@ from tiewtrade.ui.table_column import (
     table_item,
 )
 from tiewtrade.ui.table_empty_state import TableEmptyStateOverlay
-from tiewtrade.ui.theme import NEGATIVE_COLOR, POSITIVE_COLOR
 
 
 @dataclass(frozen=True, slots=True)
@@ -79,16 +78,7 @@ def _money(value: Decimal) -> str:
 
 
 def _pnl_colour(row: _Row) -> str | None:
-    """No colour at break-even: neither reading is true, so the cell stays plain."""
-    return _sign_colour(row.entry.unrealized_pnl)
-
-
-def _sign_colour(value: Decimal) -> str | None:
-    if value > 0:
-        return POSITIVE_COLOR
-    if value < 0:
-        return NEGATIVE_COLOR
-    return None
+    return sign_colour(row.entry.unrealized_pnl)
 
 
 class PositionBasketTable(QWidget):
@@ -184,7 +174,7 @@ class PositionBasketTable(QWidget):
             f"Average {format(basket.average_entry_price, 'f')} · "
             f"Unrealized {_money(basket.unrealized_pnl)}"
         )
-        _paint(self.total_label, _sign_colour(basket.unrealized_pnl))
+        paint_by_sign(self.total_label, basket.unrealized_pnl)
         self.total_label.setVisible(True)
 
     def _show_state(self, snapshot: PositionBasketTabSnapshot) -> None:
@@ -236,13 +226,3 @@ class PositionBasketTable(QWidget):
         )
         table.horizontalHeader().setStretchLastSection(True)
         return table
-
-
-def _paint(label: QLabel, colour: str | None) -> None:
-    """A break-even total keeps the theme's own colour rather than picking a side."""
-    palette = label.palette()
-    if colour is None:
-        label.setPalette(QLabel().palette())
-        return
-    palette.setColor(label.foregroundRole(), QColor(colour))
-    label.setPalette(palette)

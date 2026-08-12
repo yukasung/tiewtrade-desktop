@@ -16,8 +16,8 @@ from tiewtrade.ui.trade_history_presenter import (
     BASKET_COLUMNS,
     FILL_COLUMNS,
     TradeHistoryFilterValues,
-    pnl_text,
     trade_history_filter,
+    usdt_text,
 )
 
 
@@ -71,15 +71,16 @@ def test_filter_values_reject_from_after_to() -> None:
 @pytest.mark.parametrize(
     ("value", "expected"),
     [
-        (Decimal("19.580000000000000001"), "19.580000000000000001 USDT · Profit"),
-        (Decimal("-0.2"), "-0.2 USDT · Loss"),
-        (Decimal("0"), "0.00 USDT · Break-even"),
+        (Decimal("19.580000000000000001"), "19.580000000000000001 USDT"),
+        (Decimal("-0.2"), "-0.2 USDT"),
+        (Decimal("0"), "0.00 USDT"),
     ],
 )
-def test_pnl_text_preserves_decimal_and_adds_semantic_label(
+def test_a_recorded_figure_is_printed_exactly_as_it_was_stored(
     value: Decimal, expected: str
 ) -> None:
-    assert pnl_text(value) == expected
+    """Trade History is a durable record, so nothing is rounded away from it."""
+    assert usdt_text(value) == expected
 
 
 def test_basket_columns_format_utc_and_every_column() -> None:
@@ -96,7 +97,7 @@ def test_basket_columns_format_utc_and_every_column() -> None:
         "20 USDT",
         "0.42 USDT",
         "0.00 USDT",
-        "19.58 USDT · Profit",
+        "19.58 USDT",
         "Closed",
     )
 
@@ -130,7 +131,7 @@ def test_fill_columns_include_symbol_and_total_for_cross_basket_history() -> Non
         "2",
         "0.2 USDT",
         "200 USDT",
-        "0.00 USDT · Break-even",
+        "0.00 USDT",
         "Paper Executor",
     )
 

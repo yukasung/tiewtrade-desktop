@@ -7,6 +7,7 @@ from PySide6.QtGui import QBrush, QColor
 from PySide6.QtWidgets import QTableWidgetItem
 from pytestqt.qtbot import QtBot
 
+from tests.support.qt_rendering import ink_colours
 from tests.support.workspace_snapshots import basket_entries, basket_snapshot
 from tiewtrade.application.trading_workspace import (
     BasketEntryGate,
@@ -19,7 +20,7 @@ from tiewtrade.application.trading_workspace import (
     stale_position_basket_tab,
 )
 from tiewtrade.ui.position_basket_table import PositionBasketTable
-from tiewtrade.ui.theme import NEGATIVE_COLOR, POSITIVE_COLOR
+from tiewtrade.ui.theme import DARK_THEME, NEGATIVE_COLOR, POSITIVE_COLOR
 
 OBSERVED_AT = datetime(2026, 8, 2, 1, 2, 4, tzinfo=UTC)
 
@@ -351,3 +352,35 @@ def test_position_basket_ignores_wrong_snapshot_type(qtbot: QtBot) -> None:
 
     assert widget.table.rowCount() == 2
     assert widget.table.accessibleName() == "Position / Basket"
+
+
+@pytest.mark.parametrize(
+    ("unrealized_pnl", "expected_colour"),
+    [
+        pytest.param(Decimal("1.926"), POSITIVE_COLOR, id="profit"),
+        pytest.param(Decimal("-0.15132"), NEGATIVE_COLOR, id="loss"),
+        pytest.param(Decimal("0"), None, id="break-even"),
+    ],
+)
+def test_the_total_is_painted_by_its_sign(
+    qtbot: QtBot, unrealized_pnl: Decimal, expected_colour: str | None
+) -> None:
+    """The same reading the Trade History summary gives, given the same way."""
+    widget = PositionBasketTable()
+    widget.setStyleSheet(DARK_THEME)
+    qtbot.addWidget(widget)
+    widget.show()
+
+    widget.show_snapshot(
+        ready_position_basket_tab(
+            basket_snapshot(unrealized_pnl=unrealized_pnl),
+            observed_at_utc=OBSERVED_AT,
+        )
+    )
+
+    inks = ink_colours(widget.total_label)
+    if expected_colour is None:
+        assert POSITIVE_COLOR.lower() not in inks
+        assert NEGATIVE_COLOR.lower() not in inks
+    else:
+        assert expected_colour.lower() in inks

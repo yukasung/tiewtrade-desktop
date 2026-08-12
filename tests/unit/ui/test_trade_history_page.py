@@ -14,6 +14,7 @@ from PySide6.QtWidgets import (
 from pytestqt.qtbot import QtBot
 
 from tests.support.qt_interactions import click, qdate, table_item
+from tests.support.qt_rendering import ink_colours
 from tests.support.trade_history_records import basket_result, trade_fill
 from tiewtrade.application.trade_history import (
     BasketHistoryResult,
@@ -21,7 +22,7 @@ from tiewtrade.application.trade_history import (
 )
 from tiewtrade.trading.session_config import MarketType, TradeMode
 from tiewtrade.ui.table_column import Column
-from tiewtrade.ui.theme import POSITIVE_COLOR
+from tiewtrade.ui.theme import DARK_THEME, NEGATIVE_COLOR, POSITIVE_COLOR
 from tiewtrade.ui.trade_history_page import TradeHistoryPage
 from tiewtrade.ui.trade_history_presenter import (
     BASKET_COLUMNS,
@@ -372,22 +373,38 @@ def test_tables_are_read_only_row_selection_surfaces(qtbot: QtBot) -> None:
 
 
 @pytest.mark.parametrize(
-    ("value", "semantic"),
+    ("value", "expected_text", "expected_colour"),
     [
-        (Decimal("1"), "Profit"),
-        (Decimal("-1"), "Loss"),
-        (Decimal("0"), "Break-even"),
+        pytest.param(Decimal("1"), "1 USDT", POSITIVE_COLOR, id="profit"),
+        pytest.param(Decimal("-1"), "-1 USDT", NEGATIVE_COLOR, id="loss"),
+        pytest.param(Decimal("0"), "0.00 USDT", None, id="break-even"),
     ],
 )
-def test_summary_distinguishes_profit_loss_and_break_even_without_color(
-    qtbot: QtBot, value: Decimal, semantic: str
+def test_the_summary_is_painted_by_its_sign_rather_than_labelled(
+    qtbot: QtBot,
+    value: Decimal,
+    expected_text: str,
+    expected_colour: str | None,
 ) -> None:
+    """The figure says the amount and the colour says the side, so no word does.
+
+    Read off the rendered pixels: the theme paints this label by object name,
+    which outranks anything a palette or a property could ask for.
+    """
     page = TradeHistoryPage()
+    page.setStyleSheet(DARK_THEME)
     qtbot.addWidget(page)
+    page.show()
 
     page.show_baskets(history_result(net_realized_pnl=value))
 
-    assert semantic in page.total_net_pnl.text()
+    assert page.total_net_pnl.text() == expected_text
+    inks = ink_colours(page.total_net_pnl)
+    if expected_colour is None:
+        assert POSITIVE_COLOR.lower() not in inks
+        assert NEGATIVE_COLOR.lower() not in inks
+    else:
+        assert expected_colour.lower() in inks
 
 
 def test_basket_refresh_loading_keeps_last_known_durable_result(
@@ -404,7 +421,7 @@ def test_basket_refresh_loading_keeps_last_known_durable_result(
     assert page.basket_state.text() == "Loading trade history…"
     assert not page.apply_button.isEnabled()
     assert not page.reset_button.isEnabled()
-    assert page.total_net_pnl.text() == "19.58 USDT · Profit"
+    assert page.total_net_pnl.text() == "19.58 USDT"
     assert not page.total_net_pnl.isHidden()
 
     page.set_baskets_loading(False)
@@ -424,7 +441,7 @@ def test_empty_basket_result_preserves_the_exact_query_summary(
     page.show_baskets_empty(exact_empty_result)
 
     assert page.basket_state.text() == "No Basket history"
-    assert page.total_net_pnl.text() == "0.000000000000000001 USDT · Profit"
+    assert page.total_net_pnl.text() == "0.000000000000000001 USDT"
     assert page.total_items.text() == "0 total Baskets"
     assert not page.total_net_pnl.isHidden()
     assert page.basket_table.rowCount() == 0
@@ -479,7 +496,7 @@ def test_basket_refresh_failure_keeps_last_known_durable_result(
     page.show_baskets_unavailable("Trade History unavailable")
 
     assert page.basket_table.rowCount() == 1
-    assert page.total_net_pnl.text() == "19.58 USDT · Profit"
+    assert page.total_net_pnl.text() == "19.58 USDT"
     assert not page.total_net_pnl.isHidden()
     assert page.total_items.text() == "1 total Baskets"
     assert page.basket_state.text() == "Stale · Trade History unavailable"

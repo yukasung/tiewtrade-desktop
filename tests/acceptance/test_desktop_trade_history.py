@@ -83,7 +83,7 @@ def test_desktop_trade_history_reads_durable_spot_and_futures_records(
         "30 USDT",
         "0.6 USDT",
         "0.00 USDT",
-        "29.4 USDT · Profit",
+        "29.4 USDT",
         "Closed",
     )
     assert _table_row_text(window.trade_history.basket_table, 1) == (
@@ -97,10 +97,10 @@ def test_desktop_trade_history_reads_durable_spot_and_futures_records(
         "20 USDT",
         "0.42 USDT",
         "0.00 USDT",
-        "19.58 USDT · Profit",
+        "19.58 USDT",
         "Closed",
     )
-    assert window.trade_history.total_net_pnl.text() == "48.98 USDT · Profit"
+    assert window.trade_history.total_net_pnl.text() == "48.98 USDT"
     window.trade_history.history_tabs.setCurrentIndex(1)
     qtbot.waitUntil(lambda: window.trade_history.fill_table.rowCount() == 4)
     assert _table_rows_text(window.trade_history.fill_table) == (
@@ -112,7 +112,7 @@ def test_desktop_trade_history_reads_durable_spot_and_futures_records(
             "2",
             "0.2 USDT",
             "200 USDT",
-            "29.4 USDT · Profit",
+            "29.4 USDT",
             "Paper Executor",
         ),
         (
@@ -123,7 +123,7 @@ def test_desktop_trade_history_reads_durable_spot_and_futures_records(
             "2",
             "0.2 USDT",
             "200 USDT",
-            "0.00 USDT · Break-even",
+            "0.00 USDT",
             "Paper Executor",
         ),
         (
@@ -134,7 +134,7 @@ def test_desktop_trade_history_reads_durable_spot_and_futures_records(
             "2",
             "0.2 USDT",
             "200 USDT",
-            "19.58 USDT · Profit",
+            "19.58 USDT",
             "Paper Executor",
         ),
         (
@@ -145,7 +145,7 @@ def test_desktop_trade_history_reads_durable_spot_and_futures_records(
             "2",
             "0.2 USDT",
             "200 USDT",
-            "0.00 USDT · Break-even",
+            "0.00 USDT",
             "Paper Executor",
         ),
     )
@@ -214,7 +214,7 @@ def test_desktop_trade_history_filters_all_rows_and_survives_restart(
     qtbot.waitUntil(lambda: first.trade_history.basket_table.rowCount() == 1)
     assert table_item(first.trade_history.basket_table, 0, 4).text() == "15m"
     assert table_item(first.trade_history.basket_table, 0, 2).text() == "Futures"
-    assert first.trade_history.total_net_pnl.text() == "29.4 USDT · Profit"
+    assert first.trade_history.total_net_pnl.text() == "29.4 USDT"
     assert basket_requests[-1] == TradeHistoryFilter(
         symbol="BTCUSDT",
         timeframe="15m",
@@ -289,7 +289,7 @@ def test_trade_history_read_failure_is_fail_closed_and_sanitized(
     assert window.trade_history.fill_table.rowCount() == 0
     assert not window.trade_history.total_net_pnl.isHidden()
     assert not window.trade_history.total_net_pnl_label.isHidden()
-    assert window.trade_history.total_net_pnl.text() == "19.58 USDT · Profit"
+    assert window.trade_history.total_net_pnl.text() == "19.58 USDT"
     assert window.trade_history.retry_baskets_button.isVisible()
     assert "/private/tmp" not in window.trade_history.basket_state.text()
 

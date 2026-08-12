@@ -6,6 +6,7 @@ from tiewtrade.application.trade_history import TradeFillHistoryItem, TradeHisto
 from tiewtrade.trading.session_config import MarketType, TradeMode
 from tiewtrade.trading.trade_history import BasketResult, BasketStatus, FillSide
 from tiewtrade.ui.display_time import DISPLAY_TIMEZONE, display_timestamp
+from tiewtrade.ui.sign_state import sign_colour
 from tiewtrade.ui.table_column import CENTER, LEFT, RIGHT, Column
 from tiewtrade.ui.theme import NEGATIVE_COLOR, POSITIVE_COLOR
 
@@ -59,7 +60,7 @@ BASKET_COLUMNS: tuple[Column[BasketResult], ...] = (
     Column(
         "Net PnL",
         RIGHT,
-        lambda basket: pnl_text(basket.net_realized_pnl),
+        lambda basket: usdt_text(basket.net_realized_pnl),
         lambda basket: sign_colour(basket.net_realized_pnl),
     ),
     Column("Status", LEFT, lambda basket: display_enum(basket.status.value)),
@@ -81,35 +82,16 @@ FILL_COLUMNS: tuple[Column[TradeFillHistoryItem], ...] = (
     Column(
         "Realized PnL",
         RIGHT,
-        lambda item: pnl_text(item.fill.realized_pnl),
+        lambda item: usdt_text(item.fill.realized_pnl),
         lambda item: sign_colour(item.fill.realized_pnl),
     ),
     Column("Source", LEFT, lambda item: display_enum(item.fill.source.value)),
 )
 
 
-def sign_colour(value: Decimal) -> str | None:
-    """No colour at break-even: neither reading is true, so the cell stays plain."""
-    if value > 0:
-        return POSITIVE_COLOR
-    if value < 0:
-        return NEGATIVE_COLOR
-    return None
-
-
 def _side_colour(side: FillSide) -> str:
     """Buying and selling read as the two directions a price can move."""
     return POSITIVE_COLOR if side is FillSide.BUY else NEGATIVE_COLOR
-
-
-def pnl_text(value: Decimal) -> str:
-    if value > 0:
-        label = "Profit"
-    elif value < 0:
-        label = "Loss"
-    else:
-        label = "Break-even"
-    return f"{decimal_text(value)} USDT · {label}"
 
 
 def _utc_start(value: date | None) -> datetime | None:

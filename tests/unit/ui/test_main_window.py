@@ -286,7 +286,7 @@ def test_empty_trade_history_preserves_the_exact_query_summary(
     )
     assert (
         window.trade_history.total_net_pnl.text()
-        == "0.000000000000000001 USDT · Profit"
+        == "0.000000000000000001 USDT"
     )
     assert window.trade_history.total_items.text() == "0 total Baskets"
 

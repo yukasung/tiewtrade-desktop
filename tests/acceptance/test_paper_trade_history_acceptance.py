@@ -225,7 +225,7 @@ def test_paper_execution_history_survives_restart_and_reaches_desktop(
     window.workspace.tabs.setCurrentWidget(window.trade_history)
 
     qtbot.waitUntil(lambda: window.trade_history.basket_table.rowCount() == 2)
-    assert window.trade_history.total_net_pnl.text() == "2273.69035202 USDT · Profit"
+    assert window.trade_history.total_net_pnl.text() == "2273.69035202 USDT"
     assert _table_row_text(window.trade_history.basket_table, 0) == (
         "2026-01-01 09:05:00",
         "Paper",
@@ -237,7 +237,7 @@ def test_paper_execution_history_survives_restart_and_reaches_desktop(
         "2322.1718 USDT",
         "62.3220702 USDT",
         "0.00 USDT",
-        "2259.8497298 USDT · Profit",
+        "2259.8497298 USDT",
         "Closed",
     )
     window.trade_history.history_tabs.setCurrentIndex(1)
@@ -251,7 +251,7 @@ def test_paper_execution_history_survives_restart_and_reaches_desktop(
             "313.807",
             "29.9999492 USDT",
             "29999.9492 USDT",
-            "0.00 USDT · Break-even",
+            "0.00 USDT",
             "Paper Executor",
         ),
         (
@@ -262,7 +262,7 @@ def test_paper_execution_history_survives_restart_and_reaches_desktop(
             "313.807",
             "32.3221210 USDT",
             "32322.1210 USDT",
-            "2259.8497298 USDT · Profit",
+            "2259.8497298 USDT",
             "Paper Executor",
         ),
         (
@@ -273,7 +273,7 @@ def test_paper_execution_history_survives_restart_and_reaches_desktop(
             "1.578",
             "0.14994156 USDT",
             "149.94156 USDT",
-            "0.00 USDT · Break-even",
+            "0.00 USDT",
             "Paper Executor",
         ),
         (
@@ -284,7 +284,7 @@ def test_paper_execution_history_survives_restart_and_reaches_desktop(
             "1.578",
             "0.16409622 USDT",
             "164.09622 USDT",
-            "13.84062222 USDT · Profit",
+            "13.84062222 USDT",
             "Paper Executor",
         ),
     }
