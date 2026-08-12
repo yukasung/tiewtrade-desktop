@@ -7,9 +7,7 @@ from typing import TypeVar
 from uuid import UUID
 
 from tiewtrade.application.trade_history import (
-    BasketHistoryPage,
     BasketHistoryResult,
-    PageRequest,
     TradeFillHistoryItem,
     TradeHistoryFilter,
 )
@@ -183,40 +181,6 @@ class SQLiteTradeHistory:
             if len(rows) > 1:
                 raise TradeHistoryConflictError("Session has more than one open Basket")
             return _basket_from_row(rows[0]) if rows else None
-
-        return self._run_read(operation)
-
-    def list_baskets(
-        self,
-        filters: TradeHistoryFilter,
-        page: PageRequest,
-    ) -> BasketHistoryPage:
-        def operation(connection: sqlite3.Connection) -> BasketHistoryPage:
-            where_sql, parameters = _basket_where(filters)
-            rows = connection.execute(
-                f"""
-                SELECT * FROM basket_results
-                {where_sql}
-                ORDER BY opened_at_utc DESC, basket_id DESC
-                LIMIT ? OFFSET ?
-                """,
-                (*parameters, page.page_size, page.offset),
-            ).fetchall()
-            total_items = connection.execute(
-                f"SELECT COUNT(*) FROM basket_results {where_sql}",
-                parameters,
-            ).fetchone()[0]
-            net_realized_pnl = _closed_net_realized_pnl(
-                connection,
-                filters,
-            )
-            return BasketHistoryPage(
-                items=tuple(_basket_from_row(row) for row in rows),
-                page=page.page,
-                page_size=page.page_size,
-                total_items=total_items,
-                net_realized_pnl=net_realized_pnl,
-            )
 
         return self._run_read(operation)
 

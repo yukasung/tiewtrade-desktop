@@ -5,7 +5,6 @@ from pathlib import Path
 from uuid import UUID
 
 from tiewtrade.application.trade_history import (
-    PageRequest,
     TradeHistoryFilter,
 )
 from tiewtrade.integrations.sqlite.database import SQLiteDatabase
@@ -76,13 +75,11 @@ def test_sqlite_history_serves_application_query_after_restart(
     history.record_closed_basket(closed, sell)
 
     reopened = SQLiteTradeHistory(SQLiteDatabase(path))
-    page = reopened.list_baskets(
-        TradeHistoryFilter(symbol="BTCUSDT", status=BasketStatus.CLOSED),
-        PageRequest(page=1, page_size=20),
+    page = reopened.list_basket_history(
+        TradeHistoryFilter(symbol="BTCUSDT", status=BasketStatus.CLOSED)
     )
 
     assert page.items == (closed,)
-    assert page.total_items == 1
     assert page.net_realized_pnl == Decimal("9.800000000000000001")
     assert reopened.list_fills(BASKET_ID) == (buy, sell)
 

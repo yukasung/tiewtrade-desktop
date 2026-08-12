@@ -6,7 +6,7 @@ from PySide6.QtWidgets import QTableWidget
 from pytestqt.qtbot import QtBot
 
 from tests.support.trade_history_records import basket_result
-from tiewtrade.application.trade_history import BasketHistoryPage
+from tiewtrade.application.trade_history import BasketHistoryResult
 from tiewtrade.ui.trading_workspace import TradingWorkspace
 
 
@@ -16,7 +16,7 @@ def test_trading_tables_are_named_and_scroll_horizontally(qtbot: QtBot) -> None:
     workspace.resize(760, 700)
     workspace.show()
     workspace.trade_history.show_baskets(
-        BasketHistoryPage(
+        BasketHistoryResult(
             items=(
                 basket_result(
                     gross_realized_pnl=Decimal("-1"),
@@ -24,9 +24,6 @@ def test_trading_tables_are_named_and_scroll_horizontally(qtbot: QtBot) -> None:
                     net_realized_pnl=Decimal("-1.25"),
                 ),
             ),
-            page=1,
-            page_size=50,
-            total_items=1,
             net_realized_pnl=Decimal("-1.25"),
         )
     )

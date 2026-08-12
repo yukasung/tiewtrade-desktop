@@ -18,7 +18,7 @@ from tests.support.paper_session_setup import (
 )
 from tiewtrade.application.paper_runtime import PaperRuntimeController
 from tiewtrade.application.paper_session_setup import ConfiguredPaperSession
-from tiewtrade.application.trade_history import PageRequest, TradeHistoryFilter
+from tiewtrade.application.trade_history import TradeHistoryFilter
 from tiewtrade.application.trading_workspace import (
     BotRuntimeState,
     DataFreshness,
@@ -392,8 +392,8 @@ def test_start_selects_concrete_paper_market_and_publishes_live_basket(
     assert marker is not None
     assert marker.state is PaperRuntimeLifecycleState.RUNNING
     assert lifecycle.running_marks == 1
-    history = SQLiteTradeHistory(database).list_baskets(
-        _history_filter(market_type), _first_page()
+    history = SQLiteTradeHistory(database).list_basket_history(
+        _history_filter(market_type)
     )
     assert len(history.items) == 1
     assert history.items[0].status is BasketStatus.OPEN
@@ -1024,7 +1024,3 @@ def _runtime_snapshot(state: MarketDataRuntimeState) -> MarketDataRuntimeSnapsho
 
 def _history_filter(market_type: MarketType) -> TradeHistoryFilter:
     return TradeHistoryFilter(market_type=market_type)
-
-
-def _first_page() -> PageRequest:
-    return PageRequest(page=1, page_size=20)

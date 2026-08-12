@@ -7,7 +7,6 @@ from datetime import UTC, date, datetime
 from decimal import Decimal
 from pathlib import Path
 from typing import overload
-from uuid import UUID
 
 import pytest
 from PySide6.QtCore import QDeadlineTimer, QPoint, QRect, Qt, QThreadPool, QTimer
@@ -22,7 +21,10 @@ from tests.support.paper_session_setup import (
 )
 from tests.support.qt_interactions import click, qdate
 from tests.support.trade_history_records import basket_result, trade_fill
-from tests.support.trade_history_ui import empty_basket_page, empty_fills
+from tests.support.trade_history_ui import (
+    empty_basket_history,
+    empty_trade_fills,
+)
 from tests.support.workspace_snapshots import basket_entries
 from tiewtrade.application.bot_control import (
     BotControlSnapshot,
@@ -40,8 +42,8 @@ from tiewtrade.application.paper_session_setup import (
     PaperSessionValidationError,
 )
 from tiewtrade.application.trade_history import (
-    BasketHistoryPage,
-    PageRequest,
+    BasketHistoryResult,
+    TradeFillHistoryItem,
     TradeHistoryFilter,
 )
 from tiewtrade.application.trading_workspace import (
@@ -56,8 +58,8 @@ from tiewtrade.integrations.sqlite.active_paper_sessions import (
 )
 from tiewtrade.integrations.sqlite.database import SQLiteDatabase
 from tiewtrade.trading.futures_policy import FuturesTradingPolicy
+from tiewtrade.trading.session_config import MarketType, TradeMode
 from tiewtrade.trading.spot_policy import SpotTradingPolicy
-from tiewtrade.trading.trade_history import TradeFill
 from tiewtrade.ui.bot_lifecycle_workflow import RuntimeSnapshotRelay
 from tiewtrade.ui.main_window import MainWindow
 from tiewtrade.ui.session_overview import SessionOverviewWidget
@@ -67,7 +69,6 @@ def _runtime_state(window: MainWindow) -> BotRuntimeState | None:
     """The state the lifecycle reached, or None before a session exists."""
     snapshot = window._lifecycle_workflow._snapshot
     return None if snapshot is None else snapshot.state
-
 
 
 def no_active_session() -> ConfiguredPaperSession | None:
@@ -94,8 +95,8 @@ def test_session_ready_loads_chart_for_configured_session(qtbot: QtBot) -> None:
     window = MainWindow(
         create_session=unused_create,
         load_active=lambda: session,
-        list_baskets=empty_basket_page,
-        list_fills=empty_fills,
+        list_basket_history=empty_basket_history,
+        list_trade_fills=empty_trade_fills,
         load_chart=load_chart,
         chart_clock=lambda: datetime(2026, 8, 2, 10, 3, tzinfo=UTC),
     )
@@ -135,8 +136,8 @@ def test_chart_view_selection_reloads_chart_without_bot_lifecycle(
     window = MainWindow(
         create_session=unused_create,
         load_active=lambda: session,
-        list_baskets=empty_basket_page,
-        list_fills=empty_fills,
+        list_basket_history=empty_basket_history,
+        list_trade_fills=empty_trade_fills,
         load_chart=load_chart,
         select_chart_view=lambda _session, selection: feed_selections.append(selection),
     )
@@ -178,8 +179,8 @@ def test_chart_unavailable_does_not_disable_bot_control_or_trade_history(
     window = MainWindow(
         create_session=unused_create,
         load_active=lambda: session,
-        list_baskets=empty_basket_page,
-        list_fills=empty_fills,
+        list_basket_history=empty_basket_history,
+        list_trade_fills=empty_trade_fills,
         load_chart=unavailable_chart,
     )
     qtbot.addWidget(window)
@@ -198,7 +199,7 @@ def test_chart_unavailable_does_not_disable_bot_control_or_trade_history(
     assert window.workspace.chart.retry_button.isVisible()
     open_trade_history(window)
     qtbot.waitUntil(
-        lambda: window.trade_history.basket_state.text() == "No trade history"
+        lambda: window.trade_history.basket_state.text() == "No Basket history"
     )
     click(window.workspace.chart.retry_button)
     qtbot.waitUntil(
@@ -244,8 +245,8 @@ def test_trade_history_opens_without_active_session(qtbot: QtBot) -> None:
     window = MainWindow(
         create_session=unused_create,
         load_active=no_active_session,
-        list_baskets=empty_basket_page,
-        list_fills=empty_fills,
+        list_basket_history=empty_basket_history,
+        list_trade_fills=empty_trade_fills,
     )
     qtbot.addWidget(window)
     window.show()
@@ -254,28 +255,25 @@ def test_trade_history_opens_without_active_session(qtbot: QtBot) -> None:
     open_trade_history(window)
 
     qtbot.waitUntil(
-        lambda: window.trade_history.basket_state.text() == "No trade history"
+        lambda: window.trade_history.basket_state.text() == "No Basket history"
     )
     assert window.trade_history.isVisible()
     # No session yet: the setup form is what the workspace offers.
     assert window.setup.isVisible()
 
 
-def test_empty_trade_history_preserves_exact_query_summary_and_page_state(
+def test_empty_trade_history_preserves_the_exact_query_summary(
     qtbot: QtBot,
 ) -> None:
-    exact_empty_page = BasketHistoryPage(
+    exact_empty_result = BasketHistoryResult(
         items=(),
-        page=1,
-        page_size=50,
-        total_items=0,
         net_realized_pnl=Decimal("0.000000000000000001"),
     )
     window = MainWindow(
         create_session=unused_create,
         load_active=no_active_session,
-        list_baskets=lambda filters, request: exact_empty_page,
-        list_fills=empty_fills,
+        list_basket_history=lambda _filters: exact_empty_result,
+        list_trade_fills=empty_trade_fills,
     )
     qtbot.addWidget(window)
     window.show()
@@ -284,14 +282,13 @@ def test_empty_trade_history_preserves_exact_query_summary_and_page_state(
     open_trade_history(window)
 
     qtbot.waitUntil(
-        lambda: window.trade_history.basket_state.text() == "No trade history"
+        lambda: window.trade_history.basket_state.text() == "No Basket history"
     )
     assert (
         window.trade_history.total_net_pnl.text()
         == "0.000000000000000001 USDT · Profit"
     )
     assert window.trade_history.total_items.text() == "0 total Baskets"
-    assert window.trade_history.page_label.text() == "Page 1 of 1"
 
 
 def test_trade_history_remains_available_when_session_load_fails(
@@ -305,8 +302,8 @@ def test_trade_history_remains_available_when_session_load_fails(
     window = MainWindow(
         create_session=unused_create,
         load_active=fail_load,
-        list_baskets=empty_basket_page,
-        list_fills=empty_fills,
+        list_basket_history=empty_basket_history,
+        list_trade_fills=empty_trade_fills,
     )
     qtbot.addWidget(window)
     window.show()
@@ -315,25 +312,23 @@ def test_trade_history_remains_available_when_session_load_fails(
     open_trade_history(window)
 
     qtbot.waitUntil(
-        lambda: window.trade_history.basket_state.text() == "No trade history"
+        lambda: window.trade_history.basket_state.text() == "No Basket history"
     )
 
 
 def test_tab_activation_starts_history_query_only_once(qtbot: QtBot) -> None:
     calls = 0
 
-    def count_baskets(
-        filters: TradeHistoryFilter, request: PageRequest
-    ) -> BasketHistoryPage:
+    def count_baskets(filters: TradeHistoryFilter) -> BasketHistoryResult:
         nonlocal calls
         calls += 1
-        return empty_basket_page(filters, request)
+        return empty_basket_history(filters)
 
     window = MainWindow(
         create_session=unused_create,
         load_active=no_active_session,
-        list_baskets=count_baskets,
-        list_fills=empty_fills,
+        list_basket_history=count_baskets,
+        list_trade_fills=empty_trade_fills,
     )
     qtbot.addWidget(window)
     window.show()
@@ -365,8 +360,8 @@ def test_session_load_finishing_does_not_navigate_away_from_history(
     window = MainWindow(
         create_session=unused_create,
         load_active=delayed_load,
-        list_baskets=empty_basket_page,
-        list_fills=empty_fills,
+        list_basket_history=empty_basket_history,
+        list_trade_fills=empty_trade_fills,
         thread_pool=thread_pool,
     )
     qtbot.addWidget(window)
@@ -377,276 +372,107 @@ def test_session_load_finishing_does_not_navigate_away_from_history(
     release.set()
 
     qtbot.waitUntil(
-        lambda: (
-            window.overview.symbol_value.text() == existing.market_data.symbol
-        )
+        lambda: window.overview.symbol_value.text() == existing.market_data.symbol
     )
     assert window.trade_history.isVisible()
     assert window.overview.isVisible() is False
     assert _runtime_state(window) is BotRuntimeState.CONFIGURED
 
 
-def test_trade_history_basket_and_fill_retries_are_wired_separately(
+def test_basket_and_trade_retries_are_wired_to_their_own_tab(
     qtbot: QtBot,
 ) -> None:
+    """Each tab retries its own query; neither button reaches the other's."""
     basket = basket_result()
-    fill = trade_fill()
+    item = TradeFillHistoryItem(
+        fill=trade_fill(),
+        symbol="BTCUSDT",
+        timeframe="5m",
+        market_type=MarketType.SPOT,
+        trade_mode=TradeMode.PAPER,
+    )
     basket_calls = 0
-    fill_calls = 0
+    trade_calls = 0
 
-    def fail_baskets_once(
-        filters: TradeHistoryFilter,
-        request: PageRequest,
-    ) -> BasketHistoryPage:
+    def fail_baskets_once(filters: TradeHistoryFilter) -> BasketHistoryResult:
         nonlocal basket_calls
+        del filters
         basket_calls += 1
         if basket_calls == 1:
             raise RuntimeError("private basket failure")
-        return BasketHistoryPage(
+        return BasketHistoryResult(
             items=(basket,),
-            page=request.page,
-            page_size=request.page_size,
-            total_items=1,
             net_realized_pnl=Decimal("0"),
         )
 
-    def fail_fills_once(basket_id: UUID) -> tuple[TradeFill, ...]:
-        nonlocal fill_calls
-        fill_calls += 1
-        if fill_calls == 1:
+    def fail_trades_once(
+        filters: TradeHistoryFilter,
+    ) -> tuple[TradeFillHistoryItem, ...]:
+        nonlocal trade_calls
+        del filters
+        trade_calls += 1
+        if trade_calls == 1:
             raise RuntimeError("private fill failure")
-        assert basket_id == basket.basket_id
-        return (fill,)
+        return (item,)
 
     window = MainWindow(
         create_session=unused_create,
         load_active=no_active_session,
-        list_baskets=fail_baskets_once,
-        list_fills=fail_fills_once,
+        list_basket_history=fail_baskets_once,
+        list_trade_fills=fail_trades_once,
     )
     qtbot.addWidget(window)
     window.show()
     open_trade_history(window)
     qtbot.waitUntil(
-        lambda: window.trade_history.basket_state.text() == "Trade History unavailable"
+        lambda: window.trade_history.basket_state.text() == "Basket History unavailable"
     )
 
     click(window.trade_history.retry_baskets_button)
-    qtbot.waitUntil(
-        lambda: window.trade_history.fill_state.text() == "Trade Fills unavailable"
-    )
-
-    click(window.trade_history.retry_fills_button)
-    qtbot.waitUntil(lambda: window.trade_history.fill_table.rowCount() == 1)
-    assert basket_calls == 2
-    assert fill_calls == 2
-
-
-def test_fill_retry_remains_wired_after_basket_refresh_failure(
-    qtbot: QtBot,
-) -> None:
-    basket = basket_result()
-    fill = trade_fill()
-    basket_calls = 0
-    fill_calls = 0
-
-    def succeed_then_fail_baskets(
-        filters: TradeHistoryFilter,
-        request: PageRequest,
-    ) -> BasketHistoryPage:
-        nonlocal basket_calls
-        del filters
-        basket_calls += 1
-        if basket_calls > 1:
-            raise RuntimeError("private basket failure")
-        return BasketHistoryPage(
-            items=(basket,),
-            page=request.page,
-            page_size=request.page_size,
-            total_items=1,
-            net_realized_pnl=basket.net_realized_pnl,
-        )
-
-    def succeed_fail_succeed_fills(basket_id: UUID) -> tuple[TradeFill, ...]:
-        nonlocal fill_calls
-        fill_calls += 1
-        assert basket_id == basket.basket_id
-        if fill_calls == 2:
-            raise RuntimeError("private fill failure")
-        return (fill,)
-
-    window = MainWindow(
-        create_session=unused_create,
-        load_active=no_active_session,
-        list_baskets=succeed_then_fail_baskets,
-        list_fills=succeed_fail_succeed_fills,
-    )
-    qtbot.addWidget(window)
-    window.show()
-    open_trade_history(window)
-    qtbot.waitUntil(lambda: window.trade_history.fill_table.rowCount() == 1)
-
-    window.trade_history.basket_selected.emit(basket.basket_id)
-    qtbot.waitUntil(
-        lambda: (
-            window.trade_history.fill_state.text() == "Stale · Trade Fills unavailable"
-        )
-    )
-    click(window.trade_history.apply_button)
-    qtbot.waitUntil(
-        lambda: (
-            window.trade_history.basket_state.text()
-            == "Stale · Trade History unavailable"
-        )
-    )
+    qtbot.waitUntil(lambda: window.trade_history.basket_table.rowCount() == 1)
 
     window.trade_history.history_tabs.setCurrentIndex(1)
-    assert window.trade_history.retry_fills_button.isVisible()
+    qtbot.waitUntil(
+        lambda: window.trade_history.fill_state.text() == "Trade History unavailable"
+    )
     click(window.trade_history.retry_fills_button)
 
-    qtbot.waitUntil(lambda: fill_calls == 3)
-    qtbot.waitUntil(window.trade_history.fill_state.isHidden)
-    assert basket_calls == 2
-
-
-def test_invalidated_active_fill_does_not_keep_loading_after_basket_failure(
-    qtbot: QtBot,
-) -> None:
-    basket = basket_result()
-    fill = trade_fill()
-    basket_calls = 0
-    fill_calls = 0
-    fill_started = threading.Event()
-    release_fill = threading.Event()
-    thread_pool = QThreadPool()
-    thread_pool.setMaxThreadCount(2)
-
-    def succeed_then_fail_baskets(
-        filters: TradeHistoryFilter,
-        request: PageRequest,
-    ) -> BasketHistoryPage:
-        nonlocal basket_calls
-        del filters
-        basket_calls += 1
-        if basket_calls > 1:
-            raise RuntimeError("private basket failure")
-        return BasketHistoryPage(
-            items=(basket,),
-            page=request.page,
-            page_size=request.page_size,
-            total_items=1,
-            net_realized_pnl=basket.net_realized_pnl,
-        )
-
-    def delay_second_fill(basket_id: UUID) -> tuple[TradeFill, ...]:
-        nonlocal fill_calls
-        fill_calls += 1
-        assert basket_id == basket.basket_id
-        if fill_calls == 2:
-            fill_started.set()
-            assert release_fill.wait(timeout=1)
-        return (fill,)
-
-    window = MainWindow(
-        create_session=unused_create,
-        load_active=no_active_session,
-        list_baskets=succeed_then_fail_baskets,
-        list_fills=delay_second_fill,
-        thread_pool=thread_pool,
-    )
-    qtbot.addWidget(window)
-    window.show()
-    open_trade_history(window)
     qtbot.waitUntil(lambda: window.trade_history.fill_table.rowCount() == 1)
-
-    window.trade_history.basket_selected.emit(basket.basket_id)
-    qtbot.waitUntil(fill_started.is_set)
-    qtbot.waitUntil(
-        lambda: window.trade_history.fill_state.text() == "Loading trade fills…"
-    )
-    assert not window.trade_history.apply_button.isEnabled()
-    release_fill.set()
-    qtbot.waitUntil(window.trade_history.apply_button.isEnabled)
-    click(window.trade_history.apply_button)
-    qtbot.waitUntil(
-        lambda: (
-            window.trade_history.basket_state.text()
-            == "Stale · Trade History unavailable"
-        )
-    )
-
-    try:
-        assert window.trade_history.fill_state.text() != "Loading trade fills…"
-        assert window.trade_history.fill_state.isHidden()
-        assert window.trade_history.fill_table.rowCount() == 1
-    finally:
-        release_fill.set()
-        assert thread_pool.waitForDone(1_000)
+    assert basket_calls == 2
+    assert trade_calls == 2
 
 
-def test_trade_history_filter_reset_page_and_selection_requests_are_wired(
-    qtbot: QtBot,
-) -> None:
-    first = basket_result()
-    second = basket_result(basket_id=UUID("00000000-0000-0000-0000-000000000202"))
-    basket_calls: list[tuple[TradeHistoryFilter, PageRequest]] = []
-    fill_calls: list[UUID] = []
+def test_trade_history_filter_and_reset_requests_are_wired(qtbot: QtBot) -> None:
+    basket = basket_result()
+    basket_calls: list[TradeHistoryFilter] = []
 
-    def list_baskets(
-        filters: TradeHistoryFilter,
-        request: PageRequest,
-    ) -> BasketHistoryPage:
-        basket_calls.append((filters, request))
-        return BasketHistoryPage(
-            items=(first, second) if request.page == 1 else (second,),
-            page=request.page,
-            page_size=request.page_size,
-            total_items=51,
-            net_realized_pnl=Decimal("0"),
-        )
-
-    def list_fills(basket_id: UUID) -> tuple[TradeFill, ...]:
-        fill_calls.append(basket_id)
-        return ()
+    def list_basket_history(filters: TradeHistoryFilter) -> BasketHistoryResult:
+        basket_calls.append(filters)
+        return BasketHistoryResult(items=(basket,), net_realized_pnl=Decimal("0"))
 
     window = MainWindow(
         create_session=unused_create,
         load_active=no_active_session,
-        list_baskets=list_baskets,
-        list_fills=list_fills,
+        list_basket_history=list_basket_history,
+        list_trade_fills=empty_trade_fills,
     )
     qtbot.addWidget(window)
     window.show()
     open_trade_history(window)
-    qtbot.waitUntil(lambda: window.trade_history.basket_table.rowCount() == 2)
-    qtbot.waitUntil(lambda: fill_calls == [first.basket_id])
+    qtbot.waitUntil(lambda: window.trade_history.basket_table.rowCount() == 1)
 
-    window.trade_history.basket_table.selectRow(1)
-    qtbot.waitUntil(lambda: fill_calls[-1] == second.basket_id)
     window.trade_history.symbol.setCurrentIndex(
         window.trade_history.symbol.findData("BTCUSDT")
     )
     click(window.trade_history.apply_button)
+
     qtbot.waitUntil(lambda: len(basket_calls) == 2)
-    assert basket_calls[-1] == (
-        TradeHistoryFilter(symbol="BTCUSDT"),
-        PageRequest(page=1, page_size=50),
-    )
+    assert basket_calls[-1] == TradeHistoryFilter(symbol="BTCUSDT")
 
     click(window.trade_history.reset_button)
-    qtbot.waitUntil(lambda: len(basket_calls) == 3)
-    assert basket_calls[-1] == (
-        TradeHistoryFilter(),
-        PageRequest(page=1, page_size=50),
-    )
 
-    qtbot.waitUntil(window.trade_history.next_button.isEnabled)
-    click(window.trade_history.next_button)
-    qtbot.waitUntil(lambda: len(basket_calls) == 4)
-    assert basket_calls[-1] == (
-        TradeHistoryFilter(),
-        PageRequest(page=2, page_size=50),
-    )
+    qtbot.waitUntil(lambda: len(basket_calls) == 3)
+    assert basket_calls[-1] == TradeHistoryFilter()
 
 
 def test_trade_history_filter_validation_is_wired_without_starting_query(
@@ -654,19 +480,16 @@ def test_trade_history_filter_validation_is_wired_without_starting_query(
 ) -> None:
     basket_calls = 0
 
-    def count_baskets(
-        filters: TradeHistoryFilter,
-        request: PageRequest,
-    ) -> BasketHistoryPage:
+    def count_baskets(filters: TradeHistoryFilter) -> BasketHistoryResult:
         nonlocal basket_calls
         basket_calls += 1
-        return empty_basket_page(filters, request)
+        return empty_basket_history(filters)
 
     window = MainWindow(
         create_session=unused_create,
         load_active=no_active_session,
-        list_baskets=count_baskets,
-        list_fills=empty_fills,
+        list_basket_history=count_baskets,
+        list_trade_fills=empty_trade_fills,
     )
     qtbot.addWidget(window)
     window.show()
@@ -712,8 +535,8 @@ def test_created_spot_session_returns_to_editable_form_without_runtime_actions(
     window = MainWindow(
         create_session=lambda values: PaperSessionCreateOutcome(created, True),
         load_active=no_active_session,
-        list_baskets=empty_basket_page,
-        list_fills=empty_fills,
+        list_basket_history=empty_basket_history,
+        list_trade_fills=empty_trade_fills,
     )
     qtbot.addWidget(window)
     window.show()
@@ -814,8 +637,8 @@ def test_repeated_submit_while_worker_is_running_calls_create_once(
     window = MainWindow(
         create_session=create,
         load_active=no_active_session,
-        list_baskets=empty_basket_page,
-        list_fills=empty_fills,
+        list_basket_history=empty_basket_history,
+        list_trade_fills=empty_trade_fills,
     )
     qtbot.addWidget(window)
     window.show()
@@ -845,8 +668,8 @@ def test_validation_failure_restores_form_and_shows_field_error(qtbot: QtBot) ->
     window = MainWindow(
         create_session=reject,
         load_active=no_active_session,
-        list_baskets=empty_basket_page,
-        list_fills=empty_fills,
+        list_basket_history=empty_basket_history,
+        list_trade_fills=empty_trade_fills,
     )
     qtbot.addWidget(window)
     window.show()
@@ -878,8 +701,8 @@ def test_validation_failure_reveals_and_focuses_advanced_field(
     window = MainWindow(
         create_session=create_session.execute,
         load_active=no_active_session,
-        list_baskets=empty_basket_page,
-        list_fills=empty_fills,
+        list_basket_history=empty_basket_history,
+        list_trade_fills=empty_trade_fills,
     )
     qtbot.addWidget(window)
     window.setFixedSize(1024, 700)
@@ -927,8 +750,8 @@ def test_required_advanced_validation_expands_and_reveals_field(
     window = MainWindow(
         create_session=create_session.execute,
         load_active=no_active_session,
-        list_baskets=empty_basket_page,
-        list_fills=empty_fills,
+        list_basket_history=empty_basket_history,
+        list_trade_fills=empty_trade_fills,
     )
     qtbot.addWidget(window)
     window.setFixedSize(1024, 700)
@@ -985,8 +808,8 @@ def test_delayed_validation_reveals_the_failed_field(
     window = MainWindow(
         create_session=delayed_create,
         load_active=no_active_session,
-        list_baskets=empty_basket_page,
-        list_fills=empty_fills,
+        list_basket_history=empty_basket_history,
+        list_trade_fills=empty_trade_fills,
         thread_pool=thread_pool,
     )
     qtbot.addWidget(window)
@@ -1050,8 +873,8 @@ def test_delayed_spot_validation_freezes_configuration_until_result(
     window = MainWindow(
         create_session=delayed_create,
         load_active=no_active_session,
-        list_baskets=empty_basket_page,
-        list_fills=empty_fills,
+        list_basket_history=empty_basket_history,
+        list_trade_fills=empty_trade_fills,
         thread_pool=thread_pool,
     )
     qtbot.addWidget(window)
@@ -1107,8 +930,8 @@ def test_persistence_failure_shows_sanitized_unavailable_state_and_allows_retry(
     window = MainWindow(
         create_session=unavailable,
         load_active=no_active_session,
-        list_baskets=empty_basket_page,
-        list_fills=empty_fills,
+        list_basket_history=empty_basket_history,
+        list_trade_fills=empty_trade_fills,
     )
     qtbot.addWidget(window)
     window.show()
@@ -1135,8 +958,8 @@ def test_unknown_create_failure_shows_sanitized_unavailable_state(qtbot: QtBot) 
     window = MainWindow(
         create_session=fail_create,
         load_active=no_active_session,
-        list_baskets=empty_basket_page,
-        list_fills=empty_fills,
+        list_basket_history=empty_basket_history,
+        list_trade_fills=empty_trade_fills,
     )
     qtbot.addWidget(window)
     window.show()
@@ -1154,8 +977,8 @@ def test_existing_create_outcome_opens_editable_form(qtbot: QtBot) -> None:
     window = MainWindow(
         create_session=lambda values: PaperSessionCreateOutcome(existing, False),
         load_active=no_active_session,
-        list_baskets=empty_basket_page,
-        list_fills=empty_fills,
+        list_basket_history=empty_basket_history,
+        list_trade_fills=empty_trade_fills,
     )
     qtbot.addWidget(window)
     window.show()
@@ -1175,8 +998,8 @@ def test_existing_active_session_opens_editable_form_without_create(
     window = MainWindow(
         create_session=lambda values: pytest.fail("must not create"),
         load_active=lambda: existing,
-        list_baskets=empty_basket_page,
-        list_fills=empty_fills,
+        list_basket_history=empty_basket_history,
+        list_trade_fills=empty_trade_fills,
     )
     qtbot.addWidget(window)
     window.show()
@@ -1195,8 +1018,8 @@ def test_sqlite_failure_shows_unavailable_without_fake_overview(qtbot: QtBot) ->
     window = MainWindow(
         create_session=unused_create,
         load_active=fail_load,
-        list_baskets=empty_basket_page,
-        list_fills=empty_fills,
+        list_basket_history=empty_basket_history,
+        list_trade_fills=empty_trade_fills,
     )
     qtbot.addWidget(window)
     window.show()
@@ -1225,8 +1048,8 @@ def test_corrupt_sqlite_session_stays_unavailable_without_persisted_text(
     window = MainWindow(
         create_session=unused_create,
         load_active=store.get_active,
-        list_baskets=empty_basket_page,
-        list_fills=empty_fills,
+        list_basket_history=empty_basket_history,
+        list_trade_fills=empty_trade_fills,
     )
     qtbot.addWidget(window)
     window.show()
@@ -1257,8 +1080,8 @@ def test_retry_after_startup_load_failure_reloads_existing_session(
     window = MainWindow(
         create_session=unused_create,
         load_active=fail_then_load_existing,
-        list_baskets=empty_basket_page,
-        list_fills=empty_fills,
+        list_basket_history=empty_basket_history,
+        list_trade_fills=empty_trade_fills,
     )
     qtbot.addWidget(window)
     window.show()
@@ -1308,8 +1131,8 @@ def test_load_failures_stay_fail_closed_with_sanitized_copy(
     window = MainWindow(
         create_session=unused_create,
         load_active=fail_load,
-        list_baskets=empty_basket_page,
-        list_fills=empty_fills,
+        list_basket_history=empty_basket_history,
+        list_trade_fills=empty_trade_fills,
     )
     qtbot.addWidget(window)
     window.show()
@@ -1339,8 +1162,8 @@ def test_closing_window_ignores_late_worker_result_and_releases_task(
     window = MainWindow(
         create_session=unused_create,
         load_active=delayed_load,
-        list_baskets=empty_basket_page,
-        list_fills=empty_fills,
+        list_basket_history=empty_basket_history,
+        list_trade_fills=empty_trade_fills,
         thread_pool=thread_pool,
     )
     qtbot.addWidget(window)
@@ -1391,8 +1214,8 @@ def test_closing_window_waits_for_workers_after_closing_workflows(
     window = MainWindow(
         create_session=unused_create,
         load_active=no_active_session,
-        list_baskets=empty_basket_page,
-        list_fills=empty_fills,
+        list_basket_history=empty_basket_history,
+        list_trade_fills=empty_trade_fills,
         thread_pool=thread_pool,
     )
     qtbot.addWidget(window)
@@ -1436,8 +1259,8 @@ def test_closing_window_invokes_controlled_runtime_shutdown(qtbot: QtBot) -> Non
     window = MainWindow(
         create_session=unused_create,
         load_active=no_active_session,
-        list_baskets=empty_basket_page,
-        list_fills=empty_fills,
+        list_basket_history=empty_basket_history,
+        list_trade_fills=empty_trade_fills,
         shutdown_runtime=shutdown_runtime,
     )
     qtbot.addWidget(window)
@@ -1462,8 +1285,8 @@ def test_closing_window_does_not_stop_chart_feed_on_qt_thread(qtbot: QtBot) -> N
     window = MainWindow(
         create_session=unused_create,
         load_active=no_active_session,
-        list_baskets=empty_basket_page,
-        list_fills=empty_fills,
+        list_basket_history=empty_basket_history,
+        list_trade_fills=empty_trade_fills,
         stop_chart_feed=lambda: stopped.append(True),
     )
     qtbot.addWidget(window)
@@ -1479,20 +1302,17 @@ def test_closing_window_ignores_late_trade_history_result(qtbot: QtBot) -> None:
     thread_pool = QThreadPool()
     thread_pool.setMaxThreadCount(1)
 
-    def delayed_baskets(
-        filters: TradeHistoryFilter,
-        request: PageRequest,
-    ) -> BasketHistoryPage:
+    def delayed_baskets(filters: TradeHistoryFilter) -> BasketHistoryResult:
         started.set()
         if not release.wait(timeout=1):
             raise TimeoutError("test did not release worker")
-        return empty_basket_page(filters, request)
+        return empty_basket_history(filters)
 
     window = MainWindow(
         create_session=unused_create,
         load_active=no_active_session,
-        list_baskets=delayed_baskets,
-        list_fills=empty_fills,
+        list_basket_history=delayed_baskets,
+        list_trade_fills=empty_trade_fills,
         thread_pool=thread_pool,
     )
     qtbot.addWidget(window)
@@ -1520,8 +1340,8 @@ def test_main_window_composes_workspace_and_starts_on_setup(
     window = MainWindow(
         create_session=operation,
         load_active=no_active_session,
-        list_baskets=empty_basket_page,
-        list_fills=empty_fills,
+        list_basket_history=empty_basket_history,
+        list_trade_fills=empty_trade_fills,
     )
     qtbot.addWidget(window)
     window.show()
@@ -1566,8 +1386,8 @@ def test_lifecycle_actions_render_matching_header_and_control_snapshot(
     window = MainWindow(
         create_session=unused_create,
         load_active=lambda: session,
-        list_baskets=empty_basket_page,
-        list_fills=empty_fills,
+        list_basket_history=empty_basket_history,
+        list_trade_fills=empty_trade_fills,
         start_bot=start_bot,
         stop_bot=stop_bot,
     )
@@ -1580,9 +1400,7 @@ def test_lifecycle_actions_render_matching_header_and_control_snapshot(
     click(window.workspace.bot_control_widget.start_button)
     click(window.workspace.bot_control_widget.start_button)
 
-    qtbot.waitUntil(
-        lambda: _runtime_state(window) is BotRuntimeState.RUNNING
-    )
+    qtbot.waitUntil(lambda: _runtime_state(window) is BotRuntimeState.RUNNING)
     assert start_calls == 1
     assert window.workspace.bot_control_widget.stop_button.isVisible()
     assert window.findChildren(QWidget, "manualBuyButton") == []
@@ -1596,9 +1414,7 @@ def test_lifecycle_actions_render_matching_header_and_control_snapshot(
     )
     click(confirm_button)
 
-    qtbot.waitUntil(
-        lambda: _runtime_state(window) is BotRuntimeState.STOPPED
-    )
+    qtbot.waitUntil(lambda: _runtime_state(window) is BotRuntimeState.STOPPED)
     assert stop_calls == 1
 
 
@@ -1611,8 +1427,8 @@ def test_blocked_runtime_reopens_the_editable_setup_form(
     window = MainWindow(
         create_session=unused_create,
         load_active=configured_spot_session,
-        list_baskets=empty_basket_page,
-        list_fills=empty_fills,
+        list_basket_history=empty_basket_history,
+        list_trade_fills=empty_trade_fills,
         start_bot=fail_start,
     )
     qtbot.addWidget(window)
@@ -1623,9 +1439,7 @@ def test_blocked_runtime_reopens_the_editable_setup_form(
 
     click(window.workspace.bot_control_widget.start_button)
 
-    qtbot.waitUntil(
-        lambda: _runtime_state(window) is BotRuntimeState.BLOCKED
-    )
+    qtbot.waitUntil(lambda: _runtime_state(window) is BotRuntimeState.BLOCKED)
     qtbot.waitUntil(window.setup.isVisible)
     assert window.setup.available_capital.isEnabled()
 
@@ -1655,8 +1469,8 @@ def test_stop_reopens_an_editable_setup_form(qtbot: QtBot) -> None:
     window = MainWindow(
         create_session=unused_create,
         load_active=load_active,
-        list_baskets=empty_basket_page,
-        list_fills=empty_fills,
+        list_basket_history=empty_basket_history,
+        list_trade_fills=empty_trade_fills,
         start_bot=start,
         stop_bot=stop,
     )
@@ -1666,9 +1480,7 @@ def test_stop_reopens_an_editable_setup_form(qtbot: QtBot) -> None:
     qtbot.waitUntil(control.start_button.isEnabled)
 
     click(control.start_button)
-    qtbot.waitUntil(
-        lambda: _runtime_state(window) is BotRuntimeState.RUNNING
-    )
+    qtbot.waitUntil(lambda: _runtime_state(window) is BotRuntimeState.RUNNING)
     click(control.stop_button)
     stop_confirmation = window.findChild(QMessageBox)
     assert stop_confirmation is not None
@@ -1676,9 +1488,7 @@ def test_stop_reopens_an_editable_setup_form(qtbot: QtBot) -> None:
         button for button in stop_confirmation.buttons() if button.text() == "Stop Bot"
     )
     click(stop_button)
-    qtbot.waitUntil(
-        lambda: _runtime_state(window) is BotRuntimeState.STOPPED
-    )
+    qtbot.waitUntil(lambda: _runtime_state(window) is BotRuntimeState.STOPPED)
 
     qtbot.waitUntil(window.setup.isVisible)
     qtbot.waitUntil(window.setup.timeframe.isEnabled)
@@ -1710,8 +1520,8 @@ def test_start_from_setup_creates_and_starts_paper_bot_in_one_action(
     window = MainWindow(
         create_session=create,
         load_active=no_active_session,
-        list_baskets=empty_basket_page,
-        list_fills=empty_fills,
+        list_basket_history=empty_basket_history,
+        list_trade_fills=empty_trade_fills,
         start_bot=start,
     )
     qtbot.addWidget(window)
@@ -1721,9 +1531,7 @@ def test_start_from_setup_creates_and_starts_paper_bot_in_one_action(
 
     click(window.setup.create_button)
 
-    qtbot.waitUntil(
-        lambda: _runtime_state(window) is BotRuntimeState.RUNNING
-    )
+    qtbot.waitUntil(lambda: _runtime_state(window) is BotRuntimeState.RUNNING)
     assert len(created) == 1
     assert created[0].available_capital == "1000"
     assert len(started) == 1
@@ -1761,8 +1569,8 @@ def test_start_from_setup_skips_recovery_inspection_for_new_session(
     window = MainWindow(
         create_session=create,
         load_active=no_active_session,
-        list_baskets=empty_basket_page,
-        list_fills=empty_fills,
+        list_basket_history=empty_basket_history,
+        list_trade_fills=empty_trade_fills,
         start_bot=start,
         initialize_bot=initialize,
     )
@@ -1773,9 +1581,7 @@ def test_start_from_setup_skips_recovery_inspection_for_new_session(
 
     click(window.setup.create_button)
 
-    qtbot.waitUntil(
-        lambda: _runtime_state(window) is BotRuntimeState.RUNNING
-    )
+    qtbot.waitUntil(lambda: _runtime_state(window) is BotRuntimeState.RUNNING)
     assert initialize_calls == []
     assert len(start_calls) == 1
 
@@ -1805,8 +1611,8 @@ def test_stop_without_exposure_keeps_session_and_reopens_prefilled_form(
     window = MainWindow(
         create_session=unused_create,
         load_active=lambda: session,
-        list_baskets=empty_basket_page,
-        list_fills=empty_fills,
+        list_basket_history=empty_basket_history,
+        list_trade_fills=empty_trade_fills,
         start_bot=start,
         stop_bot=stop,
     )
@@ -1815,9 +1621,7 @@ def test_stop_without_exposure_keeps_session_and_reopens_prefilled_form(
     control = window.workspace.bot_control_widget
     qtbot.waitUntil(control.start_button.isEnabled)
     click(control.start_button)
-    qtbot.waitUntil(
-        lambda: _runtime_state(window) is BotRuntimeState.RUNNING
-    )
+    qtbot.waitUntil(lambda: _runtime_state(window) is BotRuntimeState.RUNNING)
     click(control.stop_button)
     confirmation = window.findChild(QMessageBox)
     assert confirmation is not None
@@ -1887,8 +1691,8 @@ def test_stop_with_open_position_reopens_editable_setup_without_closing(
     window = MainWindow(
         create_session=create,
         load_active=lambda: session,
-        list_baskets=empty_basket_page,
-        list_fills=empty_fills,
+        list_basket_history=empty_basket_history,
+        list_trade_fills=empty_trade_fills,
         start_bot=start,
         stop_bot=stop,
         close_position=close_position,
@@ -1901,9 +1705,7 @@ def test_stop_with_open_position_reopens_editable_setup_without_closing(
     control = window.workspace.bot_control_widget
     qtbot.waitUntil(control.start_button.isEnabled)
     click(control.start_button)
-    qtbot.waitUntil(
-        lambda: _runtime_state(window) is BotRuntimeState.RUNNING
-    )
+    qtbot.waitUntil(lambda: _runtime_state(window) is BotRuntimeState.RUNNING)
     runtime_snapshots.new_generation()(
         BotLifecycleResult(
             workspace=paper_runtime_workspace_snapshot(
@@ -1946,8 +1748,8 @@ def test_start_from_active_session_reports_missing_replacement_service(
     window = MainWindow(
         create_session=unused_create,
         load_active=lambda: session,
-        list_baskets=empty_basket_page,
-        list_fills=empty_fills,
+        list_basket_history=empty_basket_history,
+        list_trade_fills=empty_trade_fills,
     )
     qtbot.addWidget(window)
     window.show()
@@ -1964,8 +1766,8 @@ def test_configured_session_does_not_auto_start_and_explains_missing_runtime(
     window = MainWindow(
         create_session=unused_create,
         load_active=configured_spot_session,
-        list_baskets=empty_basket_page,
-        list_fills=empty_fills,
+        list_basket_history=empty_basket_history,
+        list_trade_fills=empty_trade_fills,
     )
     qtbot.addWidget(window)
     window.show()

@@ -1,5 +1,4 @@
 from datetime import date
-from uuid import UUID
 
 from PySide6.QtCore import QDate, QSignalBlocker, Qt, Signal, Slot
 from PySide6.QtGui import QColor
@@ -27,18 +26,14 @@ from PySide6.QtWidgets import (
 
 from tiewtrade.application.paper_symbols import PAPER_SYMBOLS
 from tiewtrade.application.trade_history import (
-    BasketHistoryPage,
     BasketHistoryResult,
     TradeFillHistoryItem,
 )
 from tiewtrade.market_data.config import SUPPORTED_V1_TIMEFRAME_CHOICES
-from tiewtrade.trading.trade_history import TradeFill
 from tiewtrade.ui.table_empty_state import TableEmptyStateOverlay
 from tiewtrade.ui.trade_history_presenter import (
     TradeHistoryFilterValues,
     basket_rows,
-    fill_rows,
-    page_state,
     pnl_text,
     trade_fill_rows,
 )
@@ -48,8 +43,6 @@ from tiewtrade.ui.trade_history_workflow import HistoryTab
 class TradeHistoryPage(QWidget):
     apply_filters_requested = Signal(object)
     reset_requested = Signal()
-    page_requested = Signal(int)
-    basket_selected = Signal(object)
     baskets_retry_requested = Signal()
     fills_retry_requested = Signal()
     history_tab_changed = Signal(object)
@@ -68,17 +61,6 @@ class TradeHistoryPage(QWidget):
         "Net PnL",
         "Status",
     )
-    LEGACY_FILL_HEADERS = (
-        "Filled At",
-        "Side",
-        "Entry #",
-        "Price",
-        "Quantity",
-        "Notional",
-        "Commission",
-        "Realized PnL",
-        "Source",
-    )
     FILL_HEADERS = (
         "Filled At",
         "Symbol",
@@ -95,13 +77,9 @@ class TradeHistoryPage(QWidget):
         super().__init__(parent)
         self.setObjectName("tradeHistoryPage")
         self.setAccessibleName("Trade History")
-        self._current_page = 1
         self._has_basket_result = False
-        self._fill_result_basket_id: UUID | None = None
         self._baskets_loading = False
         self._fills_loading = False
-        self._previous_page_available = False
-        self._next_page_available = False
         self._active_history_tab = HistoryTab.BASKETS
 
         self.symbol = self._combo(
@@ -161,22 +139,10 @@ class TradeHistoryPage(QWidget):
             "basketHistoryTable", "Basket History", self.BASKET_HEADERS
         )
         self.basket_empty_state = TableEmptyStateOverlay(self.basket_table)
-        self.basket_table.itemSelectionChanged.connect(self._emit_basket_selection)
+        self.basket_table.setSelectionMode(QAbstractItemView.SelectionMode.NoSelection)
         self.basket_state = self._state_label("basketState", "Basket History status")
         self.retry_baskets_button = self._retry_button("retryBasketsButton")
         self.retry_baskets_button.clicked.connect(self.baskets_retry_requested)
-
-        self.previous_button = QPushButton("Previous")
-        self.previous_button.setObjectName("secondaryButton")
-        self.previous_button.setEnabled(False)
-        self.page_label = QLabel("Page 1 of 1")
-        self.page_label.setObjectName("pageLabel")
-        self.page_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.next_button = QPushButton("Next")
-        self.next_button.setObjectName("secondaryButton")
-        self.next_button.setEnabled(False)
-        self.previous_button.clicked.connect(self._request_previous_page)
-        self.next_button.clicked.connect(self._request_next_page)
 
         self.fill_table = self._table(
             "tradeFillsTable", "Trade Fills", self.FILL_HEADERS
@@ -229,18 +195,14 @@ class TradeHistoryPage(QWidget):
             self._show_basket_tab()
         self._refresh_filter_controls()
         if not loading:
-            self.previous_button.setEnabled(self._previous_page_available)
-            self.next_button.setEnabled(self._next_page_available)
             return
         if not self._has_basket_result:
             self._clear_basket_result()
         self._set_basket_state("Loading trade history…")
         self.retry_baskets_button.setVisible(False)
-        self.previous_button.setEnabled(False)
-        self.next_button.setEnabled(False)
 
     @Slot(object)
-    def show_baskets(self, result: BasketHistoryPage | BasketHistoryResult) -> None:
+    def show_baskets(self, result: BasketHistoryResult) -> None:
         self._show_basket_tab()
         rows = basket_rows(result.items)
         blocker = QSignalBlocker(self.basket_table)
@@ -250,48 +212,24 @@ class TradeHistoryPage(QWidget):
                 item = self._table_item(value)
                 if column_index == 10:
                     self._apply_pnl_color(item, value)
-                item.setData(Qt.ItemDataRole.UserRole, row.basket_id)
                 self.basket_table.setItem(row_index, column_index, item)
-        if rows and isinstance(result, BasketHistoryPage):
-            self.basket_table.setCurrentCell(0, 0)
-            self.basket_table.selectRow(0)
-        elif isinstance(result, BasketHistoryResult):
-            self.basket_table.setSelectionMode(
-                QAbstractItemView.SelectionMode.NoSelection
-            )
         del blocker
 
         self._has_basket_result = True
-        if isinstance(result, BasketHistoryPage):
-            self._clear_fill_result()
         self.total_net_pnl_label.setVisible(True)
         self.total_net_pnl.setText(pnl_text(result.net_realized_pnl))
         self.total_net_pnl.setVisible(True)
-        total_items = (
-            result.total_items
-            if isinstance(result, BasketHistoryPage)
-            else len(result.items)
-        )
-        self.total_items.setText(f"{total_items} total Baskets")
+        self.total_items.setText(f"{len(result.items)} total Baskets")
         self.retry_baskets_button.setVisible(False)
         if rows:
             self.basket_empty_state.clear_message()
             self.basket_state.clear()
             self.basket_state.setVisible(False)
         else:
-            message = (
-                "No trade history"
-                if isinstance(result, BasketHistoryPage)
-                else "No Basket history"
-            )
-            self._set_basket_state(message)
-        if isinstance(result, BasketHistoryPage):
-            self._show_page_state(result.page, result.page_size, result.total_items)
-        else:
-            self._clear_pagination()
+            self._set_basket_state("No Basket history")
 
     @Slot(object)
-    def show_baskets_empty(self, result: BasketHistoryPage) -> None:
+    def show_baskets_empty(self, result: BasketHistoryResult) -> None:
         self.show_baskets(result)
 
     @Slot(str)
@@ -309,49 +247,9 @@ class TradeHistoryPage(QWidget):
         self.filter_error.setText(message)
         self.filter_error.setVisible(True)
 
-    @Slot(bool)
-    def set_fills_loading(self, loading: bool) -> None:
-        if not loading:
-            if not self._fills_loading:
-                self._refresh_filter_controls()
-                return
-            self._fills_loading = False
-            self._refresh_filter_controls()
-            self._show_durable_fill_state()
-            return
-        self._fills_loading = True
-        self._refresh_filter_controls()
-        if self._fill_result_basket_id != self._selected_basket_id():
-            self._clear_fill_result()
-        self._set_fill_state("Loading trade fills…")
-        self.retry_fills_button.setVisible(False)
-
-    @Slot(object, object)
-    def show_fills(self, basket_id: UUID, fills: tuple[TradeFill, ...]) -> None:
-        self._fills_loading = False
-        self.fill_table.setHorizontalHeaderLabels(self.LEGACY_FILL_HEADERS)
-        rows = fill_rows(fills)
-        blocker = QSignalBlocker(self.fill_table)
-        self.fill_table.setRowCount(len(rows))
-        for row_index, row in enumerate(rows):
-            for column_index, value in enumerate(row.values):
-                item = self._table_item(value)
-                if column_index == 1:
-                    self._apply_side_color(item, value)
-                elif column_index == 7:
-                    self._apply_pnl_color(item, value)
-                self.fill_table.setItem(row_index, column_index, item)
-        del blocker
-        self._fill_result_basket_id = basket_id
-        self.fill_empty_state.clear_message()
-        self.fill_state.clear()
-        self.fill_state.setVisible(False)
-        self.retry_fills_button.setVisible(False)
-
     @Slot(object)
     def show_trades(self, items: tuple[TradeFillHistoryItem, ...]) -> None:
         self._fills_loading = False
-        self.fill_table.setHorizontalHeaderLabels(self.FILL_HEADERS)
         rows = trade_fill_rows(items)
         blocker = QSignalBlocker(self.fill_table)
         self.fill_table.setRowCount(len(rows))
@@ -394,24 +292,6 @@ class TradeHistoryPage(QWidget):
             self._set_fill_state(message)
         self.retry_fills_button.setVisible(True)
 
-    @Slot(object)
-    def show_fills_empty(self, basket_id: UUID) -> None:
-        self._fills_loading = False
-        self._clear_table(self.fill_table)
-        self._fill_result_basket_id = basket_id
-        self._set_fill_state("No fills for this Basket")
-        self.retry_fills_button.setVisible(False)
-
-    @Slot(object, str)
-    def show_fills_unavailable(self, basket_id: UUID, message: str) -> None:
-        self._fills_loading = False
-        if self._fill_result_basket_id == basket_id:
-            self._set_fill_state(f"Stale · {message}")
-        else:
-            self._clear_fill_result()
-            self._set_fill_state(message)
-        self.retry_fills_button.setVisible(True)
-
     @Slot()
     def _apply_filters(self) -> None:
         self.filter_error.clear()
@@ -433,26 +313,6 @@ class TradeHistoryPage(QWidget):
         self.filter_error.clear()
         self.filter_error.setVisible(False)
         self.reset_requested.emit()
-
-    @Slot()
-    def _emit_basket_selection(self) -> None:
-        row = self.basket_table.currentRow()
-        if row < 0:
-            return
-        item = self.basket_table.item(row, 0)
-        if item is None:
-            return
-        basket_id = item.data(Qt.ItemDataRole.UserRole)
-        if isinstance(basket_id, UUID):
-            self.basket_selected.emit(basket_id)
-
-    @Slot()
-    def _request_previous_page(self) -> None:
-        self.page_requested.emit(self._current_page - 1)
-
-    @Slot()
-    def _request_next_page(self) -> None:
-        self.page_requested.emit(self._current_page + 1)
 
     @Slot(int)
     def _history_tab_changed(self, index: int) -> None:
@@ -574,50 +434,12 @@ class TradeHistoryPage(QWidget):
         layout.setColumnStretch(5, 1)
         return card
 
-    def _show_page_state(
-        self, current_page: int, page_size: int, total_items: int
-    ) -> None:
-        state = page_state(
-            page=current_page, page_size=page_size, total_items=total_items
-        )
-        self._current_page = state.current_page
-        self.page_label.setText(f"Page {state.current_page} of {state.total_pages}")
-        self.page_label.setVisible(True)
-        self._previous_page_available = state.previous_enabled
-        self._next_page_available = state.next_enabled
-        self.previous_button.setEnabled(
-            state.previous_enabled and not self._baskets_loading
-        )
-        self.next_button.setEnabled(state.next_enabled and not self._baskets_loading)
-
-    def _clear_pagination(self) -> None:
-        self._current_page = 1
-        self._previous_page_available = False
-        self._next_page_available = False
-        self.page_label.clear()
-        self.page_label.setVisible(False)
-        self.previous_button.setEnabled(False)
-        self.next_button.setEnabled(False)
-
     def _clear_fill_result(self) -> None:
         self._clear_table(self.fill_table)
-        self._fill_result_basket_id = None
         self.fill_empty_state.clear_message()
         self.fill_state.clear()
         self.fill_state.setVisible(False)
         self.retry_fills_button.setVisible(False)
-
-    def _show_durable_fill_state(self) -> None:
-        if self._fill_result_basket_id != self._selected_basket_id():
-            self._clear_fill_result()
-            return
-        self.retry_fills_button.setVisible(False)
-        if self.fill_table.rowCount() == 0:
-            self._set_fill_state("No fills for this Basket")
-            return
-        self.fill_empty_state.clear_message()
-        self.fill_state.clear()
-        self.fill_state.setVisible(False)
 
     def _set_filter_controls_enabled(self, enabled: bool) -> None:
         for widget in (
@@ -636,20 +458,17 @@ class TradeHistoryPage(QWidget):
         self.to_date.setEnabled(enabled and self.to_date_enabled.isChecked())
 
     def _refresh_filter_controls(self) -> None:
+        """Only the tab being read can hold the filters, since only it is loading."""
         if self._active_history_tab is HistoryTab.BASKETS:
-            legacy_fill_loading = (
-                self.basket_table.selectionMode()
-                is not QAbstractItemView.SelectionMode.NoSelection
-                and self._fills_loading
-            )
-            active_loading = self._baskets_loading or legacy_fill_loading
+            active_loading = self._baskets_loading
         else:
             active_loading = self._fills_loading
         self._set_filter_controls_enabled(not active_loading)
 
     def _set_basket_state(self, message: str) -> None:
+        """Nothing found reads inside the empty table; anything else reads below it."""
         self.basket_state.setText(message)
-        if message in {"No trade history", "No Basket history"}:
+        if message == "No Basket history":
             self.basket_empty_state.show_message(message)
             self.basket_state.setVisible(False)
             return
@@ -658,7 +477,7 @@ class TradeHistoryPage(QWidget):
 
     def _set_fill_state(self, message: str) -> None:
         self.fill_state.setText(message)
-        if message in {"No fills for this Basket", "No trade history"}:
+        if message == "No trade history":
             self.fill_empty_state.show_message(message)
             self.fill_state.setVisible(False)
             return
@@ -787,14 +606,3 @@ class TradeHistoryPage(QWidget):
         self.total_net_pnl.clear()
         self.total_net_pnl.setVisible(False)
         self.total_items.clear()
-        self._clear_pagination()
-
-    def _selected_basket_id(self) -> UUID | None:
-        row = self.basket_table.currentRow()
-        if row < 0:
-            return None
-        item = self.basket_table.item(row, 0)
-        if item is None:
-            return None
-        basket_id = item.data(Qt.ItemDataRole.UserRole)
-        return basket_id if isinstance(basket_id, UUID) else None

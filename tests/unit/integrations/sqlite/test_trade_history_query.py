@@ -6,7 +6,7 @@ from uuid import UUID
 
 import pytest
 
-from tiewtrade.application.trade_history import PageRequest, TradeHistoryFilter
+from tiewtrade.application.trade_history import TradeHistoryFilter
 from tiewtrade.integrations.sqlite.database import SQLiteDatabase
 from tiewtrade.integrations.sqlite.trade_history import SQLiteTradeHistory
 from tiewtrade.trading.session_config import MarketType, TradeMode
@@ -122,7 +122,7 @@ def record(history: SQLiteTradeHistory, result: BasketResult) -> None:
         )
 
 
-def test_list_baskets_returns_latest_deterministic_page_total_and_exact_summary(
+def test_list_basket_history_returns_latest_first_with_an_exact_summary(
     history: SQLiteTradeHistory,
 ) -> None:
     latest = datetime(2026, 2, 1, tzinfo=UTC)
@@ -146,26 +146,21 @@ def test_list_baskets_returns_latest_deterministic_page_total_and_exact_summary(
     for result in records:
         record(history, result)
 
-    first_page = history.list_baskets(
-        TradeHistoryFilter(),
-        PageRequest(page=1, page_size=2),
-    )
-    second_page = history.list_baskets(
-        TradeHistoryFilter(),
-        PageRequest(page=2, page_size=2),
-    )
+    history_result = history.list_basket_history(TradeHistoryFilter())
 
-    assert [item.basket_id for item in first_page.items] == [HIGH_ID, LOW_ID]
-    assert first_page.total_items == 3
-    assert first_page.net_realized_pnl == Decimal(
+    # Newest first, and Baskets opened at the same instant break the tie on id,
+    # so the same store always answers in the same order.
+    assert [item.basket_id for item in history_result.items] == [
+        HIGH_ID,
+        LOW_ID,
+        OLD_ID,
+    ]
+    assert history_result.net_realized_pnl == Decimal(
         "9999999999999999999999999999.100000000000000001"
     )
-    assert [item.basket_id for item in second_page.items] == [OLD_ID]
-    assert second_page.total_items == 3
-    assert second_page.net_realized_pnl == first_page.net_realized_pnl
 
 
-def test_list_baskets_filters_every_supported_dimension(
+def test_list_basket_history_filters_every_supported_dimension(
     history: SQLiteTradeHistory,
 ) -> None:
     boundary = datetime(2026, 2, 1, tzinfo=UTC)
@@ -232,11 +227,11 @@ def test_list_baskets_filters_every_supported_dimension(
     )
 
     for filters, expected, expected_net_realized_pnl in cases:
-        page = history.list_baskets(filters, PageRequest(page=1, page_size=20))
+        page = history.list_basket_history(filters)
         assert page.items == expected
         assert page.net_realized_pnl == expected_net_realized_pnl
 
-    exact = history.list_baskets(
+    exact = history.list_basket_history(
         TradeHistoryFilter(
             symbol="BTCUSDT",
             timeframe="5m",
@@ -246,11 +241,9 @@ def test_list_baskets_filters_every_supported_dimension(
             opened_from_utc=boundary,
             opened_before_utc=boundary + timedelta(microseconds=1),
         ),
-        PageRequest(page=1, page_size=20),
     )
 
     assert exact.items == (target,)
-    assert exact.total_items == 1
     assert exact.net_realized_pnl == Decimal("5.123")
 
 
@@ -264,31 +257,9 @@ def test_open_filter_has_zero_closed_basket_summary(
     )
     record(history, opened)
 
-    result = history.list_baskets(
-        TradeHistoryFilter(status=BasketStatus.OPEN),
-        PageRequest(),
-    )
+    result = history.list_basket_history(TradeHistoryFilter(status=BasketStatus.OPEN))
 
     assert result.items == (opened,)
-    assert result.total_items == 1
-    assert result.net_realized_pnl == Decimal("0")
-
-
-def test_list_baskets_returns_empty_page_beyond_results(
-    history: SQLiteTradeHistory,
-) -> None:
-    record(
-        history,
-        basket(HIGH_ID, opened_at_utc=datetime(2026, 2, 1, tzinfo=UTC)),
-    )
-
-    result = history.list_baskets(
-        TradeHistoryFilter(),
-        PageRequest(page=2, page_size=10),
-    )
-
-    assert result.items == ()
-    assert result.total_items == 1
     assert result.net_realized_pnl == Decimal("0")
 
 

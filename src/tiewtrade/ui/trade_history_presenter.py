@@ -5,11 +5,7 @@ from uuid import UUID
 
 from tiewtrade.application.trade_history import TradeFillHistoryItem, TradeHistoryFilter
 from tiewtrade.trading.session_config import MarketType, TradeMode
-from tiewtrade.trading.trade_history import (
-    BasketResult,
-    BasketStatus,
-    TradeFill,
-)
+from tiewtrade.trading.trade_history import BasketResult, BasketStatus
 from tiewtrade.ui.display_time import DISPLAY_TIMEZONE, display_timestamp
 
 
@@ -33,14 +29,6 @@ class BasketRow:
 @dataclass(frozen=True, slots=True)
 class FillRow:
     values: tuple[str, ...]
-
-
-@dataclass(frozen=True, slots=True)
-class PageState:
-    current_page: int
-    total_pages: int
-    previous_enabled: bool
-    next_enabled: bool
 
 
 def trade_history_filter(values: TradeHistoryFilterValues) -> TradeHistoryFilter:
@@ -90,25 +78,6 @@ def basket_rows(baskets: tuple[BasketResult, ...]) -> tuple[BasketRow, ...]:
     )
 
 
-def fill_rows(fills: tuple[TradeFill, ...]) -> tuple[FillRow, ...]:
-    return tuple(
-        FillRow(
-            values=(
-                _local_text(fill.filled_at_utc),
-                _display_enum(fill.side.value),
-                str(fill.entry_number) if fill.entry_number is not None else "—",
-                _decimal_text(fill.price),
-                _decimal_text(fill.quantity),
-                _usdt_text(fill.notional),
-                _usdt_text(fill.commission),
-                pnl_text(fill.realized_pnl),
-                _display_enum(fill.source.value),
-            )
-        )
-        for fill in fills
-    )
-
-
 def trade_fill_rows(
     items: tuple[TradeFillHistoryItem, ...],
 ) -> tuple[FillRow, ...]:
@@ -127,22 +96,6 @@ def trade_fill_rows(
             )
         )
         for item in items
-    )
-
-
-def page_state(*, page: int, page_size: int, total_items: int) -> PageState:
-    if page_size < 1:
-        raise ValueError("page_size must be positive")
-    if total_items < 0:
-        raise ValueError("total_items must not be negative")
-
-    total_pages = max(1, (total_items + page_size - 1) // page_size)
-    current_page = min(max(page, 1), total_pages)
-    return PageState(
-        current_page=current_page,
-        total_pages=total_pages,
-        previous_enabled=current_page > 1,
-        next_enabled=current_page < total_pages,
     )
 
 

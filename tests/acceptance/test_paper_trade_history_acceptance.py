@@ -3,10 +3,9 @@ from dataclasses import replace
 from datetime import timedelta
 from decimal import Decimal
 from pathlib import Path
-from uuid import UUID, uuid4
+from uuid import uuid4
 
 import pytest
-from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QApplication, QTableWidget
 from pytest import MonkeyPatch
 from pytestqt.qtbot import QtBot
@@ -23,7 +22,7 @@ from tests.support.paper_trade_history_acceptance import (
 )
 from tests.support.qt_interactions import table_item
 from tiewtrade.application.session_persistence import SessionPersistenceBlockedError
-from tiewtrade.application.trade_history import PageRequest, TradeHistoryFilter
+from tiewtrade.application.trade_history import TradeHistoryFilter
 from tiewtrade.integrations.sqlite.database import SQLiteDatabase
 from tiewtrade.integrations.sqlite.persistent_paper_spot_session import (
     create_persistent_paper_spot_session,
@@ -77,7 +76,7 @@ def test_sqlite_failure_blocks_new_paper_entry_fail_closed(tmp_path: Path) -> No
     else:
         raise AssertionError("deterministic Paper Spot candles did not reach an Entry")
 
-    assert history.list_baskets(TradeHistoryFilter(), PageRequest()).items == ()
+    assert history.list_basket_history(TradeHistoryFilter()).items == ()
     with database.connect() as connection:
         assert connection.execute("SELECT COUNT(*) FROM trade_fills").fetchone()[0] == 0
 
@@ -91,9 +90,7 @@ def test_sqlite_failure_blocks_new_paper_entry_fail_closed(tmp_path: Path) -> No
     reopened_database = SQLiteDatabase(path)
     reopened_database.migrate()
     reopened_history = SQLiteTradeHistory(reopened_database)
-    assert (
-        reopened_history.list_baskets(TradeHistoryFilter(), PageRequest()).items == ()
-    )
+    assert reopened_history.list_basket_history(TradeHistoryFilter()).items == ()
     with reopened_database.connect() as connection:
         assert connection.execute("SELECT COUNT(*) FROM trade_fills").fetchone()[0] == 0
 
@@ -149,10 +146,9 @@ def test_open_basket_duplicate_and_partial_fills_remain_deterministic(
     first_restart_database = SQLiteDatabase(path)
     first_restart_database.migrate()
     first_restart = SQLiteTradeHistory(first_restart_database)
-    first_page = first_restart.list_baskets(TradeHistoryFilter(), PageRequest())
-    first_open_page = first_restart.list_baskets(
-        TradeHistoryFilter(status=BasketStatus.OPEN),
-        PageRequest(),
+    first_page = first_restart.list_basket_history(TradeHistoryFilter())
+    first_open_page = first_restart.list_basket_history(
+        TradeHistoryFilter(status=BasketStatus.OPEN)
     )
     first_fills = first_restart.list_fills(open_history.basket.basket_id)
 
@@ -171,7 +167,7 @@ def test_open_basket_duplicate_and_partial_fills_remain_deterministic(
     second_restart_database = SQLiteDatabase(path)
     second_restart_database.migrate()
     second_restart = SQLiteTradeHistory(second_restart_database)
-    second_page = second_restart.list_baskets(TradeHistoryFilter(), PageRequest())
+    second_page = second_restart.list_basket_history(TradeHistoryFilter())
     second_fills = second_restart.list_fills(open_history.basket.basket_id)
 
     assert second_page == first_page
@@ -191,7 +187,7 @@ def test_paper_execution_history_survives_restart_and_reaches_desktop(
 
     spot_basket_id = run_closed_spot(history)
     futures_basket_id = run_closed_futures(history)
-    before_restart = history.list_baskets(TradeHistoryFilter(), PageRequest())
+    before_restart = history.list_basket_history(TradeHistoryFilter())
     before_fills = {
         basket.basket_id: history.list_fills(basket.basket_id)
         for basket in before_restart.items
@@ -215,7 +211,7 @@ def test_paper_execution_history_survives_restart_and_reaches_desktop(
     reopened_database = SQLiteDatabase(path)
     reopened_database.migrate()
     reopened = SQLiteTradeHistory(reopened_database)
-    after_restart = reopened.list_baskets(TradeHistoryFilter(), PageRequest())
+    after_restart = reopened.list_basket_history(TradeHistoryFilter())
     after_fills = {
         basket.basket_id: reopened.list_fills(basket.basket_id)
         for basket in after_restart.items
@@ -244,8 +240,6 @@ def test_paper_execution_history_survives_restart_and_reaches_desktop(
         "2259.8497298 USDT · Profit",
         "Closed",
     )
-    assert _basket_id(window.trade_history.basket_table, 0) == futures_basket_id
-    assert _basket_id(window.trade_history.basket_table, 1) == spot_basket_id
     window.trade_history.history_tabs.setCurrentIndex(1)
     qtbot.waitUntil(lambda: window.trade_history.fill_table.rowCount() == 4)
     assert set(_table_rows_text(window.trade_history.fill_table)) == {
@@ -330,12 +324,6 @@ def _composed_window(path: Path, monkeypatch: MonkeyPatch) -> MainWindow:
     assert desktop_main.run_desktop(path) == 0
     assert captured_window is not None
     return captured_window
-
-
-def _basket_id(table: QTableWidget, row: int) -> UUID:
-    basket_id = table_item(table, row, 0).data(Qt.ItemDataRole.UserRole)
-    assert isinstance(basket_id, UUID)
-    return basket_id
 
 
 def _table_rows_text(table: QTableWidget) -> tuple[tuple[str, ...], ...]:

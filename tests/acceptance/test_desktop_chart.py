@@ -13,7 +13,10 @@ from pytestqt.qtbot import QtBot
 from tests.support.paper_session_setup import configured_spot_session
 from tests.support.qt_interactions import click
 from tests.support.trade_history_records import trade_fill
-from tests.support.trade_history_ui import empty_basket_page, empty_fills
+from tests.support.trade_history_ui import (
+    empty_basket_history,
+    empty_trade_fills,
+)
 from tiewtrade.application.bot_control import (
     BotControlSnapshot,
     BotLifecycleResult,
@@ -130,11 +133,11 @@ class _QueuedPaperCandleSource:
         while True:
             yield await self._queue.get()
 
+
 def _runtime_state(window: MainWindow) -> BotRuntimeState | None:
     """The state the lifecycle reached, or None before a session exists."""
     snapshot = window._lifecycle_workflow._snapshot
     return None if snapshot is None else snapshot.state
-
 
 
 def unused_create(
@@ -164,8 +167,8 @@ def test_desktop_shows_configured_session_chart_without_manual_order_controls(
     window = MainWindow(
         create_session=unused_create,
         load_active=lambda: session,
-        list_baskets=empty_basket_page,
-        list_fills=empty_fills,
+        list_basket_history=empty_basket_history,
+        list_trade_fills=empty_trade_fills,
         load_chart=load_chart,
         chart_clock=lambda: datetime(2026, 8, 2, 10, 3, tzinfo=UTC),
     )
@@ -215,8 +218,8 @@ def test_chart_failure_does_not_stop_runtime_or_trade_history(qtbot: QtBot) -> N
     window = MainWindow(
         create_session=unused_create,
         load_active=lambda: session,
-        list_baskets=empty_basket_page,
-        list_fills=empty_fills,
+        list_basket_history=empty_basket_history,
+        list_trade_fills=empty_trade_fills,
         load_chart=fail_chart,
         start_bot=start_bot,
         stop_bot=stop_bot,
@@ -235,12 +238,10 @@ def test_chart_failure_does_not_stop_runtime_or_trade_history(qtbot: QtBot) -> N
     assert chart_snapshot.message == "Chart is unavailable"
 
     click(window.workspace.bot_control_widget.start_button)
-    qtbot.waitUntil(
-        lambda: _runtime_state(window) is BotRuntimeState.RUNNING
-    )
+    qtbot.waitUntil(lambda: _runtime_state(window) is BotRuntimeState.RUNNING)
     window.workspace.tabs.setCurrentWidget(window.trade_history)
     qtbot.waitUntil(
-        lambda: window.trade_history.basket_state.text() == "No trade history"
+        lambda: window.trade_history.basket_state.text() == "No Basket history"
     )
 
     assert window.workspace.chart.retry_button.isVisible()
@@ -307,8 +308,8 @@ def test_runtime_candles_reach_chart_only_from_current_generation(
     window = MainWindow(
         create_session=unused_create,
         load_active=lambda: session,
-        list_baskets=empty_basket_page,
-        list_fills=empty_fills,
+        list_basket_history=empty_basket_history,
+        list_trade_fills=empty_trade_fills,
         load_chart=load_chart,
         refresh_chart=refresh_chart,
         start_bot=start_bot,
@@ -320,9 +321,7 @@ def test_runtime_candles_reach_chart_only_from_current_generation(
     qtbot.waitUntil(lambda: window.workspace.chart._snapshot is not None)
     window._chart_workflow.snapshot_changed.connect(chart_snapshots.append)
     click(window.workspace.bot_control_widget.start_button)
-    qtbot.waitUntil(
-        lambda: _runtime_state(window) is BotRuntimeState.RUNNING
-    )
+    qtbot.waitUntil(lambda: _runtime_state(window) is BotRuntimeState.RUNNING)
     stale_publisher = relay.new_generation()
     publisher = relay.new_generation()
     forming = Candle(
@@ -456,8 +455,8 @@ def test_running_paper_session_shows_open_candle_then_commits_closed_candle(
     window = MainWindow(
         create_session=unused_create,
         load_active=lambda: session,
-        list_baskets=empty_basket_page,
-        list_fills=empty_fills,
+        list_basket_history=empty_basket_history,
+        list_trade_fills=empty_trade_fills,
         load_chart=load_chart,
         refresh_chart=refresh_chart,
         start_bot=start_bot,
@@ -475,9 +474,7 @@ def test_running_paper_session_shows_open_candle_then_commits_closed_candle(
     chart_snapshots: list[ChartSnapshot] = []
     window._chart_workflow.snapshot_changed.connect(chart_snapshots.append)
     click(window.workspace.bot_control_widget.start_button)
-    qtbot.waitUntil(
-        lambda: _runtime_state(window) is BotRuntimeState.RUNNING
-    )
+    qtbot.waitUntil(lambda: _runtime_state(window) is BotRuntimeState.RUNNING)
     assert source.stream_ready.wait(1)
 
     forming = _chart_candle(

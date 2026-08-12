@@ -7,7 +7,6 @@ from pathlib import Path
 from uuid import UUID
 
 import pytest
-from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QApplication, QTableWidget
 from pytest import MonkeyPatch
 from pytestqt.qtbot import QtBot
@@ -15,9 +14,6 @@ from pytestqt.qtbot import QtBot
 import tiewtrade.desktop_main as desktop_main
 import tiewtrade.ui.desktop as ui_desktop
 from tests.support.qt_interactions import click, qdate, table_item
-from tests.support.trade_history_records import (
-    BASKET_ID as SPOT_BASKET_ID,
-)
 from tests.support.trade_history_records import (
     basket_result,
     trade_fill,
@@ -90,12 +86,6 @@ def test_desktop_trade_history_reads_durable_spot_and_futures_records(
         "29.4 USDT · Profit",
         "Closed",
     )
-    assert (
-        table_item(window.trade_history.basket_table, 0, 0).data(
-            Qt.ItemDataRole.UserRole
-        )
-        == FUTURES_BASKET_ID
-    )
     assert _table_row_text(window.trade_history.basket_table, 1) == (
         "2026-01-01 07:00:00",
         "Paper",
@@ -109,12 +99,6 @@ def test_desktop_trade_history_reads_durable_spot_and_futures_records(
         "0.00 USDT",
         "19.58 USDT · Profit",
         "Closed",
-    )
-    assert (
-        table_item(window.trade_history.basket_table, 1, 0).data(
-            Qt.ItemDataRole.UserRole
-        )
-        == SPOT_BASKET_ID
     )
     assert window.trade_history.total_net_pnl.text() == "48.98 USDT · Profit"
     window.trade_history.history_tabs.setCurrentIndex(1)
@@ -205,7 +189,6 @@ def test_desktop_trade_history_filters_all_rows_and_survives_restart(
     open_trade_history(first)
     qtbot.waitUntil(lambda: first.trade_history.basket_table.rowCount() == 51)
     assert table_item(first.trade_history.basket_table, 0, 4).text() == "15m"
-    assert first.trade_history.page_label.isHidden()
     first_page_opened_at = tuple(
         table_item(first.trade_history.basket_table, row, 0).text() for row in range(51)
     )
@@ -251,7 +234,6 @@ def test_desktop_trade_history_filters_all_rows_and_survives_restart(
     assert not first.trade_history.to_date_enabled.isChecked()
     assert not first.trade_history.to_date.isEnabled()
     qtbot.waitUntil(lambda: first.trade_history.basket_table.rowCount() == 51)
-    assert first.trade_history.next_button.isHidden()
     first.close()
 
     restarted = _composed_window(path, monkeypatch)
@@ -259,7 +241,6 @@ def test_desktop_trade_history_filters_all_rows_and_survives_restart(
     restarted.show()
     open_trade_history(restarted)
     qtbot.waitUntil(lambda: restarted.trade_history.basket_table.rowCount() == 51)
-    assert restarted.trade_history.page_label.isHidden()
     assert table_item(restarted.trade_history.basket_table, 0, 4).text() == "15m"
 
 

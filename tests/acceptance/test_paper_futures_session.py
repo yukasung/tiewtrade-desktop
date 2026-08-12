@@ -17,7 +17,7 @@ from tiewtrade.application.paper_futures_session import (
 )
 from tiewtrade.application.paper_runtime import PaperRuntimeController
 from tiewtrade.application.paper_session_setup import ConfiguredPaperSession
-from tiewtrade.application.trade_history import PageRequest, TradeHistoryFilter
+from tiewtrade.application.trade_history import TradeHistoryFilter
 from tiewtrade.application.trading_workspace import (
     BotRuntimeState,
     TradingWorkspaceSnapshot,
@@ -169,9 +169,8 @@ def test_interrupted_runtime_recovers_without_fabricating_strategy_state(
         state=PaperRuntimeLifecycleState.STOPPED,
         observed_at_utc=_RECOVERED_AT,
     )
-    history_page = history.list_baskets(
-        TradeHistoryFilter(market_type=MarketType.FUTURES),
-        PageRequest(page=1, page_size=20),
+    history_page = history.list_basket_history(
+        TradeHistoryFilter(market_type=MarketType.FUTURES)
     )
     assert history_page.items == ()
 

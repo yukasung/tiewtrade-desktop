@@ -11,11 +11,8 @@ from tiewtrade.application.trade_history import (
 from tiewtrade.trading.session_config import MarketType, TradeMode
 from tiewtrade.trading.trade_history import BasketStatus, FillSource
 from tiewtrade.ui.trade_history_presenter import (
-    PageState,
     TradeHistoryFilterValues,
     basket_rows,
-    fill_rows,
-    page_state,
     pnl_text,
     trade_fill_rows,
     trade_history_filter,
@@ -69,9 +66,8 @@ def test_pnl_text_preserves_decimal_and_adds_semantic_label(
     assert pnl_text(value) == expected
 
 
-def test_basket_and_fill_rows_format_utc_and_all_columns() -> None:
+def test_basket_rows_format_utc_and_all_columns() -> None:
     basket = basket_result()
-    fill = trade_fill()
 
     assert basket_rows((basket,))[0].basket_id == basket.basket_id
     assert basket_rows((basket,))[0].values == (
@@ -88,24 +84,18 @@ def test_basket_and_fill_rows_format_utc_and_all_columns() -> None:
         "19.58 USDT · Profit",
         "Closed",
     )
-    assert fill_rows((fill,))[0].values == (
-        "2026-01-01 07:00:00",
-        "Buy",
-        "1",
-        "100",
-        "2",
-        "200 USDT",
-        "0.2 USDT",
-        "0.00 USDT · Break-even",
-        "Paper Executor",
+
+
+def test_trade_fill_rows_name_a_binance_source() -> None:
+    item = TradeFillHistoryItem(
+        fill=trade_fill(source=FillSource.BINANCE),
+        symbol="BTCUSDT",
+        timeframe="5m",
+        market_type=MarketType.SPOT,
+        trade_mode=TradeMode.PAPER,
     )
 
-
-def test_fill_rows_formats_exit_entry_and_binance_source() -> None:
-    fill = trade_fill(entry_number=None, source=FillSource.BINANCE)
-
-    assert fill_rows((fill,))[0].values[2] == "—"
-    assert fill_rows((fill,))[0].values[-1] == "Binance"
+    assert trade_fill_rows((item,))[0].values[-1] == "Binance"
 
 
 def test_trade_fill_rows_include_symbol_and_total_for_cross_basket_history() -> None:
@@ -127,22 +117,4 @@ def test_trade_fill_rows_include_symbol_and_total_for_cross_basket_history() -> 
         "200 USDT",
         "0.00 USDT · Break-even",
         "Paper Executor",
-    )
-
-
-@pytest.mark.parametrize(
-    ("page", "page_size", "total_items", "expected"),
-    [
-        (1, 50, 0, PageState(1, 1, False, False)),
-        (1, 50, 120, PageState(1, 3, False, True)),
-        (2, 50, 120, PageState(2, 3, True, True)),
-        (3, 50, 120, PageState(3, 3, True, False)),
-        (99, 50, 120, PageState(3, 3, True, False)),
-    ],
-)
-def test_page_state_bounds_previous_and_next(
-    page: int, page_size: int, total_items: int, expected: PageState
-) -> None:
-    assert (
-        page_state(page=page, page_size=page_size, total_items=total_items) == expected
     )
