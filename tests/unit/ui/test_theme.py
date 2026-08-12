@@ -91,9 +91,6 @@ def test_workspace_and_session_setup_labels_render_readably_on_dark_surfaces(
         if label.text() == "Trading setup"
     )
 
-    assert _palette_color(
-        workspace.header_symbol, QPalette.ColorRole.WindowText
-    ) == QColor("#F1F5F9")
     assert _palette_color(form_label, QPalette.ColorRole.WindowText) == QColor(
         "#F1F5F9"
     )
@@ -166,7 +163,6 @@ def test_bot_control_scroll_surfaces_and_scrollbar_render_dark(qtbot: QtBot) -> 
     workspace.setStyleSheet(DARK_THEME)
     workspace.setFixedSize(1024, 700)
     workspace.show()
-    workspace.bot_control_button.click()
     scroll_bar = workspace.bot_control_scroll.verticalScrollBar()
 
     assert _palette_color(workspace._bot_pages, QPalette.ColorRole.Window) == QColor(
@@ -207,21 +203,6 @@ def test_trade_history_scroll_surfaces_and_scrollbar_render_dark(
     assert (
         max(QColor(color).lightness() for color in _rendered_colors(scroll_bar)) < 128
     )
-
-
-def test_compact_drawer_focus_renders_on_actionable_close_button(qtbot: QtBot) -> None:
-    workspace = TradingWorkspace()
-    qtbot.addWidget(workspace)
-    workspace.setStyleSheet(DARK_THEME)
-    workspace.resize(1024, 700)
-    workspace.show()
-    workspace.activateWindow()
-    qtbot.waitUntil(workspace.isActiveWindow)
-
-    workspace.bot_control_button.click()
-
-    assert workspace.bot_control_close_button.hasFocus()
-    assert "#4c7dff" in _rendered_colors(workspace.bot_control_close_button)
 
 
 def test_unclassified_button_renders_a_visible_dark_theme_surface(

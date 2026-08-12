@@ -63,6 +63,7 @@ from tiewtrade.trading.session_config import MarketType, TradeMode
 from tiewtrade.trading.symbol_rules import SymbolRules
 from tiewtrade.trading.trade_history import BasketStatus
 from tiewtrade.ui.bot_lifecycle_workflow import RuntimeSnapshotRelay
+from tiewtrade.ui.display_time import display_timestamp
 from tiewtrade.ui.main_window import MainWindow
 
 _T = TypeVar("_T")
@@ -263,7 +264,9 @@ def test_desktop_real_paper_runtime_starts_once_and_stops_without_closing_basket
 
     qtbot.waitUntil(window.setup.isVisible)
     qtbot.waitUntil(lambda: start_calls == 1)
-    qtbot.waitUntil(lambda: window.workspace.header_runtime.text() == "Running")
+    qtbot.waitUntil(
+        lambda: _runtime_state(window) is BotRuntimeState.RUNNING
+    )
     session = active_sessions.get_active()
     assert session is not None
     assert initialize_calls == 0
@@ -292,7 +295,9 @@ def test_desktop_real_paper_runtime_starts_once_and_stops_without_closing_basket
         button for button in confirmation.buttons() if button.text() == "Stop Bot"
     )
     click(confirm_button)
-    qtbot.waitUntil(lambda: window.workspace.header_runtime.text() == "Stopped")
+    qtbot.waitUntil(
+        lambda: _runtime_state(window) is BotRuntimeState.STOPPED
+    )
 
     stopped_workspace = controller.current_workspace
     assert source.closed.wait(1)
@@ -308,6 +313,12 @@ def test_desktop_real_paper_runtime_starts_once_and_stops_without_closing_basket
     )
     assert len(history_page.items) == 1
     assert history_page.items[0].status is BasketStatus.OPEN
+
+def _runtime_state(window: MainWindow) -> BotRuntimeState | None:
+    """The state the lifecycle reached, or None before a session exists."""
+    snapshot = window._lifecycle_workflow._snapshot
+    return None if snapshot is None else snapshot.state
+
 
 
 def test_desktop_restart_blocked_runtime_reopens_setup_form(
@@ -358,7 +369,9 @@ def test_desktop_restart_blocked_runtime_reopens_setup_form(
     qtbot.addWidget(window)
     window.show()
 
-    qtbot.waitUntil(lambda: window.workspace.header_runtime.text() == "Blocked")
+    qtbot.waitUntil(
+        lambda: _runtime_state(window) is BotRuntimeState.BLOCKED
+    )
     assert initialize_calls == 1
     qtbot.waitUntil(window.setup.isVisible)
     assert window.setup.available_capital.isEnabled()
@@ -370,7 +383,7 @@ def test_desktop_restart_blocked_runtime_reopens_setup_form(
     qtbot.waitUntil(
         lambda: window.trade_history.basket_state.text() == "No trade history"
     )
-    assert window.workspace.header_runtime.text() == "Blocked"
+    assert _runtime_state(window) is BotRuntimeState.BLOCKED
     marker = lifecycle.read(session.config.session_id)
     assert marker is not None
     assert marker.state is PaperRuntimeLifecycleState.RUNNING
@@ -437,7 +450,6 @@ def test_desktop_fake_snapshots_render_orders_and_basket_without_manual_trading(
     )
 
     assert start_calls == 0
-    assert window.workspace.header_runtime.text() == "Running"
     assert window.workspace.position_basket.table.rowCount() == 1
     assert table_item(window.workspace.position_basket.table, 0, 1).text() == (
         case.market_type.title()
@@ -613,8 +625,8 @@ def test_desktop_paper_session_create_overview_and_restart_restore(
     qtbot.waitUntil(
         lambda: first_window.trade_history.basket_state.text() == "No trade history"
     )
-    assert first_window.workspace.header_runtime.text() == "No Session"
-    assert first_window.workspace.header_read_state.text() == "Empty"
+    # No session yet: the setup form is what the workspace offers.
+    assert first_window.setup.isVisible()
     first_window.workspace.tabs.setCurrentIndex(0)
 
     _enter_form_values(first_window, case)
@@ -637,10 +649,6 @@ def test_desktop_paper_session_create_overview_and_restart_restore(
     assert first_window.setup.timeframe.currentData() == case.timeframe
     assert _active_session_count(database) == 1
     assert _trade_side_effect_counts(database) == initial_side_effect_counts
-
-    first_window.resize(1199, 700)
-    qtbot.waitUntil(lambda: first_window.workspace.compact_mode)
-    assert first_window.workspace.bot_control_button.isVisible()
 
     first_window.workspace.tabs.setCurrentWidget(first_window.trade_history)
     assert first_window.workspace.tabs.currentWidget() is first_window.trade_history
@@ -779,9 +787,13 @@ def test_desktop_fake_lifecycle_has_no_trade_storage_side_effects(
 
     click(window.workspace.bot_control_widget.start_button)
     qtbot.waitUntil(start_entered.is_set)
-    qtbot.waitUntil(lambda: window.workspace.header_runtime.text() == "Starting")
+    qtbot.waitUntil(
+        lambda: _runtime_state(window) is BotRuntimeState.STARTING
+    )
     release_start.set()
-    qtbot.waitUntil(lambda: window.workspace.header_runtime.text() == "Running")
+    qtbot.waitUntil(
+        lambda: _runtime_state(window) is BotRuntimeState.RUNNING
+    )
 
     assert window.workspace.bot_control_widget.stop_button.text() == "Stop Bot"
     assert window.findChildren(QPushButton, "manualBuyButton") == []
@@ -797,9 +809,13 @@ def test_desktop_fake_lifecycle_has_no_trade_storage_side_effects(
     )
     click(confirm_button)
     qtbot.waitUntil(stop_entered.is_set)
-    qtbot.waitUntil(lambda: window.workspace.header_runtime.text() == "Stopping")
+    qtbot.waitUntil(
+        lambda: _runtime_state(window) is BotRuntimeState.STOPPING
+    )
     release_stop.set()
-    qtbot.waitUntil(lambda: window.workspace.header_runtime.text() == "Stopped")
+    qtbot.waitUntil(
+        lambda: _runtime_state(window) is BotRuntimeState.STOPPED
+    )
 
     assert _trade_side_effect_counts(database) == initial_counts
 
@@ -1242,26 +1258,10 @@ def _assert_overview_matches_case(
     expected_session_id: UUID,
     expected_created_at: datetime,
 ) -> None:
-    assert window.workspace.header_symbol.text() == "BTCUSDT"
-    assert window.workspace.header_timeframe.text() == case.timeframe
-    assert window.workspace.header_mode.text() == "Paper"
-    assert window.workspace.header_market_type.text() == case.market_type.title()
-    assert window.workspace.header_preset.text() == "RSI Step Grid v1"
-    assert window.workspace.header_runtime.text() == "Configured"
-    assert window.workspace.header_freshness.text() == "Market data not started"
-    assert window.workspace.header_read_state.text() == "Ready"
+    assert _runtime_state(window) is BotRuntimeState.CONFIGURED
     assert window.overview.isVisible()
-    assert window.workspace.bot_control_widget.state_value.text() == "Configured"
     assert window.workspace.bot_control_widget.start_button.isVisible()
     assert not window.workspace.bot_control_widget.start_button.isEnabled()
-    assert (
-        window.workspace.bot_control_widget.supporting_text.text()
-        == "Runtime integration is not available yet"
-    )
-    assert window.overview.state_value.text() == (
-        "Configured — Market Data Not Started"
-    )
-    assert window.overview.session_id_value.text() == str(expected_session_id)
     assert window.overview.market_value.text() == case.market_type.title()
     assert window.overview.symbol_value.text() == "BTCUSDT"
     assert window.overview.timeframe_value.text() == case.timeframe
@@ -1270,7 +1270,9 @@ def _assert_overview_matches_case(
     assert window.overview.max_entries_value.text() == str(case.max_entries)
     assert window.overview.fee_value.text() == f"{case.fee_percent}%"
     assert window.overview.slippage_value.text() == f"{case.slippage_bps} bps"
-    assert window.overview.created_at_value.text() == expected_created_at.isoformat()
+    assert window.overview.created_at_value.text() == display_timestamp(
+        expected_created_at
+    )
 
     if case.market_type == "spot":
         assert case.spot_ratio is not None
@@ -1279,21 +1281,15 @@ def _assert_overview_matches_case(
         assert window.overview.spot_reserve_ratio_value.text() == (
             f"{_decimal_text(reserve_percent)}%"
         )
-        assert window.overview.leverage_value.text() == "—"
         assert window.overview.margin_mode_value.text() == "—"
         assert window.overview.position_mode_value.text() == "—"
-        assert window.overview.trading_capital_value.text() == "—"
-        assert window.overview.collateral_buffer_value.text() == "—"
         return
 
     assert case.futures_leverage is not None
     assert window.overview.spot_ratio_value.text() == "—"
     assert window.overview.spot_reserve_ratio_value.text() == "—"
-    assert window.overview.leverage_value.text() == f"{case.futures_leverage}x"
     assert window.overview.margin_mode_value.text() == "Cross Margin"
     assert window.overview.position_mode_value.text() == "One-way Mode"
-    assert window.overview.trading_capital_value.text() == "50%"
-    assert window.overview.collateral_buffer_value.text() == "50%"
 
 
 def _active_session_count(database: SQLiteDatabase) -> int:

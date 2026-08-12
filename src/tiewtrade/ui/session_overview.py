@@ -3,9 +3,14 @@ from decimal import Decimal
 from PySide6.QtWidgets import QFrame, QGridLayout, QLabel, QVBoxLayout, QWidget
 
 from tiewtrade.application.paper_session_setup import ConfiguredPaperSession
+from tiewtrade.trading.futures_policy import FuturesTradingPolicy
 from tiewtrade.trading.session_config import MarketType
-from tiewtrade.ui.display_time import in_display_timezone
+from tiewtrade.trading.spot_policy import SpotTradingPolicy
+from tiewtrade.ui.display_time import display_timestamp
 from tiewtrade.ui.preset_display import preset_display_name
+
+_BLANK = "—"
+_UNAVAILABLE = "Unavailable"
 
 
 class SessionOverviewWidget(QWidget):
@@ -13,8 +18,6 @@ class SessionOverviewWidget(QWidget):
         super().__init__(parent)
         self.setObjectName("sessionOverview")
 
-        self.state_value = self._value_label()
-        self.session_id_value = self._value_label()
         self.market_value = self._value_label()
         self.symbol_value = self._value_label()
         self.timeframe_value = self._value_label()
@@ -23,33 +26,16 @@ class SessionOverviewWidget(QWidget):
         self.max_entries_value = self._value_label()
         self.spot_ratio_value = self._value_label()
         self.spot_reserve_ratio_value = self._value_label()
-        self.leverage_value = self._value_label()
         self.margin_mode_value = self._value_label()
         self.position_mode_value = self._value_label()
-        self.trading_capital_value = self._value_label()
-        self.collateral_buffer_value = self._value_label()
         self.fee_value = self._value_label()
         self.slippage_value = self._value_label()
         self.created_at_value = self._value_label()
 
         self._build_layout()
 
-    def show_session(
-        self,
-        session: ConfiguredPaperSession,
-        *,
-        configuration_summary: bool = False,
-    ) -> None:
+    def show_session(self, session: ConfiguredPaperSession) -> None:
         config = session.config
-        if configuration_summary:
-            self.state_value.setText("Immutable Configuration")
-            self.description.setText("This is the stored session configuration.")
-        else:
-            self.state_value.setText("Configured — Market Data Not Started")
-            self.description.setText(
-                "This configuration is stored. Market data and trading are not running."
-            )
-        self.session_id_value.setText(str(config.session_id))
         self.market_value.setText(config.market_type.value.title())
         self.symbol_value.setText(session.market_data.symbol)
         self.timeframe_value.setText(session.market_data.timeframe)
@@ -59,35 +45,14 @@ class SessionOverviewWidget(QWidget):
         )
         self.max_entries_value.setText(str(config.entry_policy.max_entries))
         self._show_market_policy(session)
-        self.fee_value.setText(f"{_decimal_text(config.fee_rate * Decimal('100'))}%")
+        self.fee_value.setText(_percent_text(config.fee_rate))
         self.slippage_value.setText(f"{_decimal_text(config.slippage_bps)} bps")
-        created_at = in_display_timezone(session.created_at_utc)
-        self.created_at_value.setText(created_at.isoformat())
+        self.created_at_value.setText(display_timestamp(session.created_at_utc))
 
     def _build_layout(self) -> None:
         root = QVBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
         root.setSpacing(16)
-
-        heading = QLabel("Session Overview")
-        heading.setObjectName("pageTitle")
-        self.description = QLabel(
-            "This configuration is stored. Market data and trading are not running."
-        )
-        self.description.setObjectName("supportingText")
-        root.addWidget(heading)
-        root.addWidget(self.description)
-
-        status_card = QFrame()
-        status_card.setObjectName("statusCard")
-        status_layout = QVBoxLayout(status_card)
-        status_layout.setContentsMargins(20, 16, 20, 16)
-        status_label = QLabel("SESSION STATE")
-        status_label.setObjectName("eyebrow")
-        self.state_value.setObjectName("stateValue")
-        status_layout.addWidget(status_label)
-        status_layout.addWidget(self.state_value)
-        root.addWidget(status_card)
 
         details = QFrame()
         details.setObjectName("card")
@@ -96,7 +61,6 @@ class SessionOverviewWidget(QWidget):
         grid.setHorizontalSpacing(48)
         grid.setVerticalSpacing(18)
         rows = (
-            ("Session ID", self.session_id_value),
             ("Market Type", self.market_value),
             ("Symbol", self.symbol_value),
             ("Timeframe", self.timeframe_value),
@@ -105,11 +69,8 @@ class SessionOverviewWidget(QWidget):
             ("Max Entries", self.max_entries_value),
             ("Spot Trading Capital Ratio", self.spot_ratio_value),
             ("Spot Reserve Ratio", self.spot_reserve_ratio_value),
-            ("Leverage", self.leverage_value),
             ("Margin Mode", self.margin_mode_value),
             ("Position Mode", self.position_mode_value),
-            ("Trading Capital", self.trading_capital_value),
-            ("Collateral Buffer", self.collateral_buffer_value),
             ("Trading Fee", self.fee_value),
             ("Slippage", self.slippage_value),
             ("Created at", self.created_at_value),
@@ -117,71 +78,60 @@ class SessionOverviewWidget(QWidget):
         for index, (label, value) in enumerate(rows):
             column = index % 2
             row = (index // 2) * 2
+            # An odd count leaves the last pair alone on its line; let it use
+            # the whole width rather than clipping inside half of it.
+            span = 2 if column == 0 and index == len(rows) - 1 else 1
             label_widget = QLabel(label)
             label_widget.setObjectName("detailLabel")
-            grid.addWidget(label_widget, row, column)
-            grid.addWidget(value, row + 1, column)
+            grid.addWidget(label_widget, row, column, 1, span)
+            grid.addWidget(value, row + 1, column, 1, span)
         root.addWidget(details)
         root.addStretch()
 
     def _show_market_policy(self, session: ConfiguredPaperSession) -> None:
+        """Fill the pair belonging to this market and blank the other one.
+
+        A Session carries the policy for its own market and no other, so one
+        holding both is malformed: its pair reads Unavailable rather than
+        showing a policy the Session never chose.
+        """
         config = session.config
+        spot = config.spot_policy
+        futures = config.futures_policy
         if config.market_type is MarketType.SPOT:
-            self._show_spot_policy(session)
-            self._clear_futures_policy()
+            self._show_spot_policy(spot if futures is None else None)
+            self._show_futures_policy(None, missing=_BLANK)
             return
+        self._show_spot_policy(None, missing=_BLANK)
+        self._show_futures_policy(futures if spot is None else None)
 
-        self._clear_spot_policy()
-        futures_policy = config.futures_policy
-        if futures_policy is None or config.spot_policy is not None:
-            self._show_unavailable_futures_policy()
+    def _show_spot_policy(
+        self,
+        policy: SpotTradingPolicy | None,
+        *,
+        missing: str = _UNAVAILABLE,
+    ) -> None:
+        if policy is None:
+            self.spot_ratio_value.setText(missing)
+            self.spot_reserve_ratio_value.setText(missing)
             return
+        self.spot_ratio_value.setText(_percent_text(policy.trading_capital_ratio))
+        self.spot_reserve_ratio_value.setText(_percent_text(policy.reserve_ratio))
 
-        self.leverage_value.setText(f"{futures_policy.leverage}x")
-        self.margin_mode_value.setText(
-            f"{futures_policy.margin_mode.value.title()} Margin"
-        )
+    def _show_futures_policy(
+        self,
+        policy: FuturesTradingPolicy | None,
+        *,
+        missing: str = _UNAVAILABLE,
+    ) -> None:
+        if policy is None:
+            self.margin_mode_value.setText(missing)
+            self.position_mode_value.setText(missing)
+            return
+        self.margin_mode_value.setText(f"{policy.margin_mode.value.title()} Margin")
         self.position_mode_value.setText(
-            f"{futures_policy.position_mode.value.replace('_', '-').capitalize()} Mode"
+            f"{policy.position_mode.value.replace('_', '-').capitalize()} Mode"
         )
-        self.trading_capital_value.setText(
-            f"{_decimal_text(futures_policy.trading_capital_ratio * Decimal('100'))}%"
-        )
-        self.collateral_buffer_value.setText(
-            f"{_decimal_text(futures_policy.collateral_buffer_ratio * Decimal('100'))}%"
-        )
-
-    def _show_spot_policy(self, session: ConfiguredPaperSession) -> None:
-        config = session.config
-        spot_policy = config.spot_policy
-        if spot_policy is None or config.futures_policy is not None:
-            self.spot_ratio_value.setText("Unavailable")
-            self.spot_reserve_ratio_value.setText("Unavailable")
-            return
-        self.spot_ratio_value.setText(
-            f"{_decimal_text(spot_policy.trading_capital_ratio * Decimal('100'))}%"
-        )
-        self.spot_reserve_ratio_value.setText(
-            f"{_decimal_text(spot_policy.reserve_ratio * Decimal('100'))}%"
-        )
-
-    def _clear_spot_policy(self) -> None:
-        self.spot_ratio_value.setText("—")
-        self.spot_reserve_ratio_value.setText("—")
-
-    def _clear_futures_policy(self) -> None:
-        self.leverage_value.setText("—")
-        self.margin_mode_value.setText("—")
-        self.position_mode_value.setText("—")
-        self.trading_capital_value.setText("—")
-        self.collateral_buffer_value.setText("—")
-
-    def _show_unavailable_futures_policy(self) -> None:
-        self.leverage_value.setText("Unavailable")
-        self.margin_mode_value.setText("Unavailable")
-        self.position_mode_value.setText("Unavailable")
-        self.trading_capital_value.setText("Unavailable")
-        self.collateral_buffer_value.setText("Unavailable")
 
     @staticmethod
     def _value_label() -> QLabel:
@@ -193,3 +143,7 @@ class SessionOverviewWidget(QWidget):
 
 def _decimal_text(value: Decimal) -> str:
     return format(value.normalize(), "f")
+
+
+def _percent_text(ratio: Decimal) -> str:
+    return f"{_decimal_text(ratio * Decimal('100'))}%"

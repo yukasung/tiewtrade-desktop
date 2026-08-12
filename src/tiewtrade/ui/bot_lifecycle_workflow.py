@@ -19,7 +19,6 @@ from tiewtrade.application.chart_data import ChartCandle
 from tiewtrade.application.paper_session_setup import ConfiguredPaperSession
 from tiewtrade.application.trading_workspace import BotRuntimeState
 from tiewtrade.ui.background_task import BackgroundTask
-from tiewtrade.ui.notification_center import NotificationStore
 
 LifecycleAction = Callable[[BotControlSnapshot], BotLifecycleResult]
 NewSessionAvailability = Callable[[ConfiguredPaperSession], bool]
@@ -78,7 +77,6 @@ class _LifecycleOperation(Enum):
 class BotLifecycleWorkflow(QObject):
     snapshot_changed = Signal(object)
     busy_changed = Signal(bool)
-    notifications_changed = Signal(object)
 
     def __init__(
         self,
@@ -102,7 +100,6 @@ class BotLifecycleWorkflow(QObject):
         self._runtime_snapshots = runtime_snapshots
         self._thread_pool = thread_pool or QThreadPool.globalInstance()
         self._clock = clock
-        self._notification_store = NotificationStore()
         self._snapshot: BotControlSnapshot | None = None
         self._active_task: BackgroundTask | None = None
         self._active_operation: _LifecycleOperation | None = None
@@ -122,10 +119,6 @@ class BotLifecycleWorkflow(QObject):
             raise RuntimeError("Bot Lifecycle Workflow has not been configured")
         return self._snapshot
 
-    @property
-    def notification_store(self) -> NotificationStore:
-        return self._notification_store
-
     def configure(
         self,
         session: ConfiguredPaperSession,
@@ -137,7 +130,6 @@ class BotLifecycleWorkflow(QObject):
         active_task = self._active_task is not None
         self._invalidate_runtime_snapshots()
         self._generation += 1
-        self._notification_store.reset_transition_identity()
         initialize_bot = self._initialize_bot if inspect_startup else None
         configured = configured_bot_control(
             session,
@@ -255,7 +247,6 @@ class BotLifecycleWorkflow(QObject):
             self._publish_failure(operation, snapshot)
             return
         self._publish(next_snapshot)
-        self._publish_notification(result)
         self._flush_pending_runtime_result()
 
     def _initialization_result_snapshot(
@@ -346,12 +337,6 @@ class BotLifecycleWorkflow(QObject):
             actions=self._actions_for(BotRuntimeState.BLOCKED, snapshot.session),
         )
         self._publish(blocked)
-        self._publish_notification(
-            BotLifecycleResult(
-                workspace=blocked.workspace,
-                blocked_reason=blocked.blocked_reason,
-            )
-        )
 
     @Slot(object, int)
     def _runtime_snapshot_received(self, result: object, generation: int) -> None:
@@ -399,7 +384,6 @@ class BotLifecycleWorkflow(QObject):
         except ValueError:
             return
         self._publish(snapshot)
-        self._publish_notification(result)
         if snapshot.state is BotRuntimeState.BLOCKED:
             self._invalidate_runtime_snapshots()
 
@@ -466,13 +450,6 @@ class BotLifecycleWorkflow(QObject):
     def _publish(self, snapshot: BotControlSnapshot) -> None:
         self._snapshot = snapshot
         self.snapshot_changed.emit(snapshot)
-
-    def _publish_notification(self, result: BotLifecycleResult) -> None:
-        records_before = self._notification_store.records
-        self._notification_store.publish(result, occurred_at_utc=self._clock())
-        if self._notification_store.records is records_before:
-            return
-        self.notifications_changed.emit(self._notification_store)
 
     def _callbacks_are_current(self) -> bool:
         return (

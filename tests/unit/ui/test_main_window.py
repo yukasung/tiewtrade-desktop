@@ -61,6 +61,13 @@ from tiewtrade.ui.main_window import MainWindow
 from tiewtrade.ui.session_overview import SessionOverviewWidget
 
 
+def _runtime_state(window: MainWindow) -> BotRuntimeState | None:
+    """The state the lifecycle reached, or None before a session exists."""
+    snapshot = window._lifecycle_workflow._snapshot
+    return None if snapshot is None else snapshot.state
+
+
+
 def no_active_session() -> ConfiguredPaperSession | None:
     return None
 
@@ -248,7 +255,8 @@ def test_trade_history_opens_without_active_session(qtbot: QtBot) -> None:
         lambda: window.trade_history.basket_state.text() == "No trade history"
     )
     assert window.trade_history.isVisible()
-    assert window.workspace.header_runtime.text() == "No Session"
+    # No session yet: the setup form is what the workspace offers.
+    assert window.setup.isVisible()
 
 
 def test_empty_trade_history_preserves_exact_query_summary_and_page_state(
@@ -368,12 +376,12 @@ def test_session_load_finishing_does_not_navigate_away_from_history(
 
     qtbot.waitUntil(
         lambda: (
-            window.overview.session_id_value.text() == str(existing.config.session_id)
+            window.overview.symbol_value.text() == existing.market_data.symbol
         )
     )
     assert window.trade_history.isVisible()
     assert window.overview.isVisible() is False
-    assert window.workspace.header_runtime.text() == "Configured"
+    assert _runtime_state(window) is BotRuntimeState.CONFIGURED
 
 
 def test_trade_history_basket_and_fill_retries_are_wired_separately(
@@ -695,93 +703,6 @@ def test_main_window_delegates_session_task_lifecycle_to_workflow() -> None:
     assert "_callback_generation" not in source
 
 
-def test_workspace_header_follows_background_snapshot_flow_through_create(
-    qtbot: QtBot,
-) -> None:
-    started = threading.Event()
-    release = threading.Event()
-    worker_thread_ids: list[int] = []
-    created = configured_spot_session()
-    thread_pool = QThreadPool()
-    thread_pool.setMaxThreadCount(1)
-
-    def delayed_load() -> ConfiguredPaperSession | None:
-        worker_thread_ids.append(threading.get_ident())
-        started.set()
-        if not release.wait(timeout=2):
-            raise TimeoutError("test did not release worker")
-        return None
-
-    window = MainWindow(
-        create_session=lambda values: PaperSessionCreateOutcome(created, True),
-        load_active=delayed_load,
-        list_baskets=empty_basket_page,
-        list_fills=empty_fills,
-        thread_pool=thread_pool,
-    )
-    qtbot.addWidget(window)
-    window.show()
-    qtbot.waitUntil(started.is_set)
-
-    assert worker_thread_ids[0] != threading.get_ident()
-    assert window.workspace.header_read_state.text() == "Loading"
-    release.set()
-    qtbot.waitUntil(lambda: window.workspace.header_read_state.text() == "Empty")
-    assert window.workspace.header_symbol.text() == "No Session"
-
-    window.setup.available_capital.setText("200000")
-    click(window.setup.create_button)
-
-    qtbot.waitUntil(lambda: window.workspace.header_read_state.text() == "Ready")
-    assert window.workspace.header_symbol.text() == "BTCUSDT"
-    assert window.workspace.header_timeframe.text() == "5m"
-    assert window.workspace.header_mode.text() == "Paper"
-    assert window.workspace.header_market_type.text() == "Spot"
-    assert window.workspace.header_runtime.text() == "Configured"
-    assert thread_pool.waitForDone(1_000)
-
-
-def test_workspace_header_keeps_ready_facts_when_retry_fails(qtbot: QtBot) -> None:
-    existing = configured_spot_session()
-    load_calls = 0
-
-    def load_then_fail() -> ConfiguredPaperSession | None:
-        nonlocal load_calls
-        load_calls += 1
-        if load_calls == 1:
-            return existing
-        raise RuntimeError("private path /private/tmp/tiewtrade.sqlite3")
-
-    window = MainWindow(
-        create_session=unused_create,
-        load_active=load_then_fail,
-        list_baskets=empty_basket_page,
-        list_fills=empty_fills,
-    )
-    qtbot.addWidget(window)
-    window.show()
-    qtbot.waitUntil(lambda: window.workspace.header_read_state.text() == "Ready")
-    expected_facts = (
-        "BTCUSDT",
-        "5m",
-        "Paper",
-        "Spot",
-        "RSI Step Grid v1",
-    )
-
-    click(window.unavailable_retry_button)
-
-    qtbot.waitUntil(lambda: window.workspace.header_read_state.text() == "Error")
-    assert (
-        window.workspace.header_symbol.text(),
-        window.workspace.header_timeframe.text(),
-        window.workspace.header_mode.text(),
-        window.workspace.header_market_type.text(),
-        window.workspace.header_preset.text(),
-    ) == expected_facts
-    assert "/private/tmp" not in window.unavailable_message.text()
-
-
 def test_created_spot_session_returns_to_editable_form_without_runtime_actions(
     qtbot: QtBot,
 ) -> None:
@@ -814,11 +735,8 @@ def test_futures_overview_shows_immutable_policy(qtbot: QtBot) -> None:
     overview.show_session(session)
 
     assert overview.market_value.text() == "Futures"
-    assert overview.leverage_value.text() == "3x"
     assert overview.margin_mode_value.text() == "Cross Margin"
     assert overview.position_mode_value.text() == "One-way Mode"
-    assert overview.trading_capital_value.text() == "50%"
-    assert overview.collateral_buffer_value.text() == "50%"
 
 
 def test_futures_overview_marks_missing_required_policy_unavailable(
@@ -832,11 +750,8 @@ def test_futures_overview_marks_missing_required_policy_unavailable(
 
     overview.show_session(session)
 
-    assert overview.leverage_value.text() == "Unavailable"
     assert overview.margin_mode_value.text() == "Unavailable"
     assert overview.position_mode_value.text() == "Unavailable"
-    assert overview.trading_capital_value.text() == "Unavailable"
-    assert overview.collateral_buffer_value.text() == "Unavailable"
 
 
 def test_futures_overview_marks_mixed_spot_policy_unavailable(
@@ -851,11 +766,8 @@ def test_futures_overview_marks_mixed_spot_policy_unavailable(
 
     overview.show_session(session)
 
-    assert overview.leverage_value.text() == "Unavailable"
     assert overview.margin_mode_value.text() == "Unavailable"
     assert overview.position_mode_value.text() == "Unavailable"
-    assert overview.trading_capital_value.text() == "Unavailable"
-    assert overview.collateral_buffer_value.text() == "Unavailable"
 
 
 @pytest.mark.parametrize(
@@ -952,7 +864,7 @@ def test_validation_failure_restores_form_and_shows_field_error(qtbot: QtBot) ->
     assert window.setup.available_capital.text() == "0"
 
 
-def test_compact_validation_failure_reveals_and_focuses_advanced_field(
+def test_validation_failure_reveals_and_focuses_advanced_field(
     qtbot: QtBot,
 ) -> None:
     def unused_create_active(
@@ -973,7 +885,6 @@ def test_compact_validation_failure_reveals_and_focuses_advanced_field(
     window.activateWindow()
     qtbot.waitUntil(window.isActiveWindow)
     qtbot.waitUntil(window.setup.create_button.isEnabled)
-    click(window.workspace.bot_control_button)
 
     window.setup.available_capital.setText("200000")
     click(window.setup.advanced_toggle)
@@ -1001,7 +912,7 @@ def test_compact_validation_failure_reveals_and_focuses_advanced_field(
 
 
 @pytest.mark.parametrize("field", ["fee_percent", "slippage_bps"])
-def test_compact_required_advanced_validation_expands_and_reveals_field(
+def test_required_advanced_validation_expands_and_reveals_field(
     qtbot: QtBot,
     field: str,
 ) -> None:
@@ -1023,7 +934,6 @@ def test_compact_required_advanced_validation_expands_and_reveals_field(
     window.activateWindow()
     qtbot.waitUntil(window.isActiveWindow)
     qtbot.waitUntil(window.setup.create_button.isEnabled)
-    click(window.workspace.bot_control_button)
     assert not window.setup.advanced_toggle.isChecked()
 
     window.setup.available_capital.setText("200000")
@@ -1047,7 +957,7 @@ def test_compact_required_advanced_validation_expands_and_reveals_field(
     assert control.hasFocus()
 
 
-def test_delayed_validation_reopens_compact_drawer_and_reveals_field(
+def test_delayed_validation_reveals_the_failed_field(
     qtbot: QtBot,
 ) -> None:
     started = threading.Event()
@@ -1083,7 +993,6 @@ def test_delayed_validation_reopens_compact_drawer_and_reveals_field(
     window.activateWindow()
     qtbot.waitUntil(window.isActiveWindow)
     qtbot.waitUntil(window.setup.create_button.isEnabled)
-    click(window.workspace.bot_control_button)
     window.setup.available_capital.setText("200000")
     click(window.setup.advanced_toggle)
     window.setup.fee_percent.setText("100")
@@ -1092,8 +1001,6 @@ def test_delayed_validation_reopens_compact_drawer_and_reveals_field(
     click(window.setup.create_button)
     qtbot.waitUntil(started.is_set)
 
-    click(window.workspace.bot_control_close_button)
-    assert not window.workspace.bot_control.isVisible()
     release.set()
 
     qtbot.waitUntil(
@@ -1151,7 +1058,6 @@ def test_delayed_spot_validation_freezes_configuration_until_result(
     window.activateWindow()
     qtbot.waitUntil(window.isActiveWindow)
     qtbot.waitUntil(window.setup.create_button.isEnabled)
-    click(window.workspace.bot_control_button)
     window.setup.available_capital.setText("200000")
     window.setup.spot_ratio.setText("100")
     click(window.setup.advanced_toggle)
@@ -1163,7 +1069,6 @@ def test_delayed_spot_validation_freezes_configuration_until_result(
 
     controls = _session_configuration_controls(window)
     assert all(not control.isEnabled() for control in controls)
-    assert window.workspace.bot_control_close_button.isEnabled()
     QTest.keyClick(window.setup.market_type, Qt.Key.Key_Down)
     assert window.setup.market_type.currentData() == "spot"
     release.set()
@@ -1439,8 +1344,7 @@ def test_closing_window_ignores_late_worker_result_and_releases_task(
     qtbot.addWidget(window)
     window.show()
     qtbot.waitUntil(started.is_set)
-    runtime_before_close = window.workspace.header_runtime.text()
-    overview_before_close = window.overview.session_id_value.text()
+    overview_before_close = window.overview.symbol_value.text()
     unavailable_before_close = window.unavailable_message.text()
 
     window.close()
@@ -1449,8 +1353,7 @@ def test_closing_window_ignores_late_worker_result_and_releases_task(
     qtbot.wait(20)
 
     assert not window.isVisible()
-    assert window.workspace.header_runtime.text() == runtime_before_close
-    assert window.overview.session_id_value.text() == overview_before_close
+    assert window.overview.symbol_value.text() == overview_before_close
     assert window.unavailable_message.text() == unavailable_before_close
     assert not window.overview.isVisible()
 
@@ -1675,13 +1578,10 @@ def test_lifecycle_actions_render_matching_header_and_control_snapshot(
     click(window.workspace.bot_control_widget.start_button)
     click(window.workspace.bot_control_widget.start_button)
 
-    qtbot.waitUntil(lambda: window.workspace.header_runtime.text() == "Running")
-    assert start_calls == 1
-    assert window.workspace.notification_button.text() == "Notifications · 1"
-    assert window.workspace.notification_button.accessibleName() == (
-        "Notifications: 1 unread; highest severity Info"
+    qtbot.waitUntil(
+        lambda: _runtime_state(window) is BotRuntimeState.RUNNING
     )
-    assert window.workspace.bot_control_widget.state_value.text() == "Running"
+    assert start_calls == 1
     assert window.workspace.bot_control_widget.stop_button.isVisible()
     assert window.findChildren(QWidget, "manualBuyButton") == []
     assert window.findChildren(QWidget, "manualSellButton") == []
@@ -1694,9 +1594,10 @@ def test_lifecycle_actions_render_matching_header_and_control_snapshot(
     )
     click(confirm_button)
 
-    qtbot.waitUntil(lambda: window.workspace.header_runtime.text() == "Stopped")
+    qtbot.waitUntil(
+        lambda: _runtime_state(window) is BotRuntimeState.STOPPED
+    )
     assert stop_calls == 1
-    assert window.workspace.bot_control_widget.state_value.text() == "Stopped"
 
 
 def test_blocked_runtime_reopens_the_editable_setup_form(
@@ -1720,7 +1621,9 @@ def test_blocked_runtime_reopens_the_editable_setup_form(
 
     click(window.workspace.bot_control_widget.start_button)
 
-    qtbot.waitUntil(lambda: window.workspace.header_runtime.text() == "Blocked")
+    qtbot.waitUntil(
+        lambda: _runtime_state(window) is BotRuntimeState.BLOCKED
+    )
     qtbot.waitUntil(window.setup.isVisible)
     assert window.setup.available_capital.isEnabled()
 
@@ -1761,7 +1664,9 @@ def test_stop_reopens_an_editable_setup_form(qtbot: QtBot) -> None:
     qtbot.waitUntil(control.start_button.isEnabled)
 
     click(control.start_button)
-    qtbot.waitUntil(lambda: control.state_value.text() == "Running")
+    qtbot.waitUntil(
+        lambda: _runtime_state(window) is BotRuntimeState.RUNNING
+    )
     click(control.stop_button)
     stop_confirmation = window.findChild(QMessageBox)
     assert stop_confirmation is not None
@@ -1769,7 +1674,9 @@ def test_stop_reopens_an_editable_setup_form(qtbot: QtBot) -> None:
         button for button in stop_confirmation.buttons() if button.text() == "Stop Bot"
     )
     click(stop_button)
-    qtbot.waitUntil(lambda: control.state_value.text() == "Stopped")
+    qtbot.waitUntil(
+        lambda: _runtime_state(window) is BotRuntimeState.STOPPED
+    )
 
     qtbot.waitUntil(window.setup.isVisible)
     qtbot.waitUntil(window.setup.timeframe.isEnabled)
@@ -1812,7 +1719,9 @@ def test_start_from_setup_creates_and_starts_paper_bot_in_one_action(
 
     click(window.setup.create_button)
 
-    qtbot.waitUntil(lambda: window.workspace.header_runtime.text() == "Running")
+    qtbot.waitUntil(
+        lambda: _runtime_state(window) is BotRuntimeState.RUNNING
+    )
     assert len(created) == 1
     assert created[0].available_capital == "1000"
     assert len(started) == 1
@@ -1862,7 +1771,9 @@ def test_start_from_setup_skips_recovery_inspection_for_new_session(
 
     click(window.setup.create_button)
 
-    qtbot.waitUntil(lambda: window.workspace.header_runtime.text() == "Running")
+    qtbot.waitUntil(
+        lambda: _runtime_state(window) is BotRuntimeState.RUNNING
+    )
     assert initialize_calls == []
     assert len(start_calls) == 1
 
@@ -1902,7 +1813,9 @@ def test_stop_without_exposure_keeps_session_and_reopens_prefilled_form(
     control = window.workspace.bot_control_widget
     qtbot.waitUntil(control.start_button.isEnabled)
     click(control.start_button)
-    qtbot.waitUntil(lambda: control.state_value.text() == "Running")
+    qtbot.waitUntil(
+        lambda: _runtime_state(window) is BotRuntimeState.RUNNING
+    )
     click(control.stop_button)
     confirmation = window.findChild(QMessageBox)
     assert confirmation is not None
@@ -1984,7 +1897,9 @@ def test_stop_with_open_position_reopens_editable_setup_without_closing(
     control = window.workspace.bot_control_widget
     qtbot.waitUntil(control.start_button.isEnabled)
     click(control.start_button)
-    qtbot.waitUntil(lambda: control.state_value.text() == "Running")
+    qtbot.waitUntil(
+        lambda: _runtime_state(window) is BotRuntimeState.RUNNING
+    )
     runtime_snapshots.new_generation()(
         BotLifecycleResult(
             workspace=paper_runtime_workspace_snapshot(

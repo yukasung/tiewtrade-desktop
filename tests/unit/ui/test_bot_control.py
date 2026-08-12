@@ -1,7 +1,7 @@
 from collections.abc import Callable
 from dataclasses import replace
 from datetime import UTC, datetime
-from decimal import Decimal, localcontext
+from decimal import Decimal
 
 from PySide6.QtWidgets import QMessageBox, QPushButton
 from pytestqt.qtbot import QtBot
@@ -20,7 +20,7 @@ from tiewtrade.application.trading_workspace import (
     DataFreshness,
     ready_position_basket_tab,
 )
-from tiewtrade.ui.bot_control import BotControlWidget, _decimal_text
+from tiewtrade.ui.bot_control import BotControlWidget
 
 
 def test_configured_shows_immutable_overview_and_disabled_start_without_runtime(
@@ -38,13 +38,10 @@ def test_configured_shows_immutable_overview_and_disabled_start_without_runtime(
         )
     )
 
-    assert widget.overview.session_id_value.text() == str(session.config.session_id)
-    assert widget.state_value.text() == "Configured"
     assert widget.start_button.text() == "Start Bot"
     assert widget.start_button.isVisible()
     assert not widget.start_button.isEnabled()
     assert widget.stop_button.isHidden()
-    assert widget.supporting_text.text() == "Runtime integration is not available yet"
     assert widget.findChildren(QPushButton, "manualBuyButton") == []
     assert widget.findChildren(QPushButton, "manualSellButton") == []
 
@@ -102,13 +99,6 @@ def test_running_shows_runtime_and_basket_facts_without_manual_order_controls(
 
     widget.show_snapshot(running)
 
-    assert widget.state_value.text() == "Running"
-    assert widget.data_freshness_value.text() == "Fresh"
-    assert widget.overview.state_value.text() == "Immutable Configuration"
-    assert widget.entry_count_value.text() == "2"
-    assert widget.average_entry_value.text() == "64000 USDT"
-    assert widget.current_price_value.text() == "65000 USDT"
-    assert widget.take_profit_value.text() == "66000 USDT"
     assert widget.stop_button.isVisible()
     assert widget.stop_button.text() == "Stop Bot"
     assert widget.findChildren(QPushButton, "manualBuyButton") == []
@@ -123,7 +113,6 @@ def test_configured_and_blocked_show_readable_data_freshness(qtbot: QtBot) -> No
         observed_at_utc=datetime(2026, 8, 1, 12, tzinfo=UTC),
     )
     widget.show_snapshot(configured)
-    assert widget.data_freshness_value.text() == "Not Started"
 
     assert configured.workspace.header is not None
     blocked_workspace = workspace_with_runtime_state(
@@ -146,7 +135,6 @@ def test_configured_and_blocked_show_readable_data_freshness(qtbot: QtBot) -> No
     )
     widget.show_snapshot(blocked)
 
-    assert widget.data_freshness_value.text() == "Unavailable"
 
 
 def test_progress_blocked_and_stopped_states_expose_only_their_allowed_actions(
@@ -170,7 +158,6 @@ def test_progress_blocked_and_stopped_states_expose_only_their_allowed_actions(
         progress_message="Starting Paper Bot",
     )
     widget.show_snapshot(starting)
-    assert widget.supporting_text.text() == "Starting Paper Bot"
     assert not widget.start_button.isEnabled()
 
     stopping = BotControlSnapshot(
@@ -183,7 +170,6 @@ def test_progress_blocked_and_stopped_states_expose_only_their_allowed_actions(
         progress_message="Stopping Paper Bot",
     )
     widget.show_snapshot(stopping)
-    assert widget.supporting_text.text() == "Stopping Paper Bot"
     assert widget.stop_button.isVisible()
     assert not widget.stop_button.isEnabled()
 
@@ -197,8 +183,6 @@ def test_progress_blocked_and_stopped_states_expose_only_their_allowed_actions(
         blocked_reason="Paper Bot could not be started",
     )
     widget.show_snapshot(blocked)
-    assert widget.state_value.text() == "Blocked"
-    assert widget.supporting_text.text() == "Paper Bot could not be started"
     assert widget.start_button.isHidden()
     assert widget.stop_button.isHidden()
 
@@ -211,7 +195,6 @@ def test_progress_blocked_and_stopped_states_expose_only_their_allowed_actions(
         available_actions=frozenset(),
     )
     widget.show_snapshot(stopped)
-    assert widget.state_value.text() == "Stopped"
     assert widget.start_button.isHidden()
     assert widget.stop_button.isHidden()
 
@@ -286,7 +269,8 @@ def test_stop_confirm_emits_once_and_guards_repeated_confirmation(qtbot: QtBot) 
 
     assert emissions == [None]
     assert not widget.stop_button.isEnabled()
-    qtbot.waitUntil(widget.state_value.hasFocus)
+    # Focus lands back on the panel now that the state label is gone.
+    qtbot.waitUntil(widget.hasFocus)
 
 
 def test_default_stop_confirmation_is_destructive_and_default_safe(
@@ -322,18 +306,6 @@ def test_default_stop_confirmation_is_destructive_and_default_safe(
 
     assert emissions == []
     qtbot.waitUntil(widget.stop_button.hasFocus)
-
-
-def test_decimal_text_is_context_independent_and_exact() -> None:
-    with localcontext() as context:
-        context.prec = 4
-        assert (
-            _decimal_text(Decimal("12345678901234567890.123456789012345678900"))
-            == "12345678901234567890.1234567890123456789"
-        )
-
-    assert _decimal_text(Decimal("0")) == "0"
-    assert _decimal_text(Decimal("-0.0000")) == "0"
 
 
 def _running_snapshot() -> BotControlSnapshot:

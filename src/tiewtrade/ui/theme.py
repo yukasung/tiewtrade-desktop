@@ -5,7 +5,7 @@ QMainWindow, QWidget#workspace, QWidget#workspaceContent {
     font-family: "Inter", "SF Pro Text", "Helvetica Neue", sans-serif;
     font-size: 14px;
 }
-QFrame#workspaceHeader, QFrame#botControl, QFrame#card,
+QFrame#botControl, QFrame#card,
 QFrame#statusCard, QFrame#filterCard, QFrame#emptyPanel {
     background: #141A22;
     border: 1px solid #2B3441;
@@ -24,15 +24,9 @@ QWidget#candlestickChart {
 QLabel {
     color: #F1F5F9;
 }
-QLabel#brand, QLabel#pageTitle, QLabel#sectionTitle,
+QLabel#pageTitle, QLabel#sectionTitle,
 QLabel#detailValue, QLabel#readOnlyValue, QLabel#stateValue {
     color: #F1F5F9;
-}
-QLabel#brand {
-    color: #4C7DFF;
-    font-size: 16px;
-    font-weight: 700;
-    letter-spacing: 1px;
 }
 QLabel#pageTitle {
     font-size: 24px;

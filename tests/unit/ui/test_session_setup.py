@@ -75,7 +75,6 @@ def test_selected_symbol_is_included_in_the_start_request(qtbot: QtBot) -> None:
     click(widget.create_button)
 
     assert requested[0].symbol == "ETHUSDT"
-    assert widget.description.text() == "Paper · ETHUSDT · RSI Step Grid v1"
 
 
 def test_primary_form_only_shows_start_inputs(qtbot: QtBot) -> None:

@@ -41,7 +41,6 @@ def test_chart_renders_durable_buy_and_sell_markers_without_action_buttons(
     chart.show()
 
     assert chart.accessibleName() == "Candlestick chart for BTCUSDT 5m"
-    assert chart._facts.text() == "BTCUSDT · 5m · Paper"
     assert chart.marker_labels == ("B", "S")
     assert chart.findChildren(QPushButton, "manualOrderButton") == []
     assert not chart.grab().isNull()
@@ -138,7 +137,6 @@ def test_chart_selector_header_leaves_readable_space_between_controls(
     chart.show()
 
     assert chart.timeframe.geometry().left() - chart.symbol.geometry().right() - 1 == 12
-    assert chart._facts.geometry().left() - chart.timeframe.geometry().right() - 1 == 16
 
 
 def test_painter_model_contains_only_chart_presentation_facts() -> None:
@@ -473,12 +471,6 @@ def test_previous_and_next_range_controls_are_keyboard_accessible(qtbot: QtBot) 
     assert chart.next_range_button.width() == 44
     assert chart.previous_range_button.accessibleName() == "Previous chart range"
     assert chart.next_range_button.accessibleName() == "Next chart range"
-    assert (
-        chart.previous_range_button.geometry().left()
-        - chart._range.geometry().right()
-        - 1
-        == 12
-    )
     assert (
         chart.next_range_button.geometry().left()
         - chart.previous_range_button.geometry().right()

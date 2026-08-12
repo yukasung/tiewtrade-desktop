@@ -1,12 +1,8 @@
 from collections.abc import Callable
-from decimal import Decimal
 
 from PySide6.QtCore import Qt, QTimer, Signal, Slot
 from PySide6.QtWidgets import (
-    QFrame,
-    QGridLayout,
     QHBoxLayout,
-    QLabel,
     QMessageBox,
     QPushButton,
     QVBoxLayout,
@@ -14,10 +10,15 @@ from PySide6.QtWidgets import (
 )
 
 from tiewtrade.application.bot_control import BotControlAction, BotControlSnapshot
-from tiewtrade.application.trading_workspace import BotRuntimeState, DataFreshness
+from tiewtrade.application.trading_workspace import BotRuntimeState
 from tiewtrade.ui.session_overview import SessionOverviewWidget
 
 StopConfirmation = Callable[[Callable[[], None], Callable[[], None]], None]
+
+# The states each button belongs to: the settled one that offers it, and the
+# in-flight one that keeps it on screen while the action runs.
+_STARTING_STATES = frozenset({BotRuntimeState.CONFIGURED, BotRuntimeState.STARTING})
+_STOPPING_STATES = frozenset({BotRuntimeState.RUNNING, BotRuntimeState.STOPPING})
 
 
 class BotControlWidget(QWidget):
@@ -35,19 +36,9 @@ class BotControlWidget(QWidget):
         self._stop_confirmation_pending = False
         self._stop_confirmation_dialog: QMessageBox | None = None
         self.setObjectName("botControlWidget")
+        self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+        self.setAccessibleName("Bot Control")
         self.overview = SessionOverviewWidget()
-        self.state_value = QLabel("—")
-        self.state_value.setObjectName("botControlState")
-        self.state_value.setAccessibleName("Bot State")
-        self.state_value.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
-        self.supporting_text = QLabel()
-        self.supporting_text.setObjectName("supportingText")
-        self.supporting_text.setWordWrap(True)
-        self.entry_count_value = QLabel("—")
-        self.data_freshness_value = QLabel("—")
-        self.average_entry_value = QLabel("—")
-        self.current_price_value = QLabel("—")
-        self.take_profit_value = QLabel("—")
         self.start_button = QPushButton("Start Bot")
         self.start_button.setObjectName("startBotButton")
         self.stop_button = QPushButton("Stop Bot")
@@ -62,15 +53,7 @@ class BotControlWidget(QWidget):
     def show_snapshot(self, value: object) -> None:
         if not isinstance(value, BotControlSnapshot):
             return
-        self.overview.show_session(
-            value.session,
-            configuration_summary=value.state is not BotRuntimeState.CONFIGURED,
-        )
-        self.state_value.setText(_STATE_TEXT[value.state])
-        header = value.workspace.header
-        assert header is not None
-        self.data_freshness_value.setText(_DATA_FRESHNESS_TEXT[header.data_freshness])
-        self._show_basket_facts(value)
+        self.overview.show_session(value.session)
         self._show_state_content(value)
 
     def _build_layout(self) -> None:
@@ -78,31 +61,6 @@ class BotControlWidget(QWidget):
         root.setContentsMargins(0, 0, 0, 0)
         root.setSpacing(12)
 
-        status_card = QFrame()
-        status_card.setObjectName("statusCard")
-        status_layout = QVBoxLayout(status_card)
-        state_label = QLabel("BOT STATE")
-        state_label.setObjectName("eyebrow")
-        status_layout.addWidget(state_label)
-        status_layout.addWidget(self.state_value)
-        status_layout.addWidget(self.supporting_text)
-        root.addWidget(status_card)
-
-        facts = QFrame()
-        facts.setObjectName("card")
-        fact_grid = QGridLayout(facts)
-        for row, (label, value) in enumerate(
-            (
-                ("Entries", self.entry_count_value),
-                ("Data Freshness", self.data_freshness_value),
-                ("Average Entry", self.average_entry_value),
-                ("Current Price", self.current_price_value),
-                ("Take Profit", self.take_profit_value),
-            )
-        ):
-            fact_grid.addWidget(QLabel(label), row, 0)
-            fact_grid.addWidget(value, row, 1)
-        root.addWidget(facts)
         root.addWidget(self.overview)
 
         actions = QHBoxLayout()
@@ -110,60 +68,23 @@ class BotControlWidget(QWidget):
         actions.addWidget(self.stop_button)
         root.addLayout(actions)
 
-    def _show_basket_facts(self, snapshot: BotControlSnapshot) -> None:
-        basket = snapshot.workspace.basket
-        if basket is None:
-            self.entry_count_value.setText("—")
-            self.average_entry_value.setText("—")
-            self.current_price_value.setText("—")
-            self.take_profit_value.setText("—")
-            return
-        self.entry_count_value.setText(str(basket.entry_count))
-        self.average_entry_value.setText(
-            f"{_decimal_text(basket.average_entry_price)} USDT"
-        )
-        self.current_price_value.setText(f"{_decimal_text(basket.current_price)} USDT")
-        self.take_profit_value.setText(
-            f"{_decimal_text(basket.take_profit_price)} USDT"
-        )
-
     def _show_state_content(self, snapshot: BotControlSnapshot) -> None:
+        """Show the one button this state owns, enabled only if it is offered.
+
+        A state in flight carries no actions — BotControlSnapshot rejects any
+        it is handed — so the button it owns shows disabled while it settles.
+        """
         self._hide_actions()
-        state = snapshot.state
-        if state is BotRuntimeState.CONFIGURED:
-            self.supporting_text.setText(
-                ""
-                if BotControlAction.START in snapshot.available_actions
-                else "Runtime integration is not available yet"
-            )
-            self._show_action(
-                self.start_button, BotControlAction.START in snapshot.available_actions
-            )
+        if snapshot.state in _STARTING_STATES:
+            button, action = self.start_button, BotControlAction.START
+        elif snapshot.state in _STOPPING_STATES:
+            button, action = self.stop_button, BotControlAction.STOP
+        else:
             return
-        if state is BotRuntimeState.STARTING:
-            self.supporting_text.setText(snapshot.progress_message or "")
-            self._show_action(self.start_button, False)
-            return
-        if state is BotRuntimeState.RUNNING:
-            self.supporting_text.setText("Paper Bot is running")
-            self._show_action(
-                self.stop_button, BotControlAction.STOP in snapshot.available_actions
-            )
-            return
-        if state is BotRuntimeState.STOPPING:
-            self.supporting_text.setText(snapshot.progress_message or "")
-            self._show_action(self.stop_button, False)
-            return
-        if state is BotRuntimeState.STOPPED:
-            self.supporting_text.setText("Paper Bot has stopped")
-            return
-        self.supporting_text.setText(snapshot.blocked_reason or "")
+        self._show_action(button, action in snapshot.available_actions)
 
     def _hide_actions(self) -> None:
-        for button in (
-            self.start_button,
-            self.stop_button,
-        ):
+        for button in (self.start_button, self.stop_button):
             button.hide()
             button.setDisabled(True)
 
@@ -237,8 +158,10 @@ class BotControlWidget(QWidget):
         self.stop_button.setFocus(Qt.FocusReason.OtherFocusReason)
 
     def _restore_confirm_focus(self) -> None:
+        # The stop confirmation took focus from a button that is now hidden,
+        # so the panel itself takes it back.
         self.window().activateWindow()
-        self.state_value.setFocus(Qt.FocusReason.OtherFocusReason)
+        self.setFocus(Qt.FocusReason.OtherFocusReason)
 
     def _emit_once(
         self,
@@ -249,27 +172,3 @@ class BotControlWidget(QWidget):
             return
         button.setDisabled(True)
         emit()
-
-
-_STATE_TEXT = {
-    BotRuntimeState.CONFIGURED: "Configured",
-    BotRuntimeState.STARTING: "Starting",
-    BotRuntimeState.RUNNING: "Running",
-    BotRuntimeState.STOPPING: "Stopping",
-    BotRuntimeState.STOPPED: "Stopped",
-    BotRuntimeState.BLOCKED: "Blocked",
-}
-
-_DATA_FRESHNESS_TEXT = {
-    DataFreshness.NOT_STARTED: "Not Started",
-    DataFreshness.FRESH: "Fresh",
-    DataFreshness.STALE: "Stale",
-    DataFreshness.UNAVAILABLE: "Unavailable",
-}
-
-
-def _decimal_text(value: Decimal) -> str:
-    text = format(value, "f")
-    if "." in text:
-        text = text.rstrip("0").rstrip(".")
-    return "0" if text in {"0", "-0"} else text

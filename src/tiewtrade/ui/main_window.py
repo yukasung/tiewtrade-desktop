@@ -143,9 +143,6 @@ class MainWindow(QMainWindow):
             parent=self,
         )
         self._lifecycle_workflow.snapshot_changed.connect(self._bot_control_changed)
-        self._lifecycle_workflow.notifications_changed.connect(
-            self.workspace.show_notifications
-        )
         self.workspace.start_bot_requested.connect(self._lifecycle_workflow.start_bot)
         self.workspace.stop_bot_requested.connect(self._stop_requested)
 

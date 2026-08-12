@@ -13,7 +13,6 @@ from PySide6.QtGui import (
 from PySide6.QtWidgets import (
     QComboBox,
     QHBoxLayout,
-    QLabel,
     QPushButton,
     QVBoxLayout,
     QWidget,
@@ -81,8 +80,6 @@ class CandlestickChartWidget(QWidget):
         self._header = QHBoxLayout()
         self._header.setContentsMargins(12, 10, 12, 0)
         self._header.setSpacing(0)
-        self._facts = QLabel("Chart")
-        self._facts.setObjectName("chartFacts")
         self.symbol = QComboBox()
         self.symbol.setObjectName("chartSymbol")
         self.symbol.setAccessibleName("Chart Symbol")
@@ -94,11 +91,8 @@ class CandlestickChartWidget(QWidget):
         for timeframe in SUPPORTED_V1_TIMEFRAME_CHOICES:
             self.timeframe.addItem(timeframe, timeframe)
         self.timeframe.setCurrentIndex(self.timeframe.findData("5m"))
-        self._range = QLabel()
-        self._range.setObjectName("chartRange")
         controls = QHBoxLayout()
         controls.setSpacing(12)
-        controls.addWidget(self._range)
         navigation = QHBoxLayout()
         navigation.setSpacing(8)
         self.zoom_out_button = QPushButton()
@@ -141,8 +135,6 @@ class CandlestickChartWidget(QWidget):
         self._header.addWidget(self.symbol)
         self._header.addSpacing(12)
         self._header.addWidget(self.timeframe)
-        self._header.addSpacing(16)
-        self._header.addWidget(self._facts)
         self._header.addStretch()
         self._header.addLayout(controls)
 
@@ -200,11 +192,9 @@ class CandlestickChartWidget(QWidget):
         self.setAccessibleName(
             f"Candlestick chart for {snapshot.symbol} {snapshot.timeframe}"
         )
-        self._facts.setText(f"{snapshot.symbol} · {snapshot.timeframe} · Paper")
         with QSignalBlocker(self.symbol), QSignalBlocker(self.timeframe):
             self.symbol.setCurrentIndex(self.symbol.findData(snapshot.symbol))
             self.timeframe.setCurrentIndex(self.timeframe.findData(snapshot.timeframe))
-        self._range.setText(_range_text(snapshot.chart_range))
         has_range = snapshot.state in {ChartReadState.READY, ChartReadState.EMPTY}
         self.zoom_in_button.setEnabled(
             has_range
@@ -398,7 +388,7 @@ class CandlestickChartWidget(QWidget):
         if readout is None:
             return
         plot = model.plot_surface
-        rect = QRectF(plot.left() + 8, plot.top() + 4, max(1.0, plot.width() - 16), 34)
+        rect = QRectF(plot.left() + 8, plot.top() + 4, max(1.0, plot.width() - 16), 18)
         painter.setPen(QPen(QColor(_LEGEND_TEXT_COLOR), 1))
         painter.drawText(rect, _ALIGN_LEFT_TOP, _legend_text(readout))
 
@@ -480,18 +470,11 @@ def _view_key(snapshot: ChartSnapshot | None) -> tuple[str, str, ChartRange] | N
     return (snapshot.symbol, snapshot.timeframe, snapshot.chart_range)
 
 
-def _range_text(chart_range: ChartRange) -> str:
-    start = in_display_timezone(chart_range.start)
-    end = in_display_timezone(chart_range.end)
-    return f"{start:%Y-%m-%d %H:%M}–{end:%H:%M}"
-
-
 def _legend_text(readout: CandleReadout) -> str:
     candle = readout.candle
     rsi = "—" if readout.rsi is None else f"{readout.rsi:,.2f}"
-    forming = "  · forming" if readout.is_in_progress else ""
     return (
-        f"{in_display_timezone(candle.open_time):%Y-%m-%d %H:%M}{forming}\n"
+        f"{in_display_timezone(candle.open_time):%Y-%m-%d %H:%M}  "
         f"O {candle.open:,.2f}  H {candle.high:,.2f}  "
         f"L {candle.low:,.2f}  C {candle.close:,.2f}  "
         f"RSI({readout.rsi_period}) {rsi}"

@@ -69,7 +69,6 @@ class SessionSetupWidget(QWidget):
 
         self.strategy = QComboBox()
         self.strategy.setObjectName("strategy")
-        self.strategy.currentIndexChanged.connect(self._sync_description)
 
         self.spot_ratio = QLineEdit("80")
         self.spot_ratio.setObjectName("spotTradingCapitalPercent")
@@ -147,7 +146,6 @@ class SessionSetupWidget(QWidget):
 
         self._build_layout()
         self.market_type.currentIndexChanged.connect(self._sync_market_fields)
-        self.symbol.currentIndexChanged.connect(self._sync_description)
         self._sync_market_fields()
 
     def values(self) -> PaperSessionSetupValues:
@@ -255,14 +253,6 @@ class SessionSetupWidget(QWidget):
         root.setContentsMargins(0, 0, 0, 0)
         root.setSpacing(16)
 
-        heading = QLabel("Start Paper Bot")
-        heading.setObjectName("pageTitle")
-        self.description = QLabel()
-        self.description.setObjectName("supportingText")
-        self._sync_description()
-        root.addWidget(heading)
-        root.addWidget(self.description)
-
         card = QFrame()
         card.setObjectName("card")
         card_layout = QVBoxLayout(card)
@@ -330,14 +320,7 @@ class SessionSetupWidget(QWidget):
         except PaperSessionValidationError:
             self.spot_reserve_ratio.setText("—")
             return
-        reserve_percent = policy.reserve_ratio * 100
-        self.spot_reserve_ratio.setText(f"{format(reserve_percent.normalize(), 'f')}%")
-
-    @Slot()
-    def _sync_description(self) -> None:
-        self.description.setText(
-            f"Paper · {self.symbol.currentData()} · {self.strategy.currentText()}"
-        )
+        self.spot_reserve_ratio.setText(_percent_text(policy.reserve_ratio))
 
     @Slot(bool)
     def _toggle_advanced(self, expanded: bool) -> None:
@@ -450,7 +433,6 @@ class SessionSetupWidget(QWidget):
             if index >= 0:
                 self.strategy.setCurrentIndex(index)
         self.strategy.blockSignals(False)
-        self._sync_description()
 
     @staticmethod
     def _form() -> QFormLayout:

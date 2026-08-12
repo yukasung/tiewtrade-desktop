@@ -68,7 +68,8 @@ def test_desktop_trade_history_reads_durable_spot_and_futures_records(
     window.show()
     qtbot.waitUntil(window.setup.isVisible)
 
-    assert window.workspace.header_runtime.text() == "No Session"
+    # No session yet: the setup form is what the workspace offers.
+    assert window.setup.isVisible()
     assert basket_requests == []
 
     open_trade_history(window)

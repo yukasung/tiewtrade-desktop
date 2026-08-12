@@ -130,6 +130,12 @@ class _QueuedPaperCandleSource:
         while True:
             yield await self._queue.get()
 
+def _runtime_state(window: MainWindow) -> BotRuntimeState | None:
+    """The state the lifecycle reached, or None before a session exists."""
+    snapshot = window._lifecycle_workflow._snapshot
+    return None if snapshot is None else snapshot.state
+
+
 
 def unused_create(
     values: PaperSessionSetupValues,
@@ -229,7 +235,9 @@ def test_chart_failure_does_not_stop_runtime_or_trade_history(qtbot: QtBot) -> N
     assert chart_snapshot.message == "Chart is unavailable"
 
     click(window.workspace.bot_control_widget.start_button)
-    qtbot.waitUntil(lambda: window.workspace.header_runtime.text() == "Running")
+    qtbot.waitUntil(
+        lambda: _runtime_state(window) is BotRuntimeState.RUNNING
+    )
     window.workspace.tabs.setCurrentWidget(window.trade_history)
     qtbot.waitUntil(
         lambda: window.trade_history.basket_state.text() == "No trade history"
@@ -312,7 +320,9 @@ def test_runtime_candles_reach_chart_only_from_current_generation(
     qtbot.waitUntil(lambda: window.workspace.chart._snapshot is not None)
     window._chart_workflow.snapshot_changed.connect(chart_snapshots.append)
     click(window.workspace.bot_control_widget.start_button)
-    qtbot.waitUntil(lambda: window.workspace.header_runtime.text() == "Running")
+    qtbot.waitUntil(
+        lambda: _runtime_state(window) is BotRuntimeState.RUNNING
+    )
     stale_publisher = relay.new_generation()
     publisher = relay.new_generation()
     forming = Candle(
@@ -465,7 +475,9 @@ def test_running_paper_session_shows_open_candle_then_commits_closed_candle(
     chart_snapshots: list[ChartSnapshot] = []
     window._chart_workflow.snapshot_changed.connect(chart_snapshots.append)
     click(window.workspace.bot_control_widget.start_button)
-    qtbot.waitUntil(lambda: window.workspace.header_runtime.text() == "Running")
+    qtbot.waitUntil(
+        lambda: _runtime_state(window) is BotRuntimeState.RUNNING
+    )
     assert source.stream_ready.wait(1)
 
     forming = _chart_candle(

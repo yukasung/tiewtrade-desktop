@@ -116,7 +116,6 @@ class CandleReadout:
     candle: ChartCandle
     rsi: Decimal | None
     rsi_period: int
-    is_in_progress: bool
 
 
 @dataclass(frozen=True, slots=True)
@@ -391,12 +390,10 @@ def candle_at(
         candle = next(
             item for item in display_candles if item.open_time == nearest.open_time
         )
-    forming = snapshot.in_progress_candle
     return CandleReadout(
         candle=candle,
         rsi=snapshot.rsi_for(candle.open_time),
         rsi_period=snapshot.rsi.period,
-        is_in_progress=forming is not None and forming.open_time == candle.open_time,
     )
 
 
