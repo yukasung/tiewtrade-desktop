@@ -83,10 +83,37 @@ class WorkspaceHeaderSnapshot:
 
 
 @dataclass(frozen=True, slots=True)
+class BasketEntrySnapshot:
+    """One Entry of a Basket, as the trader placed it.
+
+    A Basket averages its Entries away, so the average alone cannot say which
+    price was bought when. Each Entry carries its own reading, already marked
+    against the Basket's current price, so the view never recalculates.
+    """
+
+    entry_number: int
+    filled_at_utc: datetime
+    price: Decimal
+    quantity: Decimal
+    notional: Decimal
+    unrealized_pnl: Decimal
+
+    def __post_init__(self) -> None:
+        if type(self.entry_number) is not int or self.entry_number < 1:
+            raise ValueError("entry_number must be a positive integer")
+        _require_utc(self.filled_at_utc, "filled_at_utc")
+        _require_decimal(self.price, "price")
+        _require_non_negative_decimal(self.quantity, "quantity")
+        _require_decimal(self.notional, "notional")
+        _require_decimal(self.unrealized_pnl, "unrealized_pnl")
+
+
+@dataclass(frozen=True, slots=True)
 class BasketSnapshot:
     symbol: str
     market_type: str
     entry_count: int
+    entries: tuple[BasketEntrySnapshot, ...]
     total_quantity: Decimal
     average_entry_price: Decimal
     current_price: Decimal
@@ -102,6 +129,7 @@ class BasketSnapshot:
         _require_text(self.market_type, "market_type")
         if type(self.entry_count) is not int or self.entry_count < 0:
             raise ValueError("entry_count must be a non-negative integer")
+        _require_basket_entries(self.entries, self.entry_count)
         _require_non_negative_decimal(self.total_quantity, "total_quantity")
         _require_decimal(self.average_entry_price, "average_entry_price")
         _require_decimal(self.current_price, "current_price")
@@ -393,6 +421,25 @@ def _require_non_negative_decimal(value: Decimal, name: str) -> None:
     _require_decimal(value, name)
     if value < 0:
         raise ValueError(f"{name} must not be negative")
+
+
+def _require_basket_entries(
+    value: tuple[BasketEntrySnapshot, ...], entry_count: int
+) -> None:
+    """One Entry per counted Entry, numbered in the order they were taken.
+
+    Counting Entries one way and listing them another would let the table and
+    its total disagree about the same Basket.
+    """
+    if not isinstance(value, tuple) or not all(
+        isinstance(entry, BasketEntrySnapshot) for entry in value
+    ):
+        raise ValueError("entries must be a tuple of BasketEntrySnapshot")
+    if len(value) != entry_count:
+        raise ValueError("entries must hold one Entry per entry_count")
+    expected = tuple(range(1, entry_count + 1))
+    if tuple(entry.entry_number for entry in value) != expected:
+        raise ValueError("entries must be numbered 1..entry_count in order")
 
 
 def _require_position_basket_tab(value: object, name: str) -> None:

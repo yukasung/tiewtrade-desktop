@@ -23,6 +23,7 @@ from tests.support.paper_session_setup import (
 from tests.support.qt_interactions import click, qdate
 from tests.support.trade_history_records import basket_result, trade_fill
 from tests.support.trade_history_ui import empty_basket_page, empty_fills
+from tests.support.workspace_snapshots import basket_entries
 from tiewtrade.application.bot_control import (
     BotControlSnapshot,
     BotLifecycleResult,
@@ -1845,6 +1846,7 @@ def test_stop_with_open_position_reopens_editable_setup_without_closing(
         symbol="BTCUSDT",
         market_type="spot",
         entry_count=1,
+        entries=basket_entries("100", quantity="1", current_price="110"),
         total_quantity=Decimal("1"),
         average_entry_price=Decimal("100"),
         current_price=Decimal("110"),

@@ -6,6 +6,7 @@ from decimal import Decimal
 import pytest
 
 from tests.support.paper_session_setup import configured_spot_session
+from tests.support.workspace_snapshots import basket_entries
 from tiewtrade.application.bot_control import (
     BotControlAction,
     BotControlSnapshot,
@@ -460,6 +461,7 @@ def _running_control_with_workspace_facts() -> BotControlSnapshot:
                 symbol="BTCUSDT",
                 market_type="spot",
                 entry_count=2,
+                entries=basket_entries("63000", "65000"),
                 total_quantity=Decimal("1"),
                 average_entry_price=Decimal("64000.123456789012345678"),
                 current_price=Decimal("65000.123456789012345678"),

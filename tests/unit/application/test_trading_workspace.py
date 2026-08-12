@@ -5,6 +5,7 @@ from decimal import Decimal
 import pytest
 
 from tests.support.paper_session_setup import configured_spot_session
+from tests.support.workspace_snapshots import basket_entries
 from tiewtrade.application.trading_workspace import (
     BasketEntryGate,
     BasketSnapshot,
@@ -158,6 +159,9 @@ def _basket() -> BasketSnapshot:
         symbol="BTCUSDT",
         market_type="spot",
         entry_count=2,
+        entries=basket_entries(
+            "66000", "66000", quantity="0.003", current_price="66321"
+        ),
         total_quantity=Decimal("0.006"),
         average_entry_price=Decimal("66000"),
         current_price=Decimal("66321"),

@@ -1,3 +1,5 @@
+from collections.abc import Callable
+from dataclasses import dataclass, field
 from decimal import Decimal
 
 from PySide6.QtCore import QSignalBlocker, Qt
@@ -13,6 +15,7 @@ from PySide6.QtWidgets import (
 )
 
 from tiewtrade.application.trading_workspace import (
+    BasketEntrySnapshot,
     BasketSnapshot,
     PositionBasketTabSnapshot,
     WorkspaceTabState,
@@ -27,22 +30,110 @@ _CENTER = Qt.AlignmentFlag.AlignCenter
 _RIGHT = Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
 
 
+@dataclass(frozen=True, slots=True)
+class _Row:
+    """One Entry, read against the Basket it belongs to.
+
+    Some of a row's facts are the Entry's own and some are the Basket's — the
+    take profit is one target for every Entry — so a column is handed both.
+    """
+
+    basket: BasketSnapshot
+    entry: BasketEntrySnapshot
+
+
+def _filled_at(row: _Row) -> str:
+    return display_timestamp(row.entry.filled_at_utc)
+
+
+def _price(row: _Row) -> str:
+    return format(row.entry.price, "f")
+
+
+def _take_profit_price(row: _Row) -> str:
+    """The Basket's one target, restated on each Entry it applies to."""
+    return format(row.basket.take_profit_price, "f")
+
+
+def _entry_gate(row: _Row) -> str:
+    """Whether the Basket can still take an Entry, and when it cannot, why."""
+    return blocked_entry_reason(row.basket) or "Active"
+
+
+def _quantity(row: _Row) -> str:
+    return format(row.entry.quantity, "f")
+
+
+def _notional(row: _Row) -> str:
+    return f"{row.entry.notional:.2f} USDT"
+
+
+def _pnl(row: _Row) -> str:
+    return _money(row.entry.unrealized_pnl)
+
+
+def _money(value: Decimal) -> str:
+    return f"{value:.2f} USDT"
+
+
+def _pnl_colour(row: _Row) -> str | None:
+    """No colour at break-even: neither reading is true, so the cell stays plain."""
+    return _sign_colour(row.entry.unrealized_pnl)
+
+
+def _sign_colour(value: Decimal) -> str | None:
+    if value > 0:
+        return POSITIVE_COLOR
+    if value < 0:
+        return NEGATIVE_COLOR
+    return None
+
+
+def _no_colour(row: _Row) -> str | None:
+    del row
+    return None
+
+
+@dataclass(frozen=True, slots=True)
+class _Column:
+    """A column carries its own heading, alignment and reading of a row.
+
+    Stating the three together is what keeps them in step: a column moved or
+    added cannot leave its values under a different heading.
+    """
+
+    header: str
+    alignment: Qt.AlignmentFlag
+    text: Callable[[_Row], str]
+    colour: Callable[[_Row], str | None] = field(default=_no_colour)
+
+
 class PositionBasketTable(QWidget):
+    """Every Entry of the open Basket, one row each.
+
+    A trader enters the same Basket more than once, so an averaged single row
+    hides the prices actually paid. The rows are the Entries. Facts the Basket
+    holds for all of them — its take profit and lifecycle — are restated on
+    every row so a row can be read on its own; the market it trades and the
+    totals it sums to, which no row can carry, frame the table instead.
+    """
+
     # Measured numbers hang on the right so their digits line up and a minus
     # sign cannot hide; short labels sit centred; text that changes length
     # stays left so its edge does not move under the reader.
     COLUMNS = (
-        ("Symbol", _LEFT),
-        ("Market Type", _CENTER),
-        ("Entry Count", _CENTER),
-        ("Total Quantity", _RIGHT),
-        ("Average Entry Price", _RIGHT),
-        ("Basket Take Profit", _RIGHT),
-        ("Unrealized PnL", _RIGHT),
-        ("Basket Lifecycle", _LEFT),
+        _Column("Entry", _CENTER, lambda row: f"#{row.entry.entry_number}"),
+        _Column("Filled At", _LEFT, _filled_at),
+        _Column("Entry Price", _RIGHT, _price),
+        # Beside the price paid, so the distance left to run reads at a glance.
+        _Column("Take Profit", _RIGHT, _take_profit_price),
+        _Column("Quantity", _RIGHT, _quantity),
+        _Column("Notional", _RIGHT, _notional),
+        _Column("Unrealized PnL", _RIGHT, _pnl, _pnl_colour),
+        _Column("Basket Lifecycle", _LEFT, _entry_gate),
     )
-    HEADERS = tuple(header for header, _alignment in COLUMNS)
-    ALIGNMENTS = tuple(alignment for _header, alignment in COLUMNS)
+    HEADERS = tuple(column.header for column in COLUMNS)
+    ALIGNMENTS = tuple(column.alignment for column in COLUMNS)
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -56,11 +147,17 @@ class PositionBasketTable(QWidget):
         self.state_label.setAccessibleName("Position / Basket status")
         self.state_label.setProperty("stateMessage", True)
         self.state_label.setWordWrap(True)
+        self.total_label = QLabel()
+        self.total_label.setObjectName("positionBasketTotal")
+        self.total_label.setAccessibleName("Basket total")
+        self.total_label.setWordWrap(True)
+        self.total_label.setVisible(False)
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.addWidget(self.state_label)
         layout.addWidget(self.table, 1)
+        layout.addWidget(self.total_label)
 
     @property
     def headers(self) -> tuple[str, ...]:
@@ -73,19 +170,39 @@ class PositionBasketTable(QWidget):
         self._show_state(value)
 
     def _show_basket(self, basket: BasketSnapshot | None) -> None:
-        blocker = QSignalBlocker(self.table)
-        self.table.clearSelection()
-        self.table.setCurrentCell(-1, -1)
-        self.table.setRowCount(0 if basket is None else 1)
-        if basket is not None:
-            for column_index, text in enumerate(self._basket_row(basket)):
-                self.table.setItem(
-                    0,
-                    column_index,
-                    self._table_item(text, self.ALIGNMENTS[column_index]),
-                )
-            self._colour_pnl(basket.unrealized_pnl)
-        del blocker
+        rows = (
+            ()
+            if basket is None
+            else tuple(_Row(basket, entry) for entry in basket.entries)
+        )
+        with QSignalBlocker(self.table):
+            self.table.clearSelection()
+            self.table.setCurrentCell(-1, -1)
+            self.table.setRowCount(len(rows))
+            for index, row in enumerate(rows):
+                for position, column in enumerate(self.COLUMNS):
+                    self.table.setItem(index, position, _table_item(column, row))
+        self._show_basket_total(basket)
+
+    def _show_basket_total(self, basket: BasketSnapshot | None) -> None:
+        """What the Basket sums to, which no single Entry row can carry.
+
+        The symbol and market it trades are not restated here: the chart above
+        and the session panel beside it already name them, and a third copy
+        only takes a line away from the Entries.
+        """
+        if basket is None:
+            self.total_label.setVisible(False)
+            return
+        self.total_label.setText(
+            f"{basket.entry_count} "
+            f"{'Entry' if basket.entry_count == 1 else 'Entries'} · "
+            f"Total {format(basket.total_quantity, 'f')} · "
+            f"Average {format(basket.average_entry_price, 'f')} · "
+            f"Unrealized {_money(basket.unrealized_pnl)}"
+        )
+        _paint(self.total_label, _sign_colour(basket.unrealized_pnl))
+        self.total_label.setVisible(True)
 
     def _show_state(self, snapshot: PositionBasketTabSnapshot) -> None:
         text = self._state_text(snapshot)
@@ -96,27 +213,6 @@ class PositionBasketTable(QWidget):
             return
         self.empty_state.clear_message()
         self.state_label.setVisible(bool(text))
-
-    @staticmethod
-    def _basket_row(basket: BasketSnapshot) -> tuple[str, ...]:
-        return (
-            basket.symbol,
-            _enum_text(basket.market_type),
-            str(basket.entry_count),
-            format(basket.total_quantity, "f"),
-            format(basket.average_entry_price, "f"),
-            format(basket.take_profit_price, "f"),
-            _pnl_text(basket.unrealized_pnl),
-            _entry_gate_text(basket),
-        )
-
-    def _colour_pnl(self, value: Decimal) -> None:
-        """Let the figure's own colour say gain or loss, so no word has to."""
-        colour = _pnl_colour(value)
-        item = self.table.item(0, self.HEADERS.index("Unrealized PnL"))
-        if colour is None or item is None:
-            return
-        item.setForeground(QBrush(QColor(colour)))
 
     @staticmethod
     def _state_text(snapshot: PositionBasketTabSnapshot) -> str:
@@ -135,15 +231,15 @@ class PositionBasketTable(QWidget):
         return ""
 
     def _table(self) -> QTableWidget:
-        table = QTableWidget(0, len(self.HEADERS))
+        table = QTableWidget(0, len(self.COLUMNS))
         table.setObjectName("positionBasketGrid")
         table.setAccessibleName("Position / Basket")
         table.setHorizontalHeaderLabels(list(self.HEADERS))
         # A header that does not follow its column reads as a different column.
-        for column_index, alignment in enumerate(self.ALIGNMENTS):
-            header_item = table.horizontalHeaderItem(column_index)
+        for index, column in enumerate(self.COLUMNS):
+            header_item = table.horizontalHeaderItem(index)
             if header_item is not None:
-                header_item.setTextAlignment(alignment)
+                header_item.setTextAlignment(column.alignment)
         table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
@@ -158,30 +254,23 @@ class PositionBasketTable(QWidget):
         table.horizontalHeader().setStretchLastSection(True)
         return table
 
-    @staticmethod
-    def _table_item(text: str, alignment: Qt.AlignmentFlag) -> QTableWidgetItem:
-        item = QTableWidgetItem(text)
-        item.setFlags(Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable)
-        item.setTextAlignment(alignment)
-        return item
+
+def _table_item(column: _Column, row: _Row) -> QTableWidgetItem:
+    """One cell, read and dressed by the column that owns it."""
+    item = QTableWidgetItem(column.text(row))
+    item.setFlags(Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable)
+    item.setTextAlignment(column.alignment)
+    colour = column.colour(row)
+    if colour is not None:
+        item.setForeground(QBrush(QColor(colour)))
+    return item
 
 
-def _enum_text(value: str) -> str:
-    return value.replace("_", " ").title()
-
-
-def _entry_gate_text(basket: BasketSnapshot) -> str:
-    return blocked_entry_reason(basket) or "Active"
-
-
-def _pnl_text(value: Decimal) -> str:
-    return f"{format(value, '.2f')} USDT"
-
-
-def _pnl_colour(value: Decimal) -> str | None:
-    """No colour at break-even: neither reading is true, so the row stays plain."""
-    if value > 0:
-        return POSITIVE_COLOR
-    if value < 0:
-        return NEGATIVE_COLOR
-    return None
+def _paint(label: QLabel, colour: str | None) -> None:
+    """A break-even total keeps the theme's own colour rather than picking a side."""
+    palette = label.palette()
+    if colour is None:
+        label.setPalette(QLabel().palette())
+        return
+    palette.setColor(label.foregroundRole(), QColor(colour))
+    label.setPalette(palette)

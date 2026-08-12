@@ -18,6 +18,7 @@ from pytestqt.qtbot import QtBot
 
 from tests.support.qt_interactions import click, table_item
 from tests.support.trade_history_ui import empty_basket_page, empty_fills
+from tests.support.workspace_snapshots import basket_entries
 from tiewtrade.application.bot_control import (
     BotControlSnapshot,
     BotLifecycleResult,
@@ -66,6 +67,7 @@ from tiewtrade.trading.trade_history import BasketStatus
 from tiewtrade.ui.bot_lifecycle_workflow import RuntimeSnapshotRelay
 from tiewtrade.ui.display_time import display_timestamp
 from tiewtrade.ui.main_window import MainWindow
+from tiewtrade.ui.position_basket_table import PositionBasketTable
 
 _T = TypeVar("_T")
 _RUNTIME_NOW = datetime(2026, 8, 2, 3, tzinfo=UTC)
@@ -451,14 +453,14 @@ def test_desktop_fake_snapshots_render_orders_and_basket_without_manual_trading(
     )
 
     assert start_calls == 0
+    # One row per Entry taken, with only the Basket's total framing them.
     assert window.workspace.position_basket.table.rowCount() == 1
-    assert table_item(window.workspace.position_basket.table, 0, 1).text() == (
-        case.market_type.title()
-    )
-    assert table_item(window.workspace.position_basket.table, 0, 2).text() == "1"
-    assert table_item(window.workspace.position_basket.table, 0, 7).text() == (
-        "Active"
-    )
+    assert table_item(window.workspace.position_basket.table, 0, 0).text() == "#1"
+    lifecycle = PositionBasketTable.HEADERS.index("Basket Lifecycle")
+    assert table_item(
+        window.workspace.position_basket.table, 0, lifecycle
+    ).text() == ("Active")
+    assert window.workspace.position_basket.total_label.text().startswith("1 Entry · ")
     assert _manual_order_buttons(window) == ()
     assert _trade_side_effect_counts(database) == initial_counts
 
@@ -539,8 +541,9 @@ def test_spot_partial_fills_keep_one_order_and_basket_entry_across_tabs(
         _fake_running_workspace(session, observed_at=observed_at)
     )
 
+    # Two Fills of the same Entry stay one row: a Partial Fill is not an Entry.
     assert window.workspace.position_basket.table.rowCount() == 1
-    assert table_item(window.workspace.position_basket.table, 0, 2).text() == "1"
+    assert table_item(window.workspace.position_basket.table, 0, 0).text() == "#1"
     window.workspace.tabs.setCurrentWidget(window.trade_history)
     qtbot.waitUntil(lambda: window.trade_history.basket_table.rowCount() == 1)
     qtbot.waitUntil(lambda: window.trade_history.fill_table.rowCount() == 2)
@@ -1078,6 +1081,9 @@ def _fake_running_workspace(
                 symbol="BTCUSDT",
                 market_type=session.config.market_type.value,
                 entry_count=1,
+                entries=basket_entries(
+                    "66000.1250", quantity="0.00150000", current_price="66321.1200"
+                ),
                 total_quantity=Decimal("0.00150000"),
                 average_entry_price=Decimal("66000.1250"),
                 current_price=Decimal("66321.1200"),

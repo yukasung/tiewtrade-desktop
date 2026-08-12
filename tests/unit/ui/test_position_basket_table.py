@@ -4,12 +4,13 @@ from decimal import Decimal
 import pytest
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QBrush, QColor
-from PySide6.QtWidgets import QTableWidget
+from PySide6.QtWidgets import QTableWidgetItem
 from pytestqt.qtbot import QtBot
 
-from tests.support.workspace_snapshots import basket_snapshot
+from tests.support.workspace_snapshots import basket_entries, basket_snapshot
 from tiewtrade.application.trading_workspace import (
     BasketEntryGate,
+    BasketEntrySnapshot,
     BasketSnapshot,
     empty_position_basket_tab,
     failed_position_basket_tab,
@@ -23,11 +24,27 @@ from tiewtrade.ui.theme import NEGATIVE_COLOR, POSITIVE_COLOR
 OBSERVED_AT = datetime(2026, 8, 2, 1, 2, 4, tzinfo=UTC)
 
 
+def _entry(number: int, price: str, unrealized_pnl: str) -> BasketEntrySnapshot:
+    return BasketEntrySnapshot(
+        entry_number=number,
+        filled_at_utc=datetime(2026, 8, 2, number, 0, tzinfo=UTC),
+        price=Decimal(price),
+        quantity=Decimal("0.00300000"),
+        notional=Decimal(price) * Decimal("0.00300000"),
+        unrealized_pnl=Decimal(unrealized_pnl),
+    )
+
+
 def _futures_basket() -> BasketSnapshot:
+    """Two Entries at different prices: the case an average alone cannot show."""
     return BasketSnapshot(
         symbol="BTCUSDT",
         market_type="futures",
         entry_count=2,
+        entries=(
+            _entry(1, "66000.0000", "0.96336"),
+            _entry(2, "66000.2500", "0.96264"),
+        ),
         total_quantity=Decimal("0.00600000"),
         average_entry_price=Decimal("66000.1250"),
         current_price=Decimal("66321.1200"),
@@ -40,18 +57,24 @@ def _futures_basket() -> BasketSnapshot:
     )
 
 
-def _row(table: QTableWidget, row: int) -> tuple[str, ...]:
-    values: list[str] = []
-    for column in range(table.columnCount()):
-        item = table.item(row, column)
+def _row(widget: PositionBasketTable, row: int = 0) -> dict[str, str]:
+    """A row read by heading, so a moved column cannot pass by luck."""
+    values: dict[str, str] = {}
+    for column, header in enumerate(widget.headers):
+        item = widget.table.item(row, column)
         assert item is not None
-        values.append(item.text())
-    return tuple(values)
+        values[header] = item.text()
+    return values
 
 
-def test_position_basket_renders_application_facts_without_recalculation(
-    qtbot: QtBot,
-) -> None:
+def _cell(widget: PositionBasketTable, header: str, row: int = 0) -> QTableWidgetItem:
+    item = widget.table.item(row, widget.headers.index(header))
+    assert item is not None
+    return item
+
+
+def test_each_entry_of_the_basket_is_its_own_row(qtbot: QtBot) -> None:
+    """The prices actually paid, not the average that hides them."""
     widget = PositionBasketTable()
     qtbot.addWidget(widget)
 
@@ -60,27 +83,108 @@ def test_position_basket_renders_application_facts_without_recalculation(
     )
 
     assert widget.headers == (
-        "Symbol",
-        "Market Type",
-        "Entry Count",
-        "Total Quantity",
-        "Average Entry Price",
-        "Basket Take Profit",
+        "Entry",
+        "Filled At",
+        "Entry Price",
+        "Take Profit",
+        "Quantity",
+        "Notional",
         "Unrealized PnL",
         "Basket Lifecycle",
     )
-    assert _row(widget.table, 0) == (
-        "BTCUSDT",
-        "Futures",
-        "2",
-        "0.00600000",
-        "66000.1250",
-        "67000.0000",
-        "1.93 USDT",
-        "Active",
-    )
+    assert widget.table.rowCount() == 2
+    assert _row(widget, 0) == {
+        "Entry": "#1",
+        "Filled At": "2026-08-02 08:00:00",
+        "Entry Price": "66000.0000",
+        "Take Profit": "67000.0000",
+        "Quantity": "0.00300000",
+        "Notional": "198.00 USDT",
+        "Unrealized PnL": "0.96 USDT",
+        "Basket Lifecycle": "Active",
+    }
+    assert _row(widget, 1)["Entry"] == "#2"
+    assert _row(widget, 1)["Entry Price"] == "66000.2500"
+    assert _row(widget, 1)["Filled At"] == "2026-08-02 09:00:00"
     assert widget.state_label.text() == ""
     assert widget.state_label.accessibleName() == "Position / Basket status"
+
+
+def test_the_one_take_profit_is_restated_on_every_entry_it_applies_to(
+    qtbot: QtBot,
+) -> None:
+    """One target for the whole Basket, so each row can be read on its own."""
+    widget = PositionBasketTable()
+    qtbot.addWidget(widget)
+
+    widget.show_snapshot(
+        ready_position_basket_tab(_futures_basket(), observed_at_utc=OBSERVED_AT)
+    )
+
+    for row in (0, 1):
+        assert _cell(widget, "Take Profit", row).text() == "67000.0000"
+        assert _cell(widget, "Basket Lifecycle", row).text() == "Active"
+
+
+def test_only_the_total_frames_the_entries(qtbot: QtBot) -> None:
+    """The sum is the one fact no row carries; the rest of the tab is Entries.
+
+    The symbol and market are named by the chart and the session panel, so the
+    table does not spend a line repeating them.
+    """
+    widget = PositionBasketTable()
+    qtbot.addWidget(widget)
+
+    widget.show_snapshot(
+        ready_position_basket_tab(_futures_basket(), observed_at_utc=OBSERVED_AT)
+    )
+
+    assert widget.total_label.text() == (
+        "2 Entries · Total 0.00600000 · Average 66000.1250 · Unrealized 1.93 USDT"
+    )
+    assert widget.total_label.accessibleName() == "Basket total"
+    assert not hasattr(widget, "basket_label")
+
+
+def test_a_single_entry_basket_reads_as_one_entry(qtbot: QtBot) -> None:
+    widget = PositionBasketTable()
+    qtbot.addWidget(widget)
+
+    widget.show_snapshot(
+        ready_position_basket_tab(
+            basket_snapshot(entry_count=1, entries=basket_entries("64000")),
+            observed_at_utc=OBSERVED_AT,
+        )
+    )
+
+    assert widget.table.rowCount() == 1
+    assert widget.total_label.text().startswith("1 Entry · ")
+
+
+def test_a_moved_column_carries_its_own_reading(
+    qtbot: QtBot, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Values follow their heading, so reordering cannot silently swap cells."""
+    reversed_columns = tuple(reversed(PositionBasketTable.COLUMNS))
+    monkeypatch.setattr(PositionBasketTable, "COLUMNS", reversed_columns)
+    monkeypatch.setattr(
+        PositionBasketTable,
+        "HEADERS",
+        tuple(column.header for column in reversed_columns),
+    )
+    widget = PositionBasketTable()
+    qtbot.addWidget(widget)
+
+    widget.show_snapshot(
+        ready_position_basket_tab(_futures_basket(), observed_at_utc=OBSERVED_AT)
+    )
+
+    assert widget.headers[0] == "Basket Lifecycle"
+    assert _row(widget)["Entry"] == "#1"
+    assert _row(widget)["Unrealized PnL"] == "0.96 USDT"
+    assert _cell(widget, "Unrealized PnL").foreground() == QBrush(
+        QColor(POSITIVE_COLOR)
+    )
 
 
 def test_columns_align_numbers_right_and_short_labels_centre(qtbot: QtBot) -> None:
@@ -95,9 +199,9 @@ def test_columns_align_numbers_right_and_short_labels_centre(qtbot: QtBot) -> No
     )
 
     assert widget.ALIGNMENTS == (
+        centre,
         left,
-        centre,
-        centre,
+        right,
         right,
         right,
         right,
@@ -121,7 +225,7 @@ def test_columns_align_numbers_right_and_short_labels_centre(qtbot: QtBot) -> No
         pytest.param(Decimal("0"), "0.00 USDT", None, id="break-even"),
     ],
 )
-def test_unrealized_pnl_reads_as_a_two_decimal_figure_coloured_by_its_sign(
+def test_entry_pnl_reads_as_a_two_decimal_figure_coloured_by_its_sign(
     qtbot: QtBot,
     unrealized_pnl: Decimal,
     expected_text: str,
@@ -132,17 +236,18 @@ def test_unrealized_pnl_reads_as_a_two_decimal_figure_coloured_by_its_sign(
 
     widget.show_snapshot(
         ready_position_basket_tab(
-            basket_snapshot(unrealized_pnl=unrealized_pnl),
+            basket_snapshot(
+                entry_count=1,
+                entries=(_entry(1, "64000", str(unrealized_pnl)),),
+            ),
             observed_at_utc=OBSERVED_AT,
         )
     )
 
-    pnl = widget.table.item(0, 6)
-    assert pnl is not None
+    pnl = _cell(widget, "Unrealized PnL")
     assert pnl.text() == expected_text
     # A break-even figure keeps the table's own colour rather than picking a side.
-    plain = widget.table.item(0, 0)
-    assert plain is not None
+    plain = _cell(widget, "Entry")
     expected_brush = (
         plain.foreground()
         if expected_colour is None
@@ -178,9 +283,9 @@ def test_blocked_entries_read_as_their_reason(
 
     widget.show_snapshot(ready_position_basket_tab(basket, observed_at_utc=OBSERVED_AT))
 
-    gate = widget.table.item(0, 7)
-    assert gate is not None
-    assert gate.text() == expected
+    # A blocked Basket says so on every Entry, not only on the row last taken.
+    for row in range(widget.table.rowCount()):
+        assert _cell(widget, "Basket Lifecycle", row).text() == expected
 
 
 def test_position_basket_states_preserve_or_clear_application_facts(
@@ -202,7 +307,7 @@ def test_position_basket_states_preserve_or_clear_application_facts(
         ),
     ):
         widget.show_snapshot(snapshot)
-        assert widget.table.rowCount() == 1
+        assert widget.table.rowCount() == 2
         assert widget.state_label.text() == expected_state
         assert not widget.state_label.isHidden()
 
@@ -210,6 +315,7 @@ def test_position_basket_states_preserve_or_clear_application_facts(
 
     assert widget.table.rowCount() == 0
     assert widget.state_label.text() == "No open Position or Basket"
+    assert widget.total_label.isHidden()
 
 
 def test_empty_position_basket_state_is_centered_in_table_body(qtbot: QtBot) -> None:
@@ -243,5 +349,5 @@ def test_position_basket_ignores_wrong_snapshot_type(qtbot: QtBot) -> None:
 
     widget.show_snapshot(object())
 
-    assert widget.table.rowCount() == 1
+    assert widget.table.rowCount() == 2
     assert widget.table.accessibleName() == "Position / Basket"

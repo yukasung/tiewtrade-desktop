@@ -4,6 +4,7 @@ from decimal import Decimal
 
 from tests.support.paper_session_setup import configured_spot_session
 from tests.support.trade_history_records import trade_fill
+from tests.support.workspace_snapshots import basket_entries
 from tiewtrade.application.bot_control import (
     BotControlAction,
     BotControlSnapshot,
@@ -811,6 +812,9 @@ def open_basket(session: ConfiguredPaperSession, entry_count: int) -> BasketSnap
         symbol=session.market_data.symbol,
         market_type=session.config.market_type,
         entry_count=entry_count,
+        entries=basket_entries(
+            *("100",) * entry_count, quantity="1", current_price="101"
+        ),
         total_quantity=Decimal(entry_count),
         average_entry_price=Decimal("100"),
         current_price=Decimal("101"),

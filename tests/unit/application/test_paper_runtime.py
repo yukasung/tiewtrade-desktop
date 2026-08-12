@@ -376,6 +376,14 @@ def test_start_selects_concrete_paper_market_and_publishes_live_basket(
     assert current.basket is not None
     assert current.basket.market_type == market_type.value
     assert current.basket.entry_count == 1
+    # The Entry the runtime filled reaches the tab unaveraged, marked on its own
+    # price, so a second Entry cannot hide inside an average.
+    entry = current.basket.entries[0]
+    assert entry.entry_number == 1
+    assert entry.quantity == current.basket.total_quantity
+    assert entry.price == current.basket.average_entry_price
+    assert entry.notional == entry.price * entry.quantity
+    assert entry.unrealized_pnl == current.basket.unrealized_pnl
     assert current.basket.total_quantity > 0
     assert current.basket.current_price == _live_candles()[-1].close
     assert current.data_as_of_utc == _live_candles()[-1].close_time
