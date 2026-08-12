@@ -106,10 +106,10 @@ def test_page_exposes_filters_and_exact_table_columns(qtbot: QtBot) -> None:
         "Open",
         "Closed",
     ]
-    assert page.from_date_enabled.text() == "From Date (UTC)"
-    assert page.to_date_enabled.text() == "To Date (UTC)"
-    assert page.from_date.accessibleName() == "From Date (UTC)"
-    assert page.to_date.accessibleName() == "To Date (UTC)"
+    assert page.from_date_enabled.text() == "From Date"
+    assert page.to_date_enabled.text() == "To Date"
+    assert page.from_date.accessibleName() == "From Date"
+    assert page.to_date.accessibleName() == "To Date"
 
 
 def test_page_uses_two_tabs_hides_trade_only_status_and_has_no_pagination(

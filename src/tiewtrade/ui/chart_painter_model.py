@@ -13,6 +13,7 @@ from tiewtrade.application.chart_data import (
     latest_completed_boundary,
 )
 from tiewtrade.trading.trade_history import FillSide
+from tiewtrade.ui.display_time import in_display_timezone
 
 _PANE_GAP = 10.0
 _RSI_PANE_RATIO = 0.26
@@ -609,7 +610,7 @@ def crosshair_at(
                 time_label_width,
                 time_axis.height(),
             ),
-            label=f"{timestamp:%Y-%m-%d %H:%M UTC}",
+            label=f"{in_display_timezone(timestamp):%Y-%m-%d %H:%M}",
             value=timestamp.isoformat(),
         ),
     )
@@ -620,7 +621,7 @@ def _price_text(value: Decimal) -> str:
 
 
 def _time_text(value: datetime) -> str:
-    return f"{value:%H:%M}"
+    return f"{in_display_timezone(value):%H:%M}"
 
 
 def _remaining_time_text(value: timedelta) -> str:

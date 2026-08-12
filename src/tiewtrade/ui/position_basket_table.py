@@ -16,6 +16,7 @@ from tiewtrade.application.trading_workspace import (
     PositionBasketTabSnapshot,
     WorkspaceTabState,
 )
+from tiewtrade.ui.display_time import display_timestamp
 from tiewtrade.ui.table_empty_state import TableEmptyStateOverlay
 
 
@@ -108,10 +109,8 @@ class PositionBasketTable(QWidget):
             data_as_of_utc = snapshot.data_as_of_utc
             if data_as_of_utc is None:
                 return "Stale Position / Basket data"
-            return (
-                "Stale Position / Basket data as of "
-                f"{data_as_of_utc.strftime('%Y-%m-%d %H:%M:%S UTC')}"
-            )
+            stamp = display_timestamp(data_as_of_utc)
+            return f"Stale Position / Basket data as of {stamp}"
         return ""
 
     def _table(self) -> QTableWidget:

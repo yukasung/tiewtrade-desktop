@@ -231,7 +231,7 @@ def test_paper_execution_history_survives_restart_and_reaches_desktop(
     qtbot.waitUntil(lambda: window.trade_history.basket_table.rowCount() == 2)
     assert window.trade_history.total_net_pnl.text() == "2273.69035202 USDT · Profit"
     assert _table_row_text(window.trade_history.basket_table, 0) == (
-        "2026-01-01 02:05:00 UTC",
+        "2026-01-01 09:05:00",
         "Paper",
         "Futures",
         "BTCUSDT",
@@ -250,7 +250,7 @@ def test_paper_execution_history_survives_restart_and_reaches_desktop(
     qtbot.waitUntil(lambda: window.trade_history.fill_table.rowCount() == 4)
     assert set(_table_rows_text(window.trade_history.fill_table)) == {
         (
-            "2026-01-01 02:05:00 UTC",
+            "2026-01-01 09:05:00",
             "BTCUSDT",
             "Buy",
             "95.6",
@@ -261,7 +261,7 @@ def test_paper_execution_history_survives_restart_and_reaches_desktop(
             "Paper Executor",
         ),
         (
-            "2026-01-01 02:45:00 UTC",
+            "2026-01-01 09:45:00",
             "BTCUSDT",
             "Sell",
             "103.0",
@@ -272,7 +272,7 @@ def test_paper_execution_history_survives_restart_and_reaches_desktop(
             "Paper Executor",
         ),
         (
-            "2026-01-01 02:05:00 UTC",
+            "2026-01-01 09:05:00",
             "BTCUSDT",
             "Buy",
             "95.02",
@@ -283,7 +283,7 @@ def test_paper_execution_history_survives_restart_and_reaches_desktop(
             "Paper Executor",
         ),
         (
-            "2026-01-01 02:50:00 UTC",
+            "2026-01-01 09:50:00",
             "BTCUSDT",
             "Sell",
             "103.99",

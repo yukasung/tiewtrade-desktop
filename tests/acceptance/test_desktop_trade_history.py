@@ -76,7 +76,7 @@ def test_desktop_trade_history_reads_durable_spot_and_futures_records(
     qtbot.waitUntil(lambda: window.trade_history.basket_table.rowCount() == 2)
     assert basket_requests == [TradeHistoryFilter()]
     assert _table_row_text(window.trade_history.basket_table, 0) == (
-        "2026-01-03 00:00:00 UTC",
+        "2026-01-03 07:00:00",
         "Paper",
         "Futures",
         "BTCUSDT",
@@ -96,7 +96,7 @@ def test_desktop_trade_history_reads_durable_spot_and_futures_records(
         == FUTURES_BASKET_ID
     )
     assert _table_row_text(window.trade_history.basket_table, 1) == (
-        "2026-01-01 00:00:00 UTC",
+        "2026-01-01 07:00:00",
         "Paper",
         "Spot",
         "BTCUSDT",
@@ -120,7 +120,7 @@ def test_desktop_trade_history_reads_durable_spot_and_futures_records(
     qtbot.waitUntil(lambda: window.trade_history.fill_table.rowCount() == 4)
     assert _table_rows_text(window.trade_history.fill_table) == (
         (
-            "2026-01-03 01:00:00 UTC",
+            "2026-01-03 08:00:00",
             "BTCUSDT",
             "Sell",
             "100",
@@ -131,7 +131,7 @@ def test_desktop_trade_history_reads_durable_spot_and_futures_records(
             "Paper Executor",
         ),
         (
-            "2026-01-03 00:00:00 UTC",
+            "2026-01-03 07:00:00",
             "BTCUSDT",
             "Buy",
             "100",
@@ -142,7 +142,7 @@ def test_desktop_trade_history_reads_durable_spot_and_futures_records(
             "Paper Executor",
         ),
         (
-            "2026-01-02 00:00:00 UTC",
+            "2026-01-02 07:00:00",
             "BTCUSDT",
             "Sell",
             "100",
@@ -153,7 +153,7 @@ def test_desktop_trade_history_reads_durable_spot_and_futures_records(
             "Paper Executor",
         ),
         (
-            "2026-01-01 00:00:00 UTC",
+            "2026-01-01 07:00:00",
             "BTCUSDT",
             "Buy",
             "100",
@@ -209,8 +209,8 @@ def test_desktop_trade_history_filters_all_rows_and_survives_restart(
         table_item(first.trade_history.basket_table, row, 0).text() for row in range(51)
     )
     assert first_page_opened_at == tuple(sorted(first_page_opened_at, reverse=True))
-    assert first_page_opened_at[0] == "2026-02-20 00:00:00 UTC"
-    assert first_page_opened_at[-1] == "2026-01-01 00:00:00 UTC"
+    assert first_page_opened_at[0] == "2026-02-20 07:00:00"
+    assert first_page_opened_at[-1] == "2026-01-01 07:00:00"
 
     matching_filters = (
         (first.trade_history.symbol, "BTCUSDT"),
@@ -237,8 +237,9 @@ def test_desktop_trade_history_filters_all_rows_and_survives_restart(
         market_type=MarketType.FUTURES,
         trade_mode=TradeMode.PAPER,
         status=BasketStatus.CLOSED,
-        opened_from_utc=datetime(2026, 2, 20, tzinfo=UTC),
-        opened_before_utc=datetime(2026, 2, 21, tzinfo=UTC),
+        # The picked day is a Bangkok day, which opens at 17:00 UTC.
+        opened_from_utc=datetime(2026, 2, 19, 17, 0, tzinfo=UTC),
+        opened_before_utc=datetime(2026, 2, 20, 17, 0, tzinfo=UTC),
     )
 
     click(first.trade_history.reset_button)

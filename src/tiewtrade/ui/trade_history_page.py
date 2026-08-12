@@ -126,12 +126,12 @@ class TradeHistoryPage(QWidget):
             (("All", None), ("Open", "open"), ("Closed", "closed")),
         )
 
-        self.from_date_enabled = QCheckBox("From Date (UTC)")
+        self.from_date_enabled = QCheckBox("From Date")
         self.from_date_enabled.setObjectName("fromDateEnabled")
-        self.from_date = self._date_edit("fromDate", "From Date (UTC)")
-        self.to_date_enabled = QCheckBox("To Date (UTC)")
+        self.from_date = self._date_edit("fromDate", "From Date")
+        self.to_date_enabled = QCheckBox("To Date")
         self.to_date_enabled.setObjectName("toDateEnabled")
-        self.to_date = self._date_edit("toDate", "To Date (UTC)")
+        self.to_date = self._date_edit("toDate", "To Date")
         self.from_date_enabled.toggled.connect(self.from_date.setEnabled)
         self.to_date_enabled.toggled.connect(self.to_date.setEnabled)
 

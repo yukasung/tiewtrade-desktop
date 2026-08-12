@@ -124,7 +124,7 @@ def test_position_basket_states_preserve_or_clear_application_facts(
         ),
         (
             stale_position_basket_tab(ready),
-            "Stale Position / Basket data as of 2026-08-02 01:02:04 UTC",
+            "Stale Position / Basket data as of 2026-08-02 08:02:04",
         ),
     ):
         widget.show_snapshot(snapshot)

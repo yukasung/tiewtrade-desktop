@@ -112,7 +112,7 @@ def test_paper_notification_feedback_shows_blocked_without_side_effects(
     click(window.workspace.notification_button)
     qtbot.waitUntil(window.workspace.notification_drawer.isVisible)
     assert window.workspace.notification_rows[0].text() == (
-        "2026-08-02 12:00:00 UTC · Critical · Safety · Paper Bot recovery required"
+        "2026-08-02 19:00:00 · Critical · Safety · Paper Bot recovery required"
     )
 
     click(window.workspace.notification_acknowledge_buttons[0])
@@ -186,7 +186,7 @@ def test_paper_fake_stale_notification_keeps_safe_workspace_state(
     click(window.workspace.notification_button)
     qtbot.waitUntil(window.workspace.notification_drawer.isVisible)
     assert window.workspace.notification_rows[0].text() == (
-        "2026-08-02 12:00:00 UTC · Warning · Market Data · "
+        "2026-08-02 19:00:00 · Warning · Market Data · "
         "Market data is stale; new entries are paused"
     )
 

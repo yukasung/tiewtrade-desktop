@@ -10,6 +10,7 @@ from tiewtrade.trading.trade_history import (
     BasketStatus,
     TradeFill,
 )
+from tiewtrade.ui.display_time import DISPLAY_TIMEZONE, display_timestamp
 
 
 @dataclass(frozen=True, slots=True)
@@ -71,7 +72,7 @@ def basket_rows(baskets: tuple[BasketResult, ...]) -> tuple[BasketRow, ...]:
         BasketRow(
             basket_id=basket.basket_id,
             values=(
-                _utc_text(basket.opened_at_utc),
+                _local_text(basket.opened_at_utc),
                 _display_enum(basket.trade_mode.value),
                 _display_enum(basket.market_type.value),
                 basket.symbol,
@@ -93,7 +94,7 @@ def fill_rows(fills: tuple[TradeFill, ...]) -> tuple[FillRow, ...]:
     return tuple(
         FillRow(
             values=(
-                _utc_text(fill.filled_at_utc),
+                _local_text(fill.filled_at_utc),
                 _display_enum(fill.side.value),
                 str(fill.entry_number) if fill.entry_number is not None else "—",
                 _decimal_text(fill.price),
@@ -114,7 +115,7 @@ def trade_fill_rows(
     return tuple(
         FillRow(
             values=(
-                _utc_text(item.fill.filled_at_utc),
+                _local_text(item.fill.filled_at_utc),
                 item.symbol,
                 _display_enum(item.fill.side.value),
                 _decimal_text(item.fill.price),
@@ -156,13 +157,20 @@ def pnl_text(value: Decimal) -> str:
 
 
 def _utc_start(value: date | None) -> datetime | None:
+    """Midnight of a picked day, read on the clock the rows are shown in."""
     if value is None:
         return None
-    return datetime(value.year, value.month, value.day, tzinfo=UTC)
+    local = datetime(
+        value.year,
+        value.month,
+        value.day,
+        tzinfo=DISPLAY_TIMEZONE,
+    )
+    return local.astimezone(UTC)
 
 
-def _utc_text(value: datetime) -> str:
-    return value.strftime("%Y-%m-%d %H:%M:%S UTC")
+def _local_text(value: datetime) -> str:
+    return display_timestamp(value)
 
 
 def _usdt_text(value: Decimal) -> str:

@@ -171,7 +171,7 @@ def test_notification_header_and_drawer_render_and_acknowledge_in_memory_only(
     click(workspace.notification_button)
     qtbot.waitUntil(workspace.notification_drawer.isVisible)
     assert workspace.notification_rows[0].text() == (
-        "2026-08-02 09:30:00 UTC · Critical · Safety · Paper Bot recovery required"
+        "2026-08-02 16:30:00 · Critical · Safety · Paper Bot recovery required"
     )
 
     click(workspace.notification_acknowledge_buttons[0])

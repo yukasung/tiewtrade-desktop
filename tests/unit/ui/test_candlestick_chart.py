@@ -59,6 +59,20 @@ def test_chart_header_emits_selected_read_only_view(qtbot: QtBot) -> None:
     assert selected[-1] == ChartViewSelection(symbol="BNBUSDT", timeframe="1m")
 
 
+def test_zoom_buttons_carry_magnifier_icons_not_text(qtbot: QtBot) -> None:
+    chart = CandlestickChartWidget()
+    qtbot.addWidget(chart)
+
+    for button in (chart.zoom_in_button, chart.zoom_out_button):
+        assert button.text() == ""
+        assert not button.icon().isNull()
+        assert button.accessibleName()
+    # The two lenses differ: only zoom in carries the vertical stroke.
+    zoom_in = chart.zoom_in_button.icon().pixmap(18, 18).toImage()
+    zoom_out = chart.zoom_out_button.icon().pixmap(18, 18).toImage()
+    assert zoom_in != zoom_out
+
+
 def test_zoom_buttons_request_a_narrower_and_wider_range(qtbot: QtBot) -> None:
     chart = CandlestickChartWidget()
     qtbot.addWidget(chart)
@@ -276,7 +290,9 @@ def test_mouse_over_plot_shows_crosshair_price_and_time(qtbot: QtBot) -> None:
 
     assert chart.crosshair is not None
     assert chart.crosshair.price_label.label
-    assert chart.crosshair.time_label.label.endswith("UTC")
+    # The stamp names the moment only: the app shows one timezone everywhere.
+    assert chart.crosshair.time_label.label.startswith("2026-01-01 ")
+    assert "UTC" not in chart.crosshair.time_label.label
 
 
 def test_crosshair_hides_outside_plot_area(qtbot: QtBot) -> None:

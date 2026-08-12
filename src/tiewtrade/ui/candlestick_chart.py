@@ -1,10 +1,12 @@
-from PySide6.QtCore import QEvent, QPointF, QRectF, QSignalBlocker, Qt, Signal
+from PySide6.QtCore import QEvent, QPointF, QRectF, QSignalBlocker, QSize, Qt, Signal
 from PySide6.QtGui import (
     QColor,
+    QIcon,
     QMouseEvent,
     QPainter,
     QPainterPath,
     QPen,
+    QPixmap,
     QPolygonF,
     QWheelEvent,
 )
@@ -41,8 +43,24 @@ from tiewtrade.ui.chart_painter_model import (
     crosshair_at,
     marker_label,
 )
+from tiewtrade.ui.display_time import in_display_timezone
 
 _ALIGN_LEFT_TOP = int(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop)
+_ALIGN_CENTER = int(Qt.AlignmentFlag.AlignCenter)
+# One palette for the painted layer; the themed widgets read theme.py instead.
+_GRID_COLOR = "#26313F"
+_AXIS_TEXT_COLOR = "#94A3B8"
+_LEGEND_TEXT_COLOR = "#CBD5E1"
+_LABEL_TEXT_COLOR = "#F8FAFC"
+_BADGE_TEXT_COLOR = "#0B1118"
+_CROSSHAIR_COLOR = "#64748B"
+_CROSSHAIR_LABEL_COLOR = "#334155"
+_ZOOM_ICON_SIZE = 18
+_ZOOM_ICON_EXTENT = QSize(_ZOOM_ICON_SIZE, _ZOOM_ICON_SIZE)
+# The icons are painted rather than shipped as assets so they inherit the
+# button's enabled and disabled text colors from the theme.
+_ZOOM_ICON_COLOR = "#F1F5F9"
+_ZOOM_ICON_DISABLED_COLOR = "#6F7D93"
 
 
 class CandlestickChartWidget(QWidget):
@@ -83,14 +101,18 @@ class CandlestickChartWidget(QWidget):
         controls.addWidget(self._range)
         navigation = QHBoxLayout()
         navigation.setSpacing(8)
-        self.zoom_out_button = QPushButton("−")
+        self.zoom_out_button = QPushButton()
         self.zoom_out_button.setObjectName("zoomOutButton")
         self.zoom_out_button.setFixedWidth(44)
         self.zoom_out_button.setAccessibleName("Zoom out chart")
-        self.zoom_in_button = QPushButton("+")
+        self.zoom_out_button.setIcon(_magnifier_icon(zoom_in=False))
+        self.zoom_out_button.setIconSize(_ZOOM_ICON_EXTENT)
+        self.zoom_in_button = QPushButton()
         self.zoom_in_button.setObjectName("zoomInButton")
         self.zoom_in_button.setFixedWidth(44)
         self.zoom_in_button.setAccessibleName("Zoom in chart")
+        self.zoom_in_button.setIcon(_magnifier_icon(zoom_in=True))
+        self.zoom_in_button.setIconSize(_ZOOM_ICON_EXTENT)
         self.previous_range_button = QPushButton("←")
         self.previous_range_button.setObjectName("previousRangeButton")
         self.previous_range_button.setFixedWidth(44)
@@ -311,46 +333,48 @@ class CandlestickChartWidget(QWidget):
         self.range_requested.emit(next_range)
 
     def _draw_message(self, painter: QPainter, surface: QRectF, message: str) -> None:
-        painter.setPen(QColor("#94A3B8"))
-        painter.drawText(surface, 0x84, message)
+        painter.setPen(QColor(_AXIS_TEXT_COLOR))
+        painter.drawText(surface, _ALIGN_CENTER, message)
 
     def _draw_chart(
         self, painter: QPainter, surface: QRectF, snapshot: ChartSnapshot
     ) -> None:
         model = build_painter_model(snapshot, surface)
-        painter.setPen(QPen(QColor("#26313F"), 1))
+        painter.setPen(QPen(QColor(_GRID_COLOR), 1))
         for line in model.grid_lines:
             painter.drawLine(line)
-        painter.setPen(QPen(QColor("#94A3B8"), 1))
+        painter.setPen(QPen(QColor(_AXIS_TEXT_COLOR), 1))
         for tick in model.price_ticks + model.time_ticks:
             painter.drawLine(tick.line)
-            painter.drawText(tick.label_rect, 0x84, tick.label)
+            painter.drawText(tick.label_rect, _ALIGN_CENTER, tick.label)
         for candle in model.candles:
             painter.setPen(QPen(candle.color, 1))
             painter.drawLine(candle.wick)
             painter.fillRect(candle.body, candle.color)
+        ring_pen = QPen(QColor(CHART_SURFACE_COLOR), MARKER_RING_WIDTH)
+        badge_text_pen = QPen(QColor(_BADGE_TEXT_COLOR), 1)
         for marker in model.markers:
-            painter.setPen(QPen(QColor(CHART_SURFACE_COLOR), MARKER_RING_WIDTH))
+            painter.setPen(ring_pen)
             painter.setBrush(marker.color)
             painter.drawPath(_marker_path(marker))
-            painter.setPen(QPen(QColor("#0B1118"), 1))
-            painter.drawText(marker.badge, 0x84, marker.label)
+            painter.setPen(badge_text_pen)
+            painter.drawText(marker.badge, _ALIGN_CENTER, marker.label)
         painter.setBrush(Qt.BrushStyle.NoBrush)
         current_price = model.current_price
         if current_price is not None:
             painter.setPen(QPen(current_price.color, 1, Qt.PenStyle.DotLine))
             painter.drawLine(current_price.line)
             painter.fillRect(current_price.label_rect, current_price.color)
-            painter.setPen(QPen(QColor("#F8FAFC"), 1))
+            painter.setPen(QPen(QColor(_LABEL_TEXT_COLOR), 1))
             painter.drawText(
                 current_price.label_rect,
-                0x84,
+                _ALIGN_CENTER,
                 f"{current_price.price_text}\n{current_price.remaining_text}",
             )
         self._draw_rsi_pane(painter, model)
         crosshair = self._crosshair_for(model)
         if crosshair is not None:
-            painter.setPen(QPen(QColor("#64748B"), 1, Qt.PenStyle.DashLine))
+            painter.setPen(QPen(QColor(_CROSSHAIR_COLOR), 1, Qt.PenStyle.DashLine))
             painter.drawLine(crosshair.vertical)
             painter.drawLine(crosshair.horizontal)
             self._draw_crosshair_label(painter, crosshair.price_label)
@@ -359,12 +383,12 @@ class CandlestickChartWidget(QWidget):
 
     def _draw_rsi_pane(self, painter: QPainter, model: ChartPainterModel) -> None:
         pane = model.rsi_pane
-        painter.setPen(QPen(QColor("#26313F"), 1, Qt.PenStyle.DashLine))
+        painter.setPen(QPen(QColor(_GRID_COLOR), 1, Qt.PenStyle.DashLine))
         for guide in pane.guides:
             painter.drawLine(guide.line)
-        painter.setPen(QPen(QColor("#94A3B8"), 1))
+        painter.setPen(QPen(QColor(_AXIS_TEXT_COLOR), 1))
         for guide in pane.guides:
-            painter.drawText(guide.label_rect, 0x84, guide.label)
+            painter.drawText(guide.label_rect, _ALIGN_CENTER, guide.label)
         painter.setPen(QPen(pane.color, 1))
         for polyline in pane.polylines:
             painter.drawPolyline(QPolygonF(polyline))
@@ -375,7 +399,7 @@ class CandlestickChartWidget(QWidget):
             return
         plot = model.plot_surface
         rect = QRectF(plot.left() + 8, plot.top() + 4, max(1.0, plot.width() - 16), 34)
-        painter.setPen(QPen(QColor("#CBD5E1"), 1))
+        painter.setPen(QPen(QColor(_LEGEND_TEXT_COLOR), 1))
         painter.drawText(rect, _ALIGN_LEFT_TOP, _legend_text(readout))
 
     def _chart_surface(self) -> QRectF:
@@ -389,9 +413,54 @@ class CandlestickChartWidget(QWidget):
 
     @staticmethod
     def _draw_crosshair_label(painter: QPainter, label: AxisTickGlyph) -> None:
-        painter.fillRect(label.label_rect, QColor("#334155"))
-        painter.setPen(QPen(QColor("#F8FAFC"), 1))
-        painter.drawText(label.label_rect, 0x84, label.label)
+        painter.fillRect(label.label_rect, QColor(_CROSSHAIR_LABEL_COLOR))
+        painter.setPen(QPen(QColor(_LABEL_TEXT_COLOR), 1))
+        painter.drawText(label.label_rect, _ALIGN_CENTER, label.label)
+
+
+def _magnifier_icon(*, zoom_in: bool) -> QIcon:
+    """A lens with a plus or a minus, in the theme's two button text colors."""
+    icon = QIcon()
+    icon.addPixmap(
+        _magnifier_pixmap(_ZOOM_ICON_COLOR, zoom_in=zoom_in),
+        QIcon.Mode.Normal,
+    )
+    icon.addPixmap(
+        _magnifier_pixmap(_ZOOM_ICON_DISABLED_COLOR, zoom_in=zoom_in),
+        QIcon.Mode.Disabled,
+    )
+    return icon
+
+
+def _magnifier_pixmap(color: str, *, zoom_in: bool) -> QPixmap:
+    # Painted at 3x and tagged, so the lens stays smooth on a retina screen.
+    ratio = 3
+    pixmap = QPixmap(_ZOOM_ICON_SIZE * ratio, _ZOOM_ICON_SIZE * ratio)
+    pixmap.setDevicePixelRatio(ratio)
+    pixmap.fill(Qt.GlobalColor.transparent)
+    painter = QPainter(pixmap)
+    painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+    pen = QPen(QColor(color), 1.6)
+    pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+    painter.setPen(pen)
+    painter.setBrush(Qt.BrushStyle.NoBrush)
+    lens = QRectF(1.6, 1.6, 11.2, 11.2)
+    painter.drawEllipse(lens)
+    center = lens.center()
+    arm = 2.7
+    painter.drawLine(
+        QPointF(center.x() - arm, center.y()),
+        QPointF(center.x() + arm, center.y()),
+    )
+    if zoom_in:
+        painter.drawLine(
+            QPointF(center.x(), center.y() - arm),
+            QPointF(center.x(), center.y() + arm),
+        )
+    # The handle leaves the lens along the diagonal through its center.
+    painter.drawLine(QPointF(11.7, 11.7), QPointF(15.8, 15.8))
+    painter.end()
+    return pixmap
 
 
 def _marker_path(marker: MarkerGlyph) -> QPainterPath:
@@ -412,7 +481,9 @@ def _view_key(snapshot: ChartSnapshot | None) -> tuple[str, str, ChartRange] | N
 
 
 def _range_text(chart_range: ChartRange) -> str:
-    return f"{chart_range.start:%Y-%m-%d %H:%M}–{chart_range.end:%H:%M} UTC"
+    start = in_display_timezone(chart_range.start)
+    end = in_display_timezone(chart_range.end)
+    return f"{start:%Y-%m-%d %H:%M}–{end:%H:%M}"
 
 
 def _legend_text(readout: CandleReadout) -> str:
@@ -420,7 +491,7 @@ def _legend_text(readout: CandleReadout) -> str:
     rsi = "—" if readout.rsi is None else f"{readout.rsi:,.2f}"
     forming = "  · forming" if readout.is_in_progress else ""
     return (
-        f"{candle.open_time:%Y-%m-%d %H:%M} UTC{forming}\n"
+        f"{in_display_timezone(candle.open_time):%Y-%m-%d %H:%M}{forming}\n"
         f"O {candle.open:,.2f}  H {candle.high:,.2f}  "
         f"L {candle.low:,.2f}  C {candle.close:,.2f}  "
         f"RSI({readout.rsi_period}) {rsi}"

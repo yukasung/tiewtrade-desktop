@@ -25,6 +25,7 @@ from tiewtrade.application.trading_workspace import (
 )
 from tiewtrade.ui.bot_control import BotControlWidget
 from tiewtrade.ui.candlestick_chart import CandlestickChartWidget
+from tiewtrade.ui.display_time import display_timestamp
 from tiewtrade.ui.notification_center import NotificationRecord, NotificationStore
 from tiewtrade.ui.position_basket_table import PositionBasketTable
 from tiewtrade.ui.preset_display import preset_display_name
@@ -455,8 +456,7 @@ class TradingWorkspace(QWidget):
         self._render_notification_rows(store.records)
 
     def _notification_row_text(self, record: NotificationRecord) -> str:
-        occurred_at = record.occurred_at_utc.astimezone(UTC)
-        timestamp = occurred_at.strftime("%Y-%m-%d %H:%M:%S UTC")
+        timestamp = display_timestamp(record.occurred_at_utc)
         severity = record.severity.value.title()
         category = record.category.value.replace("_", " ").title()
         return f"{timestamp} · {severity} · {category} · {record.message}"

@@ -39,8 +39,9 @@ def test_filter_values_build_inclusive_utc_date_range() -> None:
         market_type=MarketType.SPOT,
         trade_mode=TradeMode.PAPER,
         status=BasketStatus.CLOSED,
-        opened_from_utc=datetime(2026, 1, 2, tzinfo=UTC),
-        opened_before_utc=datetime(2026, 1, 4, tzinfo=UTC),
+        # A Bangkok day starts seven hours before the UTC one.
+        opened_from_utc=datetime(2026, 1, 1, 17, 0, tzinfo=UTC),
+        opened_before_utc=datetime(2026, 1, 3, 17, 0, tzinfo=UTC),
     )
 
 
@@ -74,7 +75,7 @@ def test_basket_and_fill_rows_format_utc_and_all_columns() -> None:
 
     assert basket_rows((basket,))[0].basket_id == basket.basket_id
     assert basket_rows((basket,))[0].values == (
-        "2026-01-01 00:00:00 UTC",
+        "2026-01-01 07:00:00",
         "Paper",
         "Spot",
         "BTCUSDT",
@@ -88,7 +89,7 @@ def test_basket_and_fill_rows_format_utc_and_all_columns() -> None:
         "Closed",
     )
     assert fill_rows((fill,))[0].values == (
-        "2026-01-01 00:00:00 UTC",
+        "2026-01-01 07:00:00",
         "Buy",
         "1",
         "100",
@@ -117,7 +118,7 @@ def test_trade_fill_rows_include_symbol_and_total_for_cross_basket_history() -> 
     )
 
     assert trade_fill_rows((item,))[0].values == (
-        "2026-01-01 00:00:00 UTC",
+        "2026-01-01 07:00:00",
         "BTCUSDT",
         "Buy",
         "100",

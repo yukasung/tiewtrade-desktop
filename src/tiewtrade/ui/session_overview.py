@@ -4,6 +4,7 @@ from PySide6.QtWidgets import QFrame, QGridLayout, QLabel, QVBoxLayout, QWidget
 
 from tiewtrade.application.paper_session_setup import ConfiguredPaperSession
 from tiewtrade.trading.session_config import MarketType
+from tiewtrade.ui.display_time import in_display_timezone
 from tiewtrade.ui.preset_display import preset_display_name
 
 
@@ -60,7 +61,8 @@ class SessionOverviewWidget(QWidget):
         self._show_market_policy(session)
         self.fee_value.setText(f"{_decimal_text(config.fee_rate * Decimal('100'))}%")
         self.slippage_value.setText(f"{_decimal_text(config.slippage_bps)} bps")
-        self.created_at_value.setText(session.created_at_utc.isoformat())
+        created_at = in_display_timezone(session.created_at_utc)
+        self.created_at_value.setText(created_at.isoformat())
 
     def _build_layout(self) -> None:
         root = QVBoxLayout(self)
@@ -110,7 +112,7 @@ class SessionOverviewWidget(QWidget):
             ("Collateral Buffer", self.collateral_buffer_value),
             ("Trading Fee", self.fee_value),
             ("Slippage", self.slippage_value),
-            ("Created at (UTC)", self.created_at_value),
+            ("Created at", self.created_at_value),
         )
         for index, (label, value) in enumerate(rows):
             column = index % 2
