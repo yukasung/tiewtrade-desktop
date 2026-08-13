@@ -52,7 +52,7 @@ from tiewtrade.market_data.config import MarketDataConfig
 from tiewtrade.trading.symbol_rules import SymbolRules
 from tiewtrade.trading.trade_history import FillSide
 from tiewtrade.ui.bot_lifecycle_workflow import RuntimeSnapshotRelay
-from tiewtrade.ui.main_window import MainWindow
+from tiewtrade.ui.main_window import BotActions, ChartSources, MainWindow
 
 _T = TypeVar("_T")
 _FORMING_OBSERVED_AT = datetime(2026, 8, 2, 10, 3, tzinfo=UTC)
@@ -169,8 +169,9 @@ def test_desktop_shows_configured_session_chart_without_manual_order_controls(
         load_active=lambda: session,
         list_basket_history=empty_basket_history,
         list_trade_fills=empty_trade_fills,
-        load_chart=load_chart,
-        chart_clock=lambda: datetime(2026, 8, 2, 10, 3, tzinfo=UTC),
+        chart=ChartSources(
+            load=load_chart, clock=lambda: datetime(2026, 8, 2, 10, 3, tzinfo=UTC)
+        ),
     )
     qtbot.addWidget(window)
     window.resize(1200, 700)
@@ -220,9 +221,8 @@ def test_chart_failure_does_not_stop_runtime_or_trade_history(qtbot: QtBot) -> N
         load_active=lambda: session,
         list_basket_history=empty_basket_history,
         list_trade_fills=empty_trade_fills,
-        load_chart=fail_chart,
-        start_bot=start_bot,
-        stop_bot=stop_bot,
+        bot=BotActions(start=start_bot, stop=stop_bot),
+        chart=ChartSources(load=fail_chart),
     )
     qtbot.addWidget(window)
     window.show()
@@ -310,11 +310,12 @@ def test_runtime_candles_reach_chart_only_from_current_generation(
         load_active=lambda: session,
         list_basket_history=empty_basket_history,
         list_trade_fills=empty_trade_fills,
-        load_chart=load_chart,
-        refresh_chart=refresh_chart,
-        start_bot=start_bot,
-        runtime_snapshots=relay,
-        chart_clock=lambda: datetime(2026, 8, 2, 10, 3, tzinfo=UTC),
+        bot=BotActions(start=start_bot, runtime_snapshots=relay),
+        chart=ChartSources(
+            load=load_chart,
+            refresh=refresh_chart,
+            clock=lambda: datetime(2026, 8, 2, 10, 3, tzinfo=UTC),
+        ),
     )
     qtbot.addWidget(window)
     window.show()
@@ -457,11 +458,10 @@ def test_running_paper_session_shows_open_candle_then_commits_closed_candle(
         load_active=lambda: session,
         list_basket_history=empty_basket_history,
         list_trade_fills=empty_trade_fills,
-        load_chart=load_chart,
-        refresh_chart=refresh_chart,
-        start_bot=start_bot,
-        runtime_snapshots=relay,
-        chart_clock=lambda: _FORMING_OBSERVED_AT,
+        bot=BotActions(start=start_bot, runtime_snapshots=relay),
+        chart=ChartSources(
+            load=load_chart, refresh=refresh_chart, clock=lambda: _FORMING_OBSERVED_AT
+        ),
     )
     qtbot.addWidget(window)
     window.show()

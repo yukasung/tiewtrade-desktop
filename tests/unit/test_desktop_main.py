@@ -50,6 +50,7 @@ from tiewtrade.integrations.sqlite.paper_runtime_lifecycle import (
 from tiewtrade.integrations.sqlite.trade_history import SQLiteTradeHistory
 from tiewtrade.trading.symbol_rules import SymbolRules
 from tiewtrade.ui.bot_lifecycle_workflow import LifecycleAction, RuntimeSnapshotRelay
+from tiewtrade.ui.main_window import BotActions, ChartSources
 from tiewtrade.ui.session_workflow import CreateSession, LoadActiveSession
 from tiewtrade.ui.theme import DARK_THEME
 from tiewtrade.ui.trade_history_workflow import (
@@ -202,9 +203,8 @@ def test_desktop_composition_supplies_migrated_create_and_load_operations(
     active = load_active_session()
     assert isinstance(active, ConfiguredPaperSession)
     assert active.config.session_id == outcome.session.config.session_id
-    has_open_position = cast(
-        Callable[[ConfiguredPaperSession], bool], captured["has_open_position"]
-    )
+    has_open_position = cast(BotActions, captured["bot"]).has_open_position
+    assert has_open_position is not None
     assert has_open_position(active) is False
 
 
@@ -241,7 +241,7 @@ def test_desktop_composition_supplies_chart_loader_without_ui_adapter_imports(
     assert desktop_main.run_desktop(tmp_path / "tiewtrade.sqlite3") == 0
     load_chart = cast(
         Callable[[ConfiguredPaperSession, ChartRange], Awaitable[ChartSnapshot]],
-        captured["load_chart"],
+        cast(ChartSources, captured["chart"]).load,
     )
     chart_range = ChartRange(
         datetime(2026, 8, 2, 9, 0, tzinfo=UTC),
@@ -399,9 +399,10 @@ def test_desktop_composes_concrete_paper_runtime_actions(
 
     assert desktop_main.run_desktop(tmp_path / "tiewtrade.sqlite3") == 0
 
-    initialize_bot = cast(LifecycleAction, captured["initialize_bot"])
-    start_bot = cast(LifecycleAction, captured["start_bot"])
-    shutdown_runtime = cast(Callable[[], None], captured["shutdown_runtime"])
+    bot = cast(BotActions, captured["bot"])
+    initialize_bot = cast(LifecycleAction, bot.initialize)
+    start_bot = cast(LifecycleAction, bot.start)
+    shutdown_runtime = cast(Callable[[], None], bot.shutdown_runtime)
     session = configured_spot_session()
     start_snapshot = configured_bot_control(
         session,
@@ -427,7 +428,7 @@ def test_desktop_composes_concrete_paper_runtime_actions(
     assert rules.symbol == "BTCUSDT"
     assert rules.tick_size == Decimal("0.01")
     assert controller.dependencies["source_factory"] is BinancePublicMarketData
-    assert isinstance(captured["runtime_snapshots"], RuntimeSnapshotRelay)
+    assert isinstance(bot.runtime_snapshots, RuntimeSnapshotRelay)
 
     shutdown_runtime()
 
@@ -779,8 +780,10 @@ def test_ui_desktop_forwards_required_trade_history_dependencies(
             load_active=lambda: None,
             list_basket_history=lambda _filters: BasketHistoryResult((), Decimal("0")),
             list_trade_fills=lambda _filters: (),
-            runtime_snapshots=runtime_snapshots,
-            shutdown_runtime=shutdown_runtime,
+            bot=BotActions(
+                runtime_snapshots=runtime_snapshots,
+                shutdown_runtime=shutdown_runtime,
+            ),
         )
         == 0
     )
@@ -788,8 +791,9 @@ def test_ui_desktop_forwards_required_trade_history_dependencies(
     assert "list_fills" not in captured
     assert callable(captured["list_basket_history"])
     assert callable(captured["list_trade_fills"])
-    assert captured["runtime_snapshots"] is runtime_snapshots
-    assert captured["shutdown_runtime"] is shutdown_runtime
+    forwarded_bot = cast(BotActions, captured["bot"])
+    assert forwarded_bot.runtime_snapshots is runtime_snapshots
+    assert forwarded_bot.shutdown_runtime is shutdown_runtime
     assert captured["style_sheet"] == DARK_THEME
     assert captured["shown"] is True
 
@@ -832,11 +836,11 @@ def test_ui_desktop_forwards_chart_view_selection_callback(
             load_active=lambda: None,
             list_basket_history=lambda _filters: BasketHistoryResult((), Decimal("0")),
             list_trade_fills=lambda _filters: (),
-            select_chart_view=select_chart_view,
+            chart=ChartSources(select_view=select_chart_view),
         )
         == 0
     )
-    assert captured["select_chart_view"] is select_chart_view
+    assert cast(ChartSources, captured["chart"]).select_view is select_chart_view
 
 
 def test_desktop_composition_defers_database_directory_creation_to_load_worker(

@@ -55,6 +55,7 @@ from tiewtrade.trading.trade_history import TradeFill
 from tiewtrade.ui.bot_lifecycle_workflow import RuntimeSnapshotRelay
 from tiewtrade.ui.chart_workflow import ChartFactRelay
 from tiewtrade.ui.desktop import run_desktop as run_desktop_ui
+from tiewtrade.ui.main_window import BotActions, ChartSources
 
 _RUNTIME_SHUTDOWN_TIMEOUT_SECONDS = 30.0
 _MANUAL_CLOSE_PRICE_MAX_AGE = timedelta(seconds=30)
@@ -454,24 +455,28 @@ def run_desktop(database_path: Path | None = None) -> int:
         load_active=load_after_migration,
         list_basket_history=list_basket_history_after_migration,
         list_trade_fills=list_trade_fills_after_migration,
-        start_bot=runtime_actions.start,
-        stop_bot=runtime_actions.stop,
-        stop_for_replacement=runtime_actions.stop_for_replacement,
         validate_session=validate_paper_session,
-        close_position=close_position_after_migration,
-        has_open_position=lambda session: (
-            history.find_open_basket(session.config.session_id) is not None
+        bot=BotActions(
+            start=runtime_actions.start,
+            stop=runtime_actions.stop,
+            initialize=runtime_actions.initialize,
+            runtime_snapshots=runtime_snapshots,
+            shutdown_runtime=shutdown_desktop_runtimes,
+            stop_for_replacement=runtime_actions.stop_for_replacement,
+            close_position=close_position_after_migration,
+            has_open_position=lambda session: (
+                history.find_open_basket(session.config.session_id) is not None
+            ),
+            retire_session=retire_after_migration,
         ),
-        retire_session=retire_after_migration,
-        initialize_bot=runtime_actions.initialize,
-        runtime_snapshots=runtime_snapshots,
-        shutdown_runtime=shutdown_desktop_runtimes,
-        load_chart=load_chart,
-        refresh_chart=refresh_chart,
-        load_chart_fills=load_chart_fills,
-        chart_fact_relay=chart_fact_relay,
-        start_chart_feed=start_chart_feed,
-        select_chart_view=select_chart_view,
+        chart=ChartSources(
+            load=load_chart,
+            refresh=refresh_chart,
+            load_fills=load_chart_fills,
+            facts=chart_fact_relay,
+            start_feed=start_chart_feed,
+            select_view=select_chart_view,
+        ),
     )
 
 

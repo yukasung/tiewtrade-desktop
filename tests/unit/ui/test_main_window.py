@@ -61,7 +61,7 @@ from tiewtrade.trading.futures_policy import FuturesTradingPolicy
 from tiewtrade.trading.session_config import MarketType, TradeMode
 from tiewtrade.trading.spot_policy import SpotTradingPolicy
 from tiewtrade.ui.bot_lifecycle_workflow import RuntimeSnapshotRelay
-from tiewtrade.ui.main_window import MainWindow
+from tiewtrade.ui.main_window import BotActions, ChartSources, MainWindow
 from tiewtrade.ui.session_overview import SessionOverviewWidget
 
 
@@ -97,8 +97,9 @@ def test_session_ready_loads_chart_for_configured_session(qtbot: QtBot) -> None:
         load_active=lambda: session,
         list_basket_history=empty_basket_history,
         list_trade_fills=empty_trade_fills,
-        load_chart=load_chart,
-        chart_clock=lambda: datetime(2026, 8, 2, 10, 3, tzinfo=UTC),
+        chart=ChartSources(
+            load=load_chart, clock=lambda: datetime(2026, 8, 2, 10, 3, tzinfo=UTC)
+        ),
     )
     qtbot.addWidget(window)
     window.show()
@@ -138,8 +139,10 @@ def test_chart_view_selection_reloads_chart_without_bot_lifecycle(
         load_active=lambda: session,
         list_basket_history=empty_basket_history,
         list_trade_fills=empty_trade_fills,
-        load_chart=load_chart,
-        select_chart_view=lambda _session, selection: feed_selections.append(selection),
+        chart=ChartSources(
+            load=load_chart,
+            select_view=lambda _session, selection: feed_selections.append(selection),
+        ),
     )
     qtbot.addWidget(window)
     window.show()
@@ -181,7 +184,7 @@ def test_chart_unavailable_does_not_disable_bot_control_or_trade_history(
         load_active=lambda: session,
         list_basket_history=empty_basket_history,
         list_trade_fills=empty_trade_fills,
-        load_chart=unavailable_chart,
+        chart=ChartSources(load=unavailable_chart),
     )
     qtbot.addWidget(window)
     window.show()
@@ -284,10 +287,7 @@ def test_empty_trade_history_preserves_the_exact_query_summary(
     qtbot.waitUntil(
         lambda: window.trade_history.basket_state.text() == "No Basket history"
     )
-    assert (
-        window.trade_history.total_net_pnl.text()
-        == "0.000000000000000001 USDT"
-    )
+    assert window.trade_history.total_net_pnl.text() == "0.000000000000000001 USDT"
     assert window.trade_history.total_items.text() == "0 total Baskets"
 
 
@@ -1261,7 +1261,7 @@ def test_closing_window_invokes_controlled_runtime_shutdown(qtbot: QtBot) -> Non
         load_active=no_active_session,
         list_basket_history=empty_basket_history,
         list_trade_fills=empty_trade_fills,
-        shutdown_runtime=shutdown_runtime,
+        bot=BotActions(shutdown_runtime=shutdown_runtime),
     )
     qtbot.addWidget(window)
     window.show()
@@ -1287,7 +1287,7 @@ def test_closing_window_does_not_stop_chart_feed_on_qt_thread(qtbot: QtBot) -> N
         load_active=no_active_session,
         list_basket_history=empty_basket_history,
         list_trade_fills=empty_trade_fills,
-        stop_chart_feed=lambda: stopped.append(True),
+        chart=ChartSources(stop_feed=lambda: stopped.append(True)),
     )
     qtbot.addWidget(window)
 
@@ -1388,8 +1388,7 @@ def test_lifecycle_actions_render_matching_header_and_control_snapshot(
         load_active=lambda: session,
         list_basket_history=empty_basket_history,
         list_trade_fills=empty_trade_fills,
-        start_bot=start_bot,
-        stop_bot=stop_bot,
+        bot=BotActions(start=start_bot, stop=stop_bot),
     )
     qtbot.addWidget(window)
     window.show()
@@ -1429,7 +1428,7 @@ def test_blocked_runtime_reopens_the_editable_setup_form(
         load_active=configured_spot_session,
         list_basket_history=empty_basket_history,
         list_trade_fills=empty_trade_fills,
-        start_bot=fail_start,
+        bot=BotActions(start=fail_start),
     )
     qtbot.addWidget(window)
     window.show()
@@ -1471,8 +1470,7 @@ def test_stop_reopens_an_editable_setup_form(qtbot: QtBot) -> None:
         load_active=load_active,
         list_basket_history=empty_basket_history,
         list_trade_fills=empty_trade_fills,
-        start_bot=start,
-        stop_bot=stop,
+        bot=BotActions(start=start, stop=stop),
     )
     qtbot.addWidget(window)
     window.show()
@@ -1522,7 +1520,7 @@ def test_start_from_setup_creates_and_starts_paper_bot_in_one_action(
         load_active=no_active_session,
         list_basket_history=empty_basket_history,
         list_trade_fills=empty_trade_fills,
-        start_bot=start,
+        bot=BotActions(start=start),
     )
     qtbot.addWidget(window)
     window.show()
@@ -1571,8 +1569,7 @@ def test_start_from_setup_skips_recovery_inspection_for_new_session(
         load_active=no_active_session,
         list_basket_history=empty_basket_history,
         list_trade_fills=empty_trade_fills,
-        start_bot=start,
-        initialize_bot=initialize,
+        bot=BotActions(start=start, initialize=initialize),
     )
     qtbot.addWidget(window)
     window.show()
@@ -1613,8 +1610,7 @@ def test_stop_without_exposure_keeps_session_and_reopens_prefilled_form(
         load_active=lambda: session,
         list_basket_history=empty_basket_history,
         list_trade_fills=empty_trade_fills,
-        start_bot=start,
-        stop_bot=stop,
+        bot=BotActions(start=start, stop=stop),
     )
     qtbot.addWidget(window)
     window.show()
@@ -1693,12 +1689,14 @@ def test_stop_with_open_position_reopens_editable_setup_without_closing(
         load_active=lambda: session,
         list_basket_history=empty_basket_history,
         list_trade_fills=empty_trade_fills,
-        start_bot=start,
-        stop_bot=stop,
-        close_position=close_position,
-        has_open_position=lambda _session: True,
-        retire_session=retire_session,
-        runtime_snapshots=runtime_snapshots,
+        bot=BotActions(
+            start=start,
+            stop=stop,
+            close_position=close_position,
+            has_open_position=lambda _session: True,
+            retire_session=retire_session,
+            runtime_snapshots=runtime_snapshots,
+        ),
     )
     qtbot.addWidget(window)
     window.show()

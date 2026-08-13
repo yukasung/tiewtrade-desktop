@@ -69,7 +69,7 @@ from tiewtrade.trading.symbol_rules import SymbolRules
 from tiewtrade.trading.trade_history import BasketStatus
 from tiewtrade.ui.bot_lifecycle_workflow import RuntimeSnapshotRelay
 from tiewtrade.ui.display_time import display_timestamp
-from tiewtrade.ui.main_window import MainWindow
+from tiewtrade.ui.main_window import BotActions, MainWindow
 from tiewtrade.ui.position_basket_table import PositionBasketTable
 
 _T = TypeVar("_T")
@@ -253,10 +253,12 @@ def test_desktop_real_paper_runtime_starts_once_and_stops_without_closing_basket
         load_active=active_sessions.get_active,
         list_basket_history=history.list_basket_history,
         list_trade_fills=history.list_trade_fills,
-        start_bot=start_bot,
-        stop_bot=stop_bot,
-        initialize_bot=initialize_bot,
-        runtime_snapshots=runtime_relay,
+        bot=BotActions(
+            start=start_bot,
+            stop=stop_bot,
+            initialize=initialize_bot,
+            runtime_snapshots=runtime_relay,
+        ),
     )
     qtbot.addWidget(window)
     window.show()
@@ -365,7 +367,7 @@ def test_desktop_restart_blocked_runtime_reopens_setup_form(
         load_active=active_sessions.get_active,
         list_basket_history=empty_basket_history,
         list_trade_fills=empty_trade_fills,
-        initialize_bot=initialize_bot,
+        bot=BotActions(initialize=initialize_bot),
     )
     qtbot.addWidget(window)
     window.show()
@@ -438,7 +440,7 @@ def test_desktop_fake_snapshots_render_orders_and_basket_without_manual_trading(
         load_active=store.get_active,
         list_basket_history=empty_basket_history,
         list_trade_fills=empty_trade_fills,
-        start_bot=fake_start,
+        bot=BotActions(start=fake_start),
     )
     qtbot.addWidget(window)
     window.show()
@@ -779,8 +781,7 @@ def test_desktop_fake_lifecycle_has_no_trade_storage_side_effects(
         load_active=lambda: durable,
         list_basket_history=empty_basket_history,
         list_trade_fills=empty_trade_fills,
-        start_bot=fake_start,
-        stop_bot=fake_stop,
+        bot=BotActions(start=fake_start, stop=fake_stop),
     )
     qtbot.addWidget(window)
     window.show()

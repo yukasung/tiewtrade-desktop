@@ -21,7 +21,6 @@ from tiewtrade.application.trading_workspace import BotRuntimeState
 from tiewtrade.ui.background_task import BackgroundTask
 
 LifecycleAction = Callable[[BotControlSnapshot], BotLifecycleResult]
-NewSessionAvailability = Callable[[ConfiguredPaperSession], bool]
 
 
 class RuntimeSnapshotPublisher:
@@ -82,7 +81,6 @@ class BotLifecycleWorkflow(QObject):
         *,
         start_bot: LifecycleAction | None,
         stop_bot: LifecycleAction | None,
-        new_session_available: NewSessionAvailability | None = None,
         initialize_bot: LifecycleAction | None = None,
         runtime_snapshots: RuntimeSnapshotRelay | None = None,
         thread_pool: QThreadPool | None = None,
@@ -92,7 +90,6 @@ class BotLifecycleWorkflow(QObject):
         super().__init__(parent)
         self._start_bot = start_bot
         self._stop_bot = stop_bot
-        self._new_session_available = new_session_available
         self._initialize_bot = initialize_bot
         self._runtime_snapshots = runtime_snapshots
         self._thread_pool = thread_pool or QThreadPool.globalInstance()

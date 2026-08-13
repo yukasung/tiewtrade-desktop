@@ -1,4 +1,5 @@
 from collections.abc import Callable
+from dataclasses import dataclass
 from datetime import UTC, datetime
 
 from PySide6.QtCore import Qt, QThreadPool, Slot
@@ -43,6 +44,49 @@ from tiewtrade.ui.trading_workspace import TradingWorkspace
 WORKER_SHUTDOWN_TIMEOUT_MS = 5_000
 
 
+@dataclass(frozen=True, slots=True)
+class BotActions:
+    """What the window may do to the Bot and to the Session running it.
+
+    Every field is optional, because a window opened on the setup form or on
+    durable history needs none of them, and a test that exercises one flow
+    should not have to name the rest. Grouping them says which of the
+    window's questions they answer, which a flat list of optional callables
+    could not.
+    """
+
+    start: LifecycleAction | None = None
+    stop: LifecycleAction | None = None
+    initialize: LifecycleAction | None = None
+    runtime_snapshots: RuntimeSnapshotRelay | None = None
+    shutdown_runtime: Callable[[], None] | None = None
+    stop_for_replacement: Callable[[ConfiguredPaperSession], None] | None = None
+    close_position: Callable[[ConfiguredPaperSession], None] | None = None
+    has_open_position: Callable[[ConfiguredPaperSession], bool] | None = None
+    retire_session: Callable[[ConfiguredPaperSession], None] | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class ChartSources:
+    """Where the chart's candles and fills come from, and what keeps them live."""
+
+    load: LoadChart | None = None
+    refresh: RefreshChart | None = None
+    load_fills: LoadChartFills | None = None
+    facts: ChartFactRelay | None = None
+    start_feed: Callable[[ConfiguredPaperSession], None] | None = None
+    stop_feed: Callable[[], None] | None = None
+    select_view: (
+        Callable[[ConfiguredPaperSession, ChartViewSelection], None] | None
+    ) = None
+    clock: Callable[[], datetime] = lambda: datetime.now(UTC)
+
+
+# Frozen and empty, so one instance can stand for "none of this is wired".
+NO_BOT = BotActions()
+NO_CHART = ChartSources()
+
+
 class MainWindow(QMainWindow):
     def __init__(
         self,
@@ -51,41 +95,24 @@ class MainWindow(QMainWindow):
         load_active: LoadActiveSession,
         list_basket_history: ListBasketHistory | None = None,
         list_trade_fills: ListTradeFills | None = None,
-        start_bot: LifecycleAction | None = None,
-        stop_bot: LifecycleAction | None = None,
-        stop_for_replacement: Callable[[ConfiguredPaperSession], None] | None = None,
         validate_session: Callable[[PaperSessionSetupValues], None] | None = None,
-        close_position: Callable[[ConfiguredPaperSession], None] | None = None,
-        has_open_position: Callable[[ConfiguredPaperSession], bool] | None = None,
-        retire_session: Callable[[ConfiguredPaperSession], None] | None = None,
-        new_session_available: Callable[[ConfiguredPaperSession], bool] | None = None,
-        initialize_bot: LifecycleAction | None = None,
-        runtime_snapshots: RuntimeSnapshotRelay | None = None,
-        shutdown_runtime: Callable[[], None] | None = None,
-        load_chart: LoadChart | None = None,
-        refresh_chart: RefreshChart | None = None,
-        load_chart_fills: LoadChartFills | None = None,
-        chart_fact_relay: ChartFactRelay | None = None,
-        start_chart_feed: Callable[[ConfiguredPaperSession], None] | None = None,
-        select_chart_view: Callable[[ConfiguredPaperSession, ChartViewSelection], None]
-        | None = None,
-        stop_chart_feed: Callable[[], None] | None = None,
-        chart_clock: Callable[[], datetime] = lambda: datetime.now(UTC),
+        bot: BotActions = NO_BOT,
+        chart: ChartSources = NO_CHART,
         thread_pool: QThreadPool | None = None,
     ) -> None:
         super().__init__()
         self._thread_pool = thread_pool or QThreadPool.globalInstance()
-        self._load_chart = load_chart
-        self._close_position = close_position
-        self._has_open_position = has_open_position
-        self._retire_session = retire_session
-        self._stop_for_replacement = stop_for_replacement
+        self._load_chart = chart.load
+        self._close_position = bot.close_position
+        self._has_open_position = bot.has_open_position
+        self._retire_session = bot.retire_session
+        self._stop_for_replacement = bot.stop_for_replacement
         self._validate_session = validate_session or validate_paper_session
-        self._shutdown_runtime = shutdown_runtime
-        self._chart_fact_relay = chart_fact_relay
-        self._start_chart_feed = start_chart_feed
-        self._select_chart_view = select_chart_view
-        self._stop_chart_feed = stop_chart_feed
+        self._shutdown_runtime = bot.shutdown_runtime
+        self._chart_fact_relay = chart.facts
+        self._start_chart_feed = chart.start_feed
+        self._select_chart_view = chart.select_view
+        self._stop_chart_feed = chart.stop_feed
         self._close_sequence_started = False
         self._close_sequence_completed = False
         self._shutdown_task: BackgroundTask | None = None
@@ -127,11 +154,10 @@ class MainWindow(QMainWindow):
         self.unavailable_retry_button.clicked.connect(self._retry_unavailable)
 
         self._lifecycle_workflow = BotLifecycleWorkflow(
-            start_bot=start_bot,
-            stop_bot=stop_bot,
-            new_session_available=None,
-            initialize_bot=initialize_bot,
-            runtime_snapshots=runtime_snapshots,
+            start_bot=bot.start,
+            stop_bot=bot.stop,
+            initialize_bot=bot.initialize,
+            runtime_snapshots=bot.runtime_snapshots,
             thread_pool=self._thread_pool,
             parent=self,
         )
@@ -140,11 +166,11 @@ class MainWindow(QMainWindow):
         self.workspace.stop_bot_requested.connect(self._stop_requested)
 
         self._chart_workflow = ChartWorkflow(
-            load_chart=load_chart or _unused_chart_loader,
-            refresh_chart=refresh_chart,
-            load_fills=load_chart_fills,
+            load_chart=chart.load or _unused_chart_loader,
+            refresh_chart=chart.refresh,
+            load_fills=chart.load_fills,
             thread_pool=self._thread_pool,
-            clock=chart_clock,
+            clock=chart.clock,
             parent=self,
         )
         self._chart_workflow.snapshot_changed.connect(
@@ -156,22 +182,22 @@ class MainWindow(QMainWindow):
         self.workspace.chart.range_requested.connect(self._chart_workflow.load_range)
         self.workspace.chart.retry_requested.connect(self._chart_workflow.retry)
         self.workspace.chart.view_requested.connect(self._chart_view_requested)
-        if chart_fact_relay is not None:
-            chart_fact_relay.completed_candle_ready.connect(
+        if chart.facts is not None:
+            chart.facts.completed_candle_ready.connect(
                 self._chart_completed_candle,
                 Qt.ConnectionType.QueuedConnection,
             )
-            chart_fact_relay.in_progress_candle_ready.connect(
+            chart.facts.in_progress_candle_ready.connect(
                 self._chart_in_progress_candle,
                 Qt.ConnectionType.QueuedConnection,
             )
-        self._runtime_snapshots = runtime_snapshots
-        if chart_fact_relay is None and runtime_snapshots is not None:
-            runtime_snapshots.completed_candle_ready.connect(
+        self._runtime_snapshots = bot.runtime_snapshots
+        if chart.facts is None and bot.runtime_snapshots is not None:
+            bot.runtime_snapshots.completed_candle_ready.connect(
                 self._runtime_completed_candle,
                 Qt.ConnectionType.QueuedConnection,
             )
-            runtime_snapshots.in_progress_candle_ready.connect(
+            bot.runtime_snapshots.in_progress_candle_ready.connect(
                 self._runtime_in_progress_candle,
                 Qt.ConnectionType.QueuedConnection,
             )
