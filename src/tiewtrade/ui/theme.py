@@ -3,6 +3,12 @@
 POSITIVE_COLOR = "#0ECB81"
 NEGATIVE_COLOR = "#F6465D"
 
+# What a painted icon is drawn in, resting and under the pointer, matching the
+# muted and plain text the theme sets in CSS. A stylesheet cannot reach inside
+# a pixmap, so an icon carries both colours itself rather than being told one.
+ICON_COLOR = "#94A3B8"
+ICON_HOVER_COLOR = "#F1F5F9"
+
 DARK_THEME = """
 QMainWindow, QWidget#workspace, QWidget#workspaceContent {
     background: #0B0E11;
@@ -10,7 +16,7 @@ QMainWindow, QWidget#workspace, QWidget#workspaceContent {
     font-family: "Inter", "SF Pro Text", "Helvetica Neue", sans-serif;
     font-size: 14px;
 }
-QFrame#botControl, QFrame#card,
+QFrame#workspaceHeader, QFrame#botControl, QFrame#card,
 QFrame#statusCard, QFrame#filterCard, QFrame#emptyPanel {
     background: #141A22;
     border: 1px solid #2B3441;
@@ -32,6 +38,12 @@ QLabel {
 QLabel#pageTitle, QLabel#sectionTitle,
 QLabel#detailValue, QLabel#readOnlyValue, QLabel#stateValue {
     color: #F1F5F9;
+}
+QLabel#brand {
+    color: #4C7DFF;
+    font-size: 16px;
+    font-weight: 700;
+    letter-spacing: 1px;
 }
 QLabel#pageTitle {
     font-size: 24px;
@@ -167,6 +179,20 @@ QPushButton#destructiveButton {
     color: #FFFFFF;
     min-height: 38px;
     padding: 0 18px;
+}
+/* Sized in code beside its icon, which the two must agree on. */
+QPushButton#settingsButton {
+    background: transparent;
+    border: 1px solid transparent;
+    border-radius: 6px;
+    padding: 0;
+}
+QPushButton#settingsButton:hover {
+    background: #1B2430;
+    border-color: #3A4656;
+}
+QPushButton#settingsButton:focus {
+    border: 2px solid #4C7DFF;
 }
 QPushButton#advancedButton {
     background: transparent;

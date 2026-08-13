@@ -4,7 +4,7 @@ from decimal import Decimal
 from pathlib import Path
 
 from PySide6.QtCore import QPoint, QRect
-from PySide6.QtWidgets import QWidget
+from PySide6.QtWidgets import QLabel, QWidget
 from pytestqt.qtbot import QtBot
 
 from tests.support.paper_session_setup import configured_spot_session
@@ -51,6 +51,33 @@ def test_workspace_places_candlestick_chart_above_tables_with_docked_bot_control
 
     assert workspace.chart.geometry().bottom() < workspace.tabs.geometry().top()
     assert workspace.bot_control.isVisible()
+
+
+def test_header_reads_the_app_name_and_offers_settings(qtbot: QtBot) -> None:
+    workspace = TradingWorkspace()
+    qtbot.addWidget(workspace)
+    workspace.resize(1200, 700)
+    workspace.show()
+
+    qtbot.waitUntil(lambda: workspace.workspace_header.isVisible())
+
+    brand = workspace.workspace_header.findChild(QLabel, "brand")
+    assert brand is not None
+    assert brand.text() == "TIEWTRADE"
+    assert workspace.settings_button.accessibleName() == "Settings"
+    assert workspace.settings_button.text() == ""
+    assert not workspace.settings_button.icon().isNull()
+    header = workspace.workspace_header.geometry()
+    assert brand.geometry().left() < workspace.settings_button.geometry().left()
+    assert header.bottom() < workspace.chart.mapTo(workspace, QPoint(0, 0)).y()
+
+
+def test_settings_button_asks_for_settings(qtbot: QtBot) -> None:
+    workspace = TradingWorkspace()
+    qtbot.addWidget(workspace)
+
+    with qtbot.waitSignal(workspace.settings_requested, timeout=1000):
+        workspace.settings_button.click()
 
 
 def test_chart_snapshot_changes_only_the_chart(qtbot: QtBot) -> None:

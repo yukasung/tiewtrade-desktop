@@ -1,6 +1,6 @@
 from datetime import UTC, datetime
 
-from PySide6.QtCore import Qt, Signal, Slot
+from PySide6.QtCore import QSize, Qt, Signal, Slot
 from PySide6.QtWidgets import (
     QFrame,
     QHBoxLayout,
@@ -19,16 +19,27 @@ from tiewtrade.application.paper_session_setup import ConfiguredPaperSession
 from tiewtrade.application.trading_workspace import TradingWorkspaceSnapshot
 from tiewtrade.ui.bot_control import BotControlWidget
 from tiewtrade.ui.candlestick_chart import CandlestickChartWidget
+from tiewtrade.ui.icons import gear_icon
 from tiewtrade.ui.position_basket_table import PositionBasketTable
 from tiewtrade.ui.session_setup import SessionSetupWidget
+from tiewtrade.ui.theme import ICON_COLOR, ICON_HOVER_COLOR
 from tiewtrade.ui.trade_history_page import TradeHistoryPage
 
 BOT_CONTROL_WIDTH = 360
+# The gear and the square it sits in, kept together because neither reads well
+# without the other, and because the header they sit in has little height to
+# spare: the chart below it will not go under 360px, so a taller header pushes
+# the chart over the tables at the smallest window the app allows.
+SETTINGS_ICON_SIZE = 22
+SETTINGS_BUTTON_SIZE = 30
+HEADER_MARGIN = 4
+
 
 class TradingWorkspace(QWidget):
     trade_history_activated = Signal()
     start_bot_requested = Signal()
     stop_bot_requested = Signal()
+    settings_requested = Signal()
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -46,6 +57,24 @@ class TradingWorkspace(QWidget):
         self.unavailable_message.setWordWrap(True)
         self.unavailable_retry_button = QPushButton("Try Again")
         self.unavailable_retry_button.setProperty("retryButton", True)
+
+        # The gear says all of itself; a word beside it would only repeat it.
+        self.settings_button = QPushButton()
+        self.settings_button.setObjectName("settingsButton")
+        self.settings_button.setIcon(
+            gear_icon(SETTINGS_ICON_SIZE, ICON_COLOR, ICON_HOVER_COLOR)
+        )
+        self.settings_button.setIconSize(QSize(SETTINGS_ICON_SIZE, SETTINGS_ICON_SIZE))
+        # setFixedSize would lose to the minimum every button gets from the
+        # theme, so the square is asked for in the only language that outranks
+        # it: a stylesheet on the button itself.
+        self.settings_button.setStyleSheet(
+            f"min-width: {SETTINGS_BUTTON_SIZE}px;"
+            f" min-height: {SETTINGS_BUTTON_SIZE}px;"
+        )
+        self.settings_button.setAccessibleName("Settings")
+        self.settings_button.setToolTip("Settings")
+        self.settings_button.clicked.connect(self.settings_requested)
 
         self.chart = CandlestickChartWidget()
 
@@ -122,6 +151,17 @@ class TradingWorkspace(QWidget):
         root = QVBoxLayout(self)
         root.setContentsMargins(16, 16, 16, 16)
         root.setSpacing(12)
+
+        self.workspace_header = QFrame()
+        self.workspace_header.setObjectName("workspaceHeader")
+        header_layout = QHBoxLayout(self.workspace_header)
+        header_layout.setContentsMargins(16, HEADER_MARGIN, 16, HEADER_MARGIN)
+        brand = QLabel("TIEWTRADE")
+        brand.setObjectName("brand")
+        header_layout.addWidget(brand)
+        header_layout.addStretch()
+        header_layout.addWidget(self.settings_button)
+        root.addWidget(self.workspace_header)
 
         self._body = QWidget()
         self._body.setObjectName("workspaceContent")
