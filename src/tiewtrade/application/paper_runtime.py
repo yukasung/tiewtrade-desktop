@@ -2,9 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Callable
-from dataclasses import dataclass
 from datetime import UTC, datetime
-from decimal import Decimal
 from threading import Event, Lock, Thread
 from time import monotonic
 from typing import Protocol
@@ -12,6 +10,12 @@ from typing import Protocol
 from tiewtrade.application.bot_control import (
     BotLifecycleResult,
     workspace_with_runtime_state,
+)
+from tiewtrade.application.paper_basket_projection import (
+    OpenBasketPosition,
+    futures_basket_snapshot,
+    position_after_snapshot,
+    spot_basket_snapshot,
 )
 from tiewtrade.application.paper_futures_session import (
     PaperFuturesSession,
@@ -24,8 +28,6 @@ from tiewtrade.application.paper_spot_session import (
 )
 from tiewtrade.application.session_persistence import SessionPersistenceCoordinator
 from tiewtrade.application.trading_workspace import (
-    BasketEntryGate,
-    BasketEntrySnapshot,
     BasketSnapshot,
     BotRuntimeState,
     DataFreshness,
@@ -71,9 +73,6 @@ from tiewtrade.market_data.runtime_state import (
 )
 from tiewtrade.strategies.protocols import StrategyPreset
 from tiewtrade.strategies.registry import strategy_definition_for
-from tiewtrade.trading.basket import average_entry_price_after_fill
-from tiewtrade.trading.entry_pair import EntryGate
-from tiewtrade.trading.position import PositionSide, unrealized_pnl
 from tiewtrade.trading.session_config import MarketType, TradeMode
 from tiewtrade.trading.symbol_rules import SymbolRules
 
@@ -363,7 +362,7 @@ class PaperRuntimeController:
                 persistent=create_persistent_paper_spot_session(
                     spot_application, spot_history
                 ),
-                basket=_spot_basket_snapshot,
+                basket=spot_basket_snapshot,
                 publish=self._publish_candle,
                 entry_lock=self._entry_lock,
                 entries_enabled=self._entries_enabled.is_set,
@@ -394,7 +393,7 @@ class PaperRuntimeController:
             persistent=create_persistent_paper_futures_session(
                 futures_application, futures_history
             ),
-            basket=_futures_basket_snapshot,
+            basket=futures_basket_snapshot,
             publish=self._publish_candle,
             entry_lock=self._entry_lock,
             entries_enabled=self._entries_enabled.is_set,
@@ -679,7 +678,7 @@ class _PaperRuntimeSink[Snapshot: _CandleSnapshot]:
         warm_up: Callable[[tuple[Candle, ...], datetime], None],
         persistent: SessionPersistenceCoordinator[Snapshot],
         basket: Callable[
-            [Snapshot, _OpenBasketPosition | None, Candle, datetime],
+            [Snapshot, OpenBasketPosition | None, Candle, datetime],
             BasketSnapshot | None,
         ],
         publish: Callable[[BasketSnapshot | None, Candle, datetime], None],
@@ -692,7 +691,7 @@ class _PaperRuntimeSink[Snapshot: _CandleSnapshot]:
         self._publish = publish
         self._entry_lock = entry_lock
         self._entries_enabled = entries_enabled
-        self._position: _OpenBasketPosition | None = None
+        self._position: OpenBasketPosition | None = None
 
     async def warm_up(
         self,
@@ -744,7 +743,7 @@ class _PaperRuntimeSink[Snapshot: _CandleSnapshot]:
         candle: Candle,
         observed_at_utc: datetime,
     ) -> None:
-        self._position = _position_after_snapshot(
+        self._position = position_after_snapshot(
             self._position,
             entry_fill=snapshot.entry_fill,
             basket_entry_count=snapshot.basket_entry_count,
@@ -755,179 +754,6 @@ class _PaperRuntimeSink[Snapshot: _CandleSnapshot]:
                 candle,
                 observed_at_utc,
             )
-
-
-@dataclass(frozen=True, slots=True)
-class _FilledEntry:
-    """An Entry as it filled, kept unaveraged so the tab can show it."""
-
-    entry_number: int
-    filled_at_utc: datetime
-    price: Decimal
-    quantity: Decimal
-
-
-@dataclass(frozen=True, slots=True)
-class _OpenBasketPosition:
-    total_quantity: Decimal
-    average_entry_price: Decimal
-    entries: tuple[_FilledEntry, ...]
-
-
-def _position_after_snapshot(
-    current: _OpenBasketPosition | None,
-    *,
-    entry_fill: PaperSpotEntryFill | PaperFuturesEntryFill | None,
-    basket_entry_count: int,
-) -> _OpenBasketPosition | None:
-    if basket_entry_count == 0:
-        return None
-    if entry_fill is None:
-        if current is None:
-            raise ValueError("open Basket requires authoritative position facts")
-        return current
-    current_entries = () if current is None else current.entries
-    current_quantity = Decimal("0") if current is None else current.total_quantity
-    return _OpenBasketPosition(
-        total_quantity=current_quantity + entry_fill.quantity,
-        average_entry_price=average_entry_price_after_fill(
-            current_average_entry_price=(
-                None if current is None else current.average_entry_price
-            ),
-            current_quantity=current_quantity,
-            fill_price=entry_fill.price,
-            fill_quantity=entry_fill.quantity,
-        ),
-        # The Basket counts this Entry, so the list has to grow with it.
-        entries=(
-            *current_entries,
-            _FilledEntry(
-                entry_number=basket_entry_count,
-                filled_at_utc=entry_fill.filled_at,
-                price=entry_fill.price,
-                quantity=entry_fill.quantity,
-            ),
-        ),
-    )
-
-
-def _spot_basket_snapshot(
-    snapshot: PaperSpotSessionSnapshot,
-    position: _OpenBasketPosition | None,
-    candle: Candle,
-    observed_at_utc: datetime,
-) -> BasketSnapshot | None:
-    if snapshot.basket_entry_count == 0:
-        return None
-    return _updated_basket_snapshot(
-        position,
-        symbol=candle.symbol,
-        market_type=MarketType.SPOT,
-        entry_count=snapshot.basket_entry_count,
-        current_price=candle.close,
-        take_profit_price=snapshot.take_profit_price,
-        position_side=PositionSide.LONG,
-        liquidation_price=None,
-        entry_gate=snapshot.entry_gate,
-        observed_at_utc=observed_at_utc,
-    )
-
-
-def _futures_basket_snapshot(
-    snapshot: PaperFuturesSessionSnapshot,
-    position: _OpenBasketPosition | None,
-    candle: Candle,
-    observed_at_utc: datetime,
-) -> BasketSnapshot | None:
-    if snapshot.basket_entry_count == 0:
-        return None
-    if snapshot.position_side is None:
-        raise ValueError("open Futures Basket requires position_side")
-    return _updated_basket_snapshot(
-        position,
-        symbol=candle.symbol,
-        market_type=MarketType.FUTURES,
-        entry_count=snapshot.basket_entry_count,
-        current_price=candle.close,
-        take_profit_price=snapshot.take_profit_price,
-        position_side=snapshot.position_side,
-        liquidation_price=snapshot.liquidation_price,
-        entry_gate=snapshot.entry_gate,
-        observed_at_utc=observed_at_utc,
-    )
-
-
-def _updated_basket_snapshot(
-    position: _OpenBasketPosition | None,
-    *,
-    symbol: str,
-    market_type: MarketType,
-    entry_count: int,
-    current_price: Decimal,
-    take_profit_price: Decimal | None,
-    position_side: PositionSide,
-    liquidation_price: Decimal | None,
-    entry_gate: EntryGate | None,
-    observed_at_utc: datetime,
-) -> BasketSnapshot:
-    if position is None:
-        raise ValueError("open Basket requires authoritative position facts")
-    if entry_gate is None:
-        raise ValueError("open Basket requires an entry_gate")
-    total_quantity = position.total_quantity
-    average_entry_price = position.average_entry_price
-    if take_profit_price is None:
-        raise ValueError("open Basket requires take_profit_price")
-    marked_pnl = unrealized_pnl(
-        side=position_side,
-        average_entry_price=average_entry_price,
-        quantity=total_quantity,
-        current_price=current_price,
-    )
-    return BasketSnapshot(
-        symbol=symbol,
-        market_type=market_type.value,
-        entry_count=entry_count,
-        entries=_marked_entries(
-            position.entries,
-            position_side=position_side,
-            current_price=current_price,
-        ),
-        total_quantity=total_quantity,
-        average_entry_price=average_entry_price,
-        current_price=current_price,
-        take_profit_price=take_profit_price,
-        unrealized_pnl=marked_pnl,
-        liquidation_price=liquidation_price,
-        entry_gate=BasketEntryGate(entry_gate.state),
-        cooldown_until=entry_gate.reopens_at,
-        updated_at_utc=observed_at_utc,
-    )
-
-
-def _marked_entries(
-    entries: tuple[_FilledEntry, ...],
-    *,
-    position_side: PositionSide,
-    current_price: Decimal,
-) -> tuple[BasketEntrySnapshot, ...]:
-    """Each Entry marked on its own entry price, by the same rule as the Basket."""
-    return tuple(
-        BasketEntrySnapshot(
-            entry_number=entry.entry_number,
-            filled_at_utc=entry.filled_at_utc,
-            price=entry.price,
-            quantity=entry.quantity,
-            notional=entry.price * entry.quantity,
-            unrealized_pnl=unrealized_pnl(
-                side=position_side,
-                average_entry_price=entry.price,
-                quantity=entry.quantity,
-                current_price=current_price,
-            ),
-        )
-        for entry in entries
-    )
 
 
 def _warm_up_of(
