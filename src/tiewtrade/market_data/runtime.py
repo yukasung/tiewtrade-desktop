@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections.abc import AsyncIterator, Awaitable, Callable
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Protocol, TypeVar
 
@@ -213,32 +214,17 @@ class MarketDataRuntime:
         completed_before = self._scheduler.now()
         try:
             await self._perform_warm_up(completed_before)
-        except MarketDataFatalError as error:
-            self._fail_closed(
-                MarketDataRuntimeReason.SOURCE_FATAL,
-                failure_kind=_failure_kind(error),
+        except (
+            MarketDataSourceError,
+            _WarmUpSourceError,
+            _WarmUpSinkError,
+            TimeoutError,
+        ) as error:
+            failure = _source_failure(
+                error,
+                on_timeout=MarketDataRuntimeReason.WARM_UP_TIMEOUT,
             )
-            return False
-        except MarketDataRateLimitError as error:
-            self._fail_closed(
-                MarketDataRuntimeReason.RATE_LIMIT_EXHAUSTED,
-                failure_kind=_failure_kind(error),
-            )
-            return False
-        except _WarmUpSinkError:
-            self._fail_closed(MarketDataRuntimeReason.SINK_ERROR)
-            return False
-        except (MarketDataTimeoutError, TimeoutError) as error:
-            self._fail_closed(
-                MarketDataRuntimeReason.WARM_UP_TIMEOUT,
-                failure_kind=_failure_kind(error),
-            )
-            return False
-        except (MarketDataRetryableError, _WarmUpSourceError) as error:
-            self._fail_closed(
-                MarketDataRuntimeReason.SOURCE_ERROR,
-                failure_kind=_failure_kind(error),
-            )
+            self._fail_closed(failure.reason, failure_kind=failure.kind)
             return False
 
         self._transition(
@@ -466,8 +452,10 @@ class MarketDataRuntime:
             return self._fail_backfill(
                 start=end,
                 end=end,
-                reason=MarketDataRuntimeReason.SOURCE_ERROR,
-                failure_kind=None,
+                failure=_SourceFailure(
+                    MarketDataRuntimeReason.SOURCE_ERROR,
+                    None,
+                ),
             )
 
         start = last_accepted_open_time + self._config.interval
@@ -486,33 +474,15 @@ class MarketDataRuntime:
                     ),
                     timeout=_BACKFILL_TIMEOUT_SECONDS,
                 )
-            except MarketDataFatalError as error:
-                return self._fail_backfill(
-                    start=start,
-                    end=end,
-                    reason=MarketDataRuntimeReason.SOURCE_FATAL,
-                    failure_kind=_failure_kind(error),
-                )
-            except MarketDataRateLimitError as error:
-                return self._fail_backfill(
-                    start=start,
-                    end=end,
-                    reason=MarketDataRuntimeReason.RATE_LIMIT_EXHAUSTED,
-                    failure_kind=_failure_kind(error),
-                )
-            except (MarketDataRetryableError, TimeoutError) as error:
-                return self._fail_backfill(
-                    start=start,
-                    end=end,
-                    reason=MarketDataRuntimeReason.SOURCE_ERROR,
-                    failure_kind=_failure_kind(error),
-                )
             except Exception as error:
+                # A backfill that times out is a source that did not answer.
                 return self._fail_backfill(
                     start=start,
                     end=end,
-                    reason=MarketDataRuntimeReason.SOURCE_ERROR,
-                    failure_kind=_failure_kind(error),
+                    failure=_source_failure(
+                        error,
+                        on_timeout=MarketDataRuntimeReason.SOURCE_ERROR,
+                    ),
                 )
 
         def publish_backfill_ready() -> None:
@@ -530,19 +500,14 @@ class MarketDataRuntime:
                 received_at=received_at,
                 on_ready_for_delivery=publish_backfill_ready,
             )
-        except CandlePipelineInputError:
+        except (CandlePipelineInputError, CandlePipelineSinkError) as error:
             return self._fail_backfill(
                 start=start,
                 end=end,
-                reason=MarketDataRuntimeReason.SOURCE_ERROR,
-                failure_kind=None,
-            )
-        except CandlePipelineSinkError:
-            return self._fail_backfill(
-                start=start,
-                end=end,
-                reason=MarketDataRuntimeReason.SINK_ERROR,
-                failure_kind=None,
+                failure=_source_failure(
+                    error,
+                    on_timeout=MarketDataRuntimeReason.SOURCE_ERROR,
+                ),
             )
         self._runtime_log.backfill_completed(
             start=start,
@@ -556,16 +521,15 @@ class MarketDataRuntime:
         *,
         start: datetime,
         end: datetime,
-        reason: MarketDataRuntimeReason,
-        failure_kind: MarketDataFailureKind | None,
+        failure: _SourceFailure,
     ) -> bool:
         self._runtime_log.backfill_failed(
             start=start,
             end=end,
-            reason=reason,
-            failure_kind=failure_kind,
+            reason=failure.reason,
+            failure_kind=failure.kind,
         )
-        self._fail_closed(reason, failure_kind=failure_kind)
+        self._fail_closed(failure.reason, failure_kind=failure.kind)
         return False
 
     async def _recover_stream(
@@ -605,7 +569,9 @@ class MarketDataRuntime:
                         MarketDataRuntimeState.RATE_LIMITED,
                         MarketDataRuntimeReason.RATE_LIMITED,
                     )
-                attempt_delay = self._retry_after_seconds(pending_rate_limit)
+                attempt_delay = _retry_after_seconds(
+                    pending_rate_limit, now=self._scheduler.now()
+                )
                 await self._scheduler.sleep(attempt_delay)
                 self._transition(MarketDataRuntimeState.RECONNECTING, reason)
             if self._stop_requested:
@@ -678,17 +644,6 @@ class MarketDataRuntime:
         )
         return None
 
-    def _retry_after_seconds(self, error: MarketDataRateLimitError) -> float:
-        retry_after = error.retry_after
-        if isinstance(retry_after, timedelta):
-            return max(0.0, retry_after.total_seconds())
-        if isinstance(retry_after, datetime):
-            return max(
-                0.0,
-                (retry_after - self._scheduler.now()).total_seconds(),
-            )
-        return _RATE_LIMIT_FALLBACK_SECONDS
-
     async def _run_source_operation(
         self,
         operation: Callable[[], Awaitable[_T]],
@@ -709,7 +664,9 @@ class MarketDataRuntime:
                 )
                 if attempt == len(_RECONNECT_DELAYS_SECONDS):
                     raise
-                await self._scheduler.sleep(self._retry_after_seconds(error))
+                await self._scheduler.sleep(
+                    _retry_after_seconds(error, now=self._scheduler.now())
+                )
                 self._transition(
                     MarketDataRuntimeState.RECONNECTING,
                     MarketDataRuntimeReason.RATE_LIMITED,
@@ -767,6 +724,55 @@ def _latest_completed_boundary(value: datetime, *, interval: timedelta) -> datet
     interval_seconds = int(interval.total_seconds())
     boundary_timestamp = int(value.timestamp()) // interval_seconds * interval_seconds
     return datetime.fromtimestamp(boundary_timestamp, UTC)
+
+
+def _retry_after_seconds(error: MarketDataRateLimitError, *, now: datetime) -> float:
+    """How long the provider asked to be left alone, never less than nothing.
+
+    Retry-After arrives either as a duration or as the instant to resume at,
+    and a provider whose instant has already passed is asking for no wait at
+    all rather than for a negative one. A refusal that names neither still
+    earns a pause: retrying a rate limit immediately is how it is earned again.
+    """
+    retry_after = error.retry_after
+    if isinstance(retry_after, timedelta):
+        return max(0.0, retry_after.total_seconds())
+    if isinstance(retry_after, datetime):
+        return max(0.0, (retry_after - now).total_seconds())
+    return _RATE_LIMIT_FALLBACK_SECONDS
+
+
+@dataclass(frozen=True, slots=True)
+class _SourceFailure:
+    """Why a source operation failed, in the terms the runtime reports."""
+
+    reason: MarketDataRuntimeReason
+    kind: MarketDataFailureKind | None
+
+
+def _source_failure(
+    error: BaseException,
+    *,
+    on_timeout: MarketDataRuntimeReason,
+) -> _SourceFailure:
+    """Read a failure once, so every stage reports the same one the same way.
+
+    Only the meaning of a timeout differs between stages: warm-up has a
+    deadline of its own to name, while a backfill that times out is just a
+    source that did not answer. Every other kind reads the same wherever it
+    happens, and stating that in one place is what keeps it so.
+    """
+    kind = _failure_kind(error)
+    if isinstance(error, MarketDataFatalError):
+        return _SourceFailure(MarketDataRuntimeReason.SOURCE_FATAL, kind)
+    if isinstance(error, MarketDataRateLimitError):
+        return _SourceFailure(MarketDataRuntimeReason.RATE_LIMIT_EXHAUSTED, kind)
+    if isinstance(error, _WarmUpSinkError | CandlePipelineSinkError):
+        return _SourceFailure(MarketDataRuntimeReason.SINK_ERROR, kind)
+    # Checked before the retryable base it inherits from, which would swallow it.
+    if isinstance(error, MarketDataTimeoutError | TimeoutError):
+        return _SourceFailure(on_timeout, kind)
+    return _SourceFailure(MarketDataRuntimeReason.SOURCE_ERROR, kind)
 
 
 def _failure_kind(error: BaseException) -> MarketDataFailureKind | None:
