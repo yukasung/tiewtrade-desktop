@@ -306,6 +306,38 @@ def test_in_progress_candle_is_published_without_changing_workspace(
     controller.stop(session)
 
 
+def test_futures_does_not_act_on_a_forming_candle(tmp_path: Path) -> None:
+    """One sink feeds both markets, so the Session states this rule, not the sink.
+
+    Paper Futures answers a forming candle with an unaccepted snapshot, which
+    has to keep the Basket exactly where the last close left it.
+    """
+    session = configured_futures_session()
+    database = _database_with_session(tmp_path, session)
+    source = QueuedPublicCandleSource(warm_up=_warm_up_candles())
+    in_progress_candles: list[Candle] = []
+    controller = PaperRuntimeController(
+        lifecycle=SQLitePaperRuntimeLifecycle(database),
+        trade_history=SQLiteTradeHistory(database),
+        symbol_rules=_symbol_rules(),
+        source_factory=lambda _endpoints: source,
+        scheduler=ImmediateScheduler(),
+        snapshot_callback=lambda _snapshot: None,
+        in_progress_candle_callback=in_progress_candles.append,
+    )
+    controller.start(session)
+    before = controller.current_workspace
+    forming = _candle(15, close=Decimal("87.25"))
+
+    source.emit_open(forming)
+
+    assert source.delivery_completed.wait(1)
+    # The chart still sees it; the Session simply decided nothing on it.
+    assert in_progress_candles == [forming]
+    assert controller.current_workspace == before
+    controller.stop(session)
+
+
 def test_in_progress_candle_observer_failure_does_not_block_runtime(
     tmp_path: Path,
 ) -> None:

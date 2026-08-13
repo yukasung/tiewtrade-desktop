@@ -7,6 +7,7 @@ from datetime import UTC, datetime
 from decimal import Decimal
 from threading import Event, Lock, Thread
 from time import monotonic
+from typing import Protocol
 
 from tiewtrade.application.bot_control import (
     BotLifecycleResult,
@@ -336,7 +337,10 @@ class PaperRuntimeController:
         self,
         session: ConfiguredPaperSession,
         preset: StrategyPreset,
-    ) -> _PaperSpotRuntimeSink | _PaperFuturesRuntimeSink:
+    ) -> (
+        _PaperRuntimeSink[PaperSpotSessionSnapshot]
+        | _PaperRuntimeSink[PaperFuturesSessionSnapshot]
+    ):
         if session.config.market_type is MarketType.SPOT:
             spot_application = PaperSpotSession(
                 session.config,
@@ -354,12 +358,13 @@ class PaperRuntimeController:
                 ),
                 self._trade_history,
             )
-            return _PaperSpotRuntimeSink(
-                application=spot_application,
+            return _PaperRuntimeSink(
+                warm_up=_warm_up_of(spot_application),
                 persistent=create_persistent_paper_spot_session(
                     spot_application, spot_history
                 ),
-                publish=self._publish_spot_candle,
+                basket=_spot_basket_snapshot,
+                publish=self._publish_candle,
                 entry_lock=self._entry_lock,
                 entries_enabled=self._entries_enabled.is_set,
             )
@@ -384,12 +389,13 @@ class PaperRuntimeController:
             ),
             self._trade_history,
         )
-        return _PaperFuturesRuntimeSink(
-            application=futures_application,
+        return _PaperRuntimeSink(
+            warm_up=_warm_up_of(futures_application),
             persistent=create_persistent_paper_futures_session(
                 futures_application, futures_history
             ),
-            publish=self._publish_futures_candle,
+            basket=_futures_basket_snapshot,
+            publish=self._publish_candle,
             entry_lock=self._entry_lock,
             entries_enabled=self._entries_enabled.is_set,
         )
@@ -454,49 +460,16 @@ class PaperRuntimeController:
                     )
                 )
 
-    def _publish_spot_candle(
+    def _publish_candle(
         self,
-        snapshot: PaperSpotSessionSnapshot,
-        position: _OpenBasketPosition | None,
+        basket: BasketSnapshot | None,
         candle: Candle,
         observed_at_utc: datetime,
     ) -> None:
-        current = self.current_workspace
-        basket = _spot_basket_snapshot(
-            snapshot,
-            position,
-            candle,
-            observed_at_utc,
-        )
         self._publish(
             BotLifecycleResult(
                 workspace=paper_runtime_workspace_snapshot(
-                    current,
-                    basket=basket,
-                    observed_at_utc=observed_at_utc,
-                )
-            )
-        )
-        self._publish_completed_candle(candle)
-
-    def _publish_futures_candle(
-        self,
-        snapshot: PaperFuturesSessionSnapshot,
-        position: _OpenBasketPosition | None,
-        candle: Candle,
-        observed_at_utc: datetime,
-    ) -> None:
-        current = self.current_workspace
-        basket = _futures_basket_snapshot(
-            snapshot,
-            position,
-            candle,
-            observed_at_utc,
-        )
-        self._publish(
-            BotLifecycleResult(
-                workspace=paper_runtime_workspace_snapshot(
-                    current,
+                    self.current_workspace,
                     basket=basket,
                     observed_at_utc=observed_at_utc,
                 )
@@ -678,21 +651,44 @@ class PaperRuntimeController:
             raise ValueError("Paper Runtime SymbolRules must match Session symbol")
 
 
-class _PaperSpotRuntimeSink:
+class _CandleSnapshot(Protocol):
+    """What a Session's snapshot tells the sink, whichever market wrote it."""
+
+    @property
+    def accepted(self) -> bool: ...
+
+    @property
+    def entry_fill(self) -> PaperSpotEntryFill | PaperFuturesEntryFill | None: ...
+
+    @property
+    def basket_entry_count(self) -> int: ...
+
+
+class _PaperRuntimeSink[Snapshot: _CandleSnapshot]:
+    """Feeds candles to one Paper Session and publishes what it decided.
+
+    Spot and Futures differ in what a Basket looks like, not in how a candle
+    reaches one, so the market is a reading handed in rather than a class of
+    its own: how to warm up, how to persist, and how to read a Basket out of
+    the snapshot that comes back.
+    """
+
     def __init__(
         self,
         *,
-        application: PaperSpotSession,
-        persistent: SessionPersistenceCoordinator[PaperSpotSessionSnapshot],
-        publish: Callable[
-            [PaperSpotSessionSnapshot, _OpenBasketPosition | None, Candle, datetime],
-            None,
+        warm_up: Callable[[tuple[Candle, ...], datetime], None],
+        persistent: SessionPersistenceCoordinator[Snapshot],
+        basket: Callable[
+            [Snapshot, _OpenBasketPosition | None, Candle, datetime],
+            BasketSnapshot | None,
         ],
+        publish: Callable[[BasketSnapshot | None, Candle, datetime], None],
         entry_lock: Lock,
         entries_enabled: Callable[[], bool],
     ) -> None:
-        self._application = application
+        self._warm_up = warm_up
         self._persistent = persistent
+        self._basket = basket
         self._publish = publish
         self._entry_lock = entry_lock
         self._entries_enabled = entries_enabled
@@ -704,7 +700,7 @@ class _PaperSpotRuntimeSink:
         *,
         received_at: datetime,
     ) -> None:
-        self._application.warm_up_completed_candles(candles, received_at=received_at)
+        self._warm_up(candles, received_at)
 
     async def process_completed(
         self,
@@ -718,13 +714,7 @@ class _PaperSpotRuntimeSink:
             snapshot = self._persistent.process_completed_candle(
                 candle, received_at=received_at
             ).session
-            self._position = _position_after_snapshot(
-                self._position,
-                entry_fill=snapshot.entry_fill,
-                basket_entry_count=snapshot.basket_entry_count,
-            )
-            if self._entries_enabled():
-                self._publish(snapshot, self._position, candle, candle.close_time)
+            self._publish_snapshot(snapshot, candle, candle.close_time)
 
     async def process_in_progress(
         self,
@@ -732,7 +722,12 @@ class _PaperSpotRuntimeSink:
         *,
         received_at: datetime,
     ) -> None:
-        """Close the Basket the moment the forming candle reaches its exit."""
+        """Close the Basket the moment the forming candle reaches its exit.
+
+        Whether a market acts between candles is the Session's rule to state,
+        not this sink's: Paper Futures answers an unaccepted snapshot here and
+        so passes through without publishing.
+        """
         with self._entry_lock:
             if not self._entries_enabled():
                 return
@@ -741,78 +736,25 @@ class _PaperSpotRuntimeSink:
             ).session
             if not snapshot.accepted:
                 return
-            self._position = _position_after_snapshot(
-                self._position,
-                entry_fill=snapshot.entry_fill,
-                basket_entry_count=snapshot.basket_entry_count,
-            )
-            if self._entries_enabled():
-                self._publish(snapshot, self._position, candle, received_at)
+            self._publish_snapshot(snapshot, candle, received_at)
 
-
-class _PaperFuturesRuntimeSink:
-    """Futures acts only on completed candles; see PaperFuturesSession."""
-
-    def __init__(
+    def _publish_snapshot(
         self,
-        *,
-        application: PaperFuturesSession,
-        persistent: SessionPersistenceCoordinator[PaperFuturesSessionSnapshot],
-        publish: Callable[
-            [
-                PaperFuturesSessionSnapshot,
-                _OpenBasketPosition | None,
-                Candle,
-                datetime,
-            ],
-            None,
-        ],
-        entry_lock: Lock,
-        entries_enabled: Callable[[], bool],
-    ) -> None:
-        self._application = application
-        self._persistent = persistent
-        self._publish = publish
-        self._entry_lock = entry_lock
-        self._entries_enabled = entries_enabled
-        self._position: _OpenBasketPosition | None = None
-
-    async def warm_up(
-        self,
-        candles: tuple[Candle, ...],
-        *,
-        received_at: datetime,
-    ) -> None:
-        self._application.warm_up_completed_candles(candles, received_at=received_at)
-
-    async def process_completed(
-        self,
+        snapshot: Snapshot,
         candle: Candle,
-        *,
-        received_at: datetime,
+        observed_at_utc: datetime,
     ) -> None:
-        with self._entry_lock:
-            if not self._entries_enabled():
-                return
-            snapshot = self._persistent.process_completed_candle(
-                candle, received_at=received_at
-            ).session
-            self._position = _position_after_snapshot(
-                self._position,
-                entry_fill=snapshot.entry_fill,
-                basket_entry_count=snapshot.basket_entry_count,
+        self._position = _position_after_snapshot(
+            self._position,
+            entry_fill=snapshot.entry_fill,
+            basket_entry_count=snapshot.basket_entry_count,
+        )
+        if self._entries_enabled():
+            self._publish(
+                self._basket(snapshot, self._position, candle, observed_at_utc),
+                candle,
+                observed_at_utc,
             )
-            if self._entries_enabled():
-                self._publish(snapshot, self._position, candle, candle.close_time)
-
-    async def process_in_progress(
-        self,
-        candle: Candle,
-        *,
-        received_at: datetime,
-    ) -> None:
-        """Futures does not act between candles; see PaperFuturesSession."""
-        del candle, received_at
 
 
 @dataclass(frozen=True, slots=True)
@@ -986,6 +928,17 @@ def _marked_entries(
         )
         for entry in entries
     )
+
+
+def _warm_up_of(
+    session: PaperSpotSession | PaperFuturesSession,
+) -> Callable[[tuple[Candle, ...], datetime], None]:
+    """The one thing the sink asks of a Session before candles start arriving."""
+
+    def warm_up(candles: tuple[Candle, ...], received_at: datetime) -> None:
+        session.warm_up_completed_candles(candles, received_at=received_at)
+
+    return warm_up
 
 
 def _commission_asset(symbol: str) -> str:
