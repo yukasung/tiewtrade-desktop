@@ -36,7 +36,9 @@ class WorkspaceTab(IntEnum):
     TRADE_HISTORY = 2
 
 
-_TAB_TITLES = ("Position / Basket", "Basket History", "Trade History")
+# The screen says Position where the domain says Basket: a Basket is one
+# round of trading, which is what a trader already calls a position.
+_TAB_TITLES = ("Position", "Position History", "Trade History")
 
 
 class TradingWorkspace(QWidget):

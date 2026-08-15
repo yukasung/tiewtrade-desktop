@@ -304,7 +304,7 @@ def test_default_stop_confirmation_is_destructive_and_default_safe(
     )
     assert dialog.isVisible()
     assert dialog.text() == "Stop this Paper Bot session?"
-    assert "Existing Basket Take Profit stays active" in dialog.informativeText()
+    assert "Existing Take Profit stays active" in dialog.informativeText()
     cancel_button = next(
         button for button in dialog.buttons() if button.text() == "Cancel"
     )

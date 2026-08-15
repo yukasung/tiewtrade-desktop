@@ -383,7 +383,7 @@ def test_desktop_restart_blocked_runtime_reopens_setup_form(
 
     window.workspace.show_tab(WorkspaceTab.BASKET_HISTORY)
     qtbot.waitUntil(
-        lambda: window.trade_history.basket_state.text() == "No Basket history"
+        lambda: window.trade_history.basket_state.text() == "No Position history"
     )
     assert _runtime_state(window) is BotRuntimeState.BLOCKED
     marker = lifecycle.read(session.config.session_id)
@@ -455,7 +455,7 @@ def test_desktop_fake_snapshots_render_orders_and_basket_without_manual_trading(
     # One row per Entry taken, with only the Basket's total framing them.
     assert window.workspace.position_basket.table.rowCount() == 1
     assert table_item(window.workspace.position_basket.table, 0, 0).text() == "#1"
-    lifecycle = PositionBasketTable.HEADERS.index("Basket Lifecycle")
+    lifecycle = PositionBasketTable.HEADERS.index("Status")
     assert table_item(window.workspace.position_basket.table, 0, lifecycle).text() == (
         "Active"
     )
@@ -623,13 +623,13 @@ def test_desktop_paper_session_create_overview_and_restart_restore(
     assert first_window.findChildren(QPushButton, "manualSellButton") == []
     assert first_window.workspace.chart.objectName() == "candlestickChart"
     assert first_window.workspace.position_basket.state_label.text() == (
-        "No open Position or Basket"
+        "No open Position"
     )
     assert _trade_side_effect_counts(database) == initial_side_effect_counts
 
     first_window.workspace.show_tab(WorkspaceTab.BASKET_HISTORY)
     qtbot.waitUntil(
-        lambda: first_window.trade_history.basket_state.text() == "No Basket history"
+        lambda: first_window.trade_history.basket_state.text() == "No Position history"
     )
     # No session yet: the setup form is what the workspace offers.
     assert first_window.setup.isVisible()
@@ -720,7 +720,7 @@ def test_desktop_paper_session_create_overview_and_restart_restore(
     restarted_window.workspace.show_tab(WorkspaceTab.BASKET_HISTORY)
     restarted_history = restarted_window.trade_history
     qtbot.waitUntil(
-        lambda: restarted_history.basket_state.text() == "No Basket history"
+        lambda: restarted_history.basket_state.text() == "No Position history"
     )
     assert restarted_window.overview.isVisible() is False
     assert _trade_side_effect_counts(database) == restored_history_side_effect_counts
@@ -856,7 +856,7 @@ def test_desktop_session_storage_unavailable_fails_closed(
 
     window.workspace.show_tab(WorkspaceTab.BASKET_HISTORY)
     qtbot.waitUntil(
-        lambda: window.trade_history.basket_state.text() == "No Basket history"
+        lambda: window.trade_history.basket_state.text() == "No Position history"
     )
     assert window.workspace.tab_pages.currentWidget() is window.workspace.trade_history
     assert window.unavailable_panel.isVisible()

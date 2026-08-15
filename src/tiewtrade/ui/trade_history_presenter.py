@@ -80,7 +80,7 @@ BASKET_COLUMNS: tuple[Column[BasketResult], ...] = (
     # Gross PnL, Fees and Funding Fee are the three terms Net PnL is made of,
     # and Net PnL is the figure that is read. The record still holds all three.
     Column(
-        "Net PnL",
+        "Profit / Loss",
         RIGHT,
         lambda basket: usdt_text(basket.net_realized_pnl),
         lambda basket: sign_colour(basket.net_realized_pnl),
@@ -102,7 +102,7 @@ FILL_COLUMNS: tuple[Column[TradeFillHistoryItem], ...] = (
     Column("Fee", RIGHT, lambda item: usdt_text(item.fill.commission)),
     Column("Total", RIGHT, lambda item: usdt_text(item.fill.notional)),
     Column(
-        "Realized PnL",
+        "Profit / Loss",
         RIGHT,
         lambda item: usdt_text(item.fill.realized_pnl),
         lambda item: sign_colour(item.fill.realized_pnl),

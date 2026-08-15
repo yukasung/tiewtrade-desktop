@@ -44,6 +44,8 @@ from tiewtrade.ui.trade_history_workflow import HistoryTab
 # for "no date at all" and is shown as the placeholder instead of a day.
 EMPTY_DATE = QDate(1752, 9, 14)
 
+NO_BASKET_HISTORY = "No Position history"
+
 LINE_SPACING = 24
 GROUP_SPACING = 6
 
@@ -306,22 +308,22 @@ class TradeHistoryPage(QWidget):
         self.reset_button.clicked.connect(self._reset_filters)
         self.search_button.clicked.connect(self._apply_filters)
 
-        self.total_net_pnl_label = QLabel("Total Net PnL")
+        self.total_net_pnl_label = QLabel("Total Profit / Loss")
         self.total_net_pnl_label.setObjectName("summaryLabel")
         self.total_net_pnl_label.setVisible(False)
         self.total_net_pnl = QLabel()
         self.total_net_pnl.setObjectName("summaryValue")
-        self.total_net_pnl.setAccessibleName("Total Net PnL")
+        self.total_net_pnl.setAccessibleName("Total Profit / Loss")
         self.total_net_pnl.setVisible(False)
         self.total_items = QLabel()
         self.total_items.setObjectName("supportingText")
 
         self.basket_table = self._table(
-            "basketHistoryTable", "Basket History", BASKET_COLUMNS
+            "basketHistoryTable", "Position History", BASKET_COLUMNS
         )
         self.basket_empty_state = TableEmptyStateOverlay(self.basket_table)
         self.basket_table.setSelectionMode(QAbstractItemView.SelectionMode.NoSelection)
-        self.basket_state = self._state_label("basketState", "Basket History status")
+        self.basket_state = self._state_label("basketState", "Position History status")
         self.retry_baskets_button = self._retry_button("retryBasketsButton")
         self.retry_baskets_button.clicked.connect(self.baskets_retry_requested)
 
@@ -369,14 +371,14 @@ class TradeHistoryPage(QWidget):
         self.total_net_pnl.setText(usdt_text(result.net_realized_pnl))
         paint_by_sign(self.total_net_pnl, result.net_realized_pnl)
         self.total_net_pnl.setVisible(True)
-        self.total_items.setText(f"{len(result.items)} total Baskets")
+        self.total_items.setText(f"{len(result.items)} total Positions")
         self.retry_baskets_button.setVisible(False)
         if result.items:
             self.basket_empty_state.clear_message()
             self.basket_state.clear()
             self.basket_state.setVisible(False)
         else:
-            self._set_basket_state("No Basket history")
+            self._set_basket_state(NO_BASKET_HISTORY)
 
     @Slot(object)
     def show_baskets_empty(self, result: BasketHistoryResult) -> None:
@@ -596,7 +598,7 @@ class TradeHistoryPage(QWidget):
     def _set_basket_state(self, message: str) -> None:
         """Nothing found reads inside the empty table; anything else reads below it."""
         self.basket_state.setText(message)
-        if message == "No Basket history":
+        if message == NO_BASKET_HISTORY:
             self.basket_empty_state.show_message(message)
             self.basket_state.setVisible(False)
             return

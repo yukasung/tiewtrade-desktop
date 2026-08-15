@@ -99,8 +99,8 @@ class PositionBasketTable(QWidget):
         Column("Take Profit", RIGHT, _take_profit_price),
         Column("Quantity", RIGHT, _quantity),
         Column("Total", RIGHT, _notional),
-        Column("Unrealized PnL", RIGHT, _pnl, _pnl_colour),
-        Column("Basket Lifecycle", LEFT, _entry_gate),
+        Column("Unrealized P/L", RIGHT, _pnl, _pnl_colour),
+        Column("Status", LEFT, _entry_gate),
     )
     HEADERS = headers(COLUMNS)
     ALIGNMENTS = tuple(column.alignment for column in COLUMNS)
@@ -108,18 +108,18 @@ class PositionBasketTable(QWidget):
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.setObjectName("positionBasketTable")
-        self.setAccessibleName("Position / Basket")
+        self.setAccessibleName("Position")
 
         self.table = self._table()
         self.empty_state = TableEmptyStateOverlay(self.table)
-        self.state_label = QLabel("No open Position or Basket")
+        self.state_label = QLabel("No open Position")
         self.state_label.setObjectName("positionBasketState")
-        self.state_label.setAccessibleName("Position / Basket status")
+        self.state_label.setAccessibleName("Position status")
         self.state_label.setProperty("stateMessage", True)
         self.state_label.setWordWrap(True)
         self.total_label = QLabel()
         self.total_label.setObjectName("positionBasketTotal")
-        self.total_label.setAccessibleName("Basket total")
+        self.total_label.setAccessibleName("Position total")
         self.total_label.setWordWrap(True)
         self.total_label.setVisible(False)
 
@@ -187,23 +187,23 @@ class PositionBasketTable(QWidget):
     @staticmethod
     def _state_text(snapshot: PositionBasketTabSnapshot) -> str:
         if snapshot.state is WorkspaceTabState.LOADING:
-            return "Loading Position / Basket…"
+            return "Loading Position…"
         if snapshot.state is WorkspaceTabState.EMPTY:
-            return "No open Position or Basket"
+            return "No open Position"
         if snapshot.state is WorkspaceTabState.ERROR:
             return snapshot.message or ""
         if snapshot.state is WorkspaceTabState.STALE:
             data_as_of_utc = snapshot.data_as_of_utc
             if data_as_of_utc is None:
-                return "Stale Position / Basket data"
+                return "Stale Position data"
             stamp = display_timestamp(data_as_of_utc)
-            return f"Stale Position / Basket data as of {stamp}"
+            return f"Stale Position data as of {stamp}"
         return ""
 
     def _table(self) -> QTableWidget:
         table = QTableWidget(0, len(self.COLUMNS))
         table.setObjectName("positionBasketGrid")
-        table.setAccessibleName("Position / Basket")
+        table.setAccessibleName("Position")
         table.setHorizontalHeaderLabels(list(self.HEADERS))
         # A header that does not follow its column reads as a different column.
         for index, column in enumerate(self.COLUMNS):

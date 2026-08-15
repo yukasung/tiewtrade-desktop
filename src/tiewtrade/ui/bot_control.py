@@ -120,7 +120,7 @@ class BotControlWidget(QWidget):
         dialog.setIcon(QMessageBox.Icon.Warning)
         dialog.setText("Stop this Paper Bot session?")
         dialog.setInformativeText(
-            "New entries will stop. Existing Basket Take Profit stays active."
+            "New entries will stop. Existing Take Profit stays active."
         )
         stop_button = dialog.addButton(
             "Stop Bot", QMessageBox.ButtonRole.DestructiveRole

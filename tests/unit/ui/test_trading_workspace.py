@@ -31,12 +31,12 @@ def test_workspace_places_existing_features_in_one_screen(qtbot: QtBot) -> None:
     assert [
         workspace.tabs.tabText(index) for index in range(workspace.tabs.count())
     ] == [
-        "Position / Basket",
-        "Basket History",
+        "Position",
+        "Position History",
         "Trade History",
     ]
     assert workspace.position_basket.state_label.text() == (
-        "No open Position or Basket"
+        "No open Position"
     )
     assert workspace.setup.isVisible()
 

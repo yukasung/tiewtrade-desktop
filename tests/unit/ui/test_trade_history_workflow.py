@@ -256,7 +256,7 @@ def test_basket_failure_is_sanitized_and_retry_reuses_latest_filters(
     messages: list[str] = []
     workflow.baskets_unavailable.connect(messages.append)
     workflow.apply_filters(TradeHistoryFilterValues(from_date=date(2026, 1, 2)))
-    qtbot.waitUntil(lambda: messages == ["Basket History unavailable"])
+    qtbot.waitUntil(lambda: messages == ["Position History unavailable"])
 
     workflow.retry_baskets()
 
@@ -296,7 +296,7 @@ def test_a_malformed_result_fails_closed(
 
     workflow.start()
 
-    qtbot.waitUntil(lambda: messages == ["Basket History unavailable"])
+    qtbot.waitUntil(lambda: messages == ["Position History unavailable"])
     assert pool.waitForDone(1_000)
 
 

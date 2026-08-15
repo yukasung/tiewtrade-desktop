@@ -242,7 +242,7 @@ def test_chart_failure_does_not_stop_runtime_or_trade_history(qtbot: QtBot) -> N
     qtbot.waitUntil(lambda: _runtime_state(window) is BotRuntimeState.RUNNING)
     window.workspace.show_tab(WorkspaceTab.BASKET_HISTORY)
     qtbot.waitUntil(
-        lambda: window.trade_history.basket_state.text() == "No Basket history"
+        lambda: window.trade_history.basket_state.text() == "No Position history"
     )
 
     assert window.workspace.chart.retry_button.isVisible()

@@ -131,7 +131,7 @@ def test_pnl_colour_is_read_from_the_figure_not_from_its_label(
         net_realized_pnl=net_realized_pnl,
     )
 
-    assert colour_of(BASKET_COLUMNS, "Net PnL", basket) == expected
+    assert colour_of(BASKET_COLUMNS, "Profit / Loss", basket) == expected
 
 
 @pytest.mark.parametrize(

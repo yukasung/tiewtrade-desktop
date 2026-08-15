@@ -82,7 +82,7 @@ def test_page_exposes_filters_and_exact_table_columns(qtbot: QtBot) -> None:
         "Timeframe",
         "Entries",
         "Total",
-        "Net PnL",
+        "Profit / Loss",
         "Status",
     )
     assert page.fill_headers == (
@@ -93,7 +93,7 @@ def test_page_exposes_filters_and_exact_table_columns(qtbot: QtBot) -> None:
         "Quantity",
         "Fee",
         "Total",
-        "Realized PnL",
+        "Profit / Loss",
     )
     assert page.basket_table.columnCount() == len(page.basket_headers)
     basket_headers: list[str] = []
@@ -175,7 +175,7 @@ def test_basket_and_trade_results_render_independently(
     page.show_history_tab(HistoryTab.TRADES)
     page.show_trades((item,))
 
-    assert page.total_items.text() == "1 total Baskets"
+    assert page.total_items.text() == "1 total Positions"
     assert page.fill_table.rowCount() == 1
     assert cell(page.fill_table, page.fill_headers, 0, "Symbol").text() == "ETHUSDT"
     assert cell(page.fill_table, page.fill_headers, 0, "Total").text().endswith(" USDT")
@@ -184,7 +184,7 @@ def test_basket_and_trade_results_render_independently(
         QColor(POSITIVE_COLOR)
     )
     assert cell(
-        page.basket_table, page.basket_headers, 0, "Net PnL"
+        page.basket_table, page.basket_headers, 0, "Profit / Loss"
     ).foreground() == QBrush(QColor(POSITIVE_COLOR))
 
     page.show_history_tab(HistoryTab.BASKETS)
@@ -211,7 +211,7 @@ def test_initial_basket_failure_preserves_trade_tab_result(qtbot: QtBot) -> None
     qtbot.addWidget(page)
     page.show_trades((item,))
 
-    page.show_baskets_unavailable("Basket History unavailable")
+    page.show_baskets_unavailable("Position History unavailable")
 
     assert page.fill_table.rowCount() == 1
 
@@ -517,9 +517,9 @@ def test_empty_basket_result_still_carries_its_summary_to_the_screen(
 
     page.show_baskets_empty(empty_result)
 
-    assert page.basket_state.text() == "No Basket history"
+    assert page.basket_state.text() == "No Position history"
     assert page.total_net_pnl.text() == "0.01 USDT"
-    assert page.total_items.text() == "0 total Baskets"
+    assert page.total_items.text() == "0 total Positions"
     assert not page.total_net_pnl.isHidden()
     assert page.basket_table.rowCount() == 0
 
@@ -575,7 +575,7 @@ def test_basket_refresh_failure_keeps_last_known_durable_result(
     assert page.basket_table.rowCount() == 1
     assert page.total_net_pnl.text() == "19.58 USDT"
     assert not page.total_net_pnl.isHidden()
-    assert page.total_items.text() == "1 total Baskets"
+    assert page.total_items.text() == "1 total Positions"
     assert page.basket_state.text() == "Stale · Trade History unavailable"
     assert page.retry_baskets_button.isVisible()
     assert not page.retry_fills_button.isVisible()
@@ -695,7 +695,7 @@ def test_a_basket_result_does_not_change_which_half_is_read(qtbot: QtBot) -> Non
 
     page.set_baskets_loading(True)
     page.show_baskets(history_result(basket_result()))
-    page.show_baskets_unavailable("Basket History unavailable")
+    page.show_baskets_unavailable("Position History unavailable")
 
     assert page.fill_table.isVisible()
     assert not page.basket_table.isVisible()

@@ -264,12 +264,28 @@ Data, Strategy และ Paper Execution ต่อเนื่องใน flow 
 - Operations Dashboard
 - Chart ของ Symbol ที่เลือกสำหรับ Paper Session
 - Orders
-- Positions และ Basket Lifecycle
+- Positions และสถานะของ Basket (Active / Max Entries reached / Cooldown)
 - Notifications
 - Settings และ Live Preflight
 - Recovery/Reconciliation
 
 UI ต้องแยก Paper และ Live อย่างชัดเจน แสดง Market Type, Mode, Preset Version, data freshness และ Bot Session state ตลอดเวลาที่เกี่ยวข้องกับการตัดสินใจซื้อขาย
+
+### คำที่หน้าจอใช้ ต่างจากคำของโดเมน
+
+โดเมนเรียกการเทรดหนึ่งรอบว่า **Basket** ซึ่งเป็นคำที่ทีมใช้คุยกัน ไม่ใช่คำที่เทรดเดอร์ใช้
+หน้าจอจึงเรียกสิ่งเดียวกันว่า **Position** — คำที่ผู้ใช้เป้าหมายรู้จักอยู่แล้ว
+
+| โดเมนและโค้ด | หน้าจอ |
+|---|---|
+| Basket | Position |
+| Basket History | Position History |
+| Basket Lifecycle | Status (ในตาราง Position) |
+| Net PnL / Realized PnL | Profit / Loss |
+
+กฎใน AGENTS.md ที่ให้ใช้คำศัพท์ตาม CONTEXT.md ยังบังคับกับ **โค้ด** เหมือนเดิม — ชื่อคลาส
+ตัวแปร ตารางในฐานข้อมูล และเอกสารยังเป็น Basket ทั้งหมด ที่เปลี่ยนคือ **ข้อความที่ผู้ใช้เห็น**
+เท่านั้น การแปลคำเกิดขึ้นที่ชั้น UI จุดเดียว
 
 Chart เป็น read-only view ที่ผู้ใช้เลือก Symbol และ Timeframe ที่รองรับได้อย่างอิสระ
 จาก immutable Bot Session การเลือก Chart ต้องไม่เปลี่ยน Session, Strategy, Position,

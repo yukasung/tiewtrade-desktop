@@ -53,6 +53,7 @@ class DataFreshness(StrEnum):
     UNAVAILABLE = "unavailable"
 
 
+POSITION_TAB_UNAVAILABLE_MESSAGE = "Position data is unavailable"
 # An open Position that cannot be put back the way it was left. Saying "no
 # Position" instead would be the one answer that is not true, so the tab says
 # what is wrong and what clears it.
@@ -62,7 +63,7 @@ POSITION_BASKET_UNREADABLE_MESSAGE = (
 )
 _SAFE_POSITION_BASKET_TAB_MESSAGES = frozenset(
     {
-        "Position / Basket data is unavailable",
+        POSITION_TAB_UNAVAILABLE_MESSAGE,
         POSITION_BASKET_UNREADABLE_MESSAGE,
     }
 )

@@ -214,7 +214,7 @@ def test_chart_unavailable_does_not_disable_bot_control_or_trade_history(
     assert window.workspace.chart.retry_button.isVisible()
     open_trade_history(window)
     qtbot.waitUntil(
-        lambda: window.trade_history.basket_state.text() == "No Basket history"
+        lambda: window.trade_history.basket_state.text() == "No Position history"
     )
     click(window.workspace.chart.retry_button)
     qtbot.waitUntil(
@@ -270,7 +270,7 @@ def test_trade_history_opens_without_active_session(qtbot: QtBot) -> None:
     open_trade_history(window)
 
     qtbot.waitUntil(
-        lambda: window.trade_history.basket_state.text() == "No Basket history"
+        lambda: window.trade_history.basket_state.text() == "No Position history"
     )
     assert window.trade_history.isVisible()
     # No session yet: the setup form is what the workspace offers.
@@ -300,10 +300,10 @@ def test_empty_trade_history_still_carries_its_summary_to_the_screen(
     open_trade_history(window)
 
     qtbot.waitUntil(
-        lambda: window.trade_history.basket_state.text() == "No Basket history"
+        lambda: window.trade_history.basket_state.text() == "No Position history"
     )
     assert window.trade_history.total_net_pnl.text() == "0.01 USDT"
-    assert window.trade_history.total_items.text() == "0 total Baskets"
+    assert window.trade_history.total_items.text() == "0 total Positions"
 
 
 def test_trade_history_remains_available_when_session_load_fails(
@@ -327,7 +327,7 @@ def test_trade_history_remains_available_when_session_load_fails(
     open_trade_history(window)
 
     qtbot.waitUntil(
-        lambda: window.trade_history.basket_state.text() == "No Basket history"
+        lambda: window.trade_history.basket_state.text() == "No Position history"
     )
 
 
@@ -439,9 +439,8 @@ def test_basket_and_trade_retries_are_wired_to_their_own_tab(
     qtbot.addWidget(window)
     window.show()
     open_trade_history(window)
-    qtbot.waitUntil(
-        lambda: window.trade_history.basket_state.text() == "Basket History unavailable"
-    )
+    unavailable = "Position History unavailable"
+    qtbot.waitUntil(lambda: window.trade_history.basket_state.text() == unavailable)
 
     click(window.trade_history.retry_baskets_button)
     qtbot.waitUntil(lambda: window.trade_history.basket_table.rowCount() == 1)

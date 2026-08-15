@@ -235,7 +235,7 @@ class TradeHistoryWorkflow(QObject):
             return
         if not self._valid_basket_result(result):
             self._failed_basket_filters = filters
-            self.baskets_unavailable.emit("Basket History unavailable")
+            self.baskets_unavailable.emit("Position History unavailable")
             return
         if result.items:
             self.baskets_ready.emit(result)
@@ -249,7 +249,7 @@ class TradeHistoryWorkflow(QObject):
         if not self._basket_result_is_current(generation, filters):
             return
         self._failed_basket_filters = filters
-        self.baskets_unavailable.emit("Basket History unavailable")
+        self.baskets_unavailable.emit("Position History unavailable")
 
     def _basket_task_finished(self, generation: int) -> None:
         self._basket_tasks.pop(generation, None)

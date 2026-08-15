@@ -100,8 +100,8 @@ def test_each_entry_of_the_basket_is_its_own_row(qtbot: QtBot) -> None:
         "Take Profit",
         "Quantity",
         "Total",
-        "Unrealized PnL",
-        "Basket Lifecycle",
+        "Unrealized P/L",
+        "Status",
     )
     assert widget.table.rowCount() == 2
     assert _row(widget, 0) == {
@@ -111,14 +111,14 @@ def test_each_entry_of_the_basket_is_its_own_row(qtbot: QtBot) -> None:
         "Take Profit": "67,000.0000",
         "Quantity": "0.00300000",
         "Total": "198.00 USDT",
-        "Unrealized PnL": "0.96 USDT",
-        "Basket Lifecycle": "Active",
+        "Unrealized P/L": "0.96 USDT",
+        "Status": "Active",
     }
     assert _row(widget, 1)["Entry"] == "#2"
     assert _row(widget, 1)["Entry Price"] == "66,000.2500"
     assert _row(widget, 1)["Filled At"] == "2026-08-02 09:00:00"
     assert widget.state_label.text() == ""
-    assert widget.state_label.accessibleName() == "Position / Basket status"
+    assert widget.state_label.accessibleName() == "Position status"
 
 
 def test_every_entry_reads_the_target_it_is_sold_at(qtbot: QtBot) -> None:
@@ -134,7 +134,7 @@ def test_every_entry_reads_the_target_it_is_sold_at(qtbot: QtBot) -> None:
     assert _cell(widget, "Take Profit", 1).text() == "67,000.2500"
     for row in (0, 1):
         # The lifecycle is the Basket's, so it does read the same on both.
-        assert _cell(widget, "Basket Lifecycle", row).text() == "Active"
+        assert _cell(widget, "Status", row).text() == "Active"
 
 
 def test_money_is_grouped_and_a_quantity_is_not(qtbot: QtBot) -> None:
@@ -171,7 +171,7 @@ def test_only_the_total_frames_the_entries(qtbot: QtBot) -> None:
     assert widget.total_label.text() == (
         "2 Entries · Total 0.00600000 · Average 66,000.1250 · Unrealized 1.93 USDT"
     )
-    assert widget.total_label.accessibleName() == "Basket total"
+    assert widget.total_label.accessibleName() == "Position total"
     assert not hasattr(widget, "basket_label")
 
 
@@ -208,10 +208,10 @@ def test_a_moved_column_carries_its_own_reading(
         ready_position_basket_tab(_futures_basket(), observed_at_utc=OBSERVED_AT)
     )
 
-    assert widget.headers[0] == "Basket Lifecycle"
+    assert widget.headers[0] == "Status"
     assert _row(widget)["Entry"] == "#1"
-    assert _row(widget)["Unrealized PnL"] == "0.96 USDT"
-    assert _cell(widget, "Unrealized PnL").foreground() == QBrush(
+    assert _row(widget)["Unrealized P/L"] == "0.96 USDT"
+    assert _cell(widget, "Unrealized P/L").foreground() == QBrush(
         QColor(POSITIVE_COLOR)
     )
 
@@ -273,7 +273,7 @@ def test_entry_pnl_reads_as_a_two_decimal_figure_coloured_by_its_sign(
         )
     )
 
-    pnl = _cell(widget, "Unrealized PnL")
+    pnl = _cell(widget, "Unrealized P/L")
     assert pnl.text() == expected_text
     # A break-even figure keeps the table's own colour rather than picking a side.
     plain = _cell(widget, "Entry")
@@ -314,7 +314,7 @@ def test_blocked_entries_read_as_their_reason(
 
     # A blocked Basket says so on every Entry, not only on the row last taken.
     for row in range(widget.table.rowCount()):
-        assert _cell(widget, "Basket Lifecycle", row).text() == expected
+        assert _cell(widget, "Status", row).text() == expected
 
 
 def test_position_basket_states_preserve_or_clear_application_facts(
@@ -325,14 +325,14 @@ def test_position_basket_states_preserve_or_clear_application_facts(
     ready = ready_position_basket_tab(_futures_basket(), observed_at_utc=OBSERVED_AT)
 
     for snapshot, expected_state in (
-        (loading_position_basket_tab(ready), "Loading Position / Basket…"),
+        (loading_position_basket_tab(ready), "Loading Position…"),
         (
-            failed_position_basket_tab(ready, "Position / Basket data is unavailable"),
-            "Position / Basket data is unavailable",
+            failed_position_basket_tab(ready, "Position data is unavailable"),
+            "Position data is unavailable",
         ),
         (
             stale_position_basket_tab(ready),
-            "Stale Position / Basket data as of 2026-08-02 08:02:04",
+            "Stale Position data as of 2026-08-02 08:02:04",
         ),
     ):
         widget.show_snapshot(snapshot)
@@ -343,7 +343,7 @@ def test_position_basket_states_preserve_or_clear_application_facts(
     widget.show_snapshot(empty_position_basket_tab())
 
     assert widget.table.rowCount() == 0
-    assert widget.state_label.text() == "No open Position or Basket"
+    assert widget.state_label.text() == "No open Position"
     assert widget.total_label.isHidden()
 
 
@@ -379,7 +379,7 @@ def test_position_basket_ignores_wrong_snapshot_type(qtbot: QtBot) -> None:
     widget.show_snapshot(object())
 
     assert widget.table.rowCount() == 2
-    assert widget.table.accessibleName() == "Position / Basket"
+    assert widget.table.accessibleName() == "Position"
 
 
 @pytest.mark.parametrize(

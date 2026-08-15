@@ -253,7 +253,7 @@ def test_trade_history_read_failure_is_fail_closed_and_sanitized(
     qtbot.waitUntil(
         lambda: (
             window.trade_history.basket_state.text()
-            == "Stale · Basket History unavailable"
+            == "Stale · Position History unavailable"
         )
     )
 
@@ -338,10 +338,10 @@ def test_trade_history_desktop_flow_has_no_forbidden_import_or_network(
     assert window.setup.isVisible()
     open_trade_history(window)
     qtbot.waitUntil(
-        lambda: window.trade_history.basket_state.text() == "No Basket history"
+        lambda: window.trade_history.basket_state.text() == "No Position history"
     )
     assert window.workspace.tab_pages.currentWidget() is window.workspace.trade_history
-    assert window.trade_history.basket_state.text() == "No Basket history"
+    assert window.trade_history.basket_state.text() == "No Position history"
 
 
 def _record_spot_and_futures_history(history: SQLiteTradeHistory) -> None:

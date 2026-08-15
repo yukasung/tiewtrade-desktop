@@ -76,9 +76,9 @@ def test_position_basket_helpers_preserve_and_validate_basket_data() -> None:
     assert stale_position_basket_tab(ready).data_as_of_utc is OBSERVED_AT
     assert (
         failed_position_basket_tab(
-            ready, "Position / Basket data is unavailable"
+            ready, "Position data is unavailable"
         ).message
-        == "Position / Basket data is unavailable"
+        == "Position data is unavailable"
     )
     with pytest.raises(ValueError, match="message must be sanitized"):
         failed_position_basket_tab(ready, "sqlite failure at /private/tmp")
