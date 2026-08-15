@@ -107,15 +107,15 @@ def test_each_entry_of_the_basket_is_its_own_row(qtbot: QtBot) -> None:
     assert _row(widget, 0) == {
         "Entry": "#1",
         "Filled At": "2026-08-02 08:00:00",
-        "Entry Price": "66000.0000",
-        "Take Profit": "67000.0000",
+        "Entry Price": "66,000.0000",
+        "Take Profit": "67,000.0000",
         "Quantity": "0.00300000",
         "Notional": "198.00 USDT",
         "Unrealized PnL": "0.96 USDT",
         "Basket Lifecycle": "Active",
     }
     assert _row(widget, 1)["Entry"] == "#2"
-    assert _row(widget, 1)["Entry Price"] == "66000.2500"
+    assert _row(widget, 1)["Entry Price"] == "66,000.2500"
     assert _row(widget, 1)["Filled At"] == "2026-08-02 09:00:00"
     assert widget.state_label.text() == ""
     assert widget.state_label.accessibleName() == "Position / Basket status"
@@ -130,11 +130,29 @@ def test_every_entry_reads_the_target_it_is_sold_at(qtbot: QtBot) -> None:
         ready_position_basket_tab(_futures_basket(), observed_at_utc=OBSERVED_AT)
     )
 
-    assert _cell(widget, "Take Profit", 0).text() == "67000.0000"
-    assert _cell(widget, "Take Profit", 1).text() == "67000.2500"
+    assert _cell(widget, "Take Profit", 0).text() == "67,000.0000"
+    assert _cell(widget, "Take Profit", 1).text() == "67,000.2500"
     for row in (0, 1):
         # The lifecycle is the Basket's, so it does read the same on both.
         assert _cell(widget, "Basket Lifecycle", row).text() == "Active"
+
+
+def test_money_is_grouped_and_a_quantity_is_not(qtbot: QtBot) -> None:
+    """Thousands read at a glance; an amount of the asset has no thousands."""
+    widget = PositionBasketTable()
+    qtbot.addWidget(widget)
+
+    widget.show_snapshot(
+        ready_position_basket_tab(_futures_basket(), observed_at_utc=OBSERVED_AT)
+    )
+
+    row = _row(widget, 0)
+    assert row["Entry Price"] == "66,000.0000"
+    assert row["Take Profit"] == "67,000.0000"
+    assert row["Notional"] == "198.00 USDT"
+    # The quantity is counted in BTC, where a separator would suggest a
+    # scale the number does not have.
+    assert row["Quantity"] == "0.00300000"
 
 
 def test_only_the_total_frames_the_entries(qtbot: QtBot) -> None:
@@ -151,7 +169,7 @@ def test_only_the_total_frames_the_entries(qtbot: QtBot) -> None:
     )
 
     assert widget.total_label.text() == (
-        "2 Entries · Total 0.00600000 · Average 66000.1250 · Unrealized 1.93 USDT"
+        "2 Entries · Total 0.00600000 · Average 66,000.1250 · Unrealized 1.93 USDT"
     )
     assert widget.total_label.accessibleName() == "Basket total"
     assert not hasattr(widget, "basket_label")

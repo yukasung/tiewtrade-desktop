@@ -6,6 +6,7 @@ from tiewtrade.application.trade_history import TradeFillHistoryItem, TradeHisto
 from tiewtrade.trading.session_config import MarketType, TradeMode
 from tiewtrade.trading.trade_history import BasketResult, BasketStatus, FillSide
 from tiewtrade.ui.display_time import DISPLAY_TIMEZONE, display_timestamp
+from tiewtrade.ui.money_text import money_text, price_text
 from tiewtrade.ui.sign_state import sign_colour
 from tiewtrade.ui.table_column import CENTER, LEFT, RIGHT, Column
 from tiewtrade.ui.theme import NEGATIVE_COLOR, POSITIVE_COLOR
@@ -75,7 +76,7 @@ FILL_COLUMNS: tuple[Column[TradeFillHistoryItem], ...] = (
         lambda item: display_enum(item.fill.side.value),
         lambda item: _side_colour(item.fill.side),
     ),
-    Column("Price", RIGHT, lambda item: decimal_text(item.fill.price)),
+    Column("Price", RIGHT, lambda item: price_text(item.fill.price)),
     Column("Quantity", RIGHT, lambda item: decimal_text(item.fill.quantity)),
     Column("Fee", RIGHT, lambda item: usdt_text(item.fill.commission)),
     Column("Total", RIGHT, lambda item: usdt_text(item.fill.notional)),
@@ -112,10 +113,11 @@ def local_text(value: datetime) -> str:
 
 
 def usdt_text(value: Decimal) -> str:
-    return f"{decimal_text(value)} USDT"
+    return money_text(value)
 
 
 def decimal_text(value: Decimal) -> str:
+    """A quantity, which is counted in the asset rather than in money."""
     if value == 0:
         return "0.00"
     return format(value, "f")

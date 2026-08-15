@@ -225,7 +225,7 @@ def test_paper_execution_history_survives_restart_and_reaches_desktop(
     window.workspace.tabs.setCurrentWidget(window.trade_history)
 
     qtbot.waitUntil(lambda: window.trade_history.basket_table.rowCount() == 2)
-    assert window.trade_history.total_net_pnl.text() == "2273.69035202 USDT"
+    assert window.trade_history.total_net_pnl.text() == "2,273.69035202 USDT"
     assert _table_row_text(window.trade_history.basket_table, 0) == (
         "2026-01-01 09:05:00",
         "Paper",
@@ -233,11 +233,11 @@ def test_paper_execution_history_survives_restart_and_reaches_desktop(
         "BTCUSDT",
         "5m",
         "1",
-        "29999.9492 USDT",
-        "2322.1718 USDT",
+        "29,999.9492 USDT",
+        "2,322.1718 USDT",
         "62.3220702 USDT",
         "0.00 USDT",
-        "2259.8497298 USDT",
+        "2,259.8497298 USDT",
         "Closed",
     )
     window.trade_history.history_tabs.setCurrentIndex(1)
@@ -250,7 +250,7 @@ def test_paper_execution_history_survives_restart_and_reaches_desktop(
             "95.6",
             "313.807",
             "29.9999492 USDT",
-            "29999.9492 USDT",
+            "29,999.9492 USDT",
             "0.00 USDT",
             "Paper Executor",
         ),
@@ -261,8 +261,8 @@ def test_paper_execution_history_survives_restart_and_reaches_desktop(
             "103.0",
             "313.807",
             "32.3221210 USDT",
-            "32322.1210 USDT",
-            "2259.8497298 USDT",
+            "32,322.1210 USDT",
+            "2,259.8497298 USDT",
             "Paper Executor",
         ),
         (

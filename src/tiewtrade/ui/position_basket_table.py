@@ -1,5 +1,4 @@
 from dataclasses import dataclass
-from decimal import Decimal
 
 from PySide6.QtCore import QSignalBlocker, Qt
 from PySide6.QtWidgets import (
@@ -19,6 +18,7 @@ from tiewtrade.application.trading_workspace import (
 )
 from tiewtrade.ui.display_time import display_timestamp
 from tiewtrade.ui.entry_gate_display import blocked_entry_reason
+from tiewtrade.ui.money_text import money_to_cent, price_text
 from tiewtrade.ui.sign_state import paint_by_sign, sign_colour
 from tiewtrade.ui.table_column import (
     CENTER,
@@ -48,12 +48,12 @@ def _filled_at(row: _Row) -> str:
 
 
 def _price(row: _Row) -> str:
-    return format(row.entry.price, "f")
+    return price_text(row.entry.price)
 
 
 def _take_profit_price(row: _Row) -> str:
     """The target this Entry alone is sold at."""
-    return format(row.entry.take_profit_price, "f")
+    return price_text(row.entry.take_profit_price)
 
 
 def _entry_gate(row: _Row) -> str:
@@ -66,15 +66,11 @@ def _quantity(row: _Row) -> str:
 
 
 def _notional(row: _Row) -> str:
-    return f"{row.entry.notional:.2f} USDT"
+    return money_to_cent(row.entry.notional)
 
 
 def _pnl(row: _Row) -> str:
-    return _money(row.entry.unrealized_pnl)
-
-
-def _money(value: Decimal) -> str:
-    return f"{value:.2f} USDT"
+    return money_to_cent(row.entry.unrealized_pnl)
 
 
 def _pnl_colour(row: _Row) -> str | None:
@@ -172,8 +168,8 @@ class PositionBasketTable(QWidget):
             f"{basket.entry_count} "
             f"{'Entry' if basket.entry_count == 1 else 'Entries'} · "
             f"Total {format(basket.total_quantity, 'f')} · "
-            f"Average {format(basket.average_entry_price, 'f')} · "
-            f"Unrealized {_money(basket.unrealized_pnl)}"
+            f"Average {price_text(basket.average_entry_price)} · "
+            f"Unrealized {money_to_cent(basket.unrealized_pnl)}"
         )
         paint_by_sign(self.total_label, basket.unrealized_pnl)
         self.total_label.setVisible(True)
