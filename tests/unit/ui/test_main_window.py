@@ -250,7 +250,6 @@ def _session_configuration_controls(window: MainWindow) -> tuple[QWidget, ...]:
         setup.spot_ratio,
         setup.leverage,
         setup.advanced_toggle,
-        setup.fee_percent,
         setup.slippage_bps,
         setup.create_button,
     )
@@ -725,30 +724,30 @@ def test_validation_failure_reveals_and_focuses_advanced_field(
 
     window.setup.available_capital.setText("200000")
     click(window.setup.advanced_toggle)
-    window.setup.fee_percent.setText("100")
-    window.setup.slippage_bps.setText("5")
+    window.setup.slippage_bps.setText("10000")
     window.workspace.bot_control_scroll.ensureWidgetVisible(window.setup.create_button)
     click(window.setup.create_button)
 
     qtbot.waitUntil(
         lambda: (
-            window.setup.fee_percent_error.text() == "Trading Fee must be below 100%"
+            window.setup.slippage_bps_error.text()
+            == "Slippage must be below 10,000 bps"
         )
     )
     viewport = window.workspace.bot_control_scroll.viewport()
 
     assert window.workspace.bot_control.isVisible()
-    assert window.setup.fee_percent_error.isVisible()
+    assert window.setup.slippage_bps_error.isVisible()
     assert viewport.rect().contains(
-        _widget_rect_in_viewport(window.setup.fee_percent, viewport)
+        _widget_rect_in_viewport(window.setup.slippage_bps, viewport)
     )
     assert viewport.rect().contains(
-        _widget_rect_in_viewport(window.setup.fee_percent_error, viewport)
+        _widget_rect_in_viewport(window.setup.slippage_bps_error, viewport)
     )
-    assert window.setup.fee_percent.hasFocus()
+    assert window.setup.slippage_bps.hasFocus()
 
 
-@pytest.mark.parametrize("field", ["fee_percent", "slippage_bps"])
+@pytest.mark.parametrize("field", ["slippage_bps"])
 def test_required_advanced_validation_expands_and_reveals_field(
     qtbot: QtBot,
     field: str,
@@ -774,10 +773,7 @@ def test_required_advanced_validation_expands_and_reveals_field(
     assert not window.setup.advanced_toggle.isChecked()
 
     window.setup.available_capital.setText("200000")
-    window.setup.fee_percent.clear()
     window.setup.slippage_bps.clear()
-    if field == "slippage_bps":
-        window.setup.fee_percent.setText("0.1")
     window.workspace.bot_control_scroll.ensureWidgetVisible(window.setup.create_button)
     click(window.setup.create_button)
 
@@ -832,8 +828,7 @@ def test_delayed_validation_reveals_the_failed_field(
     qtbot.waitUntil(window.setup.create_button.isEnabled)
     window.setup.available_capital.setText("200000")
     click(window.setup.advanced_toggle)
-    window.setup.fee_percent.setText("100")
-    window.setup.slippage_bps.setText("5")
+    window.setup.slippage_bps.setText("10000")
     window.workspace.bot_control_scroll.ensureWidgetVisible(window.setup.create_button)
     click(window.setup.create_button)
     qtbot.waitUntil(started.is_set)
@@ -842,20 +837,21 @@ def test_delayed_validation_reveals_the_failed_field(
 
     qtbot.waitUntil(
         lambda: (
-            window.setup.fee_percent_error.text() == "Trading Fee must be below 100%"
+            window.setup.slippage_bps_error.text()
+            == "Slippage must be below 10,000 bps"
         )
     )
     viewport = window.workspace.bot_control_scroll.viewport()
 
     assert window.workspace.bot_control.isVisible()
-    assert window.setup.fee_percent_error.isVisible()
+    assert window.setup.slippage_bps_error.isVisible()
     assert viewport.rect().contains(
-        _widget_rect_in_viewport(window.setup.fee_percent, viewport)
+        _widget_rect_in_viewport(window.setup.slippage_bps, viewport)
     )
     assert viewport.rect().contains(
-        _widget_rect_in_viewport(window.setup.fee_percent_error, viewport)
+        _widget_rect_in_viewport(window.setup.slippage_bps_error, viewport)
     )
-    assert window.setup.fee_percent.hasFocus()
+    assert window.setup.slippage_bps.hasFocus()
     assert thread_pool.waitForDone(1_000)
 
 
@@ -898,7 +894,6 @@ def test_delayed_spot_validation_freezes_configuration_until_result(
     window.setup.available_capital.setText("200000")
     window.setup.spot_ratio.setText("100")
     click(window.setup.advanced_toggle)
-    window.setup.fee_percent.setText("0.1")
     window.setup.slippage_bps.setText("5")
     window.workspace.bot_control_scroll.ensureWidgetVisible(window.setup.create_button)
     click(window.setup.create_button)

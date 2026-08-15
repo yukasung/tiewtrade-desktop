@@ -40,7 +40,6 @@ def _spot_values() -> PaperSessionSetupValues:
         timeframe="5m",
         available_capital="200000",
         max_entries="10",
-        fee_percent="0.1",
         slippage_bps="5",
         spot_trading_capital_percent="80",
         futures_leverage=None,

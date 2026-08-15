@@ -105,11 +105,6 @@ class SessionSetupWidget(QWidget):
         )
         self.collateral_buffer_value.setObjectName("readOnlyValue")
 
-        self.fee_percent = QLineEdit("0.05")
-        self.fee_percent.setObjectName("feePercent")
-        self.fee_percent.setPlaceholderText("Percent")
-        self.fee_percent_error = self._error_label("fee_percent")
-
         self.slippage_bps = QLineEdit("0.05")
         self.slippage_bps.setObjectName("slippageBps")
         self.slippage_bps.setPlaceholderText("Basis points")
@@ -140,7 +135,6 @@ class SessionSetupWidget(QWidget):
         self.spot_ratio.setAccessibleName("Spot Trading Capital (%)")
         self.leverage.setAccessibleName("Futures Leverage")
         self.advanced_toggle.setAccessibleName("Advanced Execution Costs")
-        self.fee_percent.setAccessibleName("Trading Fee (%)")
         self.slippage_bps.setAccessibleName("Slippage (bps)")
         self.create_button.setAccessibleName("Start Paper Bot")
 
@@ -156,7 +150,6 @@ class SessionSetupWidget(QWidget):
             timeframe=str(self.timeframe.currentData()),
             available_capital=self.available_capital.text().strip(),
             max_entries=str(self.max_entries.value()),
-            fee_percent=self.fee_percent.text().strip(),
             slippage_bps=self.slippage_bps.text().strip(),
             spot_trading_capital_percent=(
                 None if futures else self.spot_ratio.text().strip()
@@ -176,7 +169,6 @@ class SessionSetupWidget(QWidget):
         )
         self.available_capital.setText(format(config.available_capital, "f"))
         self.max_entries.setValue(config.entry_policy.max_entries)
-        self.fee_percent.setText(format(config.fee_rate * Decimal("100"), "f"))
         self.slippage_bps.setText(format(config.slippage_bps, "f"))
         if config.spot_policy is not None:
             self.spot_ratio.setText(
@@ -206,7 +198,6 @@ class SessionSetupWidget(QWidget):
             self.spot_ratio,
             self.leverage,
             self.advanced_toggle,
-            self.fee_percent,
             self.slippage_bps,
             self.create_button,
         ):
@@ -226,9 +217,6 @@ class SessionSetupWidget(QWidget):
         error_label.setVisible(True)
 
     def reveal_validation_field(self, field: str) -> tuple[QWidget, QLabel] | None:
-        if field == "fee_percent":
-            self.advanced_toggle.setChecked(True)
-            return self.fee_percent, self.fee_percent_error
         if field == "slippage_bps":
             self.advanced_toggle.setChecked(True)
             return self.slippage_bps, self.slippage_bps_error
@@ -362,12 +350,6 @@ class SessionSetupWidget(QWidget):
         heading.setObjectName("sectionTitle")
         layout.addWidget(heading)
         costs_form = self._form()
-        self._add_row(
-            costs_form,
-            "Trading Fee (%)",
-            self.fee_percent,
-            (self.fee_percent_error,),
-        )
         self._add_row(
             costs_form,
             "Slippage (bps)",

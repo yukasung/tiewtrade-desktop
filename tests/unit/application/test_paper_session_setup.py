@@ -26,7 +26,6 @@ def spot_values() -> PaperSessionSetupValues:
         timeframe="5m",
         available_capital="200000",
         max_entries="10",
-        fee_percent="0.1",
         slippage_bps="5",
         spot_trading_capital_percent="80",
         futures_leverage=None,
@@ -54,7 +53,6 @@ def test_create_spot_session_builds_immutable_configuration() -> None:
     assert outcome.session.config.market_type is MarketType.SPOT
     assert outcome.session.market_data.symbol == "BTCUSDT"
     assert outcome.session.market_data.timeframe == "5m"
-    assert outcome.session.config.fee_rate == Decimal("0.001")
     assert outcome.session.config.slippage_bps == Decimal("5")
     assert outcome.session.config.entry_policy.max_entries == 10
     assert outcome.session.config.spot_policy is not None
@@ -83,7 +81,6 @@ def test_create_paper_session_accepts_ethusdt() -> None:
     [
         ("available_capital", "0"),
         ("max_entries", "3"),
-        ("fee_percent", "100"),
         ("slippage_bps", "10000"),
         ("spot_trading_capital_percent", "100"),
     ],
@@ -107,7 +104,6 @@ def test_invalid_input_reports_the_exact_field(field: str, value: str) -> None:
     [
         ("available_capital", "not-a-number"),
         ("max_entries", "10.5"),
-        ("fee_percent", ""),
     ],
 )
 def test_malformed_input_reports_the_exact_field(field: str, value: str) -> None:
@@ -129,7 +125,6 @@ def test_malformed_input_reports_the_exact_field(field: str, value: str) -> None
     [
         ("available_capital", "Infinity"),
         ("available_capital", "NaN"),
-        ("fee_percent", "NaN"),
         ("slippage_bps", "Infinity"),
         ("spot_trading_capital_percent", "NaN"),
     ],

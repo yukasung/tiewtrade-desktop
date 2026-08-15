@@ -44,7 +44,6 @@ class PaperSessionSetupValues:
     timeframe: str
     available_capital: str
     max_entries: str
-    fee_percent: str
     slippage_bps: str
     spot_trading_capital_percent: str | None
     futures_leverage: str | None
@@ -104,7 +103,6 @@ class CreatePaperSession:
         market_type = _market_type(values.market_type)
         available_capital = _decimal(values.available_capital, "available_capital")
         max_entries = _integer(values.max_entries, "max_entries")
-        fee_percent = _decimal(values.fee_percent, "fee_percent")
         slippage_bps = _decimal(values.slippage_bps, "slippage_bps")
 
         spot_policy: SpotTradingPolicy | None = None
@@ -147,7 +145,7 @@ class CreatePaperSession:
                 market_type=market_type,
                 trade_mode=TradeMode.PAPER,
                 available_capital=available_capital,
-                fee_rate=fee_percent / Decimal("100"),
+                fee_rate=Decimal("0"),
                 slippage_bps=slippage_bps,
                 entry_policy=entry_policy,
                 spot_policy=spot_policy,
@@ -166,7 +164,6 @@ def validate_paper_session(values: PaperSessionSetupValues) -> None:
     market_type = _market_type(values.market_type)
     available_capital = _decimal(values.available_capital, "available_capital")
     _integer(values.max_entries, "max_entries")
-    fee_percent = _decimal(values.fee_percent, "fee_percent")
     slippage_bps = _decimal(values.slippage_bps, "slippage_bps")
     try:
         validate_paper_symbol(values.symbol)
@@ -175,10 +172,6 @@ def validate_paper_session(values: PaperSessionSetupValues) -> None:
     if available_capital <= 0:
         raise PaperSessionValidationError(
             "available_capital", "Available Capital must be positive"
-        )
-    if not Decimal("0") <= fee_percent < Decimal("100"):
-        raise PaperSessionValidationError(
-            "fee_percent", "Trading Fee must be below 100%"
         )
     if not Decimal("0") <= slippage_bps < Decimal("10000"):
         raise PaperSessionValidationError(

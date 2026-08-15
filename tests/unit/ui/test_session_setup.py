@@ -18,7 +18,6 @@ def test_configuration_controls_have_explicit_accessible_names(qtbot: QtBot) -> 
     assert widget.spot_ratio.accessibleName() == "Spot Trading Capital (%)"
     assert widget.leverage.accessibleName() == "Futures Leverage"
     assert widget.advanced_toggle.accessibleName() == "Advanced Execution Costs"
-    assert widget.fee_percent.accessibleName() == "Trading Fee (%)"
     assert widget.slippage_bps.accessibleName() == "Slippage (bps)"
     assert widget.create_button.accessibleName() == "Start Paper Bot"
 
@@ -34,7 +33,6 @@ def test_default_form_builds_paper_spot_values(qtbot: QtBot) -> None:
     assert values.timeframe == "5m"
     assert values.available_capital == ""
     assert values.max_entries == "10"
-    assert values.fee_percent == "0.05"
     assert values.slippage_bps == "0.05"
     assert values.spot_trading_capital_percent == "80"
     assert values.futures_leverage is None

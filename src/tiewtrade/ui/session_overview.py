@@ -28,7 +28,6 @@ class SessionOverviewWidget(QWidget):
         self.spot_reserve_ratio_value = self._value_label()
         self.margin_mode_value = self._value_label()
         self.position_mode_value = self._value_label()
-        self.fee_value = self._value_label()
         self.slippage_value = self._value_label()
         self.created_at_value = self._value_label()
 
@@ -45,7 +44,6 @@ class SessionOverviewWidget(QWidget):
         )
         self.max_entries_value.setText(str(config.entry_policy.max_entries))
         self._show_market_policy(session)
-        self.fee_value.setText(_percent_text(config.fee_rate))
         self.slippage_value.setText(f"{_decimal_text(config.slippage_bps)} bps")
         self.created_at_value.setText(display_timestamp(session.created_at_utc))
 
@@ -71,7 +69,6 @@ class SessionOverviewWidget(QWidget):
             ("Spot Reserve Ratio", self.spot_reserve_ratio_value),
             ("Margin Mode", self.margin_mode_value),
             ("Position Mode", self.position_mode_value),
-            ("Trading Fee", self.fee_value),
             ("Slippage", self.slippage_value),
             ("Created at", self.created_at_value),
         )

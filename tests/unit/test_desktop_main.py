@@ -191,7 +191,6 @@ def test_desktop_composition_supplies_migrated_create_and_load_operations(
             timeframe="5m",
             available_capital="200000",
             max_entries="10",
-            fee_percent="0",
             slippage_bps="0",
             spot_trading_capital_percent="80",
             futures_leverage=None,
