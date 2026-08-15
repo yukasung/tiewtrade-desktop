@@ -10,6 +10,7 @@ from tiewtrade.application.chart_data import (
 )
 from tiewtrade.application.chart_indicators import (
     CHART_RSI_WARM_UP_CANDLES,
+    AtrSeries,
     RsiSeries,
 )
 from tiewtrade.application.paper_session_setup import ConfiguredPaperSession
@@ -39,7 +40,7 @@ class ChartHistory:
         session: ConfiguredPaperSession,
         chart_range: ChartRange,
     ) -> ChartSnapshot:
-        candles, rsi = await self._load_with_rsi(session, chart_range)
+        candles, rsi, atr = await self._load_with_indicators(session, chart_range)
         return ChartSnapshot(
             session=session,
             chart_range=chart_range,
@@ -48,6 +49,7 @@ class ChartHistory:
             fills=self._list_fills(session.config.session_id, chart_range),
             state=ChartReadState.READY if candles else ChartReadState.EMPTY,
             rsi=rsi,
+            atr=atr,
         )
 
     async def refresh_completed(
@@ -61,6 +63,7 @@ class ChartHistory:
         chart_range = snapshot.chart_range
         candles = snapshot.candles
         rsi = snapshot.rsi
+        atr = snapshot.atr
         if candle.open_time >= chart_range.end:
             reload_history = candle.open_time > chart_range.end
             duration = chart_range.end - chart_range.start
@@ -69,9 +72,11 @@ class ChartHistory:
                 end=candle.close_time,
             )
             if reload_history:
-                # The gap means the carried RSI state no longer sits at the
-                # candle before this one, so the series has to be rebuilt.
-                candles, rsi = await self._load_with_rsi(session, chart_range)
+                # The gap means the carried indicator state no longer sits at
+                # the candle before this one, so the series are rebuilt.
+                candles, rsi, atr = await self._load_with_indicators(
+                    session, chart_range
+                )
         elif not (
             chart_range.start <= candle.open_time
             and candle.close_time <= chart_range.end
@@ -80,6 +85,7 @@ class ChartHistory:
 
         if follows(candles, candle):
             rsi = rsi.advanced(candle)
+            atr = atr.advanced(candle)
 
         candles_by_open_time = {item.open_time: item for item in candles}
         candles_by_open_time[candle.open_time] = candle
@@ -97,19 +103,20 @@ class ChartHistory:
             fills=self._list_fills(session.config.session_id, chart_range),
             state=ChartReadState.READY if candles else ChartReadState.EMPTY,
             rsi=rsi.restricted_to(item.open_time for item in candles),
+            atr=atr.restricted_to(item.open_time for item in candles),
         )
 
-    async def _load_with_rsi(
+    async def _load_with_indicators(
         self,
         session: ConfiguredPaperSession,
         chart_range: ChartRange,
-    ) -> tuple[tuple[Candle, ...], RsiSeries]:
-        """Load the visible candles, seeding RSI from candles before them.
+    ) -> tuple[tuple[Candle, ...], RsiSeries, AtrSeries]:
+        """Load the visible candles, seeding indicators from candles before them.
 
-        Wilder smoothing is path dependent, so RSI computed from the visible
-        window alone would change every time the window moves. Reading extra
-        candles before the range makes each candle's RSI stable across zoom
-        and pan without ever showing those candles.
+        Wilder smoothing is path dependent, so a reading computed from the
+        visible window alone would change every time the window moves. Reading
+        extra candles before the range makes each candle's RSI and ATR stable
+        across zoom and pan without ever showing those candles.
         """
         interval = session.market_data.interval
         loaded = await self._load_candles(
@@ -124,5 +131,7 @@ class ChartHistory:
         )
         # The warm-up range ends where the visible range ends, so the series
         # state already sits at the last visible candle.
+        visible = tuple(item.open_time for item in candles)
         rsi = RsiSeries.over(loaded) if candles else RsiSeries()
-        return candles, rsi.restricted_to(item.open_time for item in candles)
+        atr = AtrSeries.over(loaded) if candles else AtrSeries()
+        return candles, rsi.restricted_to(visible), atr.restricted_to(visible)

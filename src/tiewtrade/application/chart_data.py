@@ -4,7 +4,7 @@ from decimal import Decimal
 from enum import StrEnum
 from uuid import UUID
 
-from tiewtrade.application.chart_indicators import RsiSeries
+from tiewtrade.application.chart_indicators import AtrSeries, RsiSeries
 from tiewtrade.application.paper_session_setup import ConfiguredPaperSession
 from tiewtrade.market_data.candle import Candle
 from tiewtrade.market_data.config import timeframe_to_interval
@@ -156,6 +156,7 @@ class ChartSnapshot:
     in_progress_candle: Candle | None = None
     message: str | None = None
     rsi: RsiSeries = field(default_factory=RsiSeries)
+    atr: AtrSeries = field(default_factory=AtrSeries)
     session: InitVar[ConfiguredPaperSession | None] = None
     _session_facts: InitVar[tuple[UUID, str, str] | None] = None
     session_id: UUID = field(init=False)
@@ -263,13 +264,19 @@ class ChartSnapshot:
         object.__setattr__(self, "markers", tuple(markers))
 
         if self.state in {ChartReadState.LOADING, ChartReadState.UNAVAILABLE} and (
-            self.rsi.values or self.rsi.state is not None
-        ):
-            raise ValueError("loading or unavailable ChartSnapshot cannot carry RSI")
-        if not {candle.open_time for candle in self.candles}.issuperset(
             self.rsi.values
+            or self.rsi.state is not None
+            or self.atr.values
+            or self.atr.state is not None
         ):
+            raise ValueError(
+                "loading or unavailable ChartSnapshot cannot carry indicators"
+            )
+        candle_open_times = {candle.open_time for candle in self.candles}
+        if not candle_open_times.issuperset(self.rsi.values):
             raise ValueError("RSI open_time must match a ChartSnapshot candle")
+        if not candle_open_times.issuperset(self.atr.values):
+            raise ValueError("ATR open_time must match a ChartSnapshot candle")
 
     @property
     def visible_range(self) -> ChartRange:
@@ -296,6 +303,13 @@ class ChartSnapshot:
             return self.rsi.value_for_close(forming.close)
         return self.rsi.value_at(open_time)
 
+    def atr_for(self, open_time: datetime) -> Decimal | None:
+        """ATR of any displayed candle, completed or forming."""
+        forming = self.in_progress_candle
+        if forming is not None and forming.open_time == open_time:
+            return self.atr.value_for_candle(forming)
+        return self.atr.value_at(open_time)
+
 
 def append_completed_candle(snapshot: ChartSnapshot, candle: Candle) -> ChartSnapshot:
     if snapshot.state is not ChartReadState.READY:
@@ -304,11 +318,9 @@ def append_completed_candle(snapshot: ChartSnapshot, candle: Candle) -> ChartSna
     candles_by_open_time[candle.open_time] = candle
     # Wilder smoothing is path dependent, so only a candle newer than every
     # candle held can extend the series; a restated one leaves it untouched.
-    rsi = (
-        snapshot.rsi.advanced(candle)
-        if follows(snapshot.candles, candle)
-        else (snapshot.rsi)
-    )
+    extends = follows(snapshot.candles, candle)
+    rsi = snapshot.rsi.advanced(candle) if extends else snapshot.rsi
+    atr = snapshot.atr.advanced(candle) if extends else snapshot.atr
     return ChartSnapshot(
         candles=tuple(
             candles_by_open_time[open_time]
@@ -321,6 +333,7 @@ def append_completed_candle(snapshot: ChartSnapshot, candle: Candle) -> ChartSna
         in_progress_candle=snapshot.in_progress_candle,
         message=snapshot.message,
         rsi=rsi,
+        atr=atr,
         _session_facts=(snapshot.session_id, snapshot.symbol, snapshot.timeframe),
     )
 

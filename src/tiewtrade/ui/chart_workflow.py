@@ -634,6 +634,7 @@ class ChartWorkflow(QObject):
             in_progress_candle=in_progress_candle,
             message=snapshot.message,
             rsi=snapshot.rsi,
+            atr=snapshot.atr,
             _session_facts=(
                 snapshot.session_id,
                 snapshot.symbol,
@@ -668,6 +669,7 @@ class ChartWorkflow(QObject):
             in_progress_candle=snapshot.in_progress_candle,
             message=snapshot.message,
             rsi=snapshot.rsi,
+            atr=snapshot.atr,
             _session_facts=(
                 session.config.session_id,
                 selection.symbol,

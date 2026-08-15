@@ -6,7 +6,10 @@ import pytest
 
 from tests.support.chart_candles import FIVE_MINUTES, flat_candle
 from tiewtrade.application.chart_indicators import (
+    CHART_ATR_PERIOD,
     CHART_RSI_PERIOD,
+    AtrSeries,
+    AtrState,
     RsiSeries,
     RsiState,
 )
@@ -36,6 +39,78 @@ def test_chart_rsi_matches_the_rsi_a_strategy_acts_on() -> None:
 
     assert expected
     assert dict(series.values) == expected
+
+
+def test_chart_atr_matches_the_atr_a_strategy_acts_on() -> None:
+    """The displayed ATR must never diverge from the ATR a target is measured from."""
+    candles = load_candles_csv(
+        FIXTURE,
+        MarketDataConfig(symbol="BTCUSDT", timeframe="5m"),
+    )
+    indicators = WilderIndicators(RsiStepGridPreset.v1())
+    expected = {
+        candle.open_time: snapshot.atr
+        for candle in candles
+        if (snapshot := indicators.update(candle)) is not None
+    }
+
+    series = AtrSeries.over(candles)
+
+    assert expected
+    # The Strategy publishes a reading only once RSI is warm too, so ATR
+    # values before that are the chart's alone.
+    assert {open_time: series.values[open_time] for open_time in expected} == expected
+
+
+def test_atr_stays_absent_until_the_period_has_enough_candles() -> None:
+    candles = rising_candles(CHART_ATR_PERIOD + 2)
+
+    series = AtrSeries.over(candles)
+
+    # A candle's own range needs no candle before it, so the first value
+    # lands on the period rather than one after it.
+    assert [candle.open_time in series.values for candle in candles] == (
+        [False] * (CHART_ATR_PERIOD - 1) + [True, True, True]
+    )
+
+
+def test_advancing_atr_one_candle_matches_recomputing_the_whole_series() -> None:
+    candles = rising_candles(30)
+
+    advanced = AtrSeries.over(candles[:-1]).advanced(candles[-1])
+    full = AtrSeries.over(candles)
+
+    assert dict(advanced.values) == dict(full.values)
+    assert advanced.state == full.state
+
+
+def test_reading_a_forming_candle_leaves_the_atr_series_usable_again() -> None:
+    candles = rising_candles(CHART_ATR_PERIOD + 5)
+    series = AtrSeries.over(candles[:-1])
+    forming = candles[-1]
+
+    forming_value = series.value_for_candle(forming)
+
+    assert forming_value is not None
+    # Reading the forming candle must not consume the state behind it.
+    assert series.advanced(forming).value_at(forming.open_time) == forming_value
+
+
+def test_empty_atr_series_reads_as_absent_rather_than_failing() -> None:
+    series = AtrSeries.over(())
+
+    assert series.state is None
+    assert series.value_at(datetime(2026, 1, 1, tzinfo=UTC)) is None
+    assert (
+        series.value_for_candle(flat_candle(datetime(2026, 1, 1, tzinfo=UTC), 100))
+        is None
+    )
+    assert series.advanced(flat_candle(datetime(2026, 1, 1, tzinfo=UTC), 100)) == series
+
+
+def test_atr_state_rejects_a_non_positive_period() -> None:
+    with pytest.raises(ValueError, match="period must be positive"):
+        AtrState(period=0)
 
 
 def test_rsi_stays_absent_until_the_period_has_enough_price_changes() -> None:

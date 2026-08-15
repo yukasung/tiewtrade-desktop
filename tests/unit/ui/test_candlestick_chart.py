@@ -9,6 +9,7 @@ from PySide6.QtGui import QColor, QWheelEvent
 from PySide6.QtWidgets import QPushButton
 from pytestqt.qtbot import QtBot
 
+import tiewtrade.ui.candlestick_chart as candlestick_chart_module
 import tiewtrade.ui.chart_painter_model as chart_module
 from tests.support.paper_session_setup import configured_spot_session
 from tiewtrade.application.chart_data import (
@@ -16,7 +17,11 @@ from tiewtrade.application.chart_data import (
     ChartReadState,
     ChartSnapshot,
 )
-from tiewtrade.application.chart_indicators import RsiSeries
+from tiewtrade.application.chart_indicators import (
+    CHART_ATR_PERIOD,
+    AtrSeries,
+    RsiSeries,
+)
 from tiewtrade.application.chart_view_selection import ChartViewSelection
 from tiewtrade.market_data.candle import Candle
 from tiewtrade.trading.trade_history import FillSide, TradeFill
@@ -670,6 +675,34 @@ def test_legend_reads_the_latest_candle_until_the_mouse_picks_one(
     assert hovered.rsi == Decimal("45.5")
 
 
+def test_legend_reads_atr_beside_rsi_without_drawing_it(qtbot: QtBot) -> None:
+    """ATR is a distance in price, so it is read, never plotted."""
+    chart = CandlestickChartWidget()
+    qtbot.addWidget(chart)
+    chart.resize(600, 400)
+    chart.show_snapshot(
+        ready_snapshot(
+            rsi=rsi_at((10, "61")),
+            atr=atr_at((10, "12.5")),
+        )
+    )
+    chart.show()
+
+    readout = chart.readout
+    assert readout is not None
+    assert readout.atr == Decimal("12.5")
+    assert readout.atr_period == CHART_ATR_PERIOD
+    legend = candlestick_chart_module._legend_text(readout)
+    assert "RSI(14) 61.00" in legend
+    assert "ATR(14) 12.50" in legend
+
+    snapshot = chart._snapshot
+    assert snapshot is not None
+    model = chart_module.build_painter_model(snapshot, chart._chart_surface())
+    # The only pane below the price is still the RSI's.
+    assert len(model.rsi_pane.guides) == 3
+
+
 def test_legend_marks_a_candle_still_inside_the_rsi_warm_up(qtbot: QtBot) -> None:
     chart = CandlestickChartWidget()
     qtbot.addWidget(chart)
@@ -690,6 +723,7 @@ def ready_snapshot(
     fills: tuple[TradeFill, ...] | None = None,
     in_progress_candle: Candle | None = None,
     rsi: RsiSeries | None = None,
+    atr: AtrSeries | None = None,
     chart_range: ChartRange | None = None,
 ) -> ChartSnapshot:
     session = configured_spot_session()
@@ -708,12 +742,23 @@ def ready_snapshot(
         state=ChartReadState.READY,
         in_progress_candle=in_progress_candle,
         rsi=rsi or RsiSeries(),
+        atr=atr or AtrSeries(),
     )
 
 
 def rsi_at(*minute_values: tuple[int, str]) -> RsiSeries:
     """A series holding exactly these values, as if the rest were warm-up."""
     return RsiSeries(
+        values={
+            datetime(2026, 1, 1, 0, minute, tzinfo=UTC): Decimal(value)
+            for minute, value in minute_values
+        }
+    )
+
+
+def atr_at(*minute_values: tuple[int, str]) -> AtrSeries:
+    """A series holding exactly these values, as if the rest were warm-up."""
+    return AtrSeries(
         values={
             datetime(2026, 1, 1, 0, minute, tzinfo=UTC): Decimal(value)
             for minute, value in minute_values

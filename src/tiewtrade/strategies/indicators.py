@@ -49,6 +49,21 @@ def price_change_gain_loss(
     return max(change, Decimal("0")), max(-change, Decimal("0"))
 
 
+def true_range(candle: Candle, previous_close: Decimal | None) -> Decimal:
+    """How far this candle travelled, gaps from the last close included.
+
+    The first candle of a series has no close behind it, so its own range is
+    all there is to measure.
+    """
+    if previous_close is None:
+        return candle.high - candle.low
+    return max(
+        candle.high - candle.low,
+        abs(candle.high - previous_close),
+        abs(candle.low - previous_close),
+    )
+
+
 class WilderIndicators:
     def __init__(self, preset: IndicatorPeriods) -> None:
         self._rsi_period = preset.rsi_period
@@ -97,19 +112,13 @@ class WilderIndicators:
         self._average_loss = wilder_average(self._average_loss, loss, self._rsi_period)
 
     def _update_atr(self, candle: Candle) -> None:
-        true_range = candle.high - candle.low
-        if self._previous_close is not None:
-            true_range = max(
-                true_range,
-                abs(candle.high - self._previous_close),
-                abs(candle.low - self._previous_close),
-            )
+        candle_range = true_range(candle, self._previous_close)
 
         period = Decimal(self._atr_period)
         if self._atr is None:
-            self._true_ranges.append(true_range)
+            self._true_ranges.append(candle_range)
             if len(self._true_ranges) == self._atr_period:
                 self._atr = sum(self._true_ranges, Decimal("0")) / period
             return
 
-        self._atr = wilder_average(self._atr, true_range, self._atr_period)
+        self._atr = wilder_average(self._atr, candle_range, self._atr_period)

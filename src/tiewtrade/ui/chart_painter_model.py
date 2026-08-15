@@ -115,6 +115,10 @@ class CandleReadout:
     candle: ChartCandle
     rsi: Decimal | None
     rsi_period: int
+    # Read beside the RSI and never drawn: ATR is a distance in price, so it
+    # has no pane of its own to sit in.
+    atr: Decimal | None
+    atr_period: int
 
 
 @dataclass(frozen=True, slots=True)
@@ -392,6 +396,8 @@ def candle_at(
         candle=candle,
         rsi=snapshot.rsi_for(candle.open_time),
         rsi_period=snapshot.rsi.period,
+        atr=snapshot.atr_for(candle.open_time),
+        atr_period=snapshot.atr.period,
     )
 
 

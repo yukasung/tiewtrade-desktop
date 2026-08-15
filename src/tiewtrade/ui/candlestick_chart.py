@@ -473,9 +473,12 @@ def _view_key(snapshot: ChartSnapshot | None) -> tuple[str, str, ChartRange] | N
 def _legend_text(readout: CandleReadout) -> str:
     candle = readout.candle
     rsi = "—" if readout.rsi is None else f"{readout.rsi:,.2f}"
+    # ATR is a distance in price, so it reads in the same units as OHLC.
+    atr = "—" if readout.atr is None else f"{readout.atr:,.2f}"
     return (
         f"{in_display_timezone(candle.open_time):%Y-%m-%d %H:%M}  "
         f"O {candle.open:,.2f}  H {candle.high:,.2f}  "
         f"L {candle.low:,.2f}  C {candle.close:,.2f}  "
-        f"RSI({readout.rsi_period}) {rsi}"
+        f"RSI({readout.rsi_period}) {rsi}  "
+        f"ATR({readout.atr_period}) {atr}"
     )

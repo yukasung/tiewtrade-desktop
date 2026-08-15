@@ -19,7 +19,12 @@ from tiewtrade.application.chart_data import (
     visible_candle_count,
     zoomed_chart_range,
 )
-from tiewtrade.application.chart_indicators import RsiSeries, RsiState
+from tiewtrade.application.chart_indicators import (
+    AtrSeries,
+    AtrState,
+    RsiSeries,
+    RsiState,
+)
 from tiewtrade.application.paper_session_setup import ConfiguredPaperSession
 from tiewtrade.market_data.candle import Candle
 from tiewtrade.market_data.config import MarketDataConfig
@@ -397,8 +402,18 @@ def test_snapshot_rejects_rsi_for_a_candle_it_does_not_hold() -> None:
         )
 
 
-def test_loading_snapshot_cannot_carry_rsi() -> None:
-    with pytest.raises(ValueError, match="cannot carry RSI"):
+def test_snapshot_rejects_atr_for_a_candle_it_does_not_hold() -> None:
+    with pytest.raises(ValueError, match="ATR open_time must match"):
+        ready_chart_snapshot(
+            candles=(candle("5m", minute=0),),
+            atr=AtrSeries(
+                values={datetime(2026, 1, 1, 0, 5, tzinfo=UTC): Decimal("12")}
+            ),
+        )
+
+
+def test_loading_snapshot_cannot_carry_indicators() -> None:
+    with pytest.raises(ValueError, match="cannot carry indicators"):
         ChartSnapshot(
             session=session(),
             chart_range=chart_range(),
@@ -407,6 +422,17 @@ def test_loading_snapshot_cannot_carry_rsi() -> None:
             fills=(),
             state=ChartReadState.LOADING,
             rsi=RsiSeries(state=RsiState(period=14, previous_close=Decimal("100"))),
+        )
+
+    with pytest.raises(ValueError, match="cannot carry indicators"):
+        ChartSnapshot(
+            session=session(),
+            chart_range=chart_range(),
+            observed_at_utc=datetime(2026, 1, 1, 0, 20, tzinfo=UTC),
+            candles=(),
+            fills=(),
+            state=ChartReadState.LOADING,
+            atr=AtrSeries(state=AtrState(period=14)),
         )
 
 
@@ -471,6 +497,7 @@ def ready_chart_snapshot(
     fills: tuple[TradeFill, ...] = (),
     in_progress_candle: Candle | None = None,
     rsi: RsiSeries | None = None,
+    atr: AtrSeries | None = None,
 ) -> ChartSnapshot:
     return ChartSnapshot(
         session=session(),
@@ -481,6 +508,7 @@ def ready_chart_snapshot(
         state=ChartReadState.READY,
         in_progress_candle=in_progress_candle,
         rsi=rsi or RsiSeries(),
+        atr=atr or AtrSeries(),
     )
 
 
