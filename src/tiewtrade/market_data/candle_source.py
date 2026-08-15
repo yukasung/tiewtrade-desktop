@@ -1,6 +1,7 @@
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
 from datetime import datetime
+from decimal import Decimal
 from typing import Protocol
 
 from tiewtrade.market_data.candle import Candle
@@ -29,6 +30,14 @@ class HistoricalCandleSource(Protocol):
         start: datetime,
         end: datetime,
     ) -> tuple[Candle, ...]: ...
+
+    async def close(self) -> None: ...
+
+
+class LatestPriceSource(Protocol):
+    """Answers what a market trades at now, without following it over time."""
+
+    async def load_latest_price(self, config: MarketDataConfig) -> Decimal: ...
 
     async def close(self) -> None: ...
 

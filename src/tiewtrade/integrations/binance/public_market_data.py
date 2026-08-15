@@ -1,6 +1,7 @@
 import json
 from collections.abc import AsyncIterator
 from datetime import UTC, datetime, timedelta
+from decimal import Decimal
 from email.utils import parsedate_to_datetime
 
 import aiohttp
@@ -116,6 +117,27 @@ class BinancePublicMarketData:
             key=lambda candle: candle.open_time,
         )
         return tuple(completed[-count:])
+
+    async def load_latest_price(self, config: MarketDataConfig) -> Decimal:
+        """Read the price the market is trading at right now.
+
+        The newest kline is still forming, so its close is the last traded
+        price rather than a candle boundary.
+        """
+        page = await self._load_rest_page(
+            config,
+            {
+                "symbol": config.symbol,
+                "interval": config.timeframe,
+                "limit": 1,
+            },
+        )
+        if not page:
+            raise MarketDataFatalError(
+                _INVALID_RESPONSE_MESSAGE,
+                kind=MarketDataFailureKind.PAYLOAD,
+            )
+        return max(page, key=lambda candle: candle.open_time).close
 
     async def load_range(
         self,

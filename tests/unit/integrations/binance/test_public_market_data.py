@@ -4,6 +4,7 @@ import asyncio
 import json
 from collections.abc import AsyncIterator, Awaitable, Iterable
 from datetime import UTC, datetime, timedelta
+from decimal import Decimal
 from typing import TypeVar, cast
 
 import aiohttp
@@ -273,6 +274,28 @@ def test_load_recent_excludes_unfinished_candles_from_response() -> None:
         datetime(2026, 1, 1, tzinfo=UTC),
         datetime(2026, 1, 1, 0, 5, tzinfo=UTC),
     ]
+
+
+def test_load_latest_price_reads_the_close_of_the_still_forming_candle() -> None:
+    source, session = source_with(rest_pages=[FakeResponse(payload=[rest_kline(10)])])
+
+    price = asyncio.run(source.load_latest_price(config()))
+
+    assert price == Decimal("101.30")
+    assert session.requests[0][1] == {
+        "symbol": "BTCUSDT",
+        "interval": "5m",
+        "limit": 1,
+    }
+
+
+def test_load_latest_price_rejects_a_response_without_a_candle() -> None:
+    source, _ = source_with(rest_pages=[FakeResponse(payload=[])])
+
+    with pytest.raises(MarketDataFatalError) as error:
+        asyncio.run(source.load_latest_price(config()))
+
+    assert error.value.kind is MarketDataFailureKind.PAYLOAD
 
 
 def test_load_range_paginates_and_returns_ascending_completed_candles() -> None:
