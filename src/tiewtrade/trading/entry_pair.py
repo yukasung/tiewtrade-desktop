@@ -83,6 +83,19 @@ class EntryPairLifecycle:
         if self._entry_count % 2 == 0:
             self._completed_pair_month = month_index(at)
 
+    def release_fill(self) -> None:
+        """Hand back the place an Entry held when that Entry is sold.
+
+        The count is what a quota and an Entry Pair are read against, so an
+        Entry that leaves the Basket leaves the count too — which is what lets
+        a Pair reopen the moment one of its Entries takes profit.
+        """
+        if self._entry_count == 0:
+            raise ValueError("no Entry is open to release")
+        self._entry_count -= 1
+        if self._entry_count % 2 == 1:
+            self._completed_pair_month = None
+
     def reset(self) -> None:
         self._entry_count = 0
         self._completed_pair_month = None

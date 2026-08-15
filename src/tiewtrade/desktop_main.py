@@ -1,5 +1,7 @@
+import asyncio
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
+from decimal import Decimal
 from pathlib import Path
 from threading import Event, Lock
 from uuid import UUID
@@ -18,8 +20,13 @@ from tiewtrade.application.chart_realtime_feed import ChartOnlyFeedController
 from tiewtrade.application.chart_view_selection import ChartViewSelection
 from tiewtrade.application.database_compatibility import DatabaseCompatibilityError
 from tiewtrade.application.latest_market_price import LatestMarketPrice
+from tiewtrade.application.manual_close_price import ManualClosePrice
+from tiewtrade.application.open_basket import ReopenedBasket, reopen_basket
 from tiewtrade.application.paper_manual_close import ClosePaperPosition
-from tiewtrade.application.paper_runtime import PaperRuntimeController
+from tiewtrade.application.paper_runtime import (
+    PaperRuntimeController,
+    read_open_basket_state,
+)
 from tiewtrade.application.paper_session_setup import (
     ConfiguredPaperSession,
     CreatePaperSession,
@@ -50,6 +57,8 @@ from tiewtrade.integrations.sqlite.paper_runtime_lifecycle import (
 )
 from tiewtrade.integrations.sqlite.trade_history import SQLiteTradeHistory
 from tiewtrade.market_data.candle import Candle
+from tiewtrade.strategies.registry import strategy_definition_for
+from tiewtrade.trading.session_config import MarketType
 from tiewtrade.trading.symbol_rules import SymbolRules
 from tiewtrade.trading.trade_history import TradeFill
 from tiewtrade.ui.bot_lifecycle_workflow import RuntimeSnapshotRelay
@@ -304,6 +313,21 @@ def run_desktop(database_path: Path | None = None) -> int:
     store = SQLiteActivePaperSessions(database)
     history = SQLiteTradeHistory(database)
     latest_market_price = LatestMarketPrice()
+
+    async def load_latest_price(session: ConfiguredPaperSession) -> Decimal:
+        source = BinancePublicMarketData(
+            BinancePublicEndpoints.for_market_type(session.config.market_type)
+        )
+        try:
+            return await source.load_latest_price(session.market_data)
+        finally:
+            await source.close()
+
+    manual_close_price = ManualClosePrice(
+        observed=latest_market_price,
+        quote=lambda session: asyncio.run(load_latest_price(session)),
+        max_age=_MANUAL_CLOSE_PRICE_MAX_AGE,
+    )
     close_paper_position = ClosePaperPosition(
         find_open_basket=history.find_open_basket,
         list_fills=history.list_fills,
@@ -340,10 +364,23 @@ def run_desktop(database_path: Path | None = None) -> int:
         prepare_database()
         close_paper_position.execute(
             session,
-            market_price=lambda: latest_market_price.get(
-                session.config.session_id,
-                max_age=_MANUAL_CLOSE_PRICE_MAX_AGE,
-            ),
+            market_price=lambda: manual_close_price.get(session),
+            tick_size=_symbol_rules_for(session).tick_size,
+        )
+
+    def read_open_basket_after_migration(
+        session: ConfiguredPaperSession,
+    ) -> ReopenedBasket | None:
+        prepare_database()
+        state = read_open_basket_state(history, session.config.session_id)
+        if state is None or session.config.market_type is not MarketType.SPOT:
+            return None
+        preset = strategy_definition_for(session.config.preset_version).build_preset()
+        return reopen_basket(
+            state,
+            entry_policy=session.config.entry_policy,
+            take_profit_atr_multiplier=preset.take_profit_atr_multiplier,
+            stop_loss_atr_multiplier=preset.stop_loss_atr_multiplier,
             tick_size=_symbol_rules_for(session).tick_size,
         )
 
@@ -468,6 +505,7 @@ def run_desktop(database_path: Path | None = None) -> int:
                 history.find_open_basket(session.config.session_id) is not None
             ),
             retire_session=retire_after_migration,
+            read_open_basket=read_open_basket_after_migration,
         ),
         chart=ChartSources(
             load=load_chart,

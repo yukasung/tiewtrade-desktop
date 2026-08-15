@@ -122,6 +122,8 @@ def snapshot(
         state=state,
         pending_intent=None,
         entry_fill=entry,
+        entry_number=1 if entry is not None else None,
+        entry_take_profit_price=Decimal("105") if entry is not None else None,
         exit_fill=exit,
         closed_basket=closed,
         basket_id=BASKET_ID if entry is not None or closed is not None else None,

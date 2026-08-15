@@ -514,6 +514,7 @@ def test_spot_partial_fills_keep_one_order_and_basket_entry_across_tabs(
             basket_id=UUID("00000000-0000-0000-0000-000000000135"),
             entry_number=1,
             fill=fill,
+            entry_atr=Decimal("12.5"),
         )
 
     basket_id = UUID("00000000-0000-0000-0000-000000000135")

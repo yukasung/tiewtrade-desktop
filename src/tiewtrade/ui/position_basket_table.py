@@ -36,7 +36,7 @@ class _Row:
     """One Entry, read against the Basket it belongs to.
 
     Some of a row's facts are the Entry's own and some are the Basket's — the
-    take profit is one target for every Entry — so a column is handed both.
+    lifecycle is one gate for every Entry — so a column is handed both.
     """
 
     basket: BasketSnapshot
@@ -52,8 +52,8 @@ def _price(row: _Row) -> str:
 
 
 def _take_profit_price(row: _Row) -> str:
-    """The Basket's one target, restated on each Entry it applies to."""
-    return format(row.basket.take_profit_price, "f")
+    """The target this Entry alone is sold at."""
+    return format(row.entry.take_profit_price, "f")
 
 
 def _entry_gate(row: _Row) -> str:
@@ -85,10 +85,11 @@ class PositionBasketTable(QWidget):
     """Every Entry of the open Basket, one row each.
 
     A trader enters the same Basket more than once, so an averaged single row
-    hides the prices actually paid. The rows are the Entries. Facts the Basket
-    holds for all of them — its take profit and lifecycle — are restated on
-    every row so a row can be read on its own; the market it trades and the
-    totals it sums to, which no row can carry, frame the table instead.
+    hides the prices actually paid. The rows are the Entries, each with the
+    price it paid and the target it is sold at. Facts the Basket holds for all
+    of them — its lifecycle — are restated on every row so a row can be read
+    on its own; the market it trades and the totals it sums to, which no row
+    can carry, frame the table instead.
     """
 
     # Measured numbers hang on the right so their digits line up and a minus

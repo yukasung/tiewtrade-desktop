@@ -32,6 +32,7 @@ def trade_fill(
     commission_asset: str = "USDT",
     realized_pnl: Decimal = Decimal("0"),
     source: FillSource = FillSource.PAPER_EXECUTOR,
+    entry_atr: Decimal | None = None,
 ) -> TradeFill:
     return TradeFill(
         fill_id=fill_id,
@@ -49,6 +50,7 @@ def trade_fill(
         commission_asset=commission_asset,
         realized_pnl=realized_pnl,
         source=source,
+        entry_atr=entry_atr,
     )
 
 

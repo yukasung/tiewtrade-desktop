@@ -3,18 +3,23 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Callable
 from datetime import UTC, datetime
+from decimal import Decimal
 from threading import Event, Lock, Thread
 from time import monotonic
 from typing import Protocol
+from uuid import UUID
 
 from tiewtrade.application.bot_control import (
     BotLifecycleResult,
     workspace_with_runtime_state,
 )
+from tiewtrade.application.open_basket import OpenBasketEntry, OpenBasketState
 from tiewtrade.application.paper_basket_projection import (
     OpenBasketPosition,
     futures_basket_snapshot,
+    open_basket_position,
     position_after_snapshot,
+    position_without_entries,
     spot_basket_snapshot,
 )
 from tiewtrade.application.paper_futures_session import (
@@ -76,10 +81,16 @@ from tiewtrade.strategies.registry import strategy_definition_for
 from tiewtrade.trading.session_config import MarketType, TradeMode
 from tiewtrade.trading.symbol_rules import SymbolRules
 
+
+class PaperPositionRestoreError(RuntimeError):
+    """An open Basket cannot be put back the way it was left."""
+
+
 _START_BLOCKED_REASON = "Paper Bot could not be started"
 _STOP_BLOCKED_REASON = "Paper Bot could not be stopped"
 _RECOVERY_BLOCKED_REASON = "Paper Bot recovery failed"
 _RECOVERY_REQUIRED_REASON = "Paper Bot recovery required"
+_RESTORE_BLOCKED_REASON = "Paper Position could not be restored"
 _STOP_TIMEOUT_SECONDS = 30.0
 
 
@@ -289,6 +300,8 @@ class PaperRuntimeController:
     def _run_owned_runtime(self, session: ConfiguredPaperSession) -> None:
         try:
             asyncio.run(self._run(session))
+        except PaperPositionRestoreError:
+            self._publish_blocked(readiness=True, reason=_RESTORE_BLOCKED_REASON)
         except BaseException:
             self._publish_blocked(readiness=True)
         finally:
@@ -341,11 +354,15 @@ class PaperRuntimeController:
         | _PaperRuntimeSink[PaperFuturesSessionSnapshot]
     ):
         if session.config.market_type is MarketType.SPOT:
+            open_basket = read_open_basket_state(
+                self._trade_history, session.config.session_id
+            )
             spot_application = PaperSpotSession(
                 session.config,
                 session.market_data,
                 self._symbol_rules,
                 preset,
+                open_basket=open_basket,
             )
             spot_history = PaperSpotSQLiteHistory(
                 PaperSpotHistoryContext(
@@ -366,8 +383,16 @@ class PaperRuntimeController:
                 publish=self._publish_candle,
                 entry_lock=self._entry_lock,
                 entries_enabled=self._entries_enabled.is_set,
+                position=open_basket_position(spot_application.open_entries),
             )
 
+        # Paper Futures has no way back into a Basket it did not open — a
+        # Liquidation Price is not derived from the Entries alone — so rather
+        # than trade beside one, it says so and stops.
+        if self._trade_history.find_open_basket(session.config.session_id) is not None:
+            raise PaperPositionRestoreError(
+                "Paper Futures cannot take back an open Basket"
+            )
         futures_application = PaperFuturesSession(
             session.config,
             session.market_data,
@@ -662,6 +687,15 @@ class _CandleSnapshot(Protocol):
     @property
     def basket_entry_count(self) -> int: ...
 
+    @property
+    def entry_number(self) -> int | None: ...
+
+    @property
+    def entry_take_profit_price(self) -> Decimal | None: ...
+
+    @property
+    def sold_entry_numbers(self) -> tuple[int, ...]: ...
+
 
 class _PaperRuntimeSink[Snapshot: _CandleSnapshot]:
     """Feeds candles to one Paper Session and publishes what it decided.
@@ -684,6 +718,7 @@ class _PaperRuntimeSink[Snapshot: _CandleSnapshot]:
         publish: Callable[[BasketSnapshot | None, Candle, datetime], None],
         entry_lock: Lock,
         entries_enabled: Callable[[], bool],
+        position: OpenBasketPosition | None = None,
     ) -> None:
         self._warm_up = warm_up
         self._persistent = persistent
@@ -691,7 +726,9 @@ class _PaperRuntimeSink[Snapshot: _CandleSnapshot]:
         self._publish = publish
         self._entry_lock = entry_lock
         self._entries_enabled = entries_enabled
-        self._position: OpenBasketPosition | None = None
+        # A Basket taken back arrives with its Entries already filled, so the
+        # position starts where they left it rather than at nothing.
+        self._position = position
 
     async def warm_up(
         self,
@@ -744,9 +781,11 @@ class _PaperRuntimeSink[Snapshot: _CandleSnapshot]:
         observed_at_utc: datetime,
     ) -> None:
         self._position = position_after_snapshot(
-            self._position,
+            position_without_entries(self._position, snapshot.sold_entry_numbers),
             entry_fill=snapshot.entry_fill,
             basket_entry_count=snapshot.basket_entry_count,
+            entry_number=snapshot.entry_number,
+            take_profit_price=snapshot.entry_take_profit_price,
         )
         if self._entries_enabled():
             self._publish(
@@ -765,6 +804,54 @@ def _warm_up_of(
         session.warm_up_completed_candles(candles, received_at=received_at)
 
     return warm_up
+
+
+def read_open_basket_state(
+    trade_history: SQLiteTradeHistory,
+    session_id: UUID,
+) -> OpenBasketState | None:
+    """Read back the Basket a previous Runtime left open, if there is one.
+
+    A Basket nobody holds is a Position nobody watches: its take profit goes
+    unchecked and its Entries go uncounted. Rather than trade beside one, a
+    Basket that cannot be put back says so.
+    """
+    basket = trade_history.find_open_basket(session_id)
+    if basket is None:
+        return None
+    fills = trade_history.list_fills(basket.basket_id)
+    # An Entry that was sold at its own target is not part of the position
+    # left open, however the Basket it belonged to still is.
+    sold = {
+        fill.closes_entry_number
+        for fill in fills
+        if fill.closes_entry_number is not None
+    }
+    entries: list[OpenBasketEntry] = []
+    for fill in fills:
+        if fill.entry_number is None or fill.entry_number in sold:
+            continue
+        if fill.entry_atr is None:
+            raise PaperPositionRestoreError(
+                "open Basket has an Entry recorded without its ATR"
+            )
+        entries.append(
+            OpenBasketEntry(
+                entry_number=fill.entry_number,
+                price=fill.price,
+                quantity=fill.quantity,
+                fee=fill.commission,
+                filled_at=fill.filled_at_utc,
+                atr=fill.entry_atr,
+            )
+        )
+    if not entries:
+        raise PaperPositionRestoreError("open Basket has no Entry Fills")
+    return OpenBasketState(
+        basket_id=basket.basket_id,
+        entries=tuple(entries),
+        closed_basket_count=trade_history.count_closed_baskets(session_id),
+    )
 
 
 def _commission_asset(symbol: str) -> str:

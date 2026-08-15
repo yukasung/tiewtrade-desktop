@@ -7,6 +7,7 @@ from datetime import UTC, date, datetime
 from decimal import Decimal
 from pathlib import Path
 from typing import overload
+from uuid import UUID
 
 import pytest
 from PySide6.QtCore import QDeadlineTimer, QPoint, QRect, Qt, QThreadPool, QTimer
@@ -15,6 +16,7 @@ from PySide6.QtWidgets import QApplication, QMessageBox, QWidget
 from pytestqt.qtbot import QtBot
 
 import tiewtrade.ui.main_window as main_window_module
+from tests.support.chart_candles import flat_candle
 from tests.support.paper_session_setup import (
     configured_futures_session,
     configured_spot_session,
@@ -33,6 +35,13 @@ from tiewtrade.application.bot_control import (
 )
 from tiewtrade.application.chart_data import ChartRange, ChartReadState, ChartSnapshot
 from tiewtrade.application.chart_view_selection import ChartViewSelection
+from tiewtrade.application.open_basket import (
+    OpenBasketEntry,
+    OpenBasketState,
+    ReopenedBasket,
+    reopen_basket,
+)
+from tiewtrade.application.paper_runtime import PaperPositionRestoreError
 from tiewtrade.application.paper_session_setup import (
     ConfiguredPaperSession,
     CreatePaperSession,
@@ -47,6 +56,7 @@ from tiewtrade.application.trade_history import (
     TradeHistoryFilter,
 )
 from tiewtrade.application.trading_workspace import (
+    POSITION_BASKET_UNREADABLE_MESSAGE,
     BasketEntryGate,
     BasketSnapshot,
     BotRuntimeState,
@@ -61,6 +71,7 @@ from tiewtrade.trading.futures_policy import FuturesTradingPolicy
 from tiewtrade.trading.session_config import MarketType, TradeMode
 from tiewtrade.trading.spot_policy import SpotTradingPolicy
 from tiewtrade.ui.bot_lifecycle_workflow import RuntimeSnapshotRelay
+from tiewtrade.ui.chart_workflow import ChartFactRelay
 from tiewtrade.ui.main_window import BotActions, ChartSources, MainWindow
 from tiewtrade.ui.session_overview import SessionOverviewWidget
 
@@ -1737,6 +1748,156 @@ def test_stop_with_open_position_reopens_editable_setup_without_closing(
     click(window.setup.create_button)
     qtbot.waitUntil(lambda: events == ["close", "retire"])
     qtbot.waitUntil(lambda: len(created) == 1)
+
+
+def test_an_open_position_shows_before_any_bot_is_started(qtbot: QtBot) -> None:
+    """The Basket outlives the Bot, so the tab has one to show on open."""
+    session = configured_spot_session()
+    relay = ChartFactRelay()
+    reopened = reopen_basket(
+        OpenBasketState(
+            basket_id=UUID("00000000-0000-0000-0000-0000000000d1"),
+            entries=(
+                OpenBasketEntry(
+                    entry_number=1,
+                    price=Decimal("100"),
+                    quantity=Decimal("2"),
+                    fee=Decimal("0.2"),
+                    filled_at=datetime(2026, 8, 1, 12, tzinfo=UTC),
+                    atr=Decimal("2"),
+                ),
+            ),
+            closed_basket_count=0,
+        ),
+        entry_policy=session.config.entry_policy,
+        take_profit_atr_multiplier=Decimal("3"),
+        stop_loss_atr_multiplier=None,
+        tick_size=Decimal("0.01"),
+    )
+
+    window = MainWindow(
+        create_session=unused_create,
+        load_active=lambda: session,
+        list_basket_history=empty_basket_history,
+        list_trade_fills=empty_trade_fills,
+        bot=BotActions(read_open_basket=lambda _session: reopened),
+        chart=ChartSources(facts=relay),
+    )
+    qtbot.addWidget(window)
+    window.show()
+    qtbot.waitUntil(lambda: window._open_basket is not None)
+
+    relay.new_generation().in_progress_candle(
+        flat_candle(datetime(2026, 8, 1, 12, 5, tzinfo=UTC), 110)
+    )
+
+    table = window.workspace.position_basket
+    qtbot.waitUntil(lambda: table.table.rowCount() == 1)
+    assert table.state_label.text() == ""
+    take_profit = table.table.item(0, 3)
+    marked_pnl = table.table.item(0, 6)
+    assert take_profit is not None and marked_pnl is not None
+    # 100 + 3 ATR, and marked 10 above its Entry Price on a position of 2.
+    assert "106" in take_profit.text()
+    assert "20" in marked_pnl.text()
+
+
+def test_a_position_that_cannot_be_read_back_says_so_instead_of_nothing(
+    qtbot: QtBot,
+) -> None:
+    """ "No open Position" would be the one answer that is not true."""
+
+    def unreadable(_session: ConfiguredPaperSession) -> ReopenedBasket | None:
+        raise PaperPositionRestoreError("open Basket has an Entry without its ATR")
+
+    window = MainWindow(
+        create_session=unused_create,
+        load_active=configured_spot_session,
+        list_basket_history=empty_basket_history,
+        list_trade_fills=empty_trade_fills,
+        bot=BotActions(read_open_basket=unreadable),
+    )
+    qtbot.addWidget(window)
+    window.show()
+
+    state_label = window.workspace.position_basket.state_label
+    qtbot.waitUntil(lambda: state_label.text() == POSITION_BASKET_UNREADABLE_MESSAGE)
+    assert "Start Paper Bot" in state_label.text()
+    assert window.workspace.position_basket.table.rowCount() == 0
+
+
+def test_keeping_an_open_position_starts_the_session_it_belongs_to(
+    qtbot: QtBot,
+) -> None:
+    """No closes nothing and creates nothing: the same Session runs on."""
+    session = configured_spot_session()
+    created: list[PaperSessionSetupValues] = []
+    events: list[str] = []
+    start_calls: list[UUID] = []
+
+    def start(snapshot: BotControlSnapshot) -> BotLifecycleResult:
+        start_calls.append(snapshot.session.config.session_id)
+        return BotLifecycleResult(
+            workspace=workspace_with_runtime_state(
+                snapshot.workspace,
+                BotRuntimeState.RUNNING,
+                data_freshness=DataFreshness.FRESH,
+            )
+        )
+
+    def stop(snapshot: BotControlSnapshot) -> BotLifecycleResult:
+        return BotLifecycleResult(
+            workspace=workspace_with_runtime_state(
+                snapshot.workspace, BotRuntimeState.STOPPED
+            )
+        )
+
+    def create(values: PaperSessionSetupValues) -> PaperSessionCreateOutcome:
+        created.append(values)
+        return PaperSessionCreateOutcome(session=session, created=True)
+
+    window = MainWindow(
+        create_session=create,
+        load_active=lambda: session,
+        list_basket_history=empty_basket_history,
+        list_trade_fills=empty_trade_fills,
+        bot=BotActions(
+            start=start,
+            stop=stop,
+            close_position=lambda _session: events.append("close"),
+            has_open_position=lambda _session: True,
+            retire_session=lambda _session: events.append("retire"),
+        ),
+    )
+    qtbot.addWidget(window)
+    window.show()
+    control = window.workspace.bot_control_widget
+    qtbot.waitUntil(control.start_button.isEnabled)
+    click(control.start_button)
+    qtbot.waitUntil(lambda: _runtime_state(window) is BotRuntimeState.RUNNING)
+    click(control.stop_button)
+    stop_dialog = window.findChild(QMessageBox)
+    assert stop_dialog is not None
+    click(
+        next(button for button in stop_dialog.buttons() if button.text() == "Stop Bot")
+    )
+    qtbot.waitUntil(window.setup.isVisible)
+    assert start_calls == [session.config.session_id]
+
+    def keep_position() -> None:
+        dialog = QApplication.activeModalWidget()
+        assert isinstance(dialog, QMessageBox)
+        no = dialog.button(QMessageBox.StandardButton.No)
+        assert no is not None
+        click(no)
+
+    QTimer.singleShot(0, keep_position)
+    click(window.setup.create_button)
+
+    qtbot.waitUntil(lambda: _runtime_state(window) is BotRuntimeState.RUNNING)
+    assert start_calls == [session.config.session_id] * 2
+    assert events == []
+    assert created == []
 
 
 def test_start_from_active_session_reports_missing_replacement_service(

@@ -17,11 +17,19 @@ class _PaperSpotSnapshotRecorder:
         if snapshot.entry_fill is not None:
             if snapshot.basket_id is None:
                 raise ValueError("entry Fill requires a Basket ID")
+            if snapshot.entry_atr is None:
+                raise ValueError("entry Fill requires the ATR it was read against")
+            if snapshot.entry_number is None:
+                raise ValueError("entry Fill requires its Entry number")
             self._history.record_entry(
                 basket_id=snapshot.basket_id,
-                entry_number=snapshot.basket_entry_count,
+                entry_number=snapshot.entry_number,
                 fill=snapshot.entry_fill,
+                entry_atr=snapshot.entry_atr,
             )
+        if snapshot.entry_exits:
+            self._record_entry_exits(snapshot)
+            return
         if snapshot.exit_fill is None and snapshot.closed_basket is None:
             return
         if snapshot.exit_fill is None or snapshot.closed_basket is None:
@@ -33,6 +41,29 @@ class _PaperSpotSnapshotRecorder:
             fill=snapshot.exit_fill,
             closed=snapshot.closed_basket,
         )
+
+    def _record_entry_exits(self, snapshot: PaperSpotSessionSnapshot) -> None:
+        """Write each Entry's sale in the order the Basket made them.
+
+        Only the last of them can be the sale that closed the Basket, so the
+        closed Basket travels with that one and with no other.
+        """
+        if snapshot.exit_fill is not None:
+            raise ValueError("an Entry Exit cannot accompany a whole-Basket Exit")
+        basket_id = snapshot.basket_id
+        if basket_id is None:
+            raise ValueError("Entry Exit requires a Basket ID")
+        closed_basket = snapshot.closed_basket
+        if closed_basket is not None and closed_basket.basket_id != basket_id:
+            raise ValueError("closed Basket requires a matching Basket ID")
+        last = len(snapshot.entry_exits) - 1
+        for index, entry_exit in enumerate(snapshot.entry_exits):
+            self._history.record_entry_exit(
+                basket_id=basket_id,
+                fill=entry_exit.fill,
+                closed=entry_exit.closed,
+                closed_basket=closed_basket if index == last else None,
+            )
 
 
 def create_persistent_paper_spot_session(

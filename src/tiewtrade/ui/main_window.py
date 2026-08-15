@@ -7,15 +7,28 @@ from PySide6.QtGui import QCloseEvent
 from PySide6.QtWidgets import QMainWindow, QMessageBox
 
 from tiewtrade.application.bot_control import BotControlAction, BotControlSnapshot
-from tiewtrade.application.chart_data import ChartRange, ChartReadState, ChartSnapshot
+from tiewtrade.application.chart_data import (
+    ChartCandle,
+    ChartRange,
+    ChartReadState,
+    ChartSnapshot,
+)
 from tiewtrade.application.chart_view_selection import ChartViewSelection
+from tiewtrade.application.open_basket import ReopenedBasket
+from tiewtrade.application.paper_basket_projection import reopened_basket_snapshot
 from tiewtrade.application.paper_session_setup import (
     ConfiguredPaperSession,
     PaperSessionSetupValues,
     PaperSessionValidationError,
     validate_paper_session,
 )
-from tiewtrade.application.trading_workspace import BotRuntimeState
+from tiewtrade.application.trading_workspace import (
+    POSITION_BASKET_UNREADABLE_MESSAGE,
+    BotRuntimeState,
+    empty_position_basket_tab,
+    failed_position_basket_tab,
+    ready_position_basket_tab,
+)
 from tiewtrade.ui.background_task import BackgroundTask
 from tiewtrade.ui.bot_lifecycle_workflow import (
     BotLifecycleWorkflow,
@@ -64,6 +77,9 @@ class BotActions:
     close_position: Callable[[ConfiguredPaperSession], None] | None = None
     has_open_position: Callable[[ConfiguredPaperSession], bool] | None = None
     retire_session: Callable[[ConfiguredPaperSession], None] | None = None
+    read_open_basket: (
+        Callable[[ConfiguredPaperSession], ReopenedBasket | None] | None
+    ) = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -105,6 +121,11 @@ class MainWindow(QMainWindow):
         self._load_chart = chart.load
         self._close_position = bot.close_position
         self._has_open_position = bot.has_open_position
+        self._read_open_basket = bot.read_open_basket
+        self._open_basket: ReopenedBasket | None = None
+        self._open_basket_task: BackgroundTask | None = None
+        self._last_chart_candle: ChartCandle | None = None
+        self._clock = chart.clock
         self._retire_session = bot.retire_session
         self._stop_for_replacement = bot.stop_for_replacement
         self._validate_session = validate_session or validate_paper_session
@@ -242,14 +263,38 @@ class MainWindow(QMainWindow):
             answer = QMessageBox.question(
                 self,
                 "Close Paper Position?",
-                "Close all Paper positions at the latest fresh market price "
-                "before starting the new bot?",
-                QMessageBox.StandardButton.Cancel | QMessageBox.StandardButton.Yes,
-                QMessageBox.StandardButton.Cancel,
+                "Yes closes all Paper positions at the latest market price and "
+                "starts a new Paper Bot with the values on this form.\n\n"
+                "No leaves them open and starts the existing Paper Session again.",
+                QMessageBox.StandardButton.No | QMessageBox.StandardButton.Yes,
+                QMessageBox.StandardButton.Yes,
             )
             if answer != QMessageBox.StandardButton.Yes:
+                self._resume_replacement_session()
                 return
         self._replace_session()
+
+    def _resume_replacement_session(self) -> None:
+        """Run the Session that is already there on, position and all.
+
+        Nothing is created and nothing is closed, so the form's edits describe
+        a Session that is not being made: the values go back to the ones the
+        running Session actually holds.
+        """
+        session = self._replacement_session
+        if session is None:
+            return
+        self._replacement_values = None
+        available = self._lifecycle_workflow.snapshot.available_actions
+        if BotControlAction.START not in available:
+            self.setup.show_field_error(
+                "available_capital",
+                "The existing Paper Session cannot be started again. "
+                "Close its positions to start a new one.",
+            )
+            return
+        self.setup.set_values_from_session(session)
+        self._lifecycle_workflow.start_bot()
 
     def _replace_session(self) -> None:
         session = self._replacement_session
@@ -297,8 +342,8 @@ class MainWindow(QMainWindow):
             "A fresh market price is unavailable"
         ):
             message = (
-                "Current market price is not fresh. Wait for live price data, "
-                "then try again."
+                "Could not reach live market data to price the close. "
+                "Check your internet connection, then try again."
             )
         elif isinstance(_error, RuntimeError) and str(_error) == (
             "Paper Bot must stop before it can be replaced"
@@ -347,10 +392,74 @@ class MainWindow(QMainWindow):
             session,
             inspect_startup=not start_after_create,
         )
+        self._read_open_basket_of(session)
         if self._load_chart is not None:
             self._chart_workflow.start(session)
         if self._start_chart_feed is not None:
             self._start_chart_feed(session)
+
+    def _read_open_basket_of(self, session: ConfiguredPaperSession) -> None:
+        """Ask for the Position the Session is already holding, if any.
+
+        A Basket outlives the Bot that opened it, so the tab has one to show
+        before anything is started. Reading it touches the database, which is
+        the worker's job, not the window's.
+        """
+        self._open_basket = None
+        read_open_basket = self._read_open_basket
+        if read_open_basket is None or self._open_basket_task is not None:
+            return
+        task = BackgroundTask(lambda: read_open_basket(session))
+        task.signals.succeeded.connect(self._open_basket_read)
+        task.signals.failed.connect(self._open_basket_unreadable)
+        task.signals.finished.connect(self._open_basket_read_finished)
+        self._open_basket_task = task
+        self._thread_pool.start(task)
+
+    @Slot(object)
+    def _open_basket_unreadable(self, _error: object) -> None:
+        """Say that a Position is there but out of reach, rather than nothing.
+
+        An empty tab would read as "no Position", which is the one thing that
+        is not true: it is open, and only closing it clears the way.
+        """
+        self._open_basket = None
+        self.workspace.position_basket.show_snapshot(
+            failed_position_basket_tab(
+                empty_position_basket_tab(),
+                POSITION_BASKET_UNREADABLE_MESSAGE,
+            )
+        )
+
+    @Slot(object)
+    def _open_basket_read(self, result: object) -> None:
+        if result is not None and not isinstance(result, ReopenedBasket):
+            return
+        self._open_basket = result
+        self._show_open_basket()
+
+    @Slot()
+    def _open_basket_read_finished(self) -> None:
+        self._open_basket_task = None
+
+    def _show_open_basket(self) -> None:
+        """Mark the Position nobody is running yet on the price of the moment."""
+        open_basket = self._open_basket
+        candle = self._last_chart_candle
+        if open_basket is None or candle is None:
+            return
+        observed_at = self._clock()
+        self.workspace.position_basket.show_snapshot(
+            ready_position_basket_tab(
+                reopened_basket_snapshot(
+                    open_basket,
+                    symbol=candle.symbol,
+                    current_price=candle.close,
+                    observed_at_utc=observed_at,
+                ),
+                observed_at_utc=observed_at,
+            )
+        )
 
     @Slot(object)
     def _bot_control_changed(self, value: object) -> None:
@@ -358,6 +467,14 @@ class MainWindow(QMainWindow):
             return
         self.workspace.show_bot_control_snapshot(value)
         self._chart_workflow.runtime_snapshot(value)
+        if value.state is BotRuntimeState.RUNNING:
+            # The Runtime holds the Basket now and publishes it every candle.
+            self._open_basket = None
+        elif value.state is BotRuntimeState.STOPPED:
+            # Whatever the Bot left open is the tab's to show again.
+            self._read_open_basket_of(value.session)
+        else:
+            self._show_open_basket()
         if (
             self._pending_start_session == value.session
             and value.state is BotRuntimeState.CONFIGURED
@@ -386,11 +503,19 @@ class MainWindow(QMainWindow):
         self.setup.set_values_from_session(snapshot.session)
         self.workspace.show_setup()
 
+    def _mark_chart_candle(self, candle: object) -> None:
+        """Keep the newest price the chart has, which a resting Basket marks on."""
+        if not isinstance(candle, ChartCandle):
+            return
+        self._last_chart_candle = candle
+        self._show_open_basket()
+
     @Slot(object, int)
     def _chart_completed_candle(self, candle: object, generation: int) -> None:
         relay = self._chart_fact_relay
         if relay is None or not relay.is_current(generation):
             return
+        self._mark_chart_candle(candle)
         self._chart_workflow.completed_candle(candle)
 
     @Slot(object, int)
@@ -398,6 +523,7 @@ class MainWindow(QMainWindow):
         relay = self._chart_fact_relay
         if relay is None or not relay.is_current(generation):
             return
+        self._mark_chart_candle(candle)
         self._chart_workflow.in_progress_candle(candle)
 
     @Slot(object)

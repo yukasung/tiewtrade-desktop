@@ -15,7 +15,7 @@ from tiewtrade.integrations.sqlite.paper_spot_history import (
     PaperSpotSQLiteHistory,
 )
 from tiewtrade.integrations.sqlite.trade_history import SQLiteTradeHistory
-from tiewtrade.trading.basket import ClosedBasket
+from tiewtrade.trading.basket import ClosedBasket, ClosedEntry
 from tiewtrade.trading.session_config import MarketType, TradeMode
 from tiewtrade.trading.trade_history import (
     BasketResult,
@@ -28,6 +28,7 @@ from tiewtrade.trading.trade_history import (
 SESSION_ID = UUID("00000000-0000-0000-0000-000000000101")
 BASKET_ID = UUID("00000000-0000-0000-0000-000000000102")
 OPENED_AT = datetime(2026, 1, 1, tzinfo=UTC)
+ENTRY_ATR = Decimal("2.5")
 CLOSED_AT = datetime(2026, 1, 2, tzinfo=UTC)
 
 
@@ -132,6 +133,7 @@ def test_entry_fill_creates_exact_open_basket_and_buy_fill(
         basket_id=BASKET_ID,
         entry_number=1,
         fill=fill,
+        entry_atr=ENTRY_ATR,
     )
 
     assert result is True
@@ -170,6 +172,7 @@ def test_entry_fill_creates_exact_open_basket_and_buy_fill(
             commission_asset="USDT",
             realized_pnl=Decimal("0"),
             source=FillSource.PAPER_EXECUTOR,
+            entry_atr=ENTRY_ATR,
         ),
     )
 
@@ -182,6 +185,7 @@ def test_second_entry_replaces_open_aggregate_and_records_another_buy_fill(
         basket_id=BASKET_ID,
         entry_number=1,
         fill=entry_fill(),
+        entry_atr=ENTRY_ATR,
     )
     second_fill = PaperSpotEntryFill(
         intent_id="intent-2",
@@ -197,6 +201,7 @@ def test_second_entry_replaces_open_aggregate_and_records_another_buy_fill(
         basket_id=BASKET_ID,
         entry_number=2,
         fill=second_fill,
+        entry_atr=ENTRY_ATR,
     )
 
     basket = store.get_basket(BASKET_ID)
@@ -236,8 +241,12 @@ def test_partial_fill_for_same_spot_order_does_not_increment_entry_count(
         filled_at=OPENED_AT + timedelta(seconds=1),
     )
 
-    assert history.record_entry(basket_id=BASKET_ID, entry_number=1, fill=first)
-    assert history.record_entry(basket_id=BASKET_ID, entry_number=1, fill=partial)
+    assert history.record_entry(
+        basket_id=BASKET_ID, entry_number=1, fill=first, entry_atr=ENTRY_ATR
+    )
+    assert history.record_entry(
+        basket_id=BASKET_ID, entry_number=1, fill=partial, entry_atr=ENTRY_ATR
+    )
 
     basket = store.get_basket(BASKET_ID)
     assert basket is not None
@@ -295,10 +304,14 @@ def test_concurrent_partial_fills_update_spot_basket_aggregate_atomically(
             filled_at=OPENED_AT + timedelta(seconds=2),
         ),
     )
-    assert history.record_entry(basket_id=BASKET_ID, entry_number=1, fill=first)
+    assert history.record_entry(
+        basket_id=BASKET_ID, entry_number=1, fill=first, entry_atr=ENTRY_ATR
+    )
 
     def record(fill: PaperSpotEntryFill) -> bool:
-        return history.record_entry(basket_id=BASKET_ID, entry_number=1, fill=fill)
+        return history.record_entry(
+            basket_id=BASKET_ID, entry_number=1, fill=fill, entry_atr=ENTRY_ATR
+        )
 
     with ThreadPoolExecutor(max_workers=2) as pool:
         results = tuple(pool.map(record, partials))
@@ -316,6 +329,57 @@ def test_concurrent_partial_fills_update_spot_basket_aggregate_atomically(
     )
 
 
+def test_entry_exit_keeps_the_basket_open_and_adds_what_it_realised(
+    history: PaperSpotSQLiteHistory,
+    store: SQLiteTradeHistory,
+) -> None:
+    history.record_entry(
+        basket_id=BASKET_ID,
+        entry_number=1,
+        fill=entry_fill(),
+        entry_atr=ENTRY_ATR,
+    )
+    sale = PaperSpotExitFill(
+        order_id=f"take-profit:{BASKET_ID}:1",
+        fill_id=f"paper:{SESSION_ID}:take-profit:{BASKET_ID}:1:fill",
+        price=Decimal("110"),
+        quantity=Decimal("2"),
+        fee=Decimal("0.22"),
+        filled_at=OPENED_AT + timedelta(hours=1),
+        entry_number=1,
+    )
+
+    recorded = history.record_entry_exit(
+        basket_id=BASKET_ID,
+        fill=sale,
+        closed=ClosedEntry(
+            entry_number=1,
+            quantity=Decimal("2"),
+            entry_price=Decimal("100"),
+            exit_price=Decimal("110"),
+            gross_realized_pnl=Decimal("20"),
+            trading_fees=Decimal("0.42"),
+            net_realized_pnl=Decimal("19.58"),
+            closed_at=OPENED_AT + timedelta(hours=1),
+        ),
+        closed_basket=None,
+    )
+
+    basket = store.get_basket(BASKET_ID)
+    fills = store.list_fills(BASKET_ID)
+    assert recorded is True
+    assert basket is not None
+    # The Basket stays open for the Entries that have not sold.
+    assert basket.status is BasketStatus.OPEN
+    assert basket.closed_at_utc is None
+    assert basket.gross_realized_pnl == Decimal("20")
+    assert basket.trading_fees == Decimal("0.42")
+    assert basket.net_realized_pnl == Decimal("19.58")
+    assert len(fills) == 2
+    assert fills[1].closes_entry_number == 1
+    assert fills[1].realized_pnl == Decimal("19.58")
+
+
 def test_close_records_exact_closed_basket_and_sell_fill(
     history: PaperSpotSQLiteHistory,
     store: SQLiteTradeHistory,
@@ -324,6 +388,7 @@ def test_close_records_exact_closed_basket_and_sell_fill(
         basket_id=BASKET_ID,
         entry_number=1,
         fill=entry_fill(),
+        entry_atr=ENTRY_ATR,
     )
 
     history.record_close(
@@ -373,6 +438,7 @@ def test_mapper_propagates_duplicate_write_result(
             basket_id=BASKET_ID,
             entry_number=1,
             fill=fill,
+            entry_atr=ENTRY_ATR,
         )
         is True
     )
@@ -381,6 +447,7 @@ def test_mapper_propagates_duplicate_write_result(
             basket_id=BASKET_ID,
             entry_number=1,
             fill=fill,
+            entry_atr=ENTRY_ATR,
         )
         is False
     )

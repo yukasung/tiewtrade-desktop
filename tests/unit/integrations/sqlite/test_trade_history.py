@@ -463,7 +463,7 @@ def test_migration_creates_versioned_history_schema_and_indexes(tmp_path: Path) 
             for row in connection.execute("PRAGMA table_info(trade_fills)")
         }
 
-    assert version == 6
+    assert version == 8
     assert "paper_runtime_lifecycle" in table_names
     assert {"basket_results", "trade_fills"} <= table_names
     assert {
@@ -559,7 +559,7 @@ def test_migration_from_legacy_schema_adds_session_fill_history_index(
 def test_migration_rejects_future_schema_version(tmp_path: Path) -> None:
     database = SQLiteDatabase(tmp_path / "history.sqlite3")
     with database.connect() as connection:
-        connection.execute("PRAGMA user_version = 7")
+        connection.execute("PRAGMA user_version = 9")
 
     with pytest.raises(ValueError, match="newer than supported"):
         database.migrate()
@@ -629,9 +629,96 @@ def test_migration_from_v1_preserves_spot_basket_with_null_leverage(
             "SELECT leverage FROM basket_results WHERE basket_id = ?",
             (str(legacy.basket_id),),
         ).fetchone()[0]
-    assert version == 6
+    assert version == 8
     assert leverage is None
     assert SQLiteTradeHistory(database).get_basket(legacy.basket_id) == legacy
+
+
+def test_entry_atr_round_trips_and_an_exit_keeps_none(
+    history: SQLiteTradeHistory,
+) -> None:
+    basket = open_basket()
+    entry = trade_fill(entry_atr=Decimal("2.5"))
+    exit_fill = trade_fill(
+        fill_id="fill-2",
+        order_id="order-2",
+        side=FillSide.SELL,
+        entry_number=None,
+        filled_at_utc=entry.filled_at_utc + timedelta(minutes=1),
+        realized_pnl=Decimal("19.58"),
+    )
+
+    history.record_open_basket(basket, entry)
+    history.record_closed_basket(
+        replace(
+            basket, status=BasketStatus.CLOSED, closed_at_utc=exit_fill.filled_at_utc
+        ),
+        exit_fill,
+    )
+
+    stored = history.list_fills(basket.basket_id)
+    assert [fill.entry_atr for fill in stored] == [Decimal("2.5"), None]
+
+
+def test_migration_from_v6_keeps_fills_and_leaves_their_atr_unknown(
+    tmp_path: Path,
+) -> None:
+    """A Fill recorded before the ATR was kept cannot invent one."""
+    database = SQLiteDatabase(tmp_path / "history.sqlite3")
+    database.migrate()
+    history = SQLiteTradeHistory(database)
+    basket = open_basket()
+    legacy_fill = trade_fill()
+    history.record_open_basket(basket, legacy_fill)
+    with database.connect() as connection:
+        connection.execute("ALTER TABLE trade_fills DROP COLUMN entry_atr")
+        connection.execute("ALTER TABLE trade_fills DROP COLUMN closes_entry_number")
+        connection.execute("PRAGMA user_version = 6")
+
+    database.migrate()
+
+    with database.connect() as connection:
+        version = connection.execute("PRAGMA user_version").fetchone()[0]
+    assert version == 8
+    assert history.list_fills(basket.basket_id) == (legacy_fill,)
+    assert history.list_fills(basket.basket_id)[0].entry_atr is None
+
+
+def test_closed_baskets_are_counted_for_their_own_session(
+    history: SQLiteTradeHistory,
+) -> None:
+    closed = basket_result()
+    other_session = replace(
+        basket_result(),
+        basket_id=UUID("00000000-0000-0000-0000-0000000000c1"),
+        session_id=UUID("00000000-0000-0000-0000-0000000000c2"),
+    )
+    history.record_open_basket(
+        replace(closed, status=BasketStatus.OPEN, closed_at_utc=None),
+        trade_fill(),
+    )
+    history.record_closed_basket(
+        closed,
+        trade_fill(
+            fill_id="fill-2",
+            order_id="order-2",
+            side=FillSide.SELL,
+            entry_number=None,
+            filled_at_utc=datetime(2026, 1, 2, tzinfo=UTC),
+        ),
+    )
+    history.record_open_basket(
+        replace(other_session, status=BasketStatus.OPEN, closed_at_utc=None),
+        trade_fill(
+            fill_id="fill-3",
+            order_id="order-3",
+            basket_id=other_session.basket_id,
+            session_id=other_session.session_id,
+        ),
+    )
+
+    assert history.count_closed_baskets(closed.session_id) == 1
+    assert history.count_closed_baskets(other_session.session_id) == 0
 
 
 def test_futures_leverage_round_trips_and_is_immutable(tmp_path: Path) -> None:

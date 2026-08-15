@@ -34,7 +34,7 @@ def test_take_profit_price_is_read_only() -> None:
     assert basket.take_profit_price is None
 
 
-def test_basket_reprices_take_profit_after_each_entry() -> None:
+def test_each_entry_carries_the_target_measured_from_its_own_price() -> None:
     basket = Basket(
         basket_id=basket_id(), policy=policy(), take_profit_atr_multiplier=Decimal("3")
     )
@@ -46,6 +46,7 @@ def test_basket_reprices_take_profit_after_each_entry() -> None:
         atr=Decimal("2.03"),
         tick_size=Decimal("0.1"),
     )
+    # 100 + 3 x 2.03, floored to the tick.
     assert basket.take_profit_price == Decimal("106.0")
 
     basket.add_entry(
@@ -58,7 +59,179 @@ def test_basket_reprices_take_profit_after_each_entry() -> None:
     )
 
     assert basket.average_entry_price == Decimal("97.5")
-    assert basket.take_profit_price == Decimal("106.5")
+    # The cheaper Entry has its own target, 90 + 3 x 3.03, and the Basket
+    # reports the nearest of the two rather than one averaged across them.
+    assert [entry.take_profit_price for entry in basket.entries] == [
+        Decimal("106.0"),
+        Decimal("99.0"),
+    ]
+    assert basket.take_profit_price == Decimal("99.0")
+    assert [entry.entry_number for entry in basket.entries] == [1, 2]
+
+
+def test_closing_one_entry_leaves_the_others_where_they_are() -> None:
+    basket = Basket(
+        basket_id=basket_id(), policy=policy(), take_profit_atr_multiplier=Decimal("3")
+    )
+    basket.add_entry(
+        price=Decimal("100"),
+        quantity=Decimal("2"),
+        fee=Decimal("0.2"),
+        filled_at=datetime(2026, 1, 1, tzinfo=UTC),
+        atr=Decimal("2"),
+        tick_size=Decimal("0.1"),
+    )
+    basket.add_entry(
+        price=Decimal("90"),
+        quantity=Decimal("1"),
+        fee=Decimal("0.09"),
+        filled_at=datetime(2026, 1, 2, tzinfo=UTC),
+        atr=Decimal("2"),
+        tick_size=Decimal("0.1"),
+    )
+
+    closed = basket.close_entry(
+        2,
+        exit_price=Decimal("96"),
+        exit_fee=Decimal("0.096"),
+        closed_at=datetime(2026, 1, 3, tzinfo=UTC),
+    )
+
+    assert closed.entry_number == 2
+    assert closed.quantity == Decimal("1")
+    assert closed.gross_realized_pnl == Decimal("6")
+    assert closed.trading_fees == Decimal("0.186")
+    assert closed.net_realized_pnl == Decimal("5.814")
+    # The Basket lives on with the Entry that did not sell.
+    assert basket.is_closed is False
+    assert basket.entry_count == 1
+    assert basket.total_quantity == Decimal("2")
+    assert basket.average_entry_price == Decimal("100")
+    assert [entry.entry_number for entry in basket.entries] == [1]
+    # The number the sold Entry used is not handed to the next one.
+    assert basket.entry_sequence == 2
+
+
+def test_selling_the_last_entry_closes_the_basket_on_every_entry_it_held() -> None:
+    basket = Basket(
+        basket_id=basket_id(), policy=policy(), take_profit_atr_multiplier=Decimal("3")
+    )
+    for index, price in enumerate((Decimal("100"), Decimal("90"))):
+        basket.add_entry(
+            price=price,
+            quantity=Decimal("1"),
+            fee=Decimal("0.1"),
+            filled_at=datetime(2026, 1, 1 + index, tzinfo=UTC),
+            atr=Decimal("2"),
+            tick_size=Decimal("0.1"),
+        )
+    basket.close_entry(
+        2,
+        exit_price=Decimal("96"),
+        exit_fee=Decimal("0.1"),
+        closed_at=datetime(2026, 1, 3, tzinfo=UTC),
+    )
+
+    basket.close_entry(
+        1,
+        exit_price=Decimal("106"),
+        exit_fee=Decimal("0.1"),
+        closed_at=datetime(2026, 1, 4, tzinfo=UTC),
+    )
+    result = basket.settled_result(
+        exit_price=Decimal("106"),
+        closed_at=datetime(2026, 1, 4, tzinfo=UTC),
+    )
+
+    assert basket.is_closed is True
+    assert basket.is_empty is True
+    # Both Entries are in the Basket's own record, whichever sold first.
+    assert result.entry_count == 2
+    assert result.average_entry_price == Decimal("95")
+    assert result.gross_realized_pnl == Decimal("12")
+    assert result.trading_fees == Decimal("0.4")
+    assert result.net_realized_pnl == Decimal("11.6")
+
+
+def test_a_basket_still_holding_an_entry_has_no_settled_result() -> None:
+    basket = Basket(
+        basket_id=basket_id(), policy=policy(), take_profit_atr_multiplier=Decimal("3")
+    )
+    basket.add_entry(
+        price=Decimal("100"),
+        quantity=Decimal("1"),
+        fee=Decimal("0.1"),
+        filled_at=datetime(2026, 1, 1, tzinfo=UTC),
+        atr=Decimal("2"),
+        tick_size=Decimal("0.1"),
+    )
+
+    with pytest.raises(ValueError, match="still holds an Entry"):
+        basket.settled_result(
+            exit_price=Decimal("106"),
+            closed_at=datetime(2026, 1, 2, tzinfo=UTC),
+        )
+
+
+def test_closing_an_entry_the_basket_does_not_hold_is_refused() -> None:
+    basket = Basket(
+        basket_id=basket_id(), policy=policy(), take_profit_atr_multiplier=Decimal("3")
+    )
+    basket.add_entry(
+        price=Decimal("100"),
+        quantity=Decimal("1"),
+        fee=Decimal("0.1"),
+        filled_at=datetime(2026, 1, 1, tzinfo=UTC),
+        atr=Decimal("2"),
+        tick_size=Decimal("0.1"),
+    )
+
+    with pytest.raises(ValueError, match="no open Entry with that number"):
+        basket.close_entry(
+            7,
+            exit_price=Decimal("106"),
+            exit_fee=Decimal("0.1"),
+            closed_at=datetime(2026, 1, 2, tzinfo=UTC),
+        )
+
+
+def test_a_stop_loss_after_a_sale_reports_the_whole_basket() -> None:
+    """The Entries that already sold are part of the Basket's result too."""
+    basket = Basket(
+        basket_id=basket_id(),
+        policy=policy(),
+        take_profit_atr_multiplier=Decimal("3"),
+        stop_loss_atr_multiplier=Decimal("3"),
+    )
+    for index, price in enumerate((Decimal("100"), Decimal("90"))):
+        basket.add_entry(
+            price=price,
+            quantity=Decimal("1"),
+            fee=Decimal("0.1"),
+            filled_at=datetime(2026, 1, 1 + index, tzinfo=UTC),
+            atr=Decimal("2"),
+            tick_size=Decimal("0.1"),
+        )
+    basket.close_entry(
+        2,
+        exit_price=Decimal("96"),
+        exit_fee=Decimal("0.1"),
+        closed_at=datetime(2026, 1, 3, tzinfo=UTC),
+    )
+
+    closed = basket.close(
+        exit_price=Decimal("80"),
+        exit_fee=Decimal("0.08"),
+        closed_at=datetime(2026, 1, 4, tzinfo=UTC),
+        close_reason=BasketCloseReason.STOP_LOSS,
+    )
+
+    assert closed.entry_count == 2
+    assert closed.average_entry_price == Decimal("95")
+    # The sale made 6, the stop lost 20.
+    assert closed.gross_realized_pnl == Decimal("-14")
+    assert closed.trading_fees == Decimal("0.38")
+    assert closed.net_realized_pnl == Decimal("-14.38")
 
 
 def test_average_entry_price_after_fill_uses_domain_weighting() -> None:
@@ -70,7 +243,7 @@ def test_average_entry_price_after_fill_uses_domain_weighting() -> None:
     ) == Decimal("97.5")
 
 
-def test_short_basket_reprices_take_profit_below_average_and_rounds_up() -> None:
+def test_short_entries_take_profit_below_their_own_price_and_round_up() -> None:
     basket = Basket(
         basket_id=basket_id(),
         policy=policy(),
@@ -102,7 +275,13 @@ def test_short_basket_reprices_take_profit_below_average_and_rounds_up() -> None
     )
 
     assert basket.average_entry_price == Decimal("92.5")
-    assert basket.take_profit_price == Decimal("89.5")
+    # 90 - 3 x 1.03 rounded up, and a SHORT reads the highest target as the
+    # nearest one the market has to fall to.
+    assert [entry.take_profit_price for entry in basket.entries] == [
+        Decimal("97.0"),
+        Decimal("87.0"),
+    ]
+    assert basket.take_profit_price == Decimal("97.0")
 
 
 def test_one_way_basket_rejects_opposite_side_without_mutation() -> None:

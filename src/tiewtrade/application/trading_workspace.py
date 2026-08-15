@@ -53,8 +53,18 @@ class DataFreshness(StrEnum):
     UNAVAILABLE = "unavailable"
 
 
+# An open Position that cannot be put back the way it was left. Saying "no
+# Position" instead would be the one answer that is not true, so the tab says
+# what is wrong and what clears it.
+POSITION_BASKET_UNREADABLE_MESSAGE = (
+    "This Session has an open Position the Bot cannot take back. "
+    "Press Start Paper Bot and answer Yes to close it."
+)
 _SAFE_POSITION_BASKET_TAB_MESSAGES = frozenset(
-    {"Position / Basket data is unavailable"}
+    {
+        "Position / Basket data is unavailable",
+        POSITION_BASKET_UNREADABLE_MESSAGE,
+    }
 )
 
 
@@ -97,11 +107,14 @@ class BasketEntrySnapshot:
     quantity: Decimal
     notional: Decimal
     unrealized_pnl: Decimal
+    # The target this Entry alone is sold at, measured from the price it paid.
+    take_profit_price: Decimal
 
     def __post_init__(self) -> None:
         if type(self.entry_number) is not int or self.entry_number < 1:
             raise ValueError("entry_number must be a positive integer")
         _require_utc(self.filled_at_utc, "filled_at_utc")
+        _require_decimal(self.take_profit_price, "take_profit_price")
         _require_decimal(self.price, "price")
         _require_non_negative_decimal(self.quantity, "quantity")
         _require_decimal(self.notional, "notional")

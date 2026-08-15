@@ -10,7 +10,7 @@ class UnsupportedDatabaseSchemaError(ValueError):
 
 
 class SQLiteDatabase:
-    _SCHEMA_VERSION = 6
+    _SCHEMA_VERSION = 8
     _BUSY_TIMEOUT_MS = 5_000
 
     def __init__(self, path: Path) -> None:
@@ -52,6 +52,18 @@ class SQLiteDatabase:
                     _migrate_paper_runtime_lifecycle_v5(connection)
                 if version in {1, 2, 3, 4} and _table_exists(connection, "trade_fills"):
                     _create_chart_history_indexes(connection)
+                if version in {1, 2, 3, 4, 5, 6} and _column_is_missing(
+                    connection, "trade_fills", "entry_atr"
+                ):
+                    connection.execute(
+                        "ALTER TABLE trade_fills ADD COLUMN entry_atr TEXT"
+                    )
+                if version in {1, 2, 3, 4, 5, 6, 7} and _column_is_missing(
+                    connection, "trade_fills", "closes_entry_number"
+                ):
+                    connection.execute(
+                        "ALTER TABLE trade_fills ADD COLUMN closes_entry_number INTEGER"
+                    )
                 connection.execute(f"PRAGMA user_version = {self._SCHEMA_VERSION}")
         finally:
             connection.close()
@@ -103,6 +115,13 @@ def _create_schema(connection: sqlite3.Connection) -> None:
             source TEXT NOT NULL CHECK (
                 source IN ('paper_executor', 'binance')
             ),
+            -- The ATR an Entry was read against, which its Basket's take
+            -- profit is derived from. NULL for an Exit, and for Entries
+            -- recorded before it was kept.
+            entry_atr TEXT,
+            -- The Entry this Exit sold, when it sold one rather than the
+            -- whole Basket. NULL for an Entry, a stop loss and a manual close.
+            closes_entry_number INTEGER,
             UNIQUE (source, order_id, exchange_trade_id)
         )
         """
@@ -128,6 +147,16 @@ def _create_chart_history_indexes(connection: sqlite3.Connection) -> None:
         CREATE INDEX IF NOT EXISTS trade_fills_session_time_idx
         ON trade_fills (session_id, filled_at_utc, fill_id)
         """
+    )
+
+
+def _column_is_missing(connection: sqlite3.Connection, table: str, column: str) -> bool:
+    """Whether a table is there to alter and still without the column."""
+    if not _table_exists(connection, table):
+        return False
+    return not any(
+        row["name"] == column
+        for row in connection.execute(f"PRAGMA table_info({table})")
     )
 
 

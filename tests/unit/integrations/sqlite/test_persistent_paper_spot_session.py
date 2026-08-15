@@ -91,6 +91,10 @@ def entry_snapshot() -> PaperSpotSessionSnapshot:
         failure_reason=None,
         pending_intent=None,
         entry_fill=entry_fill(),
+        entry_atr=Decimal("2.5"),
+        entry_number=1,
+        entry_take_profit_price=Decimal("105"),
+        entry_exits=(),
         exit_fill=None,
         closed_basket=None,
         closed_basket_count=0,
@@ -108,6 +112,10 @@ def close_snapshot() -> PaperSpotSessionSnapshot:
         failure_reason=None,
         pending_intent=None,
         entry_fill=None,
+        entry_atr=None,
+        entry_number=None,
+        entry_take_profit_price=None,
+        entry_exits=(),
         exit_fill=exit_fill(),
         closed_basket=closed_basket(),
         closed_basket_count=1,
@@ -180,6 +188,7 @@ def test_successful_entry_is_durable_before_ready_snapshot_returns() -> None:
         basket_id=BASKET_ID,
         entry_number=1,
         fill=entry_fill(),
+        entry_atr=Decimal("2.5"),
     )
     assert result.session == entry_snapshot()
     assert result.persistence_state is PersistenceState.READY
@@ -252,6 +261,10 @@ def test_exit_fill_without_closed_basket_blocks_persistence() -> None:
     session.process_completed_candle.return_value = replace(
         entry_snapshot(),
         entry_fill=None,
+        entry_atr=None,
+        entry_number=None,
+        entry_take_profit_price=None,
+        entry_exits=(),
         exit_fill=exit_fill(),
         closed_basket=None,
     )

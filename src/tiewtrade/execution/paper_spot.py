@@ -33,6 +33,9 @@ class PaperSpotExitFill:
     quantity: Decimal
     fee: Decimal
     filled_at: datetime
+    # The Entry this Fill closed, when it closed one rather than the Basket.
+    # A stop loss and a manual close take the whole position and leave it None.
+    entry_number: int | None = None
 
 
 class PaperSpotExecutor:
@@ -77,30 +80,36 @@ class PaperSpotExecutor:
 
     def fill_take_profit(
         self, basket: Basket, candle: Candle, *, filled_at: datetime
-    ) -> PaperSpotExitFill | None:
+    ) -> tuple[PaperSpotExitFill, ...]:
+        """A Fill for every Entry whose own target this candle reached.
+
+        Each Entry is sold on its own, so a candle that runs past two targets
+        books two Fills rather than one averaged sale.
+        """
         self._require_matching_symbol(candle)
 
-        if basket.take_profit_price is None or candle.high < basket.take_profit_price:
-            return None
-
-        price = self._symbol_rules.floor_price(
-            basket.take_profit_price
-            * (Decimal("1") - self._session.slippage_bps / Decimal("10000"))
-        )
-        if price <= 0:
-            return None
-
-        quantity = basket.total_quantity
-        notional = price * quantity
-        order_id = f"take-profit:{basket.basket_id}"
-        return PaperSpotExitFill(
-            order_id=order_id,
-            fill_id=f"paper:{self._session.session_id}:{order_id}:fill",
-            price=price,
-            quantity=quantity,
-            fee=notional * self._session.fee_rate,
-            filled_at=filled_at,
-        )
+        fills: list[PaperSpotExitFill] = []
+        for entry in basket.entries_reaching_take_profit(candle.high, candle.low):
+            price = self._symbol_rules.floor_price(
+                entry.take_profit_price
+                * (Decimal("1") - self._session.slippage_bps / Decimal("10000"))
+            )
+            if price <= 0:
+                continue
+            notional = price * entry.quantity
+            order_id = f"take-profit:{basket.basket_id}:{entry.entry_number}"
+            fills.append(
+                PaperSpotExitFill(
+                    order_id=order_id,
+                    fill_id=f"paper:{self._session.session_id}:{order_id}:fill",
+                    price=price,
+                    quantity=entry.quantity,
+                    fee=notional * self._session.fee_rate,
+                    filled_at=filled_at,
+                    entry_number=entry.entry_number,
+                )
+            )
+        return tuple(fills)
 
     def fill_stop_loss(
         self, basket: Basket, candle: Candle, *, filled_at: datetime

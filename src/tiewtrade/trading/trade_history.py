@@ -64,6 +64,14 @@ class TradeFill:
     commission_asset: str
     realized_pnl: Decimal
     source: FillSource
+    # The ATR the Entry was read against. A Basket's take profit is derived
+    # from it, so without it a Basket that outlives its Runtime cannot be put
+    # back together. An Exit is not measured against one, and Fills recorded
+    # before this was kept do not have one.
+    entry_atr: Decimal | None = None
+    # The Entry number this Fill sold. An Exit that took the whole Basket
+    # sold no single Entry and leaves it None.
+    closes_entry_number: int | None = None
 
     def __post_init__(self) -> None:
         _require_non_empty(self.fill_id, "fill_id")
@@ -81,6 +89,15 @@ class TradeFill:
         _require_finite(self.realized_pnl, "realized_pnl")
         if self.entry_number is not None and self.entry_number <= 0:
             raise ValueError("entry_number must be positive when present")
+        if self.entry_atr is not None:
+            if self.entry_number is None:
+                raise ValueError("entry_atr belongs to an Entry Fill")
+            _require_non_negative(self.entry_atr, "entry_atr")
+        if self.closes_entry_number is not None:
+            if self.entry_number is not None:
+                raise ValueError("closes_entry_number belongs to an Exit Fill")
+            if self.closes_entry_number <= 0:
+                raise ValueError("closes_entry_number must be positive")
 
 
 @dataclass(frozen=True, slots=True)

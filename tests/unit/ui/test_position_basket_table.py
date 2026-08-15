@@ -25,7 +25,12 @@ from tiewtrade.ui.theme import DARK_THEME, NEGATIVE_COLOR, POSITIVE_COLOR
 OBSERVED_AT = datetime(2026, 8, 2, 1, 2, 4, tzinfo=UTC)
 
 
-def _entry(number: int, price: str, unrealized_pnl: str) -> BasketEntrySnapshot:
+def _entry(
+    number: int,
+    price: str,
+    unrealized_pnl: str,
+    take_profit_price: str | None = None,
+) -> BasketEntrySnapshot:
     return BasketEntrySnapshot(
         entry_number=number,
         filled_at_utc=datetime(2026, 8, 2, number, 0, tzinfo=UTC),
@@ -33,6 +38,11 @@ def _entry(number: int, price: str, unrealized_pnl: str) -> BasketEntrySnapshot:
         quantity=Decimal("0.00300000"),
         notional=Decimal(price) * Decimal("0.00300000"),
         unrealized_pnl=Decimal(unrealized_pnl),
+        take_profit_price=(
+            Decimal(price) + Decimal("1000")
+            if take_profit_price is None
+            else Decimal(take_profit_price)
+        ),
     )
 
 
@@ -43,8 +53,8 @@ def _futures_basket() -> BasketSnapshot:
         market_type="futures",
         entry_count=2,
         entries=(
-            _entry(1, "66000.0000", "0.96336"),
-            _entry(2, "66000.2500", "0.96264"),
+            _entry(1, "66000.0000", "0.96336", take_profit_price="67000.0000"),
+            _entry(2, "66000.2500", "0.96264", take_profit_price="67000.2500"),
         ),
         total_quantity=Decimal("0.00600000"),
         average_entry_price=Decimal("66000.1250"),
@@ -111,10 +121,8 @@ def test_each_entry_of_the_basket_is_its_own_row(qtbot: QtBot) -> None:
     assert widget.state_label.accessibleName() == "Position / Basket status"
 
 
-def test_the_one_take_profit_is_restated_on_every_entry_it_applies_to(
-    qtbot: QtBot,
-) -> None:
-    """One target for the whole Basket, so each row can be read on its own."""
+def test_every_entry_reads_the_target_it_is_sold_at(qtbot: QtBot) -> None:
+    """Entries bought at different prices are sold at different targets."""
     widget = PositionBasketTable()
     qtbot.addWidget(widget)
 
@@ -122,8 +130,10 @@ def test_the_one_take_profit_is_restated_on_every_entry_it_applies_to(
         ready_position_basket_tab(_futures_basket(), observed_at_utc=OBSERVED_AT)
     )
 
+    assert _cell(widget, "Take Profit", 0).text() == "67000.0000"
+    assert _cell(widget, "Take Profit", 1).text() == "67000.2500"
     for row in (0, 1):
-        assert _cell(widget, "Take Profit", row).text() == "67000.0000"
+        # The lifecycle is the Basket's, so it does read the same on both.
         assert _cell(widget, "Basket Lifecycle", row).text() == "Active"
 
 

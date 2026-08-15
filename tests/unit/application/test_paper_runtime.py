@@ -16,7 +16,10 @@ from tests.support.paper_session_setup import (
     configured_futures_session,
     configured_spot_session,
 )
-from tiewtrade.application.paper_runtime import PaperRuntimeController
+from tiewtrade.application.paper_runtime import (
+    PaperRuntimeController,
+    read_open_basket_state,
+)
 from tiewtrade.application.paper_session_setup import ConfiguredPaperSession
 from tiewtrade.application.trade_history import TradeHistoryFilter
 from tiewtrade.application.trading_workspace import (
@@ -51,9 +54,15 @@ from tiewtrade.market_data.source_errors import (
     MarketDataFailureKind,
     MarketDataFatalError,
 )
-from tiewtrade.trading.session_config import MarketType
+from tiewtrade.trading.session_config import MarketType, TradeMode
 from tiewtrade.trading.symbol_rules import SymbolRules
-from tiewtrade.trading.trade_history import BasketStatus, TradeFill
+from tiewtrade.trading.trade_history import (
+    BasketResult,
+    BasketStatus,
+    FillSide,
+    FillSource,
+    TradeFill,
+)
 
 _NOW = datetime(2026, 8, 2, 3, tzinfo=UTC)
 _STOPPED_AT = datetime(2026, 8, 2, 4, tzinfo=UTC)
@@ -626,6 +635,221 @@ def test_transient_runtime_state_projects_stale_until_live(
     assert fresh.read_state is WorkspaceReadState.READY
     source.fail_stream()
     assert source.closed.wait(2)
+
+
+def test_start_takes_back_the_basket_a_previous_runtime_left_open(
+    tmp_path: Path,
+) -> None:
+    """A Position outlives the Runtime that opened it, and is picked up again."""
+    session = configured_spot_session()
+    database = _database_with_session(tmp_path, session)
+    _record_open_spot_entry(database, session, entry_atr=Decimal("2"))
+    source = _source()
+    basket_ready = Event()
+
+    def publish(snapshot: TradingWorkspaceSnapshot) -> None:
+        if snapshot.basket is not None:
+            basket_ready.set()
+
+    controller = PaperRuntimeController(
+        lifecycle=SQLitePaperRuntimeLifecycle(database),
+        trade_history=SQLiteTradeHistory(database),
+        symbol_rules=_symbol_rules(),
+        source_factory=lambda _endpoints: source,
+        scheduler=ImmediateScheduler(),
+        snapshot_callback=publish,
+    )
+
+    result = controller.start(session)
+
+    assert result.blocked_reason is None
+    assert basket_ready.wait(2)
+    current = controller.current_workspace
+    assert current.basket is not None
+    assert current.basket.entry_count == 1
+    assert current.basket.average_entry_price == Decimal("100")
+    # 100 + 3 ATR, the target the Basket was carrying when it was left.
+    assert current.basket.take_profit_price == Decimal("106")
+    controller.stop(session)
+
+
+def test_a_basket_that_cannot_be_taken_back_blocks_the_start(
+    tmp_path: Path,
+) -> None:
+    """An Entry recorded before its ATR was kept cannot state its target."""
+    session = configured_spot_session()
+    database = _database_with_session(tmp_path, session)
+    _record_open_spot_entry(database, session, entry_atr=None)
+    source = _source()
+
+    controller = PaperRuntimeController(
+        lifecycle=SQLitePaperRuntimeLifecycle(database),
+        trade_history=SQLiteTradeHistory(database),
+        symbol_rules=_symbol_rules(),
+        source_factory=lambda _endpoints: source,
+        scheduler=ImmediateScheduler(),
+        snapshot_callback=lambda _snapshot: None,
+    )
+
+    result = controller.start(session)
+
+    assert result.workspace.header is not None
+    assert result.workspace.header.runtime_state is BotRuntimeState.BLOCKED
+    assert result.blocked_reason == "Paper Position could not be restored"
+    assert controller.current_workspace.basket is None
+
+
+def test_futures_says_so_rather_than_trade_beside_an_open_basket(
+    tmp_path: Path,
+) -> None:
+    session = configured_futures_session()
+    database = _database_with_session(tmp_path, session)
+    SQLiteTradeHistory(database).record_open_basket(
+        BasketResult(
+            basket_id=UUID("00000000-0000-0000-0000-0000000000b2"),
+            session_id=session.config.session_id,
+            trade_mode=TradeMode.PAPER,
+            market_type=MarketType.FUTURES,
+            leverage=session.config.futures_policy.leverage
+            if session.config.futures_policy is not None
+            else None,
+            symbol=session.market_data.symbol,
+            timeframe=session.market_data.timeframe,
+            strategy_preset_version=session.config.preset_version,
+            opened_at_utc=_NOW,
+            closed_at_utc=None,
+            entry_count=1,
+            invested_notional=Decimal("100"),
+            gross_realized_pnl=Decimal("0"),
+            trading_fees=Decimal("0.1"),
+            funding_fee=Decimal("0"),
+            net_realized_pnl=Decimal("-0.1"),
+            status=BasketStatus.OPEN,
+        ),
+        TradeFill(
+            fill_id="paper:futures-left-open:fill",
+            basket_id=UUID("00000000-0000-0000-0000-0000000000b2"),
+            session_id=session.config.session_id,
+            order_id="entry:futures-left-open",
+            exchange_trade_id=None,
+            side=FillSide.BUY,
+            entry_number=1,
+            filled_at_utc=_NOW,
+            price=Decimal("100"),
+            quantity=Decimal("1"),
+            notional=Decimal("100"),
+            commission=Decimal("0.1"),
+            commission_asset="USDT",
+            realized_pnl=Decimal("0"),
+            source=FillSource.PAPER_EXECUTOR,
+        ),
+    )
+    controller = PaperRuntimeController(
+        lifecycle=SQLitePaperRuntimeLifecycle(database),
+        trade_history=SQLiteTradeHistory(database),
+        symbol_rules=_symbol_rules(),
+        source_factory=lambda _endpoints: _source(),
+        scheduler=ImmediateScheduler(),
+        snapshot_callback=lambda _snapshot: None,
+    )
+
+    result = controller.start(session)
+
+    assert result.blocked_reason == "Paper Position could not be restored"
+
+
+def test_a_basket_taken_back_leaves_out_the_entry_that_already_sold(
+    tmp_path: Path,
+) -> None:
+    session = configured_spot_session()
+    database = _database_with_session(tmp_path, session)
+    history = SQLiteTradeHistory(database)
+    _record_open_spot_entry(database, session, entry_atr=Decimal("2"))
+    basket_id = UUID("00000000-0000-0000-0000-0000000000b1")
+    history.record_paper_spot_entry_fill(
+        TradeFill(
+            fill_id="paper:left-open:fill-2",
+            basket_id=basket_id,
+            session_id=session.config.session_id,
+            order_id="entry:left-open-2",
+            exchange_trade_id=None,
+            side=FillSide.BUY,
+            entry_number=2,
+            filled_at_utc=_NOW + timedelta(minutes=5),
+            price=Decimal("90"),
+            quantity=Decimal("1"),
+            notional=Decimal("90"),
+            commission=Decimal("0.09"),
+            commission_asset="USDT",
+            realized_pnl=Decimal("0"),
+            source=FillSource.PAPER_EXECUTOR,
+            entry_atr=Decimal("2"),
+        ),
+        symbol=session.market_data.symbol,
+        timeframe=session.market_data.timeframe,
+        strategy_preset_version=session.config.preset_version,
+    )
+    basket = history.get_basket(basket_id)
+    assert basket is not None
+    history.record_entry_exit_fill(
+        basket,
+        TradeFill(
+            fill_id="paper:left-open:sale-2",
+            basket_id=basket_id,
+            session_id=session.config.session_id,
+            order_id="take-profit:2",
+            exchange_trade_id=None,
+            side=FillSide.SELL,
+            entry_number=None,
+            filled_at_utc=_NOW + timedelta(minutes=10),
+            price=Decimal("96"),
+            quantity=Decimal("1"),
+            notional=Decimal("96"),
+            commission=Decimal("0.096"),
+            commission_asset="USDT",
+            realized_pnl=Decimal("5.8"),
+            source=FillSource.PAPER_EXECUTOR,
+            closes_entry_number=2,
+        ),
+    )
+
+    state = read_open_basket_state(history, session.config.session_id)
+
+    assert state is not None
+    # Entry 2 sold, so only Entry 1 is still part of the position.
+    assert [entry.entry_number for entry in state.entries] == [1]
+
+
+def _record_open_spot_entry(
+    database: SQLiteDatabase,
+    session: ConfiguredPaperSession,
+    *,
+    entry_atr: Decimal | None,
+) -> None:
+    basket_id = UUID("00000000-0000-0000-0000-0000000000b1")
+    SQLiteTradeHistory(database).record_paper_spot_entry_fill(
+        TradeFill(
+            fill_id="paper:left-open:fill",
+            basket_id=basket_id,
+            session_id=session.config.session_id,
+            order_id="entry:left-open",
+            exchange_trade_id=None,
+            side=FillSide.BUY,
+            entry_number=1,
+            filled_at_utc=_NOW,
+            price=Decimal("100"),
+            quantity=Decimal("1"),
+            notional=Decimal("100"),
+            commission=Decimal("0.1"),
+            commission_asset="USDT",
+            realized_pnl=Decimal("0"),
+            source=FillSource.PAPER_EXECUTOR,
+            entry_atr=entry_atr,
+        ),
+        symbol=session.market_data.symbol,
+        timeframe=session.market_data.timeframe,
+        strategy_preset_version=session.config.preset_version,
+    )
 
 
 @pytest.mark.parametrize("market_type", [MarketType.SPOT, MarketType.FUTURES])

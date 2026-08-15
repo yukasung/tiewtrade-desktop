@@ -17,9 +17,11 @@ def basket_entries(
     quantity: str = "0.5",
     current_price: str = "65000",
     first_filled_at: datetime = OBSERVED_AT,
+    take_profit_offset: str = "1000",
 ) -> tuple[BasketEntrySnapshot, ...]:
-    """Entries numbered as they were taken, each marked on its own price."""
+    """Entries numbered as they were taken, each with its own price and target."""
     mark = Decimal(current_price)
+    offset = Decimal(take_profit_offset)
     return tuple(
         BasketEntrySnapshot(
             entry_number=number,
@@ -28,6 +30,7 @@ def basket_entries(
             quantity=Decimal(quantity),
             notional=Decimal(price) * Decimal(quantity),
             unrealized_pnl=(mark - Decimal(price)) * Decimal(quantity),
+            take_profit_price=Decimal(price) + offset,
         )
         for number, price in enumerate(prices, start=1)
     )

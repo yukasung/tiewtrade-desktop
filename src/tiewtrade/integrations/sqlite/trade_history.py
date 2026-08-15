@@ -146,6 +146,29 @@ class SQLiteTradeHistory:
 
         return self._run_write(operation)
 
+    def record_entry_exit_fill(self, basket: BasketResult, fill: TradeFill) -> bool:
+        """Record one Entry sold out of a Basket that others may still hold.
+
+        The Basket row carries the running total either way; whether this sale
+        was its last is the caller's reading, and arrives as the status.
+        """
+        _validate_fill_ownership(basket, fill)
+        if fill.closes_entry_number is None:
+            raise TradeHistoryConflictError("Entry Exit Fill must name its Entry")
+
+        def operation(connection: sqlite3.Connection) -> bool:
+            if _check_duplicate_fill(connection, fill):
+                return False
+            current = _require_basket(connection, basket.basket_id)
+            _validate_immutable_identity(current, basket)
+            if current.status is not BasketStatus.OPEN:
+                raise TradeHistoryConflictError("closed Basket cannot receive a Fill")
+            _insert_fill(connection, fill)
+            _update_basket(connection, basket)
+            return True
+
+        return self._run_write(operation)
+
     def record_closed_basket(self, basket: BasketResult, fill: TradeFill) -> bool:
         _validate_fill_ownership(basket, fill)
 
@@ -239,6 +262,19 @@ class SQLiteTradeHistory:
                 (str(basket_id),),
             ).fetchall()
             return tuple(_fill_from_row(row) for row in rows)
+
+        return self._run_read(operation)
+
+    def count_closed_baskets(self, session_id: UUID) -> int:
+        def operation(connection: sqlite3.Connection) -> int:
+            row = connection.execute(
+                """
+                SELECT COUNT(*) AS closed FROM basket_results
+                WHERE session_id = ? AND status = ?
+                """,
+                (str(session_id), BasketStatus.CLOSED.value),
+            ).fetchone()
+            return int(row["closed"])
 
         return self._run_read(operation)
 
@@ -660,8 +696,9 @@ def _insert_fill(connection: sqlite3.Connection, fill: TradeFill) -> None:
         INSERT INTO trade_fills (
             fill_id, basket_id, session_id, order_id, exchange_trade_id, side,
             entry_number, filled_at_utc, price, quantity, notional, commission,
-            commission_asset, realized_pnl, source
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            commission_asset, realized_pnl, source, entry_atr,
+            closes_entry_number
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             fill.fill_id,
@@ -679,6 +716,8 @@ def _insert_fill(connection: sqlite3.Connection, fill: TradeFill) -> None:
             fill.commission_asset,
             _decimal_text(fill.realized_pnl),
             fill.source.value,
+            None if fill.entry_atr is None else _decimal_text(fill.entry_atr),
+            fill.closes_entry_number,
         ),
     )
 
@@ -734,6 +773,8 @@ def _fill_from_row(row: sqlite3.Row) -> TradeFill:
         commission_asset=row["commission_asset"],
         realized_pnl=Decimal(row["realized_pnl"]),
         source=FillSource(row["source"]),
+        entry_atr=(None if row["entry_atr"] is None else Decimal(row["entry_atr"])),
+        closes_entry_number=row["closes_entry_number"],
     )
 
 
