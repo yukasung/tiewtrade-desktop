@@ -93,7 +93,13 @@ class BotControlSnapshot:
             _require_absent(self.progress_message, "progress_message")
             _require_absent(self.blocked_reason, "blocked_reason")
         elif self.state is BotRuntimeState.STOPPED:
-            _require_allowed_actions(self.available_actions, frozenset(), self.state)
+            # A stopped Bot still owns its Session, Basket and Entry Pair count,
+            # so starting it again is running the same Session on, not a new one.
+            _require_allowed_actions(
+                self.available_actions,
+                frozenset({BotControlAction.START}),
+                self.state,
+            )
             _require_absent(self.progress_message, "progress_message")
             _require_absent(self.blocked_reason, "blocked_reason")
         elif self.state is BotRuntimeState.BLOCKED:
@@ -213,7 +219,9 @@ _ALLOWED_TARGET_STATES: dict[BotRuntimeState, frozenset[BotRuntimeState]] = {
     BotRuntimeState.STOPPING: frozenset(
         {BotRuntimeState.STOPPED, BotRuntimeState.BLOCKED}
     ),
-    BotRuntimeState.STOPPED: frozenset(),
+    BotRuntimeState.STOPPED: frozenset(
+        {BotRuntimeState.STARTING, BotRuntimeState.BLOCKED}
+    ),
     BotRuntimeState.BLOCKED: frozenset(
         {
             BotRuntimeState.CONFIGURED,
@@ -229,6 +237,7 @@ _SAFE_BLOCKED_REASONS = frozenset(
         "Paper Bot could not be stopped",
         "Paper Bot recovery failed",
         "Paper Bot recovery required",
+        "Paper Position could not be restored",
     }
 )
 

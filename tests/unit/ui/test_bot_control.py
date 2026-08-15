@@ -190,6 +190,8 @@ def test_progress_blocked_and_stopped_states_expose_only_their_allowed_actions(
     assert widget.start_button.isHidden()
     assert widget.stop_button.isHidden()
 
+    # A stopped Bot owns the Start button, since starting it runs the same
+    # Session on. Whether it may is still the snapshot's to say.
     stopped = BotControlSnapshot(
         state=BotRuntimeState.STOPPED,
         session=configured.session,
@@ -199,8 +201,14 @@ def test_progress_blocked_and_stopped_states_expose_only_their_allowed_actions(
         available_actions=frozenset(),
     )
     widget.show_snapshot(stopped)
-    assert widget.start_button.isHidden()
+    assert widget.start_button.isVisible()
+    assert not widget.start_button.isEnabled()
     assert widget.stop_button.isHidden()
+
+    widget.show_snapshot(
+        replace(stopped, available_actions=frozenset({BotControlAction.START}))
+    )
+    assert widget.start_button.isEnabled()
 
 
 def test_enabled_action_emits_once_and_disables_repeated_submission(

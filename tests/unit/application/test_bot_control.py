@@ -108,6 +108,50 @@ def test_stopping_and_stopped_disallow_actions_and_entries() -> None:
     assert stopped.entry_creation_allowed is False
 
 
+def test_a_stopped_bot_can_be_started_again_on_the_same_session() -> None:
+    """Stopping ends a run, not the Session the run belongs to.
+
+    The Basket, the Entry Pair count and the Session itself outlive the
+    Runtime that was stopped, so starting again is that Session running on.
+    """
+    running = _running_control()
+    stopping = transition_bot_control(
+        running,
+        result=BotLifecycleResult(
+            workspace=workspace_with_runtime_state(
+                running.workspace,
+                BotRuntimeState.STOPPING,
+            )
+        ),
+        progress_message="Stopping Paper Bot",
+    )
+    stopped = transition_bot_control(
+        stopping,
+        result=BotLifecycleResult(
+            workspace=workspace_with_runtime_state(
+                stopping.workspace,
+                BotRuntimeState.STOPPED,
+            )
+        ),
+        actions=frozenset({BotControlAction.START}),
+    )
+
+    starting = transition_bot_control(
+        stopped,
+        result=BotLifecycleResult(
+            workspace=workspace_with_runtime_state(
+                stopped.workspace,
+                BotRuntimeState.STARTING,
+            )
+        ),
+        progress_message="Starting Paper Bot",
+    )
+
+    assert stopped.available_actions == frozenset({BotControlAction.START})
+    assert starting.state is BotRuntimeState.STARTING
+    assert starting.session is running.session
+
+
 def test_blocked_control_requires_sanitized_reason_and_has_no_action() -> None:
     running = _running_control()
 

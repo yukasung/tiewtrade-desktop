@@ -405,12 +405,14 @@ class BotLifecycleWorkflow(QObject):
         state: BotRuntimeState,
         session: ConfiguredPaperSession,
     ) -> frozenset[BotControlAction]:
-        if state is BotRuntimeState.CONFIGURED and self._start_bot is not None:
+        starts_a_session = state in {
+            BotRuntimeState.CONFIGURED,
+            BotRuntimeState.STOPPED,
+        }
+        if starts_a_session and self._start_bot is not None:
             return frozenset({BotControlAction.START})
         if state is BotRuntimeState.RUNNING and self._stop_bot is not None:
             return frozenset({BotControlAction.STOP})
-        if state in {BotRuntimeState.STOPPED, BotRuntimeState.BLOCKED}:
-            return frozenset()
         return frozenset()
 
     def _is_allowed_result(

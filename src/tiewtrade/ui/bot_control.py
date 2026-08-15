@@ -17,7 +17,13 @@ StopConfirmation = Callable[[Callable[[], None], Callable[[], None]], None]
 
 # The states each button belongs to: the settled one that offers it, and the
 # in-flight one that keeps it on screen while the action runs.
-_STARTING_STATES = frozenset({BotRuntimeState.CONFIGURED, BotRuntimeState.STARTING})
+_STARTING_STATES = frozenset(
+    {
+        BotRuntimeState.CONFIGURED,
+        BotRuntimeState.STOPPED,
+        BotRuntimeState.STARTING,
+    }
+)
 _STOPPING_STATES = frozenset({BotRuntimeState.RUNNING, BotRuntimeState.STOPPING})
 
 
