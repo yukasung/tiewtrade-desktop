@@ -17,7 +17,6 @@ def margin_inputs() -> dict[str, Decimal | PositionSide]:
         "average_entry_price": Decimal("100"),
         "quantity": Decimal("3000"),
         "available_capital": Decimal("200000"),
-        "accumulated_entry_fees": Decimal("30"),
     }
 
 
@@ -97,7 +96,7 @@ def test_liquidation_crossing_rejects_invalid_threshold(
 
 def test_long_liquidation_threshold_uses_cross_account_equity() -> None:
     price = model().liquidation_price(**margin_inputs())  # type: ignore[arg-type]
-    expected = (Decimal("100") * Decimal("3000") - Decimal("199970")) / (
+    expected = (Decimal("100") * Decimal("3000") - Decimal("200000")) / (
         Decimal("3000") * Decimal("0.995")
     )
 
@@ -109,7 +108,7 @@ def test_short_liquidation_threshold_is_above_entry() -> None:
     inputs["side"] = PositionSide.SHORT
 
     price = model().liquidation_price(**inputs)  # type: ignore[arg-type]
-    expected = (Decimal("199970") + Decimal("100") * Decimal("3000")) / (
+    expected = (Decimal("200000") + Decimal("100") * Decimal("3000")) / (
         Decimal("3000") * Decimal("1.005")
     )
 
@@ -125,23 +124,21 @@ def test_long_threshold_returns_none_when_equity_covers_all_positive_prices() ->
             average_entry_price=Decimal("100"),
             quantity=Decimal("1"),
             available_capital=Decimal("200000"),
-            accumulated_entry_fees=Decimal("0"),
         )
         is None
     )
 
 
-def test_entry_fees_reduce_account_equity() -> None:
+def test_account_equity_is_capital_plus_the_marked_result() -> None:
     snapshot = model().snapshot(
         side=PositionSide.LONG,
         average_entry_price=Decimal("100"),
         quantity=Decimal("3000"),
         available_capital=Decimal("200000"),
-        accumulated_entry_fees=Decimal("30"),
         current_price=Decimal("90"),
     )
 
-    assert snapshot.account_equity == Decimal("169970")
+    assert snapshot.account_equity == Decimal("170000")
     assert isinstance(snapshot.account_equity, Decimal)
 
 
@@ -151,11 +148,10 @@ def test_short_snapshot_uses_directional_unrealized_pnl() -> None:
         average_entry_price=Decimal("100"),
         quantity=Decimal("2"),
         available_capital=Decimal("1000"),
-        accumulated_entry_fees=Decimal("1"),
         current_price=Decimal("110"),
     )
 
-    assert snapshot.account_equity == Decimal("979")
+    assert snapshot.account_equity == Decimal("980")
 
 
 def test_snapshot_keeps_equity_at_adverse_price() -> None:
@@ -164,7 +160,6 @@ def test_snapshot_keeps_equity_at_adverse_price() -> None:
         average_entry_price=Decimal("100"),
         quantity=Decimal("1"),
         available_capital=Decimal("10"),
-        accumulated_entry_fees=Decimal("0"),
         current_price=Decimal("90"),
     )
 
@@ -183,10 +178,6 @@ def test_snapshot_keeps_equity_at_adverse_price() -> None:
         ("available_capital", Decimal("0")),
         ("available_capital", Decimal("NaN")),
         ("available_capital", Decimal("Infinity")),
-        ("accumulated_entry_fees", Decimal("-1")),
-        ("accumulated_entry_fees", Decimal("NaN")),
-        ("accumulated_entry_fees", Decimal("Infinity")),
-        ("accumulated_entry_fees", Decimal("200000")),
     ],
 )
 def test_liquidation_price_rejects_invalid_inputs(field: str, value: Decimal) -> None:
@@ -214,7 +205,6 @@ def test_snapshot_rejects_invalid_current_price(current_price: Decimal) -> None:
             average_entry_price=Decimal("100"),
             quantity=Decimal("1"),
             available_capital=Decimal("1000"),
-            accumulated_entry_fees=Decimal("0"),
             current_price=current_price,
         )
 

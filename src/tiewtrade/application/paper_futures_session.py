@@ -274,7 +274,6 @@ class PaperFuturesSession:
             average_entry_price=candidate_basket.average_entry_price,
             quantity=candidate_basket.total_quantity,
             available_capital=self._wallet_balance,
-            accumulated_entry_fees=candidate_basket.entry_fees,
             current_price=candle.close,
         )
         candidate_lifecycle.record_fill(fill.filled_at)
@@ -362,7 +361,6 @@ class PaperFuturesSession:
             average_entry_price=self._basket.average_entry_price,
             quantity=self._basket.total_quantity,
             available_capital=self._wallet_balance,
-            accumulated_entry_fees=self._basket.entry_fees,
             current_price=self._latest_mark_price,
         )
         self._liquidation_price = margin_snapshot.liquidation_price

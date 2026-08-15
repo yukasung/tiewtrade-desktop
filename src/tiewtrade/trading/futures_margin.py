@@ -22,16 +22,10 @@ class FuturesMarginModel:
         average_entry_price: Decimal,
         quantity: Decimal,
         available_capital: Decimal,
-        accumulated_entry_fees: Decimal,
     ) -> Decimal | None:
         self._require_position_side(side)
-        self._validate_inputs(
-            average_entry_price,
-            quantity,
-            available_capital,
-            accumulated_entry_fees,
-        )
-        wallet = available_capital - accumulated_entry_fees
+        self._validate_inputs(average_entry_price, quantity, available_capital)
+        wallet = available_capital
         rate = self._policy.maintenance_margin_rate
         if side is PositionSide.LONG:
             threshold = (average_entry_price * quantity - wallet) / (
@@ -49,7 +43,6 @@ class FuturesMarginModel:
         average_entry_price: Decimal,
         quantity: Decimal,
         available_capital: Decimal,
-        accumulated_entry_fees: Decimal,
         current_price: Decimal,
     ) -> FuturesMarginSnapshot:
         if not current_price.is_finite() or current_price <= 0:
@@ -59,7 +52,6 @@ class FuturesMarginModel:
             average_entry_price=average_entry_price,
             quantity=quantity,
             available_capital=available_capital,
-            accumulated_entry_fees=accumulated_entry_fees,
         )
         marked_pnl = unrealized_pnl(
             side=side,
@@ -67,7 +59,7 @@ class FuturesMarginModel:
             quantity=quantity,
             current_price=current_price,
         )
-        account_equity = available_capital - accumulated_entry_fees + marked_pnl
+        account_equity = available_capital + marked_pnl
         return FuturesMarginSnapshot(
             account_equity=account_equity,
             liquidation_price=liquidation_price,
@@ -98,7 +90,6 @@ class FuturesMarginModel:
         average_entry_price: Decimal,
         quantity: Decimal,
         available_capital: Decimal,
-        accumulated_entry_fees: Decimal,
     ) -> None:
         if not average_entry_price.is_finite() or average_entry_price <= 0:
             raise ValueError("average_entry_price must be finite and positive")
@@ -106,9 +97,3 @@ class FuturesMarginModel:
             raise ValueError("quantity must be finite and positive")
         if not available_capital.is_finite() or available_capital <= 0:
             raise ValueError("available_capital must be finite and positive")
-        if not accumulated_entry_fees.is_finite() or accumulated_entry_fees < 0:
-            raise ValueError("accumulated_entry_fees must be finite and non-negative")
-        if accumulated_entry_fees >= available_capital:
-            raise ValueError(
-                "accumulated_entry_fees must remain below available capital"
-            )
