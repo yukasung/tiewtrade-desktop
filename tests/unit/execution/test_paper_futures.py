@@ -18,7 +18,7 @@ from tiewtrade.trading.symbol_rules import SymbolRules
 
 
 def test_long_entry_uses_next_open_adverse_slippage_and_target_notional() -> None:
-    executor = make_executor(leverage=3, fee_rate="0.001", slippage_bps="10")
+    executor = make_executor(leverage=3, slippage_bps="10")
     intent = long_intent()
     fill_candle = candle(minute=5, open="100")
 
@@ -29,12 +29,12 @@ def test_long_entry_uses_next_open_adverse_slippage_and_target_notional() -> Non
     assert fill.side is PositionSide.LONG
     assert fill.price == Decimal("100.1")
     assert fill.quantity == Decimal("299.7")
-    assert fill.fee == fill.price * fill.quantity * Decimal("0.001")
+    assert fill.fee == Decimal("0")
     assert fill.filled_at == fill_candle.open_time
 
 
 def test_short_entry_uses_adverse_downward_slippage() -> None:
-    executor = make_executor(leverage=3, fee_rate="0.001", slippage_bps="10")
+    executor = make_executor(leverage=3, slippage_bps="10")
 
     fill = executor.fill_entry(short_intent(), candle(minute=5, open="100"))
 
@@ -42,7 +42,7 @@ def test_short_entry_uses_adverse_downward_slippage() -> None:
     assert fill.side is PositionSide.SHORT
     assert fill.price == Decimal("99.9")
     assert fill.quantity == Decimal("300.3")
-    assert fill.fee == Decimal("29.99997")
+    assert fill.fee == Decimal("0")
 
 
 def test_short_entry_returns_none_when_quantized_price_is_zero() -> None:
@@ -96,7 +96,7 @@ def test_long_take_profit_uses_adverse_downward_price() -> None:
     assert fill.close_reason is BasketCloseReason.TAKE_PROFIT
     assert fill.price == Decimal("105.8")
     assert fill.quantity == Decimal("2")
-    assert fill.fee == Decimal("0.2116")
+    assert fill.fee == Decimal("0")
     assert fill.filled_at == current.close_time
     assert fill.order_id == ("take_profit:00000000-0000-0000-0000-000000000108")
     assert fill.fill_id == (
@@ -118,7 +118,7 @@ def test_short_take_profit_uses_adverse_upward_price() -> None:
     assert fill.close_reason is BasketCloseReason.TAKE_PROFIT
     assert fill.price == Decimal("94.1")
     assert fill.quantity == Decimal("2")
-    assert fill.fee == Decimal("0.1882")
+    assert fill.fee == Decimal("0")
     assert fill.order_id == ("take_profit:00000000-0000-0000-0000-000000000108")
     assert fill.fill_id == (
         "paper:00000000-0000-0000-0000-000000000107:"
@@ -179,7 +179,7 @@ def test_liquidation_wins_over_take_profit_and_uses_gap_aware_price() -> None:
     assert liquidation.close_reason is BasketCloseReason.LIQUIDATION
     assert liquidation.price == Decimal("69.9")
     assert liquidation.quantity == Decimal("2")
-    assert liquidation.fee == Decimal("0.1398")
+    assert liquidation.fee == Decimal("0")
     assert liquidation.filled_at == current.close_time
     assert liquidation.order_id == ("liquidation:00000000-0000-0000-0000-000000000108")
     assert liquidation.fill_id == (
@@ -210,7 +210,7 @@ def test_short_liquidation_uses_gap_aware_adverse_price() -> None:
     assert fill.close_reason is BasketCloseReason.LIQUIDATION
     assert fill.price == Decimal("130.2")
     assert fill.quantity == Decimal("2")
-    assert fill.fee == Decimal("0.2604")
+    assert fill.fee == Decimal("0")
     assert fill.order_id == ("liquidation:00000000-0000-0000-0000-000000000108")
     assert fill.fill_id == (
         "paper:00000000-0000-0000-0000-000000000107:"
@@ -316,7 +316,6 @@ def test_executor_rejects_non_paper_or_non_futures_configuration() -> None:
         market_type=MarketType.SPOT,
         trade_mode=TradeMode.PAPER,
         available_capital=session.available_capital,
-        fee_rate=session.fee_rate,
         slippage_bps=session.slippage_bps,
         entry_policy=session.entry_policy,
         spot_policy=SpotTradingPolicy(trading_capital_ratio=Decimal("0.8")),
@@ -328,14 +327,12 @@ def test_executor_rejects_non_paper_or_non_futures_configuration() -> None:
 def make_executor(
     *,
     leverage: int = 1,
-    fee_rate: str = "0.001",
     min_notional: str = "5",
     slippage_bps: str = "0",
 ) -> PaperFuturesExecutor:
     return PaperFuturesExecutor(
         futures_session(
             leverage=leverage,
-            fee_rate=fee_rate,
             slippage_bps=slippage_bps,
         ),
         symbol_rules(min_notional=min_notional),
@@ -343,7 +340,7 @@ def make_executor(
 
 
 def futures_session(
-    *, leverage: int = 1, fee_rate: str = "0.001", slippage_bps: str = "0"
+    *, leverage: int = 1, slippage_bps: str = "0"
 ) -> SessionConfig:
     return SessionConfig(
         session_id=UUID("00000000-0000-0000-0000-000000000107"),
@@ -351,7 +348,6 @@ def futures_session(
         market_type=MarketType.FUTURES,
         trade_mode=TradeMode.PAPER,
         available_capital=Decimal("40000"),
-        fee_rate=Decimal(fee_rate),
         slippage_bps=Decimal(slippage_bps),
         entry_policy=EntryPolicy(max_entries=2),
         spot_policy=None,

@@ -36,7 +36,6 @@ def main(argv: Sequence[str] | None = None) -> int:
             market_type=MarketType.SPOT,
             trade_mode=TradeMode.PAPER,
             available_capital=arguments.available_capital,
-            fee_rate=Decimal("0.001"),
             slippage_bps=Decimal("2"),
             entry_policy=EntryPolicy(max_entries=arguments.max_entries),
             spot_policy=SpotTradingPolicy(

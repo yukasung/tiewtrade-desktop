@@ -22,10 +22,10 @@ def test_replaying_the_tracer_fixture_is_deterministic() -> None:
     assert first.accepted_candles == 40
     assert first.current_entries == 0
     assert first.closed_baskets == 1
-    assert first.realized_pnl == Decimal("13.84062222")
+    assert first.realized_pnl == Decimal("14.15466")
     assert first.to_json() == (
         '{"accepted_candles":40,"closed_baskets":1,'
-        '"current_entries":0,"realized_pnl":"13.84062222"}'
+        '"current_entries":0,"realized_pnl":"14.15466"}'
     )
 
 
@@ -39,7 +39,6 @@ def replay_fixture() -> ReplayResult:
             market_type=MarketType.SPOT,
             trade_mode=TradeMode.PAPER,
             available_capital=Decimal("1000"),
-            fee_rate=Decimal("0.001"),
             slippage_bps=Decimal("2"),
             entry_policy=EntryPolicy(max_entries=4),
             spot_policy=SpotTradingPolicy(trading_capital_ratio=Decimal("0.6")),

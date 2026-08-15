@@ -83,7 +83,7 @@ class PaperFuturesExecutor:
             side=intent.side,
             price=price,
             quantity=quantity,
-            fee=price * quantity * self._session.fee_rate,
+            fee=Decimal("0"),
             filled_at=candle.open_time,
         )
 
@@ -177,6 +177,6 @@ class PaperFuturesExecutor:
             close_reason=close_reason,
             price=price,
             quantity=quantity,
-            fee=price * quantity * self._session.fee_rate,
+            fee=Decimal("0"),
             filled_at=filled_at,
         )

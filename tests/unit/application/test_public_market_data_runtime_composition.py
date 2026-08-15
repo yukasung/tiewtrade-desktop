@@ -129,7 +129,6 @@ def session_config(market_type: MarketType) -> SessionConfig:
         market_type=market_type,
         trade_mode=TradeMode.PAPER,
         available_capital=Decimal("1000"),
-        fee_rate=Decimal("0.001"),
         slippage_bps=Decimal("2"),
         entry_policy=EntryPolicy(max_entries=4),
         spot_policy=(

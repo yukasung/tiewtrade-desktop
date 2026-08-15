@@ -276,7 +276,6 @@ def replay(candles: list[Candle]) -> list[PaperFuturesSessionSnapshot]:
             market_type=MarketType.FUTURES,
             trade_mode=TradeMode.PAPER,
             available_capital=Decimal("200000"),
-            fee_rate=Decimal("0.001"),
             slippage_bps=Decimal("2"),
             entry_policy=EntryPolicy(max_entries=10),
             spot_policy=None,

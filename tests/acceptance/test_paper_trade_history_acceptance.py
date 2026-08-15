@@ -157,7 +157,7 @@ def test_open_basket_duplicate_and_partial_fills_remain_deterministic(
         closed_basket_id,
         open_history.basket.basket_id,
     }
-    assert first_page.net_realized_pnl == Decimal("13.84062222")
+    assert first_page.net_realized_pnl == Decimal("14.15466")
     assert first_open_page.items == (updated_open_basket,)
     assert first_open_page.net_realized_pnl == Decimal("0")
     assert len(first_fills) == 2
@@ -195,16 +195,16 @@ def test_paper_execution_history_survives_restart_and_reaches_desktop(
     }
 
     assert len(before_restart.items) == 2
-    assert before_restart.net_realized_pnl == Decimal("2273.69035202")
+    assert before_restart.net_realized_pnl == Decimal("2336.32646")
     futures, spot = before_restart.items
     assert futures.basket_id == futures_basket_id
     assert futures.status is BasketStatus.CLOSED
-    assert futures.net_realized_pnl == Decimal("2259.8497298")
+    assert futures.net_realized_pnl == Decimal("2322.1718")
     assert futures.leverage == 3
     assert futures.funding_fee == Decimal("0.00")
     assert spot.basket_id == spot_basket_id
     assert spot.status is BasketStatus.CLOSED
-    assert spot.net_realized_pnl == Decimal("13.84062222")
+    assert spot.net_realized_pnl == Decimal("14.15466")
     for fills in before_fills.values():
         assert [fill.side for fill in fills] == [FillSide.BUY, FillSide.SELL]
         assert all(fill.source is FillSource.PAPER_EXECUTOR for fill in fills)
@@ -226,7 +226,7 @@ def test_paper_execution_history_survives_restart_and_reaches_desktop(
     window.workspace.show_tab(WorkspaceTab.BASKET_HISTORY)
 
     qtbot.waitUntil(lambda: window.trade_history.basket_table.rowCount() == 2)
-    assert window.trade_history.total_net_pnl.text() == "2,273.69 USDT"
+    assert window.trade_history.total_net_pnl.text() == "2,336.33 USDT"
     assert _table_row_text(window.trade_history.basket_table, 0) == (
         "2026-01-01 09:05:00",
         "Paper",
@@ -235,7 +235,7 @@ def test_paper_execution_history_survives_restart_and_reaches_desktop(
         "5m",
         "1",
         "29,999.95 USDT",
-        "2,259.85 USDT",
+        "2,322.17 USDT",
         "Closed",
     )
     window.workspace.show_tab(WorkspaceTab.TRADE_HISTORY)
@@ -247,7 +247,7 @@ def test_paper_execution_history_survives_restart_and_reaches_desktop(
             "Buy",
             "95.6",
             "313.807",
-            "30.00 USDT",
+            "0.00 USDT",
             "29,999.95 USDT",
             "0.00 USDT",
         ),
@@ -257,9 +257,9 @@ def test_paper_execution_history_survives_restart_and_reaches_desktop(
             "Sell",
             "103.0",
             "313.807",
-            "32.32 USDT",
+            "0.00 USDT",
             "32,322.12 USDT",
-            "2,259.85 USDT",
+            "2,322.17 USDT",
         ),
         (
             "2026-01-01 09:05:00",
@@ -267,7 +267,7 @@ def test_paper_execution_history_survives_restart_and_reaches_desktop(
             "Buy",
             "95.02",
             "1.578",
-            "0.15 USDT",
+            "0.00 USDT",
             "149.94 USDT",
             "0.00 USDT",
         ),
@@ -277,9 +277,9 @@ def test_paper_execution_history_survives_restart_and_reaches_desktop(
             "Sell",
             "103.99",
             "1.578",
-            "0.16 USDT",
+            "0.00 USDT",
             "164.10 USDT",
-            "13.84 USDT",
+            "14.15 USDT",
         ),
     }
 

@@ -145,7 +145,6 @@ class CreatePaperSession:
                 market_type=market_type,
                 trade_mode=TradeMode.PAPER,
                 available_capital=available_capital,
-                fee_rate=Decimal("0"),
                 slippage_bps=slippage_bps,
                 entry_policy=entry_policy,
                 spot_policy=spot_policy,

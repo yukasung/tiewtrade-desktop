@@ -66,7 +66,6 @@ class PaperSpotExecutor:
             self._log_entry_rejected(price=price, quantity=quantity)
             return None
 
-        notional = price * quantity
         order_id = f"entry:{intent.intent_id}"
         return PaperSpotEntryFill(
             order_id=order_id,
@@ -74,7 +73,7 @@ class PaperSpotExecutor:
             intent_id=intent.intent_id,
             price=price,
             quantity=quantity,
-            fee=notional * self._session.fee_rate,
+            fee=Decimal("0"),
             filled_at=candle.open_time,
         )
 
@@ -96,7 +95,6 @@ class PaperSpotExecutor:
             )
             if price <= 0:
                 continue
-            notional = price * entry.quantity
             order_id = f"take-profit:{basket.basket_id}:{entry.entry_number}"
             fills.append(
                 PaperSpotExitFill(
@@ -104,7 +102,7 @@ class PaperSpotExecutor:
                     fill_id=f"paper:{self._session.session_id}:{order_id}:fill",
                     price=price,
                     quantity=entry.quantity,
-                    fee=notional * self._session.fee_rate,
+                    fee=Decimal("0"),
                     filled_at=filled_at,
                     entry_number=entry.entry_number,
                 )
@@ -127,14 +125,13 @@ class PaperSpotExecutor:
             return None
 
         quantity = basket.total_quantity
-        notional = price * quantity
         order_id = f"stop-loss:{basket.basket_id}"
         return PaperSpotExitFill(
             order_id=order_id,
             fill_id=f"paper:{self._session.session_id}:{order_id}:fill",
             price=price,
             quantity=quantity,
-            fee=notional * self._session.fee_rate,
+            fee=Decimal("0"),
             filled_at=filled_at,
         )
 

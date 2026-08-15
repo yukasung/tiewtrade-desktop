@@ -23,7 +23,6 @@ def make_config(**overrides: object) -> SessionConfig:
         "market_type": MarketType.SPOT,
         "trade_mode": TradeMode.PAPER,
         "available_capital": Decimal("1000"),
-        "fee_rate": Decimal("0.001"),
         "slippage_bps": Decimal("2"),
         "entry_policy": EntryPolicy(max_entries=10),
         "spot_policy": SpotTradingPolicy(trading_capital_ratio=Decimal("0.80")),
@@ -114,20 +113,9 @@ def test_session_requires_positive_capital(capital: Decimal) -> None:
         make_config(available_capital=capital)
 
 
-@pytest.mark.parametrize(
-    ("fee_rate", "slippage_bps"),
-    [(Decimal("-0.001"), Decimal("0")), (Decimal("0"), Decimal("-1"))],
-)
-def test_session_rejects_negative_execution_costs(
-    fee_rate: Decimal, slippage_bps: Decimal
-) -> None:
+def test_session_rejects_negative_slippage() -> None:
     with pytest.raises(ValueError):
-        make_config(fee_rate=fee_rate, slippage_bps=slippage_bps)
-
-
-def test_session_config_rejects_fee_rate_at_or_above_one() -> None:
-    with pytest.raises(ValueError, match="fee_rate must be below 1"):
-        make_config(fee_rate=Decimal("1"))
+        make_config(slippage_bps=Decimal("-1"))
 
 
 @pytest.mark.parametrize("slippage_bps", [Decimal("10000"), Decimal("10000.001")])

@@ -39,7 +39,6 @@ def test_session_requires_paper_futures_configuration_and_matching_preset() -> N
         market_type=MarketType.SPOT,
         trade_mode=TradeMode.PAPER,
         available_capital=session.available_capital,
-        fee_rate=session.fee_rate,
         slippage_bps=session.slippage_bps,
         entry_policy=session.entry_policy,
         spot_policy=SpotTradingPolicy(trading_capital_ratio=Decimal("0.8")),
@@ -440,7 +439,8 @@ def test_entry_updates_account_equity_and_liquidation_threshold() -> None:
 
     assert snapshot.entry_fill is None
     assert snapshot.position_side is PositionSide.LONG
-    assert snapshot.account_equity < snapshot.capital_plan.available_capital
+    # Opening costs nothing now, so equity is untouched until the mark moves.
+    assert snapshot.account_equity == snapshot.capital_plan.available_capital
     assert snapshot.liquidation_price is not None
 
 
@@ -462,7 +462,7 @@ def test_account_equity_marks_open_long_to_latest_accepted_close() -> None:
     assert snapshot.accepted
     assert snapshot.exit_fill is None
     assert snapshot.state is PaperFuturesSessionState.ACTIVE
-    assert snapshot.account_equity == Decimal("894.752")
+    assert snapshot.account_equity == Decimal("896.0")
 
 
 def test_warm_up_seeds_indicators_without_execution_side_effects() -> None:
@@ -506,7 +506,6 @@ def futures_session() -> SessionConfig:
         market_type=MarketType.FUTURES,
         trade_mode=TradeMode.PAPER,
         available_capital=Decimal("1000"),
-        fee_rate=Decimal("0.001"),
         slippage_bps=Decimal("0"),
         entry_policy=EntryPolicy(max_entries=2),
         spot_policy=None,

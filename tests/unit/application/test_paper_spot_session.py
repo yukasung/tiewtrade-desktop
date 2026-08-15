@@ -1266,7 +1266,6 @@ def session_config(**overrides: object) -> SessionConfig:
         "market_type": MarketType.SPOT,
         "trade_mode": TradeMode.PAPER,
         "available_capital": Decimal("1000"),
-        "fee_rate": Decimal("0.001"),
         "slippage_bps": Decimal("25"),
         "entry_policy": EntryPolicy(max_entries=4),
         "spot_policy": SpotTradingPolicy(trading_capital_ratio=Decimal("0.6")),

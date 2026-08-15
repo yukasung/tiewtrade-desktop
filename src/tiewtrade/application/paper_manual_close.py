@@ -80,7 +80,7 @@ class ClosePaperPosition:
             ),
             start=Decimal("0"),
         )
-        exit_fee = exit_price * quantity * session.config.fee_rate
+        exit_fee = Decimal("0")
         trading_fees = basket.trading_fees + exit_fee
         net_realized_pnl = gross_realized_pnl - trading_fees - basket.funding_fee
         closed_at = self._clock()
