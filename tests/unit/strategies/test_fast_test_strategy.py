@@ -88,28 +88,61 @@ def test_a_closed_gate_still_decides() -> None:
     assert intent is None
 
 
-def test_entries_follow_one_another_candle_by_candle() -> None:
+def test_a_filled_entry_stands_three_candles_from_the_next_one() -> None:
+    """The Fill lands on candle 5; the next may not land before candle 20."""
     fast = strategy()
     first = fast.evaluate(
         candle(0, "100", "101"), snapshot("40"), entry_number=1, can_enter=True
     )
     assert first is not None
 
-    # The pending Intent holds the next candle back until its Fill lands.
-    assert (
-        fast.evaluate(
-            candle(5, "101", "102"), snapshot("41"), entry_number=1, can_enter=True
-        )
-        is None
-    )
-
+    # The Intent read from candle 0 fills at the open of candle 5.
     fast.on_entry_filled(first.intent_id)
+
+    # The candle the Entry filled on, and the one after it, are both too close:
+    # an Intent read from either would fill inside the three-candle gap.
+    for minute in (5, 10):
+        assert (
+            fast.evaluate(
+                candle(minute, "102", "103"),
+                snapshot("42"),
+                entry_number=2,
+                can_enter=True,
+            )
+            is None
+        )
+
     second = fast.evaluate(
-        candle(10, "102", "103"), snapshot("42"), entry_number=2, can_enter=True
+        candle(15, "102", "103"), snapshot("42"), entry_number=2, can_enter=True
     )
 
     assert second is not None
     assert second.intent_id != first.intent_id
+
+
+def test_a_pending_intent_does_not_stop_the_wait_from_running_down() -> None:
+    """The candles an Intent waits out are candles the market moved through."""
+    fast = strategy()
+    first = fast.evaluate(
+        candle(0, "100", "101"), snapshot("40"), entry_number=1, can_enter=True
+    )
+    assert first is not None
+    fast.on_entry_filled(first.intent_id)
+
+    fast.evaluate(
+        candle(5, "101", "102"), snapshot("41"), entry_number=2, can_enter=True
+    )
+    # A gate the domain closed does not pause the count either.
+    fast.evaluate(
+        candle(10, "102", "103"), snapshot("42"), entry_number=2, can_enter=False
+    )
+
+    assert (
+        fast.evaluate(
+            candle(15, "103", "104"), snapshot("43"), entry_number=2, can_enter=True
+        )
+        is not None
+    )
 
 
 def test_a_rejected_entry_frees_the_next_candle() -> None:
