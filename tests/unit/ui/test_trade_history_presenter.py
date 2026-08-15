@@ -9,13 +9,15 @@ from tiewtrade.application.trade_history import (
     TradeHistoryFilter,
 )
 from tiewtrade.trading.session_config import MarketType, TradeMode
-from tiewtrade.trading.trade_history import BasketStatus, FillSide, FillSource
+from tiewtrade.trading.trade_history import FillSide
 from tiewtrade.ui.table_column import Column
 from tiewtrade.ui.theme import NEGATIVE_COLOR, POSITIVE_COLOR
 from tiewtrade.ui.trade_history_presenter import (
     BASKET_COLUMNS,
     FILL_COLUMNS,
+    QuickRange,
     TradeHistoryFilterValues,
+    quick_range_dates,
     trade_history_filter,
     usdt_text,
 )
@@ -37,21 +39,11 @@ def colour_of[Record](
 
 def test_filter_values_build_inclusive_utc_date_range() -> None:
     values = TradeHistoryFilterValues(
-        symbol="BTCUSDT",
-        timeframe="5m",
-        market_type="spot",
-        trade_mode="paper",
-        status="closed",
         from_date=date(2026, 1, 2),
         to_date=date(2026, 1, 3),
     )
 
     assert trade_history_filter(values) == TradeHistoryFilter(
-        symbol="BTCUSDT",
-        timeframe="5m",
-        market_type=MarketType.SPOT,
-        trade_mode=TradeMode.PAPER,
-        status=BasketStatus.CLOSED,
         # A Bangkok day starts seven hours before the UTC one.
         opened_from_utc=datetime(2026, 1, 1, 17, 0, tzinfo=UTC),
         opened_before_utc=datetime(2026, 1, 3, 17, 0, tzinfo=UTC),
@@ -71,15 +63,15 @@ def test_filter_values_reject_from_after_to() -> None:
 @pytest.mark.parametrize(
     ("value", "expected"),
     [
-        (Decimal("19.580000000000000001"), "19.580000000000000001 USDT"),
-        (Decimal("-0.2"), "-0.2 USDT"),
+        (Decimal("19.580000000000000001"), "19.58 USDT"),
+        (Decimal("-0.2"), "-0.20 USDT"),
         (Decimal("0"), "0.00 USDT"),
     ],
 )
-def test_a_recorded_figure_is_printed_exactly_as_it_was_stored(
+def test_a_recorded_figure_reads_to_the_cent_whatever_it_was_stored_as(
     value: Decimal, expected: str
 ) -> None:
-    """Trade History is a durable record, so nothing is rounded away from it."""
+    """The record keeps every place; the column shows the two that are read."""
     assert usdt_text(value) == expected
 
 
@@ -93,25 +85,10 @@ def test_basket_columns_format_utc_and_every_column() -> None:
         "BTCUSDT",
         "5m",
         "1",
-        "200 USDT",
-        "20 USDT",
-        "0.42 USDT",
-        "0.00 USDT",
+        "200.00 USDT",
         "19.58 USDT",
         "Closed",
     )
-
-
-def test_fill_columns_name_a_binance_source() -> None:
-    item = TradeFillHistoryItem(
-        fill=trade_fill(source=FillSource.BINANCE),
-        symbol="BTCUSDT",
-        timeframe="5m",
-        market_type=MarketType.SPOT,
-        trade_mode=TradeMode.PAPER,
-    )
-
-    assert read(FILL_COLUMNS, item)[-1] == "Binance"
 
 
 def test_fill_columns_include_symbol_and_total_for_cross_basket_history() -> None:
@@ -129,10 +106,9 @@ def test_fill_columns_include_symbol_and_total_for_cross_basket_history() -> Non
         "Buy",
         "100",
         "2",
-        "0.2 USDT",
-        "200 USDT",
+        "0.20 USDT",
+        "200.00 USDT",
         "0.00 USDT",
-        "Paper Executor",
     )
 
 
@@ -177,3 +153,38 @@ def test_side_colour_is_read_from_the_side_itself(
     )
 
     assert colour_of(FILL_COLUMNS, "Side", item) == expected
+
+
+@pytest.mark.parametrize(
+    ("kind", "expected_from"),
+    [
+        pytest.param(QuickRange.ONE_DAY, date(2026, 8, 15), id="1-day"),
+        pytest.param(QuickRange.ONE_WEEK, date(2026, 8, 9), id="1-week"),
+        pytest.param(QuickRange.ONE_MONTH, date(2026, 7, 16), id="1-month"),
+        pytest.param(QuickRange.THREE_MONTHS, date(2026, 5, 16), id="3-months"),
+    ],
+)
+def test_a_quick_range_counts_its_period_inclusively_up_to_today(
+    kind: QuickRange, expected_from: date
+) -> None:
+    """A week means seven days of trading, today included."""
+    assert quick_range_dates(kind, date(2026, 8, 15)) == (
+        expected_from,
+        date(2026, 8, 15),
+    )
+
+
+def test_a_quick_range_lands_on_a_day_the_shorter_month_has() -> None:
+    """A month before the 31st is not the 31st of a month with 28 days."""
+    assert quick_range_dates(QuickRange.ONE_MONTH, date(2026, 3, 31))[0] == date(
+        2026, 3, 1
+    )
+    assert quick_range_dates(QuickRange.THREE_MONTHS, date(2026, 5, 31))[0] == date(
+        2026, 3, 1
+    )
+
+
+def test_a_quick_range_crosses_the_year() -> None:
+    assert quick_range_dates(QuickRange.THREE_MONTHS, date(2026, 1, 10))[0] == date(
+        2025, 10, 11
+    )

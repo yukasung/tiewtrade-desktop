@@ -38,6 +38,7 @@ from tiewtrade.trading.trade_history import (
     TradeFill,
 )
 from tiewtrade.ui.main_window import MainWindow
+from tiewtrade.ui.trading_workspace import WorkspaceTab
 
 
 def test_sqlite_failure_blocks_new_paper_entry_fail_closed(tmp_path: Path) -> None:
@@ -222,10 +223,10 @@ def test_paper_execution_history_survives_restart_and_reaches_desktop(
     window = _composed_window(path, monkeypatch)
     qtbot.addWidget(window)
     window.show()
-    window.workspace.tabs.setCurrentWidget(window.trade_history)
+    window.workspace.show_tab(WorkspaceTab.BASKET_HISTORY)
 
     qtbot.waitUntil(lambda: window.trade_history.basket_table.rowCount() == 2)
-    assert window.trade_history.total_net_pnl.text() == "2,273.69035202 USDT"
+    assert window.trade_history.total_net_pnl.text() == "2,273.69 USDT"
     assert _table_row_text(window.trade_history.basket_table, 0) == (
         "2026-01-01 09:05:00",
         "Paper",
@@ -233,14 +234,11 @@ def test_paper_execution_history_survives_restart_and_reaches_desktop(
         "BTCUSDT",
         "5m",
         "1",
-        "29,999.9492 USDT",
-        "2,322.1718 USDT",
-        "62.3220702 USDT",
-        "0.00 USDT",
-        "2,259.8497298 USDT",
+        "29,999.95 USDT",
+        "2,259.85 USDT",
         "Closed",
     )
-    window.trade_history.history_tabs.setCurrentIndex(1)
+    window.workspace.show_tab(WorkspaceTab.TRADE_HISTORY)
     qtbot.waitUntil(lambda: window.trade_history.fill_table.rowCount() == 4)
     assert set(_table_rows_text(window.trade_history.fill_table)) == {
         (
@@ -249,10 +247,9 @@ def test_paper_execution_history_survives_restart_and_reaches_desktop(
             "Buy",
             "95.6",
             "313.807",
-            "29.9999492 USDT",
-            "29,999.9492 USDT",
+            "30.00 USDT",
+            "29,999.95 USDT",
             "0.00 USDT",
-            "Paper Executor",
         ),
         (
             "2026-01-01 09:45:00",
@@ -260,10 +257,9 @@ def test_paper_execution_history_survives_restart_and_reaches_desktop(
             "Sell",
             "103.0",
             "313.807",
-            "32.3221210 USDT",
-            "32,322.1210 USDT",
-            "2,259.8497298 USDT",
-            "Paper Executor",
+            "32.32 USDT",
+            "32,322.12 USDT",
+            "2,259.85 USDT",
         ),
         (
             "2026-01-01 09:05:00",
@@ -271,10 +267,9 @@ def test_paper_execution_history_survives_restart_and_reaches_desktop(
             "Buy",
             "95.02",
             "1.578",
-            "0.14994156 USDT",
-            "149.94156 USDT",
+            "0.15 USDT",
+            "149.94 USDT",
             "0.00 USDT",
-            "Paper Executor",
         ),
         (
             "2026-01-01 09:50:00",
@@ -282,10 +277,9 @@ def test_paper_execution_history_survives_restart_and_reaches_desktop(
             "Sell",
             "103.99",
             "1.578",
-            "0.16409622 USDT",
-            "164.09622 USDT",
-            "13.84062222 USDT",
-            "Paper Executor",
+            "0.16 USDT",
+            "164.10 USDT",
+            "13.84 USDT",
         ),
     }
 

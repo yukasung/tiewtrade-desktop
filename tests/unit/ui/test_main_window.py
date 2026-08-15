@@ -74,6 +74,7 @@ from tiewtrade.ui.bot_lifecycle_workflow import RuntimeSnapshotRelay
 from tiewtrade.ui.chart_workflow import ChartFactRelay
 from tiewtrade.ui.main_window import BotActions, ChartSources, MainWindow
 from tiewtrade.ui.session_overview import SessionOverviewWidget
+from tiewtrade.ui.trading_workspace import WorkspaceTab
 
 
 def _runtime_state(window: MainWindow) -> BotRuntimeState | None:
@@ -230,7 +231,7 @@ def unused_create(values: PaperSessionSetupValues) -> PaperSessionCreateOutcome:
 
 
 def open_trade_history(window: MainWindow) -> None:
-    window.workspace.tabs.setCurrentWidget(window.trade_history)
+    window.workspace.show_tab(WorkspaceTab.BASKET_HISTORY)
 
 
 def _widget_rect_in_viewport(widget: QWidget, viewport: QWidget) -> QRect:
@@ -276,17 +277,20 @@ def test_trade_history_opens_without_active_session(qtbot: QtBot) -> None:
     assert window.setup.isVisible()
 
 
-def test_empty_trade_history_preserves_the_exact_query_summary(
+def test_empty_trade_history_still_carries_its_summary_to_the_screen(
     qtbot: QtBot,
 ) -> None:
-    exact_empty_result = BasketHistoryResult(
+    """No rows is a result, not a blank: its summary is shown, not cleared."""
+    empty_result = BasketHistoryResult(
         items=(),
-        net_realized_pnl=Decimal("0.000000000000000001"),
+        # The smallest amount that still reads on screen, so a summary quietly
+        # dropped cannot pass as one that was merely too small to see.
+        net_realized_pnl=Decimal("0.01"),
     )
     window = MainWindow(
         create_session=unused_create,
         load_active=no_active_session,
-        list_basket_history=lambda _filters: exact_empty_result,
+        list_basket_history=lambda _filters: empty_result,
         list_trade_fills=empty_trade_fills,
     )
     qtbot.addWidget(window)
@@ -298,7 +302,7 @@ def test_empty_trade_history_preserves_the_exact_query_summary(
     qtbot.waitUntil(
         lambda: window.trade_history.basket_state.text() == "No Basket history"
     )
-    assert window.trade_history.total_net_pnl.text() == "0.000000000000000001 USDT"
+    assert window.trade_history.total_net_pnl.text() == "0.01 USDT"
     assert window.trade_history.total_items.text() == "0 total Baskets"
 
 
@@ -347,7 +351,7 @@ def test_tab_activation_starts_history_query_only_once(qtbot: QtBot) -> None:
 
     open_trade_history(window)
     qtbot.waitUntil(lambda: calls == 1)
-    window.workspace.tabs.setCurrentIndex(0)
+    window.workspace.show_tab(WorkspaceTab.POSITION_BASKET)
     open_trade_history(window)
 
     assert calls == 1
@@ -442,7 +446,7 @@ def test_basket_and_trade_retries_are_wired_to_their_own_tab(
     click(window.trade_history.retry_baskets_button)
     qtbot.waitUntil(lambda: window.trade_history.basket_table.rowCount() == 1)
 
-    window.trade_history.history_tabs.setCurrentIndex(1)
+    window.workspace.show_tab(WorkspaceTab.TRADE_HISTORY)
     qtbot.waitUntil(
         lambda: window.trade_history.fill_state.text() == "Trade History unavailable"
     )
@@ -472,13 +476,13 @@ def test_trade_history_filter_and_reset_requests_are_wired(qtbot: QtBot) -> None
     open_trade_history(window)
     qtbot.waitUntil(lambda: window.trade_history.basket_table.rowCount() == 1)
 
-    window.trade_history.symbol.setCurrentIndex(
-        window.trade_history.symbol.findData("BTCUSDT")
-    )
-    click(window.trade_history.apply_button)
+    window.trade_history.from_date.setDate(qdate(date(2026, 1, 2)))
+    click(window.trade_history.search_button)
 
     qtbot.waitUntil(lambda: len(basket_calls) == 2)
-    assert basket_calls[-1] == TradeHistoryFilter(symbol="BTCUSDT")
+    assert basket_calls[-1] == TradeHistoryFilter(
+        opened_from_utc=datetime(2026, 1, 1, 17, tzinfo=UTC)
+    )
 
     click(window.trade_history.reset_button)
 
@@ -506,13 +510,11 @@ def test_trade_history_filter_validation_is_wired_without_starting_query(
     window.show()
     open_trade_history(window)
     qtbot.waitUntil(lambda: basket_calls == 1)
-    qtbot.waitUntil(window.trade_history.apply_button.isEnabled)
-    window.trade_history.from_date_enabled.setChecked(True)
-    window.trade_history.to_date_enabled.setChecked(True)
+    qtbot.waitUntil(window.trade_history.search_button.isEnabled)
     window.trade_history.from_date.setDate(qdate(date(2026, 1, 2)))
     window.trade_history.to_date.setDate(qdate(date(2026, 1, 1)))
 
-    click(window.trade_history.apply_button)
+    click(window.trade_history.search_button)
 
     qtbot.waitUntil(window.trade_history.filter_error.isVisible)
     assert (

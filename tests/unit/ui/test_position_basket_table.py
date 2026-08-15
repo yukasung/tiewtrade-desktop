@@ -99,7 +99,7 @@ def test_each_entry_of_the_basket_is_its_own_row(qtbot: QtBot) -> None:
         "Entry Price",
         "Take Profit",
         "Quantity",
-        "Notional",
+        "Total",
         "Unrealized PnL",
         "Basket Lifecycle",
     )
@@ -110,7 +110,7 @@ def test_each_entry_of_the_basket_is_its_own_row(qtbot: QtBot) -> None:
         "Entry Price": "66,000.0000",
         "Take Profit": "67,000.0000",
         "Quantity": "0.00300000",
-        "Notional": "198.00 USDT",
+        "Total": "198.00 USDT",
         "Unrealized PnL": "0.96 USDT",
         "Basket Lifecycle": "Active",
     }
@@ -149,7 +149,7 @@ def test_money_is_grouped_and_a_quantity_is_not(qtbot: QtBot) -> None:
     row = _row(widget, 0)
     assert row["Entry Price"] == "66,000.0000"
     assert row["Take Profit"] == "67,000.0000"
-    assert row["Notional"] == "198.00 USDT"
+    assert row["Total"] == "198.00 USDT"
     # The quantity is counted in BTC, where a separator would suggest a
     # scale the number does not have.
     assert row["Quantity"] == "0.00300000"

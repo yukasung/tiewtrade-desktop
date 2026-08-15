@@ -1,10 +1,11 @@
+from calendar import monthrange
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
+from enum import Enum
 
 from tiewtrade.application.trade_history import TradeFillHistoryItem, TradeHistoryFilter
-from tiewtrade.trading.session_config import MarketType, TradeMode
-from tiewtrade.trading.trade_history import BasketResult, BasketStatus, FillSide
+from tiewtrade.trading.trade_history import BasketResult, FillSide
 from tiewtrade.ui.display_time import DISPLAY_TIMEZONE, display_timestamp
 from tiewtrade.ui.money_text import money_text, price_text
 from tiewtrade.ui.sign_state import sign_colour
@@ -14,13 +15,41 @@ from tiewtrade.ui.theme import NEGATIVE_COLOR, POSITIVE_COLOR
 
 @dataclass(frozen=True, slots=True)
 class TradeHistoryFilterValues:
-    symbol: str | None = None
-    timeframe: str | None = None
-    market_type: str | None = None
-    trade_mode: str | None = None
-    status: str | None = None
+    """What the filter bar asks for: a range of days, either end open."""
+
     from_date: date | None = None
     to_date: date | None = None
+
+
+class QuickRange(Enum):
+    """The periods the filter bar offers as one click each."""
+
+    ONE_DAY = "1 Day"
+    ONE_WEEK = "1 Week"
+    ONE_MONTH = "1 Month"
+    THREE_MONTHS = "3 Months"
+
+
+def quick_range_dates(kind: QuickRange, today: date) -> tuple[date, date]:
+    """The window a quick range asks for, counted back from today.
+
+    Every window ends today and includes it, so "1 Week" returns seven days
+    of trading rather than eight.
+    """
+    if kind is QuickRange.ONE_DAY:
+        return today, today
+    if kind is QuickRange.ONE_WEEK:
+        return today - timedelta(days=6), today
+    months = 1 if kind is QuickRange.ONE_MONTH else 3
+    return _months_before(today, months) + timedelta(days=1), today
+
+
+def _months_before(value: date, months: int) -> date:
+    """The same day of an earlier month, or its last day where that is short."""
+    month_index = value.year * 12 + value.month - 1 - months
+    year, month = divmod(month_index, 12)
+    last_day = monthrange(year, month + 1)[1]
+    return date(year, month + 1, min(value.day, last_day))
 
 
 def trade_history_filter(values: TradeHistoryFilterValues) -> TradeHistoryFilter:
@@ -29,15 +58,6 @@ def trade_history_filter(values: TradeHistoryFilterValues) -> TradeHistoryFilter
             raise ValueError("From Date must not be after To Date")
 
     return TradeHistoryFilter(
-        symbol=values.symbol,
-        timeframe=values.timeframe,
-        market_type=(
-            MarketType(values.market_type) if values.market_type is not None else None
-        ),
-        trade_mode=(
-            TradeMode(values.trade_mode) if values.trade_mode is not None else None
-        ),
-        status=BasketStatus(values.status) if values.status is not None else None,
         opened_from_utc=_utc_start(values.from_date),
         opened_before_utc=(
             _utc_start(values.to_date + timedelta(days=1))
@@ -54,10 +74,11 @@ BASKET_COLUMNS: tuple[Column[BasketResult], ...] = (
     Column("Symbol", LEFT, lambda basket: basket.symbol),
     Column("Timeframe", CENTER, lambda basket: basket.timeframe),
     Column("Entries", CENTER, lambda basket: str(basket.entry_count)),
-    Column("Notional", RIGHT, lambda basket: usdt_text(basket.invested_notional)),
-    Column("Gross PnL", RIGHT, lambda basket: usdt_text(basket.gross_realized_pnl)),
-    Column("Fees", RIGHT, lambda basket: usdt_text(basket.trading_fees)),
-    Column("Funding Fee", RIGHT, lambda basket: usdt_text(basket.funding_fee)),
+    # "Total" is what an exchange calls price × quantity, and what the Fills
+    # table beside this one already calls it. One word for one idea.
+    Column("Total", RIGHT, lambda basket: usdt_text(basket.invested_notional)),
+    # Gross PnL, Fees and Funding Fee are the three terms Net PnL is made of,
+    # and Net PnL is the figure that is read. The record still holds all three.
     Column(
         "Net PnL",
         RIGHT,
@@ -86,7 +107,8 @@ FILL_COLUMNS: tuple[Column[TradeFillHistoryItem], ...] = (
         lambda item: usdt_text(item.fill.realized_pnl),
         lambda item: sign_colour(item.fill.realized_pnl),
     ),
-    Column("Source", LEFT, lambda item: display_enum(item.fill.source.value)),
+    # Source is on the record but off the screen: every Fill a Paper Bot makes
+    # says the same thing, so the column reads the same on every row.
 )
 
 

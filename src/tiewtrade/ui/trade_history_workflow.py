@@ -1,5 +1,4 @@
 from collections.abc import Callable
-from dataclasses import replace
 from decimal import Decimal
 from enum import Enum, auto
 from typing import TypeGuard
@@ -79,7 +78,8 @@ class TradeHistoryWorkflow(QObject):
 
     @Slot()
     def start(self) -> None:
-        self._request_basket_history()
+        """Read the half that was opened, which is not always the first one."""
+        self._request_active_tab()
 
     def apply_filters(self, values: TradeHistoryFilterValues) -> None:
         if self._closed:
@@ -119,7 +119,7 @@ class TradeHistoryWorkflow(QObject):
         list_trade_fills = self._list_trade_fills
         if list_trade_fills is None:
             return
-        filters = replace(self._filters, status=None)
+        filters = self._filters
         if self._trade_tasks:
             if filters != self._latest_trade_filters:
                 self._trade_generation += 1
@@ -191,7 +191,7 @@ class TradeHistoryWorkflow(QObject):
             not self._closed
             and self._active_tab is HistoryTab.TRADES
             and generation == self._trade_generation
-            and filters == replace(self._filters, status=None)
+            and filters == self._filters
         )
 
     def _request_basket_history(self) -> None:
@@ -293,7 +293,7 @@ class TradeHistoryWorkflow(QObject):
         if (
             self._closed
             or self._active_tab is not HistoryTab.TRADES
-            or self._failed_trade_filters != replace(self._filters, status=None)
+            or self._failed_trade_filters != self._filters
         ):
             return
         self._request_trades()

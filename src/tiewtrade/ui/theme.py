@@ -74,6 +74,12 @@ QLineEdit, QComboBox, QSpinBox, QDateEdit {
 QComboBox#chartSymbol, QComboBox#chartTimeframe {
     padding: 0 40px 0 14px;
 }
+/* The history filter is one row above the tables, so it keeps its own
+   height rather than the taller one a form field is given. */
+QDateEdit#fromDate, QDateEdit#toDate {
+    min-height: 32px;
+    padding: 0 8px;
+}
 QComboBox#chartSymbol QAbstractItemView::item,
 QComboBox#chartTimeframe QAbstractItemView::item {
     padding: 6px 12px;
@@ -160,6 +166,32 @@ QPushButton#secondaryButton:hover, QPushButton[retryButton="true"]:hover {
 QPushButton#secondaryButton:focus, QPushButton[retryButton="true"]:focus {
     border: 2px solid #4C7DFF;
 }
+/* A quick range reads as a chip: quiet until it is the one in force. */
+QPushButton[rangeChip="true"] {
+    background: transparent;
+    border: 1px solid #3A4656;
+    border-radius: 6px;
+    color: #CBD5E1;
+    font-weight: 600;
+    min-height: 30px;
+    padding: 0 12px;
+}
+QPushButton[rangeChip="true"]:hover {
+    border-color: #4C7DFF;
+    color: #F1F5F9;
+}
+QPushButton[rangeChip="true"]:focus {
+    border: 2px solid #4C7DFF;
+}
+QPushButton[rangeChip="true"]:checked {
+    background: #22355F;
+    border-color: #4C7DFF;
+    color: #F8FAFC;
+}
+QPushButton[rangeChip="true"]:disabled {
+    border-color: #2B3441;
+    color: #6F7D93;
+}
 QPushButton#destructiveButton {
     background: #F6465D;
     border: 0;
@@ -175,7 +207,9 @@ QPushButton#advancedButton {
     font-weight: 600;
     text-align: left;
 }
-QTabWidget::pane {
+/* The tab strip and the page under it are two widgets rather than one
+   QTabWidget, so the page carries the card the pane used to draw. */
+QStackedWidget#workspaceTabPages {
     background: #141A22;
     border: 1px solid #2B3441;
 }
@@ -189,7 +223,7 @@ QTabBar::tab:selected {
     color: #F1F5F9;
     border-bottom: 2px solid #4C7DFF;
 }
-QTabBar#historyTabs::tab {
+QTabBar#workspaceTabs::tab {
     background: transparent;
     min-width: 132px;
     min-height: 42px;

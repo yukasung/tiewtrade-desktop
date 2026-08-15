@@ -29,19 +29,20 @@ from tiewtrade.integrations.sqlite.trade_history import (
     SQLiteTradeHistory,
     TradeHistoryUnavailableError,
 )
-from tiewtrade.trading.session_config import MarketType, TradeMode
+from tiewtrade.trading.session_config import MarketType
 from tiewtrade.trading.trade_history import (
     BasketResult,
     BasketStatus,
     FillSide,
 )
 from tiewtrade.ui.main_window import MainWindow
+from tiewtrade.ui.trading_workspace import WorkspaceTab
 
 FUTURES_BASKET_ID = UUID("00000000-0000-0000-0000-000000000202")
 
 
 def open_trade_history(window: MainWindow) -> None:
-    window.workspace.tabs.setCurrentWidget(window.trade_history)
+    window.workspace.show_tab(WorkspaceTab.BASKET_HISTORY)
 
 
 def test_desktop_trade_history_reads_durable_spot_and_futures_records(
@@ -79,11 +80,8 @@ def test_desktop_trade_history_reads_durable_spot_and_futures_records(
         "BTCUSDT",
         "5m",
         "1",
-        "200 USDT",
-        "30 USDT",
-        "0.6 USDT",
-        "0.00 USDT",
-        "29.4 USDT",
+        "200.00 USDT",
+        "29.40 USDT",
         "Closed",
     )
     assert _table_row_text(window.trade_history.basket_table, 1) == (
@@ -93,15 +91,12 @@ def test_desktop_trade_history_reads_durable_spot_and_futures_records(
         "BTCUSDT",
         "5m",
         "1",
-        "200 USDT",
-        "20 USDT",
-        "0.42 USDT",
-        "0.00 USDT",
+        "200.00 USDT",
         "19.58 USDT",
         "Closed",
     )
     assert window.trade_history.total_net_pnl.text() == "48.98 USDT"
-    window.trade_history.history_tabs.setCurrentIndex(1)
+    window.workspace.show_tab(WorkspaceTab.TRADE_HISTORY)
     qtbot.waitUntil(lambda: window.trade_history.fill_table.rowCount() == 4)
     assert _table_rows_text(window.trade_history.fill_table) == (
         (
@@ -110,10 +105,9 @@ def test_desktop_trade_history_reads_durable_spot_and_futures_records(
             "Sell",
             "100",
             "2",
-            "0.2 USDT",
-            "200 USDT",
-            "29.4 USDT",
-            "Paper Executor",
+            "0.20 USDT",
+            "200.00 USDT",
+            "29.40 USDT",
         ),
         (
             "2026-01-03 07:00:00",
@@ -121,10 +115,9 @@ def test_desktop_trade_history_reads_durable_spot_and_futures_records(
             "Buy",
             "100",
             "2",
-            "0.2 USDT",
-            "200 USDT",
+            "0.20 USDT",
+            "200.00 USDT",
             "0.00 USDT",
-            "Paper Executor",
         ),
         (
             "2026-01-02 07:00:00",
@@ -132,10 +125,9 @@ def test_desktop_trade_history_reads_durable_spot_and_futures_records(
             "Sell",
             "100",
             "2",
-            "0.2 USDT",
-            "200 USDT",
+            "0.20 USDT",
+            "200.00 USDT",
             "19.58 USDT",
-            "Paper Executor",
         ),
         (
             "2026-01-01 07:00:00",
@@ -143,10 +135,9 @@ def test_desktop_trade_history_reads_durable_spot_and_futures_records(
             "Buy",
             "100",
             "2",
-            "0.2 USDT",
-            "200 USDT",
+            "0.20 USDT",
+            "200.00 USDT",
             "0.00 USDT",
-            "Paper Executor",
         ),
     )
 
@@ -196,43 +187,24 @@ def test_desktop_trade_history_filters_all_rows_and_survives_restart(
     assert first_page_opened_at[0] == "2026-02-20 07:00:00"
     assert first_page_opened_at[-1] == "2026-01-01 07:00:00"
 
-    matching_filters = (
-        (first.trade_history.symbol, "BTCUSDT"),
-        (first.trade_history.timeframe, "15m"),
-        (first.trade_history.market, "futures"),
-        (first.trade_history.mode, "paper"),
-        (first.trade_history.status, "closed"),
-    )
-    for combo, value in matching_filters:
-        combo.setCurrentIndex(combo.findData(value))
+    # One Basket was opened each day, so a single day narrows 51 rows to one.
     newest_date = (datetime(2026, 1, 1, tzinfo=UTC) + timedelta(days=50)).date()
-    first.trade_history.from_date_enabled.setChecked(True)
     first.trade_history.from_date.setDate(qdate(newest_date))
-    first.trade_history.to_date_enabled.setChecked(True)
     first.trade_history.to_date.setDate(qdate(newest_date))
-    click(first.trade_history.apply_button)
+    click(first.trade_history.search_button)
     qtbot.waitUntil(lambda: first.trade_history.basket_table.rowCount() == 1)
     assert table_item(first.trade_history.basket_table, 0, 4).text() == "15m"
     assert table_item(first.trade_history.basket_table, 0, 2).text() == "Futures"
-    assert first.trade_history.total_net_pnl.text() == "29.4 USDT"
+    assert first.trade_history.total_net_pnl.text() == "29.40 USDT"
     assert basket_requests[-1] == TradeHistoryFilter(
-        symbol="BTCUSDT",
-        timeframe="15m",
-        market_type=MarketType.FUTURES,
-        trade_mode=TradeMode.PAPER,
-        status=BasketStatus.CLOSED,
         # The picked day is a Bangkok day, which opens at 17:00 UTC.
         opened_from_utc=datetime(2026, 2, 19, 17, 0, tzinfo=UTC),
         opened_before_utc=datetime(2026, 2, 20, 17, 0, tzinfo=UTC),
     )
 
     click(first.trade_history.reset_button)
-    for combo, _ in matching_filters:
-        assert combo.currentData() is None
-    assert not first.trade_history.from_date_enabled.isChecked()
-    assert not first.trade_history.from_date.isEnabled()
-    assert not first.trade_history.to_date_enabled.isChecked()
-    assert not first.trade_history.to_date.isEnabled()
+    assert not first.trade_history.from_date.has_date()
+    assert not first.trade_history.to_date.has_date()
     qtbot.waitUntil(lambda: first.trade_history.basket_table.rowCount() == 51)
     first.close()
 
@@ -277,7 +249,7 @@ def test_trade_history_read_failure_is_fail_closed_and_sanitized(
     qtbot.waitUntil(lambda: window.trade_history.basket_table.rowCount() == 1)
     assert not window.trade_history.total_net_pnl.isHidden()
 
-    click(window.trade_history.apply_button)
+    click(window.trade_history.search_button)
     qtbot.waitUntil(
         lambda: (
             window.trade_history.basket_state.text()
@@ -368,7 +340,7 @@ def test_trade_history_desktop_flow_has_no_forbidden_import_or_network(
     qtbot.waitUntil(
         lambda: window.trade_history.basket_state.text() == "No Basket history"
     )
-    assert window.workspace.tabs.currentWidget() is window.trade_history
+    assert window.workspace.tab_pages.currentWidget() is window.workspace.trade_history
     assert window.trade_history.basket_state.text() == "No Basket history"
 
 
@@ -507,3 +479,27 @@ def _unused_create(
 ) -> PaperSessionCreateOutcome:
     del values
     pytest.fail("create must not run")
+
+
+def test_opening_the_trade_half_first_shows_trades_not_baskets(
+    monkeypatch: MonkeyPatch,
+    qtbot: QtBot,
+    tmp_path: Path,
+) -> None:
+    """The half the trader opened is the half that is read and shown."""
+    path = tmp_path / "tiewtrade.sqlite3"
+    database = SQLiteDatabase(path)
+    database.migrate()
+    history = SQLiteTradeHistory(database)
+    _record_closed(history, basket_result())
+
+    window = _composed_window(path, monkeypatch)
+    qtbot.addWidget(window)
+    window.show()
+
+    window.workspace.show_tab(WorkspaceTab.TRADE_HISTORY)
+
+    qtbot.waitUntil(lambda: window.trade_history.fill_table.rowCount() > 0)
+    assert window.trade_history.fill_table.isVisible()
+    assert not window.trade_history.basket_table.isVisible()
+    assert window.workspace.current_tab is WorkspaceTab.TRADE_HISTORY

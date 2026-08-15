@@ -1,4 +1,5 @@
 import threading
+from datetime import UTC, date, datetime
 from decimal import Decimal
 from typing import cast
 
@@ -165,27 +166,6 @@ def test_trade_query_has_independent_loading_empty_error_and_retry() -> None:
     assert empty == [None]
 
 
-def test_trade_query_ignores_basket_only_status_filter() -> None:
-    requested: list[TradeHistoryFilter] = []
-
-    def list_trade_fills(
-        filters: TradeHistoryFilter,
-    ) -> tuple[TradeFillHistoryItem, ...]:
-        requested.append(filters)
-        return ()
-
-    workflow = TradeHistoryWorkflow(
-        list_basket_history=lambda _filters: BasketHistoryResult((), Decimal("0")),
-        list_trade_fills=list_trade_fills,
-        thread_pool=immediate_thread_pool(),
-    )
-    workflow.apply_filters(TradeHistoryFilterValues(status="closed"))
-
-    workflow.select_tab(HistoryTab.TRADES)
-
-    assert requested == [TradeHistoryFilter()]
-
-
 def test_trade_channel_runs_one_query_and_coalesces_latest_filter() -> None:
     qt_pool, holding = holding_thread_pool()
     requested: list[TradeHistoryFilter] = []
@@ -202,8 +182,8 @@ def test_trade_channel_runs_one_query_and_coalesces_latest_filter() -> None:
         thread_pool=qt_pool,
     )
     workflow.select_tab(HistoryTab.TRADES)
-    workflow.apply_filters(TradeHistoryFilterValues(symbol="BTCUSDT"))
-    workflow.apply_filters(TradeHistoryFilterValues(symbol="ETHUSDT"))
+    workflow.apply_filters(TradeHistoryFilterValues(from_date=date(2026, 1, 2)))
+    workflow.apply_filters(TradeHistoryFilterValues(from_date=date(2026, 1, 3)))
 
     assert len(holding.tasks) == 1
     holding.tasks[0].run()
@@ -212,7 +192,7 @@ def test_trade_channel_runs_one_query_and_coalesces_latest_filter() -> None:
 
     assert requested == [
         TradeHistoryFilter(),
-        TradeHistoryFilter(symbol="ETHUSDT"),
+        TradeHistoryFilter(opened_from_utc=datetime(2026, 1, 2, 17, tzinfo=UTC)),
     ]
 
 
@@ -275,7 +255,7 @@ def test_basket_failure_is_sanitized_and_retry_reuses_latest_filters(
     workflow, pool = workflow_with(fail_then_succeed)
     messages: list[str] = []
     workflow.baskets_unavailable.connect(messages.append)
-    workflow.apply_filters(TradeHistoryFilterValues(symbol="BTCUSDT"))
+    workflow.apply_filters(TradeHistoryFilterValues(from_date=date(2026, 1, 2)))
     qtbot.waitUntil(lambda: messages == ["Basket History unavailable"])
 
     workflow.retry_baskets()
@@ -323,10 +303,10 @@ def test_a_malformed_result_fails_closed(
 def test_only_the_latest_filters_run_after_the_active_request(qtbot: QtBot) -> None:
     started = threading.Event()
     release = threading.Event()
-    calls: list[str | None] = []
+    calls: list[datetime | None] = []
 
     def delayed(filters: TradeHistoryFilter) -> BasketHistoryResult:
-        calls.append(filters.symbol)
+        calls.append(filters.opened_from_utc)
         if len(calls) == 1:
             started.set()
             assert release.wait(timeout=2)
@@ -336,13 +316,13 @@ def test_only_the_latest_filters_run_after_the_active_request(qtbot: QtBot) -> N
     workflow.start()
     qtbot.waitUntil(started.is_set)
 
-    workflow.apply_filters(TradeHistoryFilterValues(symbol="OLD"))
-    workflow.apply_filters(TradeHistoryFilterValues(symbol="BTCUSDT"))
+    workflow.apply_filters(TradeHistoryFilterValues(from_date=date(2026, 1, 2)))
+    workflow.apply_filters(TradeHistoryFilterValues(from_date=date(2026, 1, 3)))
     release.set()
 
     # The filter changed twice while one query ran: only the last one is asked.
     qtbot.waitUntil(lambda: len(calls) == 2)
-    assert calls == [None, "BTCUSDT"]
+    assert calls == [None, datetime(2026, 1, 2, 17, tzinfo=UTC)]
     assert pool.waitForDone(1_000)
 
 
@@ -363,7 +343,7 @@ def test_close_suppresses_a_late_result(qtbot: QtBot) -> None:
 
     workflow.close()
     workflow.start()
-    workflow.apply_filters(TradeHistoryFilterValues(symbol="BTCUSDT"))
+    workflow.apply_filters(TradeHistoryFilterValues(from_date=date(2026, 1, 2)))
     release.set()
 
     assert pool.waitForDone(1_000)
@@ -371,3 +351,54 @@ def test_close_suppresses_a_late_result(qtbot: QtBot) -> None:
 
     # The window is gone; a reply that arrives after it must reach no one.
     assert results == []
+
+
+def test_a_to_date_at_the_end_of_time_is_refused_rather_than_crashing() -> None:
+    """Nothing guards the field any more, and a day after 9999 has no date."""
+    requested: list[TradeHistoryFilter] = []
+
+    def list_basket_history(filters: TradeHistoryFilter) -> BasketHistoryResult:
+        requested.append(filters)
+        return BasketHistoryResult((), Decimal("0"))
+
+    workflow = TradeHistoryWorkflow(
+        list_basket_history=list_basket_history,
+        list_trade_fills=lambda _filters: (),
+        thread_pool=immediate_thread_pool(),
+    )
+    messages: list[str] = []
+    workflow.filter_invalid.connect(messages.append)
+
+    workflow.apply_filters(TradeHistoryFilterValues(to_date=date(9999, 12, 31)))
+
+    assert messages == ["To Date is out of range"]
+    assert requested == []
+
+
+def test_starting_asks_for_the_half_that_was_opened() -> None:
+    """Opening Trade History first must not fetch Baskets nobody asked for."""
+    baskets: list[TradeHistoryFilter] = []
+    trades: list[TradeHistoryFilter] = []
+
+    def list_basket_history(filters: TradeHistoryFilter) -> BasketHistoryResult:
+        baskets.append(filters)
+        return BasketHistoryResult((), Decimal("0"))
+
+    def list_trade_fills(
+        filters: TradeHistoryFilter,
+    ) -> tuple[TradeFillHistoryItem, ...]:
+        trades.append(filters)
+        return ()
+
+    workflow = TradeHistoryWorkflow(
+        list_basket_history=list_basket_history,
+        list_trade_fills=list_trade_fills,
+        thread_pool=immediate_thread_pool(),
+    )
+    workflow.select_tab(HistoryTab.TRADES)
+    trades.clear()
+
+    workflow.start()
+
+    assert trades == [TradeHistoryFilter()]
+    assert baskets == []

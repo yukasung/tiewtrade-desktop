@@ -18,7 +18,7 @@ from tiewtrade.application.trading_workspace import (
 )
 from tiewtrade.ui.display_time import display_timestamp
 from tiewtrade.ui.entry_gate_display import blocked_entry_reason
-from tiewtrade.ui.money_text import money_to_cent, price_text
+from tiewtrade.ui.money_text import money_text, price_text
 from tiewtrade.ui.sign_state import paint_by_sign, sign_colour
 from tiewtrade.ui.table_column import (
     CENTER,
@@ -66,11 +66,11 @@ def _quantity(row: _Row) -> str:
 
 
 def _notional(row: _Row) -> str:
-    return money_to_cent(row.entry.notional)
+    return money_text(row.entry.notional)
 
 
 def _pnl(row: _Row) -> str:
-    return money_to_cent(row.entry.unrealized_pnl)
+    return money_text(row.entry.unrealized_pnl)
 
 
 def _pnl_colour(row: _Row) -> str | None:
@@ -98,7 +98,7 @@ class PositionBasketTable(QWidget):
         # Beside the price paid, so the distance left to run reads at a glance.
         Column("Take Profit", RIGHT, _take_profit_price),
         Column("Quantity", RIGHT, _quantity),
-        Column("Notional", RIGHT, _notional),
+        Column("Total", RIGHT, _notional),
         Column("Unrealized PnL", RIGHT, _pnl, _pnl_colour),
         Column("Basket Lifecycle", LEFT, _entry_gate),
     )
@@ -169,7 +169,7 @@ class PositionBasketTable(QWidget):
             f"{'Entry' if basket.entry_count == 1 else 'Entries'} · "
             f"Total {format(basket.total_quantity, 'f')} · "
             f"Average {price_text(basket.average_entry_price)} · "
-            f"Unrealized {money_to_cent(basket.unrealized_pnl)}"
+            f"Unrealized {money_text(basket.unrealized_pnl)}"
         )
         paint_by_sign(self.total_label, basket.unrealized_pnl)
         self.total_label.setVisible(True)

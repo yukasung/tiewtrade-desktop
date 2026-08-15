@@ -1,4 +1,5 @@
 from datetime import UTC, datetime
+from enum import IntEnum
 
 from PySide6.QtCore import Qt, Signal, Slot
 from PySide6.QtWidgets import (
@@ -9,7 +10,7 @@ from PySide6.QtWidgets import (
     QScrollArea,
     QSizePolicy,
     QStackedWidget,
-    QTabWidget,
+    QTabBar,
     QVBoxLayout,
     QWidget,
 )
@@ -22,8 +23,20 @@ from tiewtrade.ui.candlestick_chart import CandlestickChartWidget
 from tiewtrade.ui.position_basket_table import PositionBasketTable
 from tiewtrade.ui.session_setup import SessionSetupWidget
 from tiewtrade.ui.trade_history_page import TradeHistoryPage
+from tiewtrade.ui.trade_history_workflow import HistoryTab
 
 BOT_CONTROL_WIDTH = 360
+
+
+class WorkspaceTab(IntEnum):
+    """The tabs under the chart, in the order they are read left to right."""
+
+    POSITION_BASKET = 0
+    BASKET_HISTORY = 1
+    TRADE_HISTORY = 2
+
+
+_TAB_TITLES = ("Position / Basket", "Basket History", "Trade History")
 
 
 class TradingWorkspace(QWidget):
@@ -58,9 +71,19 @@ class TradingWorkspace(QWidget):
         self.bot_control_widget.start_requested.connect(self.start_bot_requested)
         self.bot_control_widget.stop_requested.connect(self.stop_bot_requested)
 
-        self.tabs = QTabWidget()
-        self.tabs.addTab(self.position_basket, "Position / Basket")
-        self.tabs.addTab(self.trade_history, "Trade History")
+        # One strip of tabs, not two. Basket History and Trade History are two
+        # readings of the same records rather than a place of their own, so
+        # they stand beside the open Position instead of behind a second row.
+        self.tabs = QTabBar()
+        self.tabs.setObjectName("workspaceTabs")
+        self.tabs.setExpanding(False)
+        self.tabs.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+        for title in _TAB_TITLES:
+            self.tabs.addTab(title)
+        self.tab_pages = QStackedWidget()
+        self.tab_pages.setObjectName("workspaceTabPages")
+        self.tab_pages.addWidget(self.position_basket)
+        self.tab_pages.addWidget(self.trade_history)
         self.tabs.currentChanged.connect(self._tab_changed)
 
         unavailable_layout = QVBoxLayout(self.unavailable_panel)
@@ -135,7 +158,13 @@ class TradingWorkspace(QWidget):
         primary_layout.setContentsMargins(0, 0, 0, 0)
         primary_layout.setSpacing(12)
         primary_layout.addWidget(self.chart, 3)
-        primary_layout.addWidget(self.tabs, 2)
+        tabbed = QWidget()
+        tabbed_layout = QVBoxLayout(tabbed)
+        tabbed_layout.setContentsMargins(0, 0, 0, 0)
+        tabbed_layout.setSpacing(0)
+        tabbed_layout.addWidget(self.tabs)
+        tabbed_layout.addWidget(self.tab_pages, 1)
+        primary_layout.addWidget(tabbed, 2)
 
         self.bot_control = QFrame()
         self.bot_control.setObjectName("botControl")
@@ -160,10 +189,32 @@ class TradingWorkspace(QWidget):
         self._body_layout.addWidget(self.bot_control)
         root.addWidget(self._body, 1)
 
+    def show_tab(self, tab: WorkspaceTab) -> None:
+        """Show one of the three readings the tab strip offers."""
+        # Setting the index announces the change itself; it stays silent only
+        # when the index already holds, which is the one case to answer here.
+        if self.tabs.currentIndex() == tab.value:
+            self._tab_changed(tab.value)
+            return
+        self.tabs.setCurrentIndex(tab.value)
+
+    @property
+    def current_tab(self) -> WorkspaceTab:
+        return WorkspaceTab(self.tabs.currentIndex())
+
     @Slot(int)
     def _tab_changed(self, index: int) -> None:
-        if self.tabs.widget(index) is self.trade_history:
-            self.trade_history_activated.emit()
+        tab = WorkspaceTab(index)
+        if tab is WorkspaceTab.POSITION_BASKET:
+            self.tab_pages.setCurrentWidget(self.position_basket)
+            return
+        self.tab_pages.setCurrentWidget(self.trade_history)
+        self.trade_history.show_history_tab(
+            HistoryTab.BASKETS
+            if tab is WorkspaceTab.BASKET_HISTORY
+            else HistoryTab.TRADES
+        )
+        self.trade_history_activated.emit()
 
     def _show_bot_page(self, page: QWidget) -> None:
         self._bot_pages.setCurrentWidget(page)

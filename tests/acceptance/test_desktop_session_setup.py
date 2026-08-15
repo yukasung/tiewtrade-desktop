@@ -71,6 +71,7 @@ from tiewtrade.ui.bot_lifecycle_workflow import RuntimeSnapshotRelay
 from tiewtrade.ui.display_time import display_timestamp
 from tiewtrade.ui.main_window import BotActions, MainWindow
 from tiewtrade.ui.position_basket_table import PositionBasketTable
+from tiewtrade.ui.trading_workspace import WorkspaceTab
 
 _T = TypeVar("_T")
 _RUNTIME_NOW = datetime(2026, 8, 2, 3, tzinfo=UTC)
@@ -380,7 +381,7 @@ def test_desktop_restart_blocked_runtime_reopens_setup_form(
     assert marker is not None
     assert marker.state is PaperRuntimeLifecycleState.RUNNING
 
-    window.workspace.tabs.setCurrentWidget(window.trade_history)
+    window.workspace.show_tab(WorkspaceTab.BASKET_HISTORY)
     qtbot.waitUntil(
         lambda: window.trade_history.basket_state.text() == "No Basket history"
     )
@@ -388,7 +389,7 @@ def test_desktop_restart_blocked_runtime_reopens_setup_form(
     marker = lifecycle.read(session.config.session_id)
     assert marker is not None
     assert marker.state is PaperRuntimeLifecycleState.RUNNING
-    assert window.workspace.tabs.currentWidget() is window.trade_history
+    assert window.workspace.tab_pages.currentWidget() is window.workspace.trade_history
     assert window.workspace.position_basket.table.rowCount() == 0
 
 
@@ -543,11 +544,11 @@ def test_spot_partial_fills_keep_one_order_and_basket_entry_across_tabs(
     # Two Fills of the same Entry stay one row: a Partial Fill is not an Entry.
     assert window.workspace.position_basket.table.rowCount() == 1
     assert table_item(window.workspace.position_basket.table, 0, 0).text() == "#1"
-    window.workspace.tabs.setCurrentWidget(window.trade_history)
+    window.workspace.show_tab(WorkspaceTab.BASKET_HISTORY)
     qtbot.waitUntil(lambda: window.trade_history.basket_table.rowCount() == 1)
     assert table_item(window.trade_history.basket_table, 0, 5).text() == "1"
     # Both Fills are still recorded; the Trade History tab is where they read.
-    window.trade_history.history_tabs.setCurrentIndex(1)
+    window.workspace.show_tab(WorkspaceTab.TRADE_HISTORY)
     qtbot.waitUntil(lambda: window.trade_history.fill_table.rowCount() == 2)
     assert _trade_side_effect_counts(database) == initial_counts
 
@@ -626,13 +627,13 @@ def test_desktop_paper_session_create_overview_and_restart_restore(
     )
     assert _trade_side_effect_counts(database) == initial_side_effect_counts
 
-    first_window.workspace.tabs.setCurrentWidget(first_window.trade_history)
+    first_window.workspace.show_tab(WorkspaceTab.BASKET_HISTORY)
     qtbot.waitUntil(
         lambda: first_window.trade_history.basket_state.text() == "No Basket history"
     )
     # No session yet: the setup form is what the workspace offers.
     assert first_window.setup.isVisible()
-    first_window.workspace.tabs.setCurrentIndex(0)
+    first_window.workspace.show_tab(WorkspaceTab.POSITION_BASKET)
 
     _enter_form_values(first_window, case)
     click(first_window.setup.create_button)
@@ -655,9 +656,12 @@ def test_desktop_paper_session_create_overview_and_restart_restore(
     assert _active_session_count(database) == 1
     assert _trade_side_effect_counts(database) == initial_side_effect_counts
 
-    first_window.workspace.tabs.setCurrentWidget(first_window.trade_history)
-    assert first_window.workspace.tabs.currentWidget() is first_window.trade_history
-    first_window.workspace.tabs.setCurrentIndex(0)
+    first_window.workspace.show_tab(WorkspaceTab.BASKET_HISTORY)
+    assert (
+        first_window.workspace.tab_pages.currentWidget()
+        is first_window.workspace.trade_history
+    )
+    first_window.workspace.show_tab(WorkspaceTab.POSITION_BASKET)
 
     second_create_use_case = CreatePaperSession(
         create_active=SQLiteActivePaperSessions(SQLiteDatabase(database_path)).create,
@@ -713,7 +717,7 @@ def test_desktop_paper_session_create_overview_and_restart_restore(
     assert _trade_side_effect_counts(database) == initial_side_effect_counts
 
     restored_history_side_effect_counts = _trade_side_effect_counts(database)
-    restarted_window.workspace.tabs.setCurrentWidget(restarted_window.trade_history)
+    restarted_window.workspace.show_tab(WorkspaceTab.BASKET_HISTORY)
     restarted_history = restarted_window.trade_history
     qtbot.waitUntil(
         lambda: restarted_history.basket_state.text() == "No Basket history"
@@ -850,11 +854,11 @@ def test_desktop_session_storage_unavailable_fails_closed(
     assert not window.setup.isVisible()
     assert not window.overview.isVisible()
 
-    window.workspace.tabs.setCurrentWidget(window.trade_history)
+    window.workspace.show_tab(WorkspaceTab.BASKET_HISTORY)
     qtbot.waitUntil(
         lambda: window.trade_history.basket_state.text() == "No Basket history"
     )
-    assert window.workspace.tabs.currentWidget() is window.trade_history
+    assert window.workspace.tab_pages.currentWidget() is window.workspace.trade_history
     assert window.unavailable_panel.isVisible()
 
 

@@ -184,7 +184,8 @@ def test_trade_history_scroll_surfaces_and_scrollbar_render_dark(
     page = TradeHistoryPage()
     qtbot.addWidget(page)
     page.setStyleSheet(DARK_THEME)
-    page.setFixedSize(1200, 240)
+    # Short enough that the tables overflow, which is what is scrolled.
+    page.setFixedSize(1200, 140)
     page.show()
 
     scroll_area = page.scroll_area

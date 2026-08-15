@@ -17,7 +17,8 @@ from tiewtrade.application.trading_workspace import (
     ready_position_basket_tab,
 )
 from tiewtrade.ui.candlestick_chart import CandlestickChartWidget
-from tiewtrade.ui.trading_workspace import TradingWorkspace
+from tiewtrade.ui.trade_history_workflow import HistoryTab
+from tiewtrade.ui.trading_workspace import TradingWorkspace, WorkspaceTab
 
 
 def test_workspace_places_existing_features_in_one_screen(qtbot: QtBot) -> None:
@@ -31,6 +32,7 @@ def test_workspace_places_existing_features_in_one_screen(qtbot: QtBot) -> None:
         workspace.tabs.tabText(index) for index in range(workspace.tabs.count())
     ] == [
         "Position / Basket",
+        "Basket History",
         "Trade History",
     ]
     assert workspace.position_basket.state_label.text() == (
@@ -49,7 +51,11 @@ def test_workspace_places_candlestick_chart_above_tables_with_docked_bot_control
 
     qtbot.waitUntil(lambda: workspace.chart.isVisible())
 
-    assert workspace.chart.geometry().bottom() < workspace.tabs.geometry().top()
+    # The tab strip sits inside its own container now, so both are read in
+    # the workspace's own coordinates rather than their parents'.
+    chart = _widget_rect_in_viewport(workspace.chart, workspace)
+    tabs = _widget_rect_in_viewport(workspace.tabs, workspace)
+    assert chart.bottom() < tabs.top()
     assert workspace.bot_control.isVisible()
 
 
@@ -131,8 +137,6 @@ def test_bot_control_is_docked_beside_the_chart(qtbot: QtBot) -> None:
     workspace.show()
 
 
-
-
 def test_resizing_keeps_the_same_bot_control_and_workspace_state(
     qtbot: QtBot,
 ) -> None:
@@ -156,7 +160,7 @@ def test_resizing_keeps_the_same_bot_control_and_workspace_state(
         )
     )
     workspace.show_configured_session(session)
-    workspace.tabs.setCurrentWidget(workspace.trade_history)
+    workspace.show_tab(WorkspaceTab.BASKET_HISTORY)
     workspace.resize(1199, 700)
     workspace.resize(1200, 700)
 
@@ -168,7 +172,7 @@ def test_resizing_keeps_the_same_bot_control_and_workspace_state(
         workspace.unavailable_panel,
     ) == bot_instances
     assert workspace.overview.isVisible()
-    assert workspace.tabs.currentWidget() is workspace.trade_history
+    assert workspace.tab_pages.currentWidget() is workspace.trade_history
     assert workspace.bot_control.isVisible()
 
 
@@ -195,7 +199,48 @@ def test_trade_history_signal_is_emitted_when_tab_is_opened(qtbot: QtBot) -> Non
     qtbot.addWidget(workspace)
 
     with qtbot.waitSignal(workspace.trade_history_activated):
-        workspace.tabs.setCurrentWidget(workspace.trade_history)
+        workspace.show_tab(WorkspaceTab.BASKET_HISTORY)
+
+
+def test_both_history_tabs_show_the_same_page_on_its_own_half(
+    qtbot: QtBot,
+) -> None:
+    """One filter bar serves both, so they stay one page under two tabs."""
+    workspace = TradingWorkspace()
+    qtbot.addWidget(workspace)
+    workspace.resize(1200, 700)
+    workspace.show()
+
+    workspace.show_tab(WorkspaceTab.BASKET_HISTORY)
+
+    assert workspace.tab_pages.currentWidget() is workspace.trade_history
+    assert workspace.trade_history.basket_table.isVisible()
+    assert not workspace.trade_history.fill_table.isVisible()
+
+    workspace.show_tab(WorkspaceTab.TRADE_HISTORY)
+
+    assert workspace.tab_pages.currentWidget() is workspace.trade_history
+    assert workspace.trade_history.fill_table.isVisible()
+    assert not workspace.trade_history.basket_table.isVisible()
+    # The filters are the page's, and stay put under either tab.
+    assert workspace.trade_history.search_button.isVisible()
+
+    workspace.show_tab(WorkspaceTab.POSITION_BASKET)
+
+    assert workspace.tab_pages.currentWidget() is workspace.position_basket
+    assert workspace.current_tab is WorkspaceTab.POSITION_BASKET
+
+
+def test_opening_a_history_tab_says_which_half_it_wants(qtbot: QtBot) -> None:
+    workspace = TradingWorkspace()
+    qtbot.addWidget(workspace)
+    asked: list[HistoryTab] = []
+    workspace.trade_history.history_tab_changed.connect(asked.append)
+
+    workspace.show_tab(WorkspaceTab.TRADE_HISTORY)
+    workspace.show_tab(WorkspaceTab.BASKET_HISTORY)
+
+    assert asked == [HistoryTab.TRADES, HistoryTab.BASKETS]
 
 
 def test_unavailable_state_and_busy_control_are_scoped_to_bot_control(
@@ -218,3 +263,18 @@ def test_unavailable_state_and_busy_control_are_scoped_to_bot_control(
 def _widget_rect_in_viewport(widget: QWidget, viewport: QWidget) -> QRect:
     return QRect(widget.mapTo(viewport, QPoint(0, 0)), widget.size())
 
+
+def test_opening_a_history_tab_announces_it_once(qtbot: QtBot) -> None:
+    """A doubled announcement costs a second query and a second table rebuild."""
+    workspace = TradingWorkspace()
+    qtbot.addWidget(workspace)
+    activations: list[None] = []
+    workspace.trade_history_activated.connect(lambda: activations.append(None))
+
+    workspace.show_tab(WorkspaceTab.BASKET_HISTORY)
+
+    assert activations == [None]
+
+    workspace.show_tab(WorkspaceTab.TRADE_HISTORY)
+
+    assert activations == [None, None]

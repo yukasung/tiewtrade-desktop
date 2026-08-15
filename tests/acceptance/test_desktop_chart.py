@@ -53,6 +53,7 @@ from tiewtrade.trading.symbol_rules import SymbolRules
 from tiewtrade.trading.trade_history import FillSide
 from tiewtrade.ui.bot_lifecycle_workflow import RuntimeSnapshotRelay
 from tiewtrade.ui.main_window import BotActions, ChartSources, MainWindow
+from tiewtrade.ui.trading_workspace import WorkspaceTab
 
 _T = TypeVar("_T")
 _FORMING_OBSERVED_AT = datetime(2026, 8, 2, 10, 3, tzinfo=UTC)
@@ -239,14 +240,14 @@ def test_chart_failure_does_not_stop_runtime_or_trade_history(qtbot: QtBot) -> N
 
     click(window.workspace.bot_control_widget.start_button)
     qtbot.waitUntil(lambda: _runtime_state(window) is BotRuntimeState.RUNNING)
-    window.workspace.tabs.setCurrentWidget(window.trade_history)
+    window.workspace.show_tab(WorkspaceTab.BASKET_HISTORY)
     qtbot.waitUntil(
         lambda: window.trade_history.basket_state.text() == "No Basket history"
     )
 
     assert window.workspace.chart.retry_button.isVisible()
     assert window.workspace.bot_control_widget.stop_button.isEnabled()
-    assert window.workspace.tabs.currentWidget() is window.trade_history
+    assert window.workspace.tab_pages.currentWidget() is window.workspace.trade_history
 
 
 def test_runtime_candles_reach_chart_only_from_current_generation(
