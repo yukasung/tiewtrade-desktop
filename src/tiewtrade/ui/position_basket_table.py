@@ -92,8 +92,7 @@ class PositionBasketTable(QWidget):
     # sign cannot hide; short labels sit centred; text that changes length
     # stays left so its edge does not move under the reader.
     COLUMNS: tuple[Column[_Row], ...] = (
-        Column("Entry", CENTER, lambda row: f"#{row.entry.entry_number}"),
-        Column("Filled At", LEFT, _filled_at),
+        Column("Date", LEFT, _filled_at),
         Column("Entry Price", RIGHT, _price),
         # Beside the price paid, so the distance left to run reads at a glance.
         Column("Take Profit", RIGHT, _take_profit_price),
@@ -205,11 +204,13 @@ class PositionBasketTable(QWidget):
         table.setObjectName("positionBasketGrid")
         table.setAccessibleName("Position")
         table.setHorizontalHeaderLabels(list(self.HEADERS))
-        # A header that does not follow its column reads as a different column.
-        for index, column in enumerate(self.COLUMNS):
+        # Headings sit centred over every column, whichever way the values
+        # under them run. The cells keep their own alignment, so figures
+        # still line up on one right edge to be read down.
+        for index in range(len(self.COLUMNS)):
             header_item = table.horizontalHeaderItem(index)
             if header_item is not None:
-                header_item.setTextAlignment(column.alignment)
+                header_item.setTextAlignment(CENTER)
         table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)

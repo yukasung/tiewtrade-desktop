@@ -16,7 +16,13 @@ from tiewtrade.application.trade_history import (
 from tiewtrade.trading.session_config import MarketType, TradeMode
 from tiewtrade.trading.trade_history import BasketResult, BasketStatus
 from tiewtrade.ui.background_task import BackgroundTask
-from tiewtrade.ui.trade_history_presenter import TradeHistoryFilterValues
+from tiewtrade.ui.display_time import display_today
+from tiewtrade.ui.trade_history_page import TradeHistoryPage
+from tiewtrade.ui.trade_history_presenter import (
+    TradeHistoryFilterValues,
+    default_filter_values,
+    trade_history_filter,
+)
 from tiewtrade.ui.trade_history_workflow import (
     HistoryTab,
     ListBasketHistory,
@@ -28,11 +34,7 @@ def result_with(*items: BasketResult) -> BasketHistoryResult:
     return BasketHistoryResult(
         items=tuple(items),
         realized_pnl=sum(
-            (
-                item.realized_pnl
-                for item in items
-                if item.status is BasketStatus.CLOSED
-            ),
+            (item.realized_pnl for item in items if item.status is BasketStatus.CLOSED),
             start=Decimal("0"),
         ),
     )
@@ -57,6 +59,11 @@ def workflow_with(
 class ImmediateThreadPool:
     def start(self, task: BackgroundTask) -> None:
         task.run()
+
+
+def _today_filter() -> TradeHistoryFilter:
+    """The range the workflow opens on, which is today rather than everything."""
+    return trade_history_filter(default_filter_values(display_today()))
 
 
 def immediate_thread_pool() -> QThreadPool:
@@ -102,7 +109,7 @@ def test_selecting_trade_tab_queries_cross_basket_fill_history(qtbot: QtBot) -> 
 
     workflow.select_tab(HistoryTab.TRADES)
 
-    assert requested == [TradeHistoryFilter()]
+    assert requested == [_today_filter()]
     assert rows == [(item,)]
 
 
@@ -128,7 +135,7 @@ def test_start_loads_every_basket_the_filters_match() -> None:
 
     workflow.start()
 
-    assert requested == [TradeHistoryFilter()]
+    assert requested == [_today_filter()]
     assert results == [BasketHistoryResult((basket,), Decimal("12.50"))]
     assert events == ["loading:True", "loading:False"]
 
@@ -191,7 +198,7 @@ def test_trade_channel_runs_one_query_and_coalesces_latest_filter() -> None:
     holding.tasks[1].run()
 
     assert requested == [
-        TradeHistoryFilter(),
+        _today_filter(),
         TradeHistoryFilter(opened_from_utc=datetime(2026, 1, 2, 17, tzinfo=UTC)),
     ]
 
@@ -322,7 +329,10 @@ def test_only_the_latest_filters_run_after_the_active_request(qtbot: QtBot) -> N
 
     # The filter changed twice while one query ran: only the last one is asked.
     qtbot.waitUntil(lambda: len(calls) == 2)
-    assert calls == [None, datetime(2026, 1, 2, 17, tzinfo=UTC)]
+    assert calls == [
+        _today_filter().opened_from_utc,
+        datetime(2026, 1, 2, 17, tzinfo=UTC),
+    ]
     assert pool.waitForDone(1_000)
 
 
@@ -400,5 +410,62 @@ def test_starting_asks_for_the_half_that_was_opened() -> None:
 
     workflow.start()
 
-    assert trades == [TradeHistoryFilter()]
+    assert trades == [_today_filter()]
     assert baskets == []
+
+
+def test_opening_the_page_reads_once() -> None:
+    """The bar shows its default without asking for a read of its own.
+
+    Setting the opening range by calling the chip's own handler would search
+    from the page as well as from the workflow, drawing the tables twice.
+    """
+    requested: list[TradeHistoryFilter] = []
+
+    def list_basket_history(filters: TradeHistoryFilter) -> BasketHistoryResult:
+        requested.append(filters)
+        return BasketHistoryResult((), Decimal("0"))
+
+    workflow = TradeHistoryWorkflow(
+        list_basket_history=list_basket_history,
+        list_trade_fills=lambda _filters: (),
+        thread_pool=immediate_thread_pool(),
+    )
+    page = TradeHistoryPage()
+    page.apply_filters_requested.connect(workflow.apply_filters)
+
+    workflow.start()
+
+    assert requested == [_today_filter()]
+
+
+def test_a_filter_applies_only_to_the_half_that_asked() -> None:
+    """A range picked on one half must not narrow the other half's query."""
+    baskets: list[TradeHistoryFilter] = []
+    trades: list[TradeHistoryFilter] = []
+
+    def list_basket_history(filters: TradeHistoryFilter) -> BasketHistoryResult:
+        baskets.append(filters)
+        return BasketHistoryResult((), Decimal("0"))
+
+    def list_trade_fills(
+        filters: TradeHistoryFilter,
+    ) -> tuple[TradeFillHistoryItem, ...]:
+        trades.append(filters)
+        return ()
+
+    workflow = TradeHistoryWorkflow(
+        list_basket_history=list_basket_history,
+        list_trade_fills=list_trade_fills,
+        thread_pool=immediate_thread_pool(),
+    )
+    workflow.select_tab(HistoryTab.TRADES)
+    workflow.apply_filters(TradeHistoryFilterValues(from_date=date(2026, 1, 2)))
+    baskets.clear()
+
+    workflow.select_tab(HistoryTab.BASKETS)
+
+    assert trades[-1] == TradeHistoryFilter(
+        opened_from_utc=datetime(2026, 1, 1, 17, tzinfo=UTC)
+    )
+    assert baskets == [_today_filter()]

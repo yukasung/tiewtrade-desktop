@@ -102,7 +102,6 @@ def build_session() -> PaperFuturesSession:
             market_type=MarketType.FUTURES,
             trade_mode=TradeMode.PAPER,
             available_capital=Decimal("200000"),
-            slippage_bps=Decimal("2"),
             entry_policy=EntryPolicy(max_entries=10),
             spot_policy=None,
             futures_policy=FuturesTradingPolicy.v1(leverage=3),

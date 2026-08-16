@@ -11,14 +11,12 @@ def test_configuration_controls_have_explicit_accessible_names(qtbot: QtBot) -> 
     qtbot.addWidget(widget)
 
     assert widget.market_type.accessibleName() == "Market Type"
-    assert widget.symbol.accessibleName() == "Symbol"
+    assert widget.symbol.accessibleName() == "Pair"
     assert widget.timeframe.accessibleName() == "Timeframe"
     assert widget.available_capital.accessibleName() == "Available Capital (USDT)"
     assert widget.max_entries.accessibleName() == "Maximum Entries"
     assert widget.spot_ratio.accessibleName() == "Spot Trading Capital (%)"
     assert widget.leverage.accessibleName() == "Futures Leverage"
-    assert widget.advanced_toggle.accessibleName() == "Advanced Execution Costs"
-    assert widget.slippage_bps.accessibleName() == "Slippage (bps)"
     assert widget.create_button.accessibleName() == "Start Paper Bot"
 
 
@@ -33,7 +31,6 @@ def test_default_form_builds_paper_spot_values(qtbot: QtBot) -> None:
     assert values.timeframe == "5m"
     assert values.available_capital == ""
     assert values.max_entries == "10"
-    assert values.slippage_bps == "0.05"
     assert values.spot_trading_capital_percent == "80"
     assert values.futures_leverage is None
     assert values.preset_version == "rsi-step-grid-v1"
@@ -76,7 +73,8 @@ def test_selected_symbol_is_included_in_the_start_request(qtbot: QtBot) -> None:
     assert requested[0].symbol == "ETHUSDT"
 
 
-def test_primary_form_only_shows_start_inputs(qtbot: QtBot) -> None:
+def test_every_setting_is_on_the_form_from_the_start(qtbot: QtBot) -> None:
+    """Nothing is folded away — only the other market's row is put aside."""
     widget = SessionSetupWidget()
     qtbot.addWidget(widget)
     widget.show()
@@ -87,31 +85,21 @@ def test_primary_form_only_shows_start_inputs(qtbot: QtBot) -> None:
     assert widget.symbol.isVisible()
     assert widget.timeframe.isVisible()
     assert widget.available_capital.isVisible()
-    assert widget.max_entries.isVisible() is False
-    assert widget.spot_fields.isVisible() is False
-    assert widget.futures_fields.isVisible() is False
-
-    click(widget.advanced_toggle)
-
     assert widget.max_entries.isVisible()
-    assert widget.spot_fields.isVisible()
+    assert widget.spot_ratio.isVisible()
+    assert widget.leverage.isVisible() is False
 
 
-def test_futures_selection_shows_futures_policy_and_hides_spot_ratio(
+def test_futures_selection_swaps_the_leverage_row_in_for_the_spot_ratio(
     qtbot: QtBot,
 ) -> None:
     widget = SessionSetupWidget()
     qtbot.addWidget(widget)
 
     widget.market_type.setCurrentIndex(widget.market_type.findData("futures"))
-    click(widget.advanced_toggle)
 
-    assert widget.spot_fields.isHidden()
-    assert widget.futures_fields.isHidden() is False
-    assert widget.margin_mode_value.text() == "Cross Margin"
-    assert widget.position_mode_value.text() == "One-way Mode"
-    assert widget.trading_capital_value.text() == "50%"
-    assert widget.collateral_buffer_value.text() == "50%"
+    assert widget.spot_row.isHidden()
+    assert widget.futures_row.isHidden() is False
     assert widget.values().spot_trading_capital_percent is None
     assert widget.values().futures_leverage == "1"
 
@@ -160,32 +148,6 @@ def test_timeframe_field_offers_every_supported_value(qtbot: QtBot) -> None:
     ]
 
     assert values == ["1m", "3m", "5m", "15m", "30m", "1h", "4h"]
-
-
-def test_spot_reserve_ratio_updates_from_trading_capital_input(
-    qtbot: QtBot,
-) -> None:
-    widget = SessionSetupWidget()
-    qtbot.addWidget(widget)
-
-    assert widget.spot_reserve_ratio.text() == "20%"
-
-    widget.spot_ratio.setText("65.5")
-
-    assert widget.spot_reserve_ratio.text() == "34.5%"
-
-
-def test_advanced_execution_costs_can_be_revealed(qtbot: QtBot) -> None:
-    widget = SessionSetupWidget()
-    qtbot.addWidget(widget)
-
-    assert widget.advanced_costs.isHidden() is True
-    assert widget.advanced_toggle.text() == "Show Advanced Settings"
-
-    click(widget.advanced_toggle)
-
-    assert widget.advanced_costs.isHidden() is False
-    assert widget.advanced_toggle.text() == "Hide Advanced Settings"
 
 
 def test_submit_emits_current_values_once(qtbot: QtBot) -> None:

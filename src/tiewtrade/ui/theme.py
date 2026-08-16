@@ -29,17 +29,13 @@ QWidget#candlestickChart {
 QLabel {
     color: #F1F5F9;
 }
-QLabel#pageTitle, QLabel#sectionTitle,
+QLabel#pageTitle,
 QLabel#detailValue, QLabel#readOnlyValue, QLabel#stateValue {
     color: #F1F5F9;
 }
 QLabel#pageTitle {
     font-size: 24px;
     font-weight: 700;
-}
-QLabel#sectionTitle {
-    font-size: 16px;
-    font-weight: 650;
 }
 QLabel#supportingText, QLabel#detailLabel, QLabel#filterLabel,
 QLabel#summaryLabel, QLabel#pageLabel, QLabel[stateMessage="true"],
@@ -85,7 +81,7 @@ QComboBox#chartTimeframe QAbstractItemView::item {
     padding: 6px 12px;
 }
 QLineEdit:focus, QComboBox:focus, QSpinBox:focus, QDateEdit:focus,
-QPushButton:focus, QTabBar::tab:focus, QTableWidget:focus {
+QPushButton:focus, QTableWidget:focus {
     border: 2px solid #4C7DFF;
 }
 QLineEdit:read-only, QComboBox:disabled, QDateEdit:disabled {
@@ -200,18 +196,16 @@ QPushButton#destructiveButton {
     min-height: 38px;
     padding: 0 18px;
 }
-QPushButton#advancedButton {
+/* The tab strip and the page under it are two widgets rather than one
+   QTabWidget, so the pane around both draws the surface they share. No
+   border between them: a tab that names the table under it should not be
+   fenced off from it. */
+QWidget#workspaceTabbedPane {
+    background: #141A22;
+}
+QStackedWidget#workspaceTabPages {
     background: transparent;
     border: 0;
-    color: #6E97FF;
-    font-weight: 600;
-    text-align: left;
-}
-/* The tab strip and the page under it are two widgets rather than one
-   QTabWidget, so the page carries the card the pane used to draw. */
-QStackedWidget#workspaceTabPages {
-    background: #141A22;
-    border: 1px solid #2B3441;
 }
 QTabBar::tab {
     background: #0B0E11;
@@ -219,15 +213,27 @@ QTabBar::tab {
     min-height: 36px;
     padding: 0 16px;
 }
+/* The selected tab is named by its colour and its weight, not by a rule
+   under it. A border costs height on every tab to mark one of them, and
+   the height above the table is what the table is short of. Weight is
+   here so the mark does not rest on colour alone. */
 QTabBar::tab:selected {
-    color: #F1F5F9;
-    border-bottom: 2px solid #4C7DFF;
+    color: #6E97FF;
+    font-weight: 700;
 }
 QTabBar#workspaceTabs::tab {
     background: transparent;
+    border-radius: 4px;
     min-width: 132px;
-    min-height: 42px;
+    min-height: 28px;
     padding: 0 18px;
+}
+/* A tab is bare words with no box, so there is nothing to draw a focus
+   ring around without inventing a rectangle. Focus tints the tab instead.
+   Keyboard users still have to be able to see where they are, and the ID
+   in the selector is what lets this beat the transparent rule above. */
+QTabBar#workspaceTabs::tab:focus {
+    background: #1B2432;
 }
 QScrollArea#botControlScroll, QWidget#botControlViewport,
 QStackedWidget#botControlPages, QScrollArea#tradeHistoryScroll,
@@ -273,6 +279,13 @@ QTableWidget {
     selection-color: #F8FAFC;
 }
 QTableWidget::item { padding: 7px 8px; }
+/* The strip past the last column is the header widget itself, not a
+   section, and it is on show whenever the columns do not fill the width. */
+QHeaderView {
+    background: #1B2430;
+    border: 0;
+    border-bottom: 1px solid #2B3441;
+}
 QHeaderView::section {
     background: #1B2430;
     border: 0;

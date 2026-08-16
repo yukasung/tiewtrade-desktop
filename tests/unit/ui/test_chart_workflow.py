@@ -27,6 +27,7 @@ from tiewtrade.application.trading_workspace import (
     ready_position_basket_tab,
 )
 from tiewtrade.market_data.candle import Candle
+from tiewtrade.market_data.config import timeframe_to_interval
 from tiewtrade.trading.trade_history import FillSide, TradeFill
 from tiewtrade.ui.background_task import BackgroundTask
 from tiewtrade.ui.chart_workflow import ChartWorkflow
@@ -96,6 +97,49 @@ def test_select_view_loads_the_selected_market_data_identity() -> None:
     workflow.select_view(ChartViewSelection(symbol="ETHUSDT", timeframe="1m"))
 
     assert identities == [("BTCUSDT", "5m"), ("ETHUSDT", "1m")]
+
+
+def test_another_timeframe_of_the_same_pair_keeps_its_badges() -> None:
+    """The same trade, drawn on whichever candles are on screen.
+
+    The view used to be compared against the Session by symbol *and*
+    timeframe, so reading BTC at 3m while the Session ran at 1m counted as
+    another market and every badge was wiped.
+    """
+    session = configured_spot_session()
+    snapshots: list[ChartSnapshot] = []
+    workflow = ChartWorkflow(
+        load_chart=load_snapshot_with_a_fill,
+        thread_pool=ImmediateThreadPool(),  # type: ignore[arg-type]
+        clock=lambda: datetime(2026, 1, 1, 1, 0, tzinfo=UTC),
+    )
+    workflow.snapshot_changed.connect(snapshots.append)
+    workflow.start(session)
+    assert session.market_data.timeframe != "1m"
+
+    workflow.select_view(ChartViewSelection(symbol="BTCUSDT", timeframe="1m"))
+
+    assert snapshots[-1].timeframe == "1m"
+    assert [marker.fill_id for marker in snapshots[-1].markers] == ["fill-1"]
+
+
+def test_another_pair_never_shows_this_session_badges() -> None:
+    """Fills are read by Session, so the chart of another Pair must drop them."""
+    session = configured_spot_session()
+    snapshots: list[ChartSnapshot] = []
+    workflow = ChartWorkflow(
+        load_chart=load_snapshot_with_a_fill,
+        thread_pool=ImmediateThreadPool(),  # type: ignore[arg-type]
+        clock=lambda: datetime(2026, 1, 1, 1, 0, tzinfo=UTC),
+    )
+    workflow.snapshot_changed.connect(snapshots.append)
+    workflow.start(session)
+
+    workflow.select_view(ChartViewSelection(symbol="ETHUSDT", timeframe="1m"))
+
+    assert snapshots[-1].symbol == "ETHUSDT"
+    assert snapshots[-1].fills == ()
+    assert snapshots[-1].markers == ()
 
 
 def test_configured_session_displays_valid_forming_candle() -> None:
@@ -575,11 +619,41 @@ def test_new_entry_badges_its_fill_before_the_candle_completes() -> None:
     )
 
     # The fill sits in the forming candle, so the range read has to reach past
-    # the completed candles the chart holds.
-    assert fill_ranges == [chart_range(20, 45)]
+    # the completed candles the chart holds. The forming candle and the new
+    # Entry each ask for it, which is one read more than the answer needs.
+    assert set(fill_ranges) == {chart_range(20, 45)}
     assert snapshots[-1].fills == (entry,)
     assert [marker.fill_id for marker in snapshots[-1].markers] == [entry.fill_id]
     assert snapshots[-1].in_progress_candle == candle("5m", 40)
+
+
+def test_a_forming_candle_asks_for_the_fills_inside_it() -> None:
+    """A drawn Position keeps its badge when the chart is loaded afresh.
+
+    Fills are read for the completed range, but the forming candle draws
+    past it. Only a Basket that changed used to ask again, so a Position
+    that merely sat there lost its badge on every timeframe change until
+    the new candle closed — moments on 1m, hours on 4h.
+    """
+    session = configured_spot_session()
+    snapshots: list[ChartSnapshot] = []
+    fill_ranges: list[ChartRange] = []
+    entry = trade_fill(
+        session_id=session.config.session_id,
+        filled_at_utc=datetime(2026, 1, 1, 0, 41, tzinfo=UTC),
+    )
+    workflow = latest_workflow(
+        session=session,
+        snapshots=snapshots,
+        fills=(entry,),
+        fill_ranges=fill_ranges,
+    )
+    workflow.runtime_snapshot(runtime_snapshot(session, BotRuntimeState.RUNNING))
+
+    workflow.in_progress_candle(candle("5m", 40))
+
+    assert fill_ranges == [chart_range(20, 45)]
+    assert [marker.fill_id for marker in snapshots[-1].markers] == [entry.fill_id]
 
 
 def test_unchanged_basket_leaves_the_chart_fills_alone() -> None:
@@ -848,6 +922,30 @@ async def load_snapshot(
         observed_at_utc=datetime(2026, 1, 1, 1, 0, tzinfo=UTC),
         candles=(candle("5m", chart_range.start.minute),),
         fills=(),
+        state=ChartReadState.READY,
+    )
+
+
+async def load_snapshot_with_a_fill(
+    session: ConfiguredPaperSession,
+    chart_range: ChartRange,
+) -> ChartSnapshot:
+    """What the real loader does: read fills by Session, whatever the view.
+
+    ChartHistory.load asks for fills with the Session id and the range, so
+    they arrive on a chart of any timeframe — and of any Pair, which is why
+    the workflow has to drop them itself.
+    """
+    interval = timeframe_to_interval(session.market_data.timeframe)
+    last_open = chart_range.end - interval
+    return ChartSnapshot(
+        session=session,
+        chart_range=chart_range,
+        observed_at_utc=chart_range.end,
+        candles=(candle(session.market_data.timeframe, last_open.minute),),
+        fills=(
+            trade_fill(session_id=session.config.session_id, filled_at_utc=last_open),
+        ),
         state=ChartReadState.READY,
     )
 

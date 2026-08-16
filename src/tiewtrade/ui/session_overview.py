@@ -7,6 +7,7 @@ from tiewtrade.trading.futures_policy import FuturesTradingPolicy
 from tiewtrade.trading.session_config import MarketType
 from tiewtrade.trading.spot_policy import SpotTradingPolicy
 from tiewtrade.ui.display_time import display_timestamp
+from tiewtrade.ui.pair_text import pair_text
 from tiewtrade.ui.preset_display import preset_display_name
 
 _BLANK = "—"
@@ -28,7 +29,6 @@ class SessionOverviewWidget(QWidget):
         self.spot_reserve_ratio_value = self._value_label()
         self.margin_mode_value = self._value_label()
         self.position_mode_value = self._value_label()
-        self.slippage_value = self._value_label()
         self.created_at_value = self._value_label()
 
         self._build_layout()
@@ -36,7 +36,7 @@ class SessionOverviewWidget(QWidget):
     def show_session(self, session: ConfiguredPaperSession) -> None:
         config = session.config
         self.market_value.setText(config.market_type.value.title())
-        self.symbol_value.setText(session.market_data.symbol)
+        self.symbol_value.setText(pair_text(session.market_data.symbol))
         self.timeframe_value.setText(session.market_data.timeframe)
         self.preset_value.setText(preset_display_name(config.preset_version))
         self.available_capital_value.setText(
@@ -44,7 +44,6 @@ class SessionOverviewWidget(QWidget):
         )
         self.max_entries_value.setText(str(config.entry_policy.max_entries))
         self._show_market_policy(session)
-        self.slippage_value.setText(f"{_decimal_text(config.slippage_bps)} bps")
         self.created_at_value.setText(display_timestamp(session.created_at_utc))
 
     def _build_layout(self) -> None:
@@ -60,7 +59,7 @@ class SessionOverviewWidget(QWidget):
         grid.setVerticalSpacing(18)
         rows = (
             ("Market Type", self.market_value),
-            ("Symbol", self.symbol_value),
+            ("Pair", self.symbol_value),
             ("Timeframe", self.timeframe_value),
             ("Strategy Preset", self.preset_value),
             ("Available Capital", self.available_capital_value),
@@ -69,7 +68,6 @@ class SessionOverviewWidget(QWidget):
             ("Spot Reserve Ratio", self.spot_reserve_ratio_value),
             ("Margin Mode", self.margin_mode_value),
             ("Position Mode", self.position_mode_value),
-            ("Slippage", self.slippage_value),
             ("Created at", self.created_at_value),
         )
         for index, (label, value) in enumerate(rows):

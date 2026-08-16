@@ -30,7 +30,6 @@ def configured_spot_session(*, session_id: UUID = SESSION_ID) -> ConfiguredPaper
             timeframe="5m",
             available_capital="200000",
             max_entries="10",
-                slippage_bps="5",
             spot_trading_capital_percent="80",
             futures_leverage=None,
         )
@@ -50,7 +49,6 @@ def configured_futures_session(
             timeframe="5m",
             available_capital="200000",
             max_entries="10",
-                slippage_bps="5",
             spot_trading_capital_percent=None,
             futures_leverage=str(leverage),
         )

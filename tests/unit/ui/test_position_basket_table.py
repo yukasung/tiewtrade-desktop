@@ -94,8 +94,7 @@ def test_each_entry_of_the_basket_is_its_own_row(qtbot: QtBot) -> None:
     )
 
     assert widget.headers == (
-        "Entry",
-        "Filled At",
+        "Date",
         "Entry Price",
         "Take Profit",
         "Quantity",
@@ -105,8 +104,7 @@ def test_each_entry_of_the_basket_is_its_own_row(qtbot: QtBot) -> None:
     )
     assert widget.table.rowCount() == 2
     assert _row(widget, 0) == {
-        "Entry": "#1",
-        "Filled At": "2026-08-02 08:00:00",
+        "Date": "2026-08-02 08:00:00",
         "Entry Price": "66,000.0000",
         "Take Profit": "67,000.0000",
         "Quantity": "0.00300000",
@@ -114,9 +112,8 @@ def test_each_entry_of_the_basket_is_its_own_row(qtbot: QtBot) -> None:
         "Unrealized P/L": "0.96 USDT",
         "Status": "Active",
     }
-    assert _row(widget, 1)["Entry"] == "#2"
     assert _row(widget, 1)["Entry Price"] == "66,000.2500"
-    assert _row(widget, 1)["Filled At"] == "2026-08-02 09:00:00"
+    assert _row(widget, 1)["Date"] == "2026-08-02 09:00:00"
     assert widget.state_label.text() == ""
     assert widget.state_label.accessibleName() == "Position status"
 
@@ -209,14 +206,13 @@ def test_a_moved_column_carries_its_own_reading(
     )
 
     assert widget.headers[0] == "Status"
-    assert _row(widget)["Entry"] == "#1"
     assert _row(widget)["Unrealized P/L"] == "0.96 USDT"
     assert _cell(widget, "Unrealized P/L").foreground() == QBrush(
         QColor(POSITIVE_COLOR)
     )
 
 
-def test_columns_align_numbers_right_and_short_labels_centre(qtbot: QtBot) -> None:
+def test_columns_align_numbers_right_and_text_left(qtbot: QtBot) -> None:
     widget = PositionBasketTable()
     qtbot.addWidget(widget)
     left = Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter
@@ -228,7 +224,6 @@ def test_columns_align_numbers_right_and_short_labels_centre(qtbot: QtBot) -> No
     )
 
     assert widget.ALIGNMENTS == (
-        centre,
         left,
         right,
         right,
@@ -241,9 +236,10 @@ def test_columns_align_numbers_right_and_short_labels_centre(qtbot: QtBot) -> No
         cell = widget.table.item(0, column)
         header = widget.table.horizontalHeaderItem(column)
         assert cell is not None and header is not None
-        # A header out of step with its column reads as a different column.
+        # The cell follows its column, so a run of figures shares one right
+        # edge. The heading is centred over the column whatever that is.
         assert cell.textAlignment() == alignment
-        assert header.textAlignment() == alignment
+        assert header.textAlignment() == centre
 
 
 @pytest.mark.parametrize(
@@ -276,7 +272,7 @@ def test_entry_pnl_reads_as_a_two_decimal_figure_coloured_by_its_sign(
     pnl = _cell(widget, "Unrealized P/L")
     assert pnl.text() == expected_text
     # A break-even figure keeps the table's own colour rather than picking a side.
-    plain = _cell(widget, "Entry")
+    plain = _cell(widget, "Date")
     expected_brush = (
         plain.foreground()
         if expected_colour is None

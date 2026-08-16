@@ -17,8 +17,8 @@ from tiewtrade.trading.spot_policy import SpotTradingPolicy
 from tiewtrade.trading.symbol_rules import SymbolRules
 
 
-def test_long_entry_uses_next_open_adverse_slippage_and_target_notional() -> None:
-    executor = make_executor(leverage=3, slippage_bps="10")
+def test_long_entry_fills_at_the_next_open_for_the_target_notional() -> None:
+    executor = make_executor(leverage=3)
     intent = long_intent()
     fill_candle = candle(minute=5, open="100")
 
@@ -27,26 +27,20 @@ def test_long_entry_uses_next_open_adverse_slippage_and_target_notional() -> Non
     assert fill is not None
     assert intent.signal_candle.open_time != fill_candle.open_time
     assert fill.side is PositionSide.LONG
-    assert fill.price == Decimal("100.1")
-    assert fill.quantity == Decimal("299.7")
+    assert fill.price == Decimal("100")
+    assert fill.quantity == Decimal("300.0")
     assert fill.filled_at == fill_candle.open_time
 
 
-def test_short_entry_uses_adverse_downward_slippage() -> None:
-    executor = make_executor(leverage=3, slippage_bps="10")
+def test_short_entry_fills_at_the_next_open() -> None:
+    executor = make_executor(leverage=3)
 
     fill = executor.fill_entry(short_intent(), candle(minute=5, open="100"))
 
     assert fill is not None
     assert fill.side is PositionSide.SHORT
-    assert fill.price == Decimal("99.9")
-    assert fill.quantity == Decimal("300.3")
-
-
-def test_short_entry_returns_none_when_quantized_price_is_zero() -> None:
-    executor = make_executor(slippage_bps="9999.9")
-
-    assert executor.fill_entry(short_intent(), candle(minute=5, open="100")) is None
+    assert fill.price == Decimal("100")
+    assert fill.quantity == Decimal("300.0")
 
 
 def test_entry_below_min_notional_returns_none() -> None:
@@ -82,8 +76,8 @@ def test_repeating_the_same_entry_produces_the_same_fill_identity() -> None:
     )
 
 
-def test_long_take_profit_uses_adverse_downward_price() -> None:
-    executor = make_executor(slippage_bps="10")
+def test_long_take_profit_fills_at_its_target() -> None:
+    executor = make_executor()
     basket = long_basket(entry_price="100", take_profit="106")
     current = candle(open="105", high="107", low="104")
 
@@ -92,7 +86,7 @@ def test_long_take_profit_uses_adverse_downward_price() -> None:
     assert fill is not None
     assert fill.side is PositionSide.LONG
     assert fill.close_reason is BasketCloseReason.TAKE_PROFIT
-    assert fill.price == Decimal("105.8")
+    assert fill.price == Decimal("106")
     assert fill.quantity == Decimal("2")
     assert fill.filled_at == current.close_time
     assert fill.order_id == ("take_profit:00000000-0000-0000-0000-000000000108")
@@ -103,8 +97,8 @@ def test_long_take_profit_uses_adverse_downward_price() -> None:
     assert fill == executor.fill_take_profit(basket, current)
 
 
-def test_short_take_profit_uses_adverse_upward_price() -> None:
-    executor = make_executor(slippage_bps="10")
+def test_short_take_profit_fills_at_its_target() -> None:
+    executor = make_executor()
     basket = short_basket(entry_price="100", take_profit="94")
     current = candle(open="95", high="96", low="93")
 
@@ -113,7 +107,7 @@ def test_short_take_profit_uses_adverse_upward_price() -> None:
     assert fill is not None
     assert fill.side is PositionSide.SHORT
     assert fill.close_reason is BasketCloseReason.TAKE_PROFIT
-    assert fill.price == Decimal("94.1")
+    assert fill.price == Decimal("94")
     assert fill.quantity == Decimal("2")
     assert fill.order_id == ("take_profit:00000000-0000-0000-0000-000000000108")
     assert fill.fill_id == (
@@ -160,7 +154,7 @@ def test_take_profit_rejects_a_padded_near_match() -> None:
 
 
 def test_liquidation_wins_over_take_profit_and_uses_gap_aware_price() -> None:
-    executor = make_executor(slippage_bps="10")
+    executor = make_executor()
     basket = long_basket(entry_price="100", take_profit="106")
     current = candle(open="70", high="110", low="60")
 
@@ -173,7 +167,7 @@ def test_liquidation_wins_over_take_profit_and_uses_gap_aware_price() -> None:
 
     assert liquidation is not None
     assert liquidation.close_reason is BasketCloseReason.LIQUIDATION
-    assert liquidation.price == Decimal("69.9")
+    assert liquidation.price == Decimal("70")
     assert liquidation.quantity == Decimal("2")
     assert liquidation.filled_at == current.close_time
     assert liquidation.order_id == ("liquidation:00000000-0000-0000-0000-000000000108")
@@ -189,8 +183,8 @@ def test_liquidation_wins_over_take_profit_and_uses_gap_aware_price() -> None:
     assert take_profit is not None
 
 
-def test_short_liquidation_uses_gap_aware_adverse_price() -> None:
-    executor = make_executor(slippage_bps="10")
+def test_short_liquidation_uses_the_gap_aware_price() -> None:
+    executor = make_executor()
     basket = short_basket(entry_price="100", take_profit="94")
     current = candle(open="130", high="140", low="100")
 
@@ -203,7 +197,7 @@ def test_short_liquidation_uses_gap_aware_adverse_price() -> None:
     assert fill is not None
     assert fill.side is PositionSide.SHORT
     assert fill.close_reason is BasketCloseReason.LIQUIDATION
-    assert fill.price == Decimal("130.2")
+    assert fill.price == Decimal("130")
     assert fill.quantity == Decimal("2")
     assert fill.order_id == ("liquidation:00000000-0000-0000-0000-000000000108")
     assert fill.fill_id == (
@@ -310,7 +304,6 @@ def test_executor_rejects_non_paper_or_non_futures_configuration() -> None:
         market_type=MarketType.SPOT,
         trade_mode=TradeMode.PAPER,
         available_capital=session.available_capital,
-        slippage_bps=session.slippage_bps,
         entry_policy=session.entry_policy,
         spot_policy=SpotTradingPolicy(trading_capital_ratio=Decimal("0.8")),
     )
@@ -322,27 +315,22 @@ def make_executor(
     *,
     leverage: int = 1,
     min_notional: str = "5",
-    slippage_bps: str = "0",
 ) -> PaperFuturesExecutor:
     return PaperFuturesExecutor(
         futures_session(
             leverage=leverage,
-            slippage_bps=slippage_bps,
         ),
         symbol_rules(min_notional=min_notional),
     )
 
 
-def futures_session(
-    *, leverage: int = 1, slippage_bps: str = "0"
-) -> SessionConfig:
+def futures_session(*, leverage: int = 1) -> SessionConfig:
     return SessionConfig(
         session_id=UUID("00000000-0000-0000-0000-000000000107"),
         preset_version="rsi-step-grid-v1",
         market_type=MarketType.FUTURES,
         trade_mode=TradeMode.PAPER,
         available_capital=Decimal("40000"),
-        slippage_bps=Decimal(slippage_bps),
         entry_policy=EntryPolicy(max_entries=2),
         spot_policy=None,
         futures_policy=FuturesTradingPolicy.v1(leverage=leverage),

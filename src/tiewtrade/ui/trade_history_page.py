@@ -27,16 +27,15 @@ from tiewtrade.application.trade_history import (
     TradeFillHistoryItem,
 )
 from tiewtrade.ui.display_time import display_today
-from tiewtrade.ui.sign_state import paint_by_sign
-from tiewtrade.ui.table_column import Column, headers, table_item
+from tiewtrade.ui.table_column import CENTER, Column, headers, table_item
 from tiewtrade.ui.table_empty_state import TableEmptyStateOverlay
 from tiewtrade.ui.trade_history_presenter import (
     BASKET_COLUMNS,
+    DEFAULT_QUICK_RANGE,
     FILL_COLUMNS,
     QuickRange,
     TradeHistoryFilterValues,
     quick_range_dates,
-    usdt_text,
 )
 from tiewtrade.ui.trade_history_workflow import HistoryTab
 
@@ -111,24 +110,119 @@ class OptionalDateEdit(QDateEdit):
 _ARRANGEMENTS = ((0, 0, 0), (0, 0, 1), (0, 1, 1), (0, 1, 2))
 
 
-class FilterBar(QFrame):
-    """One row of filters, folded onto more lines where the width is short.
+def fill_table[Record](
+    table: QTableWidget,
+    columns: tuple[Column[Record], ...],
+    records: Sequence[Record],
+) -> None:
+    """Put a whole result into a table in one pass.
 
-    The tables below live in a scroll area with no horizontal bar, so a row
-    too wide to fit would be cut off rather than scrolled to. Folding keeps
-    every control reachable at the narrowest window the app supports.
+    The header must not measure while the cells are written. Under
+    ResizeToContents every setItem re-reads every row of that column, so one
+    refresh of a few hundred rows costs seconds on the thread that draws the
+    app — the window simply stops responding. The width is measured once,
+    after all the rows are in, which reads the same and costs one pass.
+
+    Rows are dropped before they are rebuilt for the same reason: replacing
+    an item in place is the case that triggers the re-measure.
+    """
+    table.setUpdatesEnabled(False)
+    blocker = QSignalBlocker(table)
+    table.setRowCount(0)
+    table.setRowCount(len(records))
+    for row_index, record in enumerate(records):
+        for column_index, column in enumerate(columns):
+            table.setItem(row_index, column_index, table_item(column, record))
+    del blocker
+    table.resizeColumnsToContents()
+    table.setUpdatesEnabled(True)
+
+
+def _group(*widgets: QWidget) -> QWidget:
+    """Controls that are read together and so wrap together."""
+    group = QWidget()
+    row = QHBoxLayout(group)
+    row.setContentsMargins(0, 0, 0, 0)
+    row.setSpacing(GROUP_SPACING)
+    for widget in widgets:
+        row.addWidget(widget)
+    return group
+
+
+def _group_line() -> tuple[QWidget, QHBoxLayout]:
+    """One line of the bar, holding whichever groups fit on it."""
+    line = QWidget()
+    # A line asks for no width of its own. Were it to ask for the width of
+    # everything on it, the bar could never be narrower than the one-line
+    # arrangement, and it would be clipped rather than folded.
+    line.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Minimum)
+    row = QHBoxLayout(line)
+    row.setContentsMargins(0, 0, 0, 0)
+    row.setSpacing(LINE_SPACING)
+    row.addStretch()
+    return line, row
+
+
+class FilterBar(QFrame):
+    """The range one half of the history is read over, and how it is picked.
+
+    Each half of the history asks its own question, so each half owns one of
+    these rather than sharing. The controls fold onto more lines where the
+    width is short: the tables live in a scroll area with no horizontal bar,
+    so a row too wide to fit would be cut off rather than scrolled to.
     """
 
-    def __init__(
-        self,
-        groups: tuple[QWidget, ...],
-        footer: QWidget,
-        parent: QWidget | None = None,
-    ) -> None:
+    apply_filters_requested = Signal(object)
+    reset_requested = Signal()
+
+    apply_filters_requested = Signal(object)
+    reset_requested = Signal()
+
+    def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.setObjectName("historyFilterBar")
-        self._groups = groups
-        lines = tuple(_group_line() for _ in groups)
+
+        self.range_chips: dict[QuickRange, QPushButton] = {}
+        self.range_group = QButtonGroup(self)
+        self.range_group.setExclusive(True)
+        for kind in QuickRange:
+            chip = QPushButton(kind.value)
+            chip.setObjectName(f"range{kind.name.title().replace('_', '')}")
+            chip.setAccessibleName(f"Last {kind.value}")
+            chip.setProperty("rangeChip", True)
+            chip.setCheckable(True)
+            chip.setCursor(Qt.CursorShape.PointingHandCursor)
+            # Bound now, or every chip would close over the last range.
+            chip.clicked.connect(lambda _checked, picked=kind: self._pick_range(picked))
+            self.range_group.addButton(chip)
+            self.range_chips[kind] = chip
+
+        self.from_date = OptionalDateEdit("fromDate", "From Date")
+        self.date_separator = QLabel("to")
+        self.date_separator.setObjectName("filterLabel")
+        self.to_date = OptionalDateEdit("toDate", "To Date")
+        # A date typed by hand is the trader's own range, not one of the chips'.
+        self.from_date.dateChanged.connect(self._clear_range_chips)
+        self.to_date.dateChanged.connect(self._clear_range_chips)
+
+        self.filter_error = QLabel()
+        self.filter_error.setObjectName("filterError")
+        self.filter_error.setWordWrap(True)
+        self.filter_error.setVisible(False)
+
+        self.reset_button = QPushButton("Reset")
+        self.reset_button.setObjectName("secondaryButton")
+        self.search_button = QPushButton("Search")
+        self.search_button.setObjectName("primaryButton")
+        self.reset_button.clicked.connect(self._reset_filters)
+        self.search_button.clicked.connect(self._apply_filters)
+
+        self._groups = (
+            _group(*self.range_chips.values()),
+            _group(self.from_date, self.date_separator, self.to_date),
+            _group(self.search_button, self.reset_button),
+        )
+        lines = tuple(_group_line() for _ in self._groups)
         self._lines = tuple(line for line, _ in lines)
         self._line_layouts = tuple(layout for _, layout in lines)
         self._arrangement: tuple[int, ...] = ()
@@ -138,8 +232,88 @@ class FilterBar(QFrame):
         layout.setSpacing(8)
         for line in self._lines:
             layout.addWidget(line)
-        layout.addWidget(footer)
+        layout.addWidget(self.filter_error)
         self._arrange(_ARRANGEMENTS[0])
+        self._show_default_range()
+
+    def filter_values(self) -> TradeHistoryFilterValues:
+        return TradeHistoryFilterValues(
+            from_date=self.from_date.optional_date(),
+            to_date=self.to_date.optional_date(),
+        )
+
+    def set_controls_enabled(self, enabled: bool) -> None:
+        for widget in (
+            *self.range_chips.values(),
+            self.from_date,
+            self.to_date,
+            self.reset_button,
+            self.search_button,
+        ):
+            widget.setEnabled(enabled)
+
+    def show_error(self, message: str) -> None:
+        self.filter_error.setText(message)
+        self.filter_error.setVisible(True)
+
+    def clear_error(self) -> None:
+        self.filter_error.clear()
+        self.filter_error.setVisible(False)
+
+    def focus_chain(self) -> tuple[QWidget, ...]:
+        """Reading order, which the folding does not disturb."""
+        return (
+            *self.range_chips.values(),
+            self.from_date,
+            self.to_date,
+            self.search_button,
+            self.reset_button,
+        )
+
+    @Slot()
+    def _apply_filters(self) -> None:
+        self.clear_error()
+        self.apply_filters_requested.emit(self.filter_values())
+
+    @Slot()
+    def _reset_filters(self) -> None:
+        self._show_default_range()
+        self.clear_error()
+        self.reset_requested.emit()
+
+    def _show_default_range(self) -> None:
+        """Put the bar back to what it opens on, without asking for a read.
+
+        The workflow reads on its own, both when it starts and when it is
+        reset, so searching from here would draw the tables a second time.
+        """
+        from_day, to_day = quick_range_dates(DEFAULT_QUICK_RANGE, display_today())
+        self._set_date(self.from_date, from_day)
+        self._set_date(self.to_date, to_day)
+        self.range_chips[DEFAULT_QUICK_RANGE].setChecked(True)
+
+    def _pick_range(self, kind: QuickRange) -> None:
+        """A quick range fills both ends and searches on the spot."""
+        from_day, to_day = quick_range_dates(kind, display_today())
+        self._set_date(self.from_date, from_day)
+        self._set_date(self.to_date, to_day)
+        self.range_chips[kind].setChecked(True)
+        self._apply_filters()
+
+    def _set_date(self, field: OptionalDateEdit, value: date) -> None:
+        # Filling the field from a chip must not read as the trader editing it.
+        blocker = QSignalBlocker(field)
+        field.setDate(QDate(value.year, value.month, value.day))
+        del blocker
+
+    @Slot()
+    def _clear_range_chips(self) -> None:
+        checked = self.range_group.checkedButton()
+        if checked is None:
+            return
+        self.range_group.setExclusive(False)
+        checked.setChecked(False)
+        self.range_group.setExclusive(True)
 
     def line_of(self, widget: QWidget) -> int:
         """Which line a control ended up on, so intent can be read in a test."""
@@ -201,59 +375,6 @@ class FilterBar(QFrame):
         self._arrangement = arrangement
 
 
-def _group_line() -> tuple[QWidget, QHBoxLayout]:
-    """One line of the bar, holding whichever groups fit on it."""
-    line = QWidget()
-    # A line asks for no width of its own. Were it to ask for the width of
-    # everything on it, the bar could never be narrower than the one-line
-    # arrangement, and it would be clipped rather than folded.
-    line.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Minimum)
-    row = QHBoxLayout(line)
-    row.setContentsMargins(0, 0, 0, 0)
-    row.setSpacing(LINE_SPACING)
-    row.addStretch()
-    return line, row
-
-
-def fill_table[Record](
-    table: QTableWidget,
-    columns: tuple[Column[Record], ...],
-    records: Sequence[Record],
-) -> None:
-    """Put a whole result into a table in one pass.
-
-    The header must not measure while the cells are written. Under
-    ResizeToContents every setItem re-reads every row of that column, so one
-    refresh of a few hundred rows costs seconds on the thread that draws the
-    app — the window simply stops responding. The width is measured once,
-    after all the rows are in, which reads the same and costs one pass.
-
-    Rows are dropped before they are rebuilt for the same reason: replacing
-    an item in place is the case that triggers the re-measure.
-    """
-    table.setUpdatesEnabled(False)
-    blocker = QSignalBlocker(table)
-    table.setRowCount(0)
-    table.setRowCount(len(records))
-    for row_index, record in enumerate(records):
-        for column_index, column in enumerate(columns):
-            table.setItem(row_index, column_index, table_item(column, record))
-    del blocker
-    table.resizeColumnsToContents()
-    table.setUpdatesEnabled(True)
-
-
-def _group(*widgets: QWidget) -> QWidget:
-    """Controls that are read together and so wrap together."""
-    group = QWidget()
-    row = QHBoxLayout(group)
-    row.setContentsMargins(0, 0, 0, 0)
-    row.setSpacing(GROUP_SPACING)
-    for widget in widgets:
-        row.addWidget(widget)
-    return group
-
-
 class TradeHistoryPage(QWidget):
     apply_filters_requested = Signal(object)
     reset_requested = Signal()
@@ -273,50 +394,15 @@ class TradeHistoryPage(QWidget):
         self._fills_loading = False
         self._active_history_tab = HistoryTab.BASKETS
 
-        self.range_chips: dict[QuickRange, QPushButton] = {}
-        self.range_group = QButtonGroup(self)
-        self.range_group.setExclusive(True)
-        for kind in QuickRange:
-            chip = QPushButton(kind.value)
-            chip.setObjectName(f"range{kind.name.title().replace('_', '')}")
-            chip.setAccessibleName(f"Last {kind.value}")
-            chip.setProperty("rangeChip", True)
-            chip.setCheckable(True)
-            chip.setCursor(Qt.CursorShape.PointingHandCursor)
-            # Bound now, or every chip would close over the last range.
-            chip.clicked.connect(lambda _checked, picked=kind: self._pick_range(picked))
-            self.range_group.addButton(chip)
-            self.range_chips[kind] = chip
-
-        self.from_date = OptionalDateEdit("fromDate", "From Date")
-        self.date_separator = QLabel("to")
-        self.date_separator.setObjectName("filterLabel")
-        self.to_date = OptionalDateEdit("toDate", "To Date")
-        # A date typed by hand is the trader's own range, not one of the chips'.
-        self.from_date.dateChanged.connect(self._clear_range_chips)
-        self.to_date.dateChanged.connect(self._clear_range_chips)
-
-        self.filter_error = QLabel()
-        self.filter_error.setObjectName("filterError")
-        self.filter_error.setWordWrap(True)
-        self.filter_error.setVisible(False)
-
-        self.reset_button = QPushButton("Reset")
-        self.reset_button.setObjectName("secondaryButton")
-        self.search_button = QPushButton("Search")
-        self.search_button.setObjectName("primaryButton")
-        self.reset_button.clicked.connect(self._reset_filters)
-        self.search_button.clicked.connect(self._apply_filters)
-
-        self.total_net_pnl_label = QLabel("Total Profit / Loss")
-        self.total_net_pnl_label.setObjectName("summaryLabel")
-        self.total_net_pnl_label.setVisible(False)
-        self.total_net_pnl = QLabel()
-        self.total_net_pnl.setObjectName("summaryValue")
-        self.total_net_pnl.setAccessibleName("Total Profit / Loss")
-        self.total_net_pnl.setVisible(False)
-        self.total_items = QLabel()
-        self.total_items.setObjectName("supportingText")
+        # Each half asks its own question of the record, so each owns the
+        # range it is read over. Only the visible bar can be clicked, and the
+        # visible bar is always the active half, so the workflow can apply
+        # what it is handed to the half it is already showing.
+        self.basket_filters = FilterBar()
+        self.trade_filters = FilterBar()
+        for bar in (self.basket_filters, self.trade_filters):
+            bar.apply_filters_requested.connect(self.apply_filters_requested)
+            bar.reset_requested.connect(self.reset_requested)
 
         self.basket_table = self._table(
             "basketHistoryTable", "Position History", BASKET_COLUMNS
@@ -345,12 +431,6 @@ class TradeHistoryPage(QWidget):
     def fill_headers(self) -> tuple[str, ...]:
         return self.FILL_HEADERS
 
-    def filter_values(self) -> TradeHistoryFilterValues:
-        return TradeHistoryFilterValues(
-            from_date=self.from_date.optional_date(),
-            to_date=self.to_date.optional_date(),
-        )
-
     @Slot(bool)
     def set_baskets_loading(self, loading: bool) -> None:
         self._baskets_loading = loading
@@ -367,11 +447,6 @@ class TradeHistoryPage(QWidget):
         fill_table(self.basket_table, BASKET_COLUMNS, result.items)
 
         self._has_basket_result = True
-        self.total_net_pnl_label.setVisible(True)
-        self.total_net_pnl.setText(usdt_text(result.realized_pnl))
-        paint_by_sign(self.total_net_pnl, result.realized_pnl)
-        self.total_net_pnl.setVisible(True)
-        self.total_items.setText(f"{len(result.items)} total Positions")
         self.retry_baskets_button.setVisible(False)
         if result.items:
             self.basket_empty_state.clear_message()
@@ -395,8 +470,7 @@ class TradeHistoryPage(QWidget):
 
     @Slot(str)
     def show_filter_error(self, message: str) -> None:
-        self.filter_error.setText(message)
-        self.filter_error.setVisible(True)
+        self._active_filters().show_error(message)
 
     @Slot(object)
     def show_trades(self, items: tuple[TradeFillHistoryItem, ...]) -> None:
@@ -432,49 +506,11 @@ class TradeHistoryPage(QWidget):
             self._set_fill_state(message)
         self.retry_fills_button.setVisible(True)
 
-    @Slot()
-    def _apply_filters(self) -> None:
-        self.filter_error.clear()
-        self.filter_error.setVisible(False)
-        self.apply_filters_requested.emit(self.filter_values())
-
-    @Slot()
-    def _reset_filters(self) -> None:
-        self.from_date.clear_date()
-        self.to_date.clear_date()
-        self._clear_range_chips()
-        self.filter_error.clear()
-        self.filter_error.setVisible(False)
-        self.reset_requested.emit()
-
-    def _pick_range(self, kind: QuickRange) -> None:
-        """A quick range fills both ends and searches on the spot."""
-        from_day, to_day = quick_range_dates(kind, display_today())
-        self._set_date(self.from_date, from_day)
-        self._set_date(self.to_date, to_day)
-        self.range_chips[kind].setChecked(True)
-        self._apply_filters()
-
-    def _set_date(self, field: OptionalDateEdit, value: date) -> None:
-        # Filling the field from a chip must not read as the trader editing it.
-        blocker = QSignalBlocker(field)
-        field.setDate(QDate(value.year, value.month, value.day))
-        del blocker
-
-    @Slot()
-    def _clear_range_chips(self) -> None:
-        checked = self.range_group.checkedButton()
-        if checked is None:
-            return
-        self.range_group.setExclusive(False)
-        checked.setChecked(False)
-        self.range_group.setExclusive(True)
-
     def show_history_tab(self, tab: HistoryTab) -> None:
         """Show the half of the history the workspace's tab strip asked for.
 
-        The two halves share one filter bar, so they stay one widget however
-        the tabs above them are arranged; only which table is on top changes.
+        Each half carries its own filter, so switching does not disturb the
+        range the other half was being read over.
 
         This is the only way the shown half changes. A result arriving from a
         query must never switch it: the reader chose the half, and a reply
@@ -512,20 +548,11 @@ class TradeHistoryPage(QWidget):
         root.setContentsMargins(0, 0, 0, 0)
         root.setSpacing(14)
 
-        self.filter_bar = self._build_filter_card()
-        root.addWidget(self.filter_bar)
-
-        basket_heading = QHBoxLayout()
-        basket_heading.setSpacing(12)
-        basket_heading.addWidget(self.total_items)
-        basket_heading.addStretch()
-        basket_heading.addWidget(self.total_net_pnl_label)
-        basket_heading.addWidget(self.total_net_pnl)
         basket_page = QWidget()
         basket_layout = QVBoxLayout(basket_page)
         basket_layout.setContentsMargins(0, 0, 0, 0)
         basket_layout.setSpacing(10)
-        basket_layout.addLayout(basket_heading)
+        basket_layout.addWidget(self.basket_filters)
         basket_layout.addWidget(self.basket_table, 1)
         basket_layout.addLayout(
             self._state_row(self.basket_state, self.retry_baskets_button)
@@ -535,6 +562,7 @@ class TradeHistoryPage(QWidget):
         trade_layout = QVBoxLayout(trade_page)
         trade_layout.setContentsMargins(0, 0, 0, 0)
         trade_layout.setSpacing(10)
+        trade_layout.addWidget(self.trade_filters)
         trade_layout.addWidget(self.fill_table, 1)
         trade_layout.addLayout(
             self._state_row(self.fill_state, self.retry_fills_button)
@@ -544,31 +572,17 @@ class TradeHistoryPage(QWidget):
         self.history_stack.addWidget(trade_page)
         root.addWidget(self.history_stack, 1)
 
-        # Reading order, which the folding above does not disturb: the ranges,
-        # then the dates they fill, then the actions, then the table itself.
-        focus_chain: tuple[QWidget, ...] = (
-            *self.range_chips.values(),
-            self.from_date,
-            self.to_date,
-            self.search_button,
-            self.reset_button,
-            self.basket_table,
-        )
-        for earlier, later in zip(focus_chain, focus_chain[1:], strict=False):
-            QWidget.setTabOrder(earlier, later)
+        # Each half reads its own filter and then its own table.
+        for bar, table in (
+            (self.basket_filters, self.basket_table),
+            (self.trade_filters, self.fill_table),
+        ):
+            chain = (*bar.focus_chain(), table)
+            for earlier, later in zip(chain, chain[1:], strict=False):
+                QWidget.setTabOrder(earlier, later)
 
         self.scroll_area.setWidget(content)
         outer.addWidget(self.scroll_area)
-
-    def _build_filter_card(self) -> FilterBar:
-        return FilterBar(
-            (
-                _group(*self.range_chips.values()),
-                _group(self.from_date, self.date_separator, self.to_date),
-                _group(self.search_button, self.reset_button),
-            ),
-            self.filter_error,
-        )
 
     def _clear_fill_result(self) -> None:
         self._clear_table(self.fill_table)
@@ -577,23 +591,15 @@ class TradeHistoryPage(QWidget):
         self.fill_state.setVisible(False)
         self.retry_fills_button.setVisible(False)
 
-    def _set_filter_controls_enabled(self, enabled: bool) -> None:
-        for widget in (
-            *self.range_chips.values(),
-            self.from_date,
-            self.to_date,
-            self.reset_button,
-            self.search_button,
-        ):
-            widget.setEnabled(enabled)
-
     def _refresh_filter_controls(self) -> None:
-        """Only the tab being read can hold the filters, since only it is loading."""
+        """Each half's filter is held only while that half is reading."""
+        self.basket_filters.set_controls_enabled(not self._baskets_loading)
+        self.trade_filters.set_controls_enabled(not self._fills_loading)
+
+    def _active_filters(self) -> FilterBar:
         if self._active_history_tab is HistoryTab.BASKETS:
-            active_loading = self._baskets_loading
-        else:
-            active_loading = self._fills_loading
-        self._set_filter_controls_enabled(not active_loading)
+            return self.basket_filters
+        return self.trade_filters
 
     def _set_basket_state(self, message: str) -> None:
         """Nothing found reads inside the empty table; anything else reads below it."""
@@ -624,11 +630,13 @@ class TradeHistoryPage(QWidget):
         table.setObjectName(object_name)
         table.setAccessibleName(accessible_name)
         table.setHorizontalHeaderLabels(list(headers(columns)))
-        # A header that does not follow its column reads as a different column.
-        for index, column in enumerate(columns):
+        # Headings sit centred over every column, whichever way the values
+        # under them run. The cells keep their own alignment, so figures
+        # still line up on one right edge to be read down.
+        for index in range(len(columns)):
             header_item = table.horizontalHeaderItem(index)
             if header_item is not None:
-                header_item.setTextAlignment(column.alignment)
+                header_item.setTextAlignment(CENTER)
         table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
@@ -642,7 +650,11 @@ class TradeHistoryPage(QWidget):
         table.horizontalHeader().setSectionResizeMode(
             QHeaderView.ResizeMode.Interactive
         )
-        table.horizontalHeader().setStretchLastSection(True)
+        # The last column here holds figures, right aligned. Stretching it
+        # would hand it all the room left over and push those figures to the
+        # far edge, away from the Total they are read against. The spare
+        # width is better left empty beside the table.
+        table.horizontalHeader().setStretchLastSection(False)
         return table
 
     @staticmethod
@@ -682,7 +694,3 @@ class TradeHistoryPage(QWidget):
     def _clear_basket_result(self) -> None:
         self._has_basket_result = False
         self._clear_table(self.basket_table)
-        self.total_net_pnl_label.setVisible(False)
-        self.total_net_pnl.clear()
-        self.total_net_pnl.setVisible(False)
-        self.total_items.clear()

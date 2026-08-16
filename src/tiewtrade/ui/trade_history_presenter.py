@@ -7,7 +7,8 @@ from enum import Enum
 from tiewtrade.application.trade_history import TradeFillHistoryItem, TradeHistoryFilter
 from tiewtrade.trading.trade_history import BasketResult, FillSide
 from tiewtrade.ui.display_time import DISPLAY_TIMEZONE, display_timestamp
-from tiewtrade.ui.money_text import money_text, price_text
+from tiewtrade.ui.money_text import money_text, price_text, realized_text
+from tiewtrade.ui.pair_text import pair_text
 from tiewtrade.ui.sign_state import sign_colour
 from tiewtrade.ui.table_column import CENTER, LEFT, RIGHT, Column
 from tiewtrade.ui.theme import NEGATIVE_COLOR, POSITIVE_COLOR
@@ -44,6 +45,20 @@ def quick_range_dates(kind: QuickRange, today: date) -> tuple[date, date]:
     return _months_before(today, months) + timedelta(days=1), today
 
 
+DEFAULT_QUICK_RANGE = QuickRange.ONE_DAY
+
+
+def default_filter_values(today: date) -> TradeHistoryFilterValues:
+    """What the filter asks for before anyone has touched it.
+
+    Both the bar and the workflow read the default from here, because a
+    filter bar that says one thing while the query asks another is wrong in
+    a way nothing on screen would show.
+    """
+    from_date, to_date = quick_range_dates(DEFAULT_QUICK_RANGE, today)
+    return TradeHistoryFilterValues(from_date=from_date, to_date=to_date)
+
+
 def _months_before(value: date, months: int) -> date:
     """The same day of an earlier month, or its last day where that is short."""
     month_index = value.year * 12 + value.month - 1 - months
@@ -68,27 +83,27 @@ def trade_history_filter(values: TradeHistoryFilterValues) -> TradeHistoryFilter
 
 
 BASKET_COLUMNS: tuple[Column[BasketResult], ...] = (
-    Column("Opened At", LEFT, lambda basket: local_text(basket.opened_at_utc)),
-    Column("Mode", CENTER, lambda basket: display_enum(basket.trade_mode.value)),
+    Column("Date", LEFT, lambda basket: local_text(basket.opened_at_utc)),
     Column("Market", CENTER, lambda basket: display_enum(basket.market_type.value)),
-    Column("Symbol", LEFT, lambda basket: basket.symbol),
+    Column("Pair", LEFT, lambda basket: pair_text(basket.symbol)),
     Column("Timeframe", CENTER, lambda basket: basket.timeframe),
-    Column("Entries", CENTER, lambda basket: str(basket.entry_count)),
     # "Total" is what an exchange calls price × quantity, and what the Fills
     # table beside this one already calls it. One word for one idea.
     Column("Total", RIGHT, lambda basket: usdt_text(basket.invested_notional)),
     Column(
         "Profit / Loss",
         RIGHT,
-        lambda basket: usdt_text(basket.realized_pnl),
+        lambda basket: realized_text(basket.realized_pnl),
         lambda basket: sign_colour(basket.realized_pnl),
     ),
-    Column("Status", LEFT, lambda basket: display_enum(basket.status.value)),
+    # Mode, Entries and Status are on the record but off the screen: a Paper
+    # Bot writes only Paper, and how many Entries a round took is a fact about
+    # how it was built rather than how it did.
 )
 
 FILL_COLUMNS: tuple[Column[TradeFillHistoryItem], ...] = (
-    Column("Filled At", LEFT, lambda item: local_text(item.fill.filled_at_utc)),
-    Column("Symbol", LEFT, lambda item: item.symbol),
+    Column("Date", LEFT, lambda item: local_text(item.fill.filled_at_utc)),
+    Column("Pair", LEFT, lambda item: pair_text(item.symbol)),
     Column(
         "Side",
         CENTER,
@@ -101,7 +116,7 @@ FILL_COLUMNS: tuple[Column[TradeFillHistoryItem], ...] = (
     Column(
         "Profit / Loss",
         RIGHT,
-        lambda item: usdt_text(item.fill.realized_pnl),
+        lambda item: realized_text(item.fill.realized_pnl),
         lambda item: sign_colour(item.fill.realized_pnl),
     ),
     # Source is on the record but off the screen: every Fill a Paper Bot makes

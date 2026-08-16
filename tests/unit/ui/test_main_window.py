@@ -72,8 +72,14 @@ from tiewtrade.trading.session_config import MarketType, TradeMode
 from tiewtrade.trading.spot_policy import SpotTradingPolicy
 from tiewtrade.ui.bot_lifecycle_workflow import RuntimeSnapshotRelay
 from tiewtrade.ui.chart_workflow import ChartFactRelay
+from tiewtrade.ui.display_time import display_today
 from tiewtrade.ui.main_window import BotActions, ChartSources, MainWindow
+from tiewtrade.ui.pair_text import pair_text
 from tiewtrade.ui.session_overview import SessionOverviewWidget
+from tiewtrade.ui.trade_history_presenter import (
+    default_filter_values,
+    trade_history_filter,
+)
 from tiewtrade.ui.trading_workspace import WorkspaceTab
 
 
@@ -249,8 +255,6 @@ def _session_configuration_controls(window: MainWindow) -> tuple[QWidget, ...]:
         setup.max_entries,
         setup.spot_ratio,
         setup.leverage,
-        setup.advanced_toggle,
-        setup.slippage_bps,
         setup.create_button,
     )
 
@@ -274,35 +278,6 @@ def test_trade_history_opens_without_active_session(qtbot: QtBot) -> None:
     assert window.trade_history.isVisible()
     # No session yet: the setup form is what the workspace offers.
     assert window.setup.isVisible()
-
-
-def test_empty_trade_history_still_carries_its_summary_to_the_screen(
-    qtbot: QtBot,
-) -> None:
-    """No rows is a result, not a blank: its summary is shown, not cleared."""
-    empty_result = BasketHistoryResult(
-        items=(),
-        # The smallest amount that still reads on screen, so a summary quietly
-        # dropped cannot pass as one that was merely too small to see.
-        realized_pnl=Decimal("0.01"),
-    )
-    window = MainWindow(
-        create_session=unused_create,
-        load_active=no_active_session,
-        list_basket_history=lambda _filters: empty_result,
-        list_trade_fills=empty_trade_fills,
-    )
-    qtbot.addWidget(window)
-    window.show()
-    qtbot.waitUntil(window.setup.create_button.isEnabled)
-
-    open_trade_history(window)
-
-    qtbot.waitUntil(
-        lambda: window.trade_history.basket_state.text() == "No Position history"
-    )
-    assert window.trade_history.total_net_pnl.text() == "0.01 USDT"
-    assert window.trade_history.total_items.text() == "0 total Positions"
 
 
 def test_trade_history_remains_available_when_session_load_fails(
@@ -386,7 +361,10 @@ def test_session_load_finishing_does_not_navigate_away_from_history(
     release.set()
 
     qtbot.waitUntil(
-        lambda: window.overview.symbol_value.text() == existing.market_data.symbol
+        lambda: (
+            window.overview.symbol_value.text()
+            == pair_text(existing.market_data.symbol)
+        )
     )
     assert window.trade_history.isVisible()
     assert window.overview.isVisible() is False
@@ -474,18 +452,22 @@ def test_trade_history_filter_and_reset_requests_are_wired(qtbot: QtBot) -> None
     open_trade_history(window)
     qtbot.waitUntil(lambda: window.trade_history.basket_table.rowCount() == 1)
 
-    window.trade_history.from_date.setDate(qdate(date(2026, 1, 2)))
-    click(window.trade_history.search_button)
+    window.trade_history.basket_filters.from_date.setDate(qdate(date(2026, 1, 2)))
+    window.trade_history.basket_filters.to_date.clear_date()
+    click(window.trade_history.basket_filters.search_button)
 
     qtbot.waitUntil(lambda: len(basket_calls) == 2)
     assert basket_calls[-1] == TradeHistoryFilter(
         opened_from_utc=datetime(2026, 1, 1, 17, tzinfo=UTC)
     )
 
-    click(window.trade_history.reset_button)
+    click(window.trade_history.basket_filters.reset_button)
 
     qtbot.waitUntil(lambda: len(basket_calls) == 3)
-    assert basket_calls[-1] == TradeHistoryFilter()
+    # Reset asks for the day the page opens on, not for everything.
+    assert basket_calls[-1] == trade_history_filter(
+        default_filter_values(display_today())
+    )
 
 
 def test_trade_history_filter_validation_is_wired_without_starting_query(
@@ -508,15 +490,15 @@ def test_trade_history_filter_validation_is_wired_without_starting_query(
     window.show()
     open_trade_history(window)
     qtbot.waitUntil(lambda: basket_calls == 1)
-    qtbot.waitUntil(window.trade_history.search_button.isEnabled)
-    window.trade_history.from_date.setDate(qdate(date(2026, 1, 2)))
-    window.trade_history.to_date.setDate(qdate(date(2026, 1, 1)))
+    qtbot.waitUntil(window.trade_history.basket_filters.search_button.isEnabled)
+    window.trade_history.basket_filters.from_date.setDate(qdate(date(2026, 1, 2)))
+    window.trade_history.basket_filters.to_date.setDate(qdate(date(2026, 1, 1)))
 
-    click(window.trade_history.search_button)
+    click(window.trade_history.basket_filters.search_button)
 
-    qtbot.waitUntil(window.trade_history.filter_error.isVisible)
+    qtbot.waitUntil(window.trade_history.basket_filters.filter_error.isVisible)
     assert (
-        window.trade_history.filter_error.text()
+        window.trade_history.basket_filters.filter_error.text()
         == "From Date must not be after To Date"
     )
     assert basket_calls == 1
@@ -560,7 +542,6 @@ def test_created_spot_session_returns_to_editable_form_without_runtime_actions(
     assert window.setup.market_type.currentData() == "spot"
     assert window.setup.timeframe.currentData() == "5m"
     assert window.setup.available_capital.text() == "200000"
-    assert window.setup.spot_reserve_ratio.text() == "20%"
 
 
 def test_futures_overview_shows_immutable_policy(qtbot: QtBot) -> None:
@@ -700,7 +681,7 @@ def test_validation_failure_restores_form_and_shows_field_error(qtbot: QtBot) ->
     assert window.setup.available_capital.text() == "0"
 
 
-def test_validation_failure_reveals_and_focuses_advanced_field(
+def test_an_out_of_range_value_reveals_and_focuses_its_field(
     qtbot: QtBot,
 ) -> None:
     def unused_create_active(
@@ -723,35 +704,34 @@ def test_validation_failure_reveals_and_focuses_advanced_field(
     qtbot.waitUntil(window.setup.create_button.isEnabled)
 
     window.setup.available_capital.setText("200000")
-    click(window.setup.advanced_toggle)
-    window.setup.slippage_bps.setText("10000")
+    window.setup.spot_ratio.setText("200")
     window.workspace.bot_control_scroll.ensureWidgetVisible(window.setup.create_button)
     click(window.setup.create_button)
 
     qtbot.waitUntil(
         lambda: (
-            window.setup.slippage_bps_error.text()
-            == "Slippage must be below 10,000 bps"
+            window.setup.spot_ratio_error.text()
+            == "trading_capital_ratio must be between 0 and 1"
         )
     )
     viewport = window.workspace.bot_control_scroll.viewport()
 
     assert window.workspace.bot_control.isVisible()
-    assert window.setup.slippage_bps_error.isVisible()
+    assert window.setup.spot_ratio_error.isVisible()
     assert viewport.rect().contains(
-        _widget_rect_in_viewport(window.setup.slippage_bps, viewport)
+        _widget_rect_in_viewport(window.setup.spot_ratio, viewport)
     )
     assert viewport.rect().contains(
-        _widget_rect_in_viewport(window.setup.slippage_bps_error, viewport)
+        _widget_rect_in_viewport(window.setup.spot_ratio_error, viewport)
     )
-    assert window.setup.slippage_bps.hasFocus()
+    assert window.setup.spot_ratio.hasFocus()
 
 
-@pytest.mark.parametrize("field", ["slippage_bps"])
-def test_required_advanced_validation_expands_and_reveals_field(
+def test_a_required_field_left_empty_is_revealed_and_focused(
     qtbot: QtBot,
-    field: str,
 ) -> None:
+    """A rejected field is scrolled to and focused, not just marked in red."""
+
     def unused_create_active(
         _session: ConfiguredPaperSession,
     ) -> PaperSessionCreateOutcome:
@@ -770,20 +750,17 @@ def test_required_advanced_validation_expands_and_reveals_field(
     window.activateWindow()
     qtbot.waitUntil(window.isActiveWindow)
     qtbot.waitUntil(window.setup.create_button.isEnabled)
-    assert not window.setup.advanced_toggle.isChecked()
 
     window.setup.available_capital.setText("200000")
-    window.setup.slippage_bps.clear()
+    window.setup.spot_ratio.clear()
     window.workspace.bot_control_scroll.ensureWidgetVisible(window.setup.create_button)
     click(window.setup.create_button)
 
-    control = getattr(window.setup, field)
-    error_label = getattr(window.setup, f"{field}_error")
+    control = window.setup.spot_ratio
+    error_label = window.setup.spot_ratio_error
     qtbot.waitUntil(lambda: error_label.text() == "This field is required")
     viewport = window.workspace.bot_control_scroll.viewport()
 
-    assert window.setup.advanced_toggle.isChecked()
-    assert window.setup.advanced_costs.isVisible()
     assert error_label.isVisible()
     assert viewport.rect().contains(_widget_rect_in_viewport(control, viewport))
     assert viewport.rect().contains(_widget_rect_in_viewport(error_label, viewport))
@@ -827,8 +804,7 @@ def test_delayed_validation_reveals_the_failed_field(
     qtbot.waitUntil(window.isActiveWindow)
     qtbot.waitUntil(window.setup.create_button.isEnabled)
     window.setup.available_capital.setText("200000")
-    click(window.setup.advanced_toggle)
-    window.setup.slippage_bps.setText("10000")
+    window.setup.spot_ratio.setText("200")
     window.workspace.bot_control_scroll.ensureWidgetVisible(window.setup.create_button)
     click(window.setup.create_button)
     qtbot.waitUntil(started.is_set)
@@ -837,21 +813,21 @@ def test_delayed_validation_reveals_the_failed_field(
 
     qtbot.waitUntil(
         lambda: (
-            window.setup.slippage_bps_error.text()
-            == "Slippage must be below 10,000 bps"
+            window.setup.spot_ratio_error.text()
+            == "trading_capital_ratio must be between 0 and 1"
         )
     )
     viewport = window.workspace.bot_control_scroll.viewport()
 
     assert window.workspace.bot_control.isVisible()
-    assert window.setup.slippage_bps_error.isVisible()
+    assert window.setup.spot_ratio_error.isVisible()
     assert viewport.rect().contains(
-        _widget_rect_in_viewport(window.setup.slippage_bps, viewport)
+        _widget_rect_in_viewport(window.setup.spot_ratio, viewport)
     )
     assert viewport.rect().contains(
-        _widget_rect_in_viewport(window.setup.slippage_bps_error, viewport)
+        _widget_rect_in_viewport(window.setup.spot_ratio_error, viewport)
     )
-    assert window.setup.slippage_bps.hasFocus()
+    assert window.setup.spot_ratio.hasFocus()
     assert thread_pool.waitForDone(1_000)
 
 
@@ -893,8 +869,6 @@ def test_delayed_spot_validation_freezes_configuration_until_result(
     qtbot.waitUntil(window.setup.create_button.isEnabled)
     window.setup.available_capital.setText("200000")
     window.setup.spot_ratio.setText("100")
-    click(window.setup.advanced_toggle)
-    window.setup.slippage_bps.setText("5")
     window.workspace.bot_control_scroll.ensureWidgetVisible(window.setup.create_button)
     click(window.setup.create_button)
     qtbot.waitUntil(started.is_set)
@@ -1789,8 +1763,11 @@ def test_an_open_position_shows_before_any_bot_is_started(qtbot: QtBot) -> None:
     table = window.workspace.position_basket
     qtbot.waitUntil(lambda: table.table.rowCount() == 1)
     assert table.state_label.text() == ""
-    take_profit = table.table.item(0, 3)
-    marked_pnl = table.table.item(0, 6)
+    # Read by heading: a column added or dropped must not silently shift
+    # which cell this asserts on.
+    headings = table.headers
+    take_profit = table.table.item(0, headings.index("Take Profit"))
+    marked_pnl = table.table.item(0, headings.index("Unrealized P/L"))
     assert take_profit is not None and marked_pnl is not None
     # 100 + 3 ATR, and marked 10 above its Entry Price on a position of 2.
     assert "106" in take_profit.text()

@@ -1,6 +1,6 @@
 from decimal import Decimal
 
-from tiewtrade.ui.money_text import money_text, price_text
+from tiewtrade.ui.money_text import money_text, price_text, realized_text
 
 
 def test_a_price_is_grouped_at_the_precision_it_was_quoted_in() -> None:
@@ -23,6 +23,22 @@ def test_an_amount_reads_the_cents_it_does_not_carry() -> None:
     assert money_text(Decimal("200")) == "200.00 USDT"
     assert money_text(Decimal("0.2")) == "0.20 USDT"
     assert money_text(Decimal("0")) == "0.00 USDT"
+
+
+def test_a_trade_that_realised_nothing_reads_as_a_dash() -> None:
+    """An Entry has closed nothing, so 0.00 USDT would claim a result."""
+    assert realized_text(Decimal("0")) == "—"
+    assert realized_text(Decimal("20")) == "20.00 USDT"
+    assert realized_text(Decimal("-1.25")) == "-1.25 USDT"
+
+
+def test_a_result_too_small_to_show_still_reads_as_a_result() -> None:
+    """Exactly zero is the test, not zero to the cent.
+
+    A trade that made 0.001 did close, and a dash would say it never did.
+    """
+    assert realized_text(Decimal("0.001")) == "0.00 USDT"
+    assert realized_text(Decimal("-0.001")) == "-0.00 USDT"
 
 
 def test_a_negative_amount_groups_the_digits_not_the_sign() -> None:

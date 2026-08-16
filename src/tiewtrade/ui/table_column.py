@@ -5,6 +5,8 @@ from PySide6.QtCore import Qt
 from PySide6.QtGui import QBrush, QColor
 from PySide6.QtWidgets import QTableWidgetItem
 
+from tiewtrade.ui.blank_text import BLANK
+
 LEFT = Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter
 CENTER = Qt.AlignmentFlag.AlignCenter
 RIGHT = Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
@@ -39,10 +41,17 @@ def headers[Row](columns: tuple[Column[Row], ...]) -> tuple[str, ...]:
 
 
 def table_item[Row](column: Column[Row], row: Row) -> QTableWidgetItem:
-    """One cell, read and dressed by the column that owns it."""
-    item = QTableWidgetItem(column.text(row))
+    """One cell, read and dressed by the column that owns it.
+
+    A cell with no value to show is the one exception to the column's
+    alignment: a dash is not a figure, so hanging it on the right edge the
+    figures share would have it read as the smallest number in the column.
+    Centred, it reads as the absence it is.
+    """
+    text = column.text(row)
+    item = QTableWidgetItem(text)
     item.setFlags(Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable)
-    item.setTextAlignment(column.alignment)
+    item.setTextAlignment(CENTER if text == BLANK else column.alignment)
     colour = column.colour(row)
     if colour is not None:
         item.setForeground(QBrush(QColor(colour)))

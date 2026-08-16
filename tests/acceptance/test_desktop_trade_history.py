@@ -36,6 +36,7 @@ from tiewtrade.trading.trade_history import (
     FillSide,
 )
 from tiewtrade.ui.main_window import MainWindow
+from tiewtrade.ui.trade_history_page import FilterBar
 from tiewtrade.ui.trading_workspace import WorkspaceTab
 
 FUTURES_BASKET_ID = UUID("00000000-0000-0000-0000-000000000202")
@@ -43,6 +44,19 @@ FUTURES_BASKET_ID = UUID("00000000-0000-0000-0000-000000000202")
 
 def open_trade_history(window: MainWindow) -> None:
     window.workspace.show_tab(WorkspaceTab.BASKET_HISTORY)
+
+
+def show_every_day(bar: FilterBar, qtbot: QtBot) -> None:
+    """Widen one half past the day it opens on, to reach a dated fixture.
+
+    Each half carries its own range, so widening one says nothing about the
+    other. The filter is held while a read is in flight, so this waits for it
+    rather than clicking into nothing.
+    """
+    qtbot.waitUntil(bar.search_button.isEnabled)
+    bar.from_date.clear_date()
+    bar.to_date.clear_date()
+    click(bar.search_button)
 
 
 def test_desktop_trade_history_reads_durable_spot_and_futures_records(
@@ -70,38 +84,35 @@ def test_desktop_trade_history_reads_durable_spot_and_futures_records(
     assert basket_requests == []
 
     open_trade_history(window)
+    show_every_day(window.trade_history.basket_filters, qtbot)
 
     qtbot.waitUntil(lambda: window.trade_history.basket_table.rowCount() == 2)
-    assert basket_requests == [TradeHistoryFilter()]
+    assert basket_requests[0].opened_from_utc is not None
+    assert basket_requests[-1] == TradeHistoryFilter()
     assert _table_row_text(window.trade_history.basket_table, 0) == (
         "2026-01-03 07:00:00",
-        "Paper",
         "Futures",
-        "BTCUSDT",
+        "BTC/USDT",
         "5m",
-        "1",
         "200.00 USDT",
         "29.40 USDT",
-        "Closed",
     )
     assert _table_row_text(window.trade_history.basket_table, 1) == (
         "2026-01-01 07:00:00",
-        "Paper",
         "Spot",
-        "BTCUSDT",
+        "BTC/USDT",
         "5m",
-        "1",
         "200.00 USDT",
         "20.00 USDT",
-        "Closed",
     )
-    assert window.trade_history.total_net_pnl.text() == "49.40 USDT"
     window.workspace.show_tab(WorkspaceTab.TRADE_HISTORY)
+    # The Trades half opens on today too, and carries its own range.
+    show_every_day(window.trade_history.trade_filters, qtbot)
     qtbot.waitUntil(lambda: window.trade_history.fill_table.rowCount() == 4)
     assert _table_rows_text(window.trade_history.fill_table) == (
         (
             "2026-01-03 08:00:00",
-            "BTCUSDT",
+            "BTC/USDT",
             "Sell",
             "100",
             "2",
@@ -110,16 +121,16 @@ def test_desktop_trade_history_reads_durable_spot_and_futures_records(
         ),
         (
             "2026-01-03 07:00:00",
-            "BTCUSDT",
+            "BTC/USDT",
             "Buy",
             "100",
             "2",
             "200.00 USDT",
-            "0.00 USDT",
+            "—",
         ),
         (
             "2026-01-02 07:00:00",
-            "BTCUSDT",
+            "BTC/USDT",
             "Sell",
             "100",
             "2",
@@ -128,12 +139,12 @@ def test_desktop_trade_history_reads_durable_spot_and_futures_records(
         ),
         (
             "2026-01-01 07:00:00",
-            "BTCUSDT",
+            "BTC/USDT",
             "Buy",
             "100",
             "2",
             "200.00 USDT",
-            "0.00 USDT",
+            "—",
         ),
     )
 
@@ -171,8 +182,9 @@ def test_desktop_trade_history_filters_all_rows_and_survives_restart(
     qtbot.addWidget(first)
     first.show()
     open_trade_history(first)
+    show_every_day(first.trade_history.basket_filters, qtbot)
     qtbot.waitUntil(lambda: first.trade_history.basket_table.rowCount() == 51)
-    assert table_item(first.trade_history.basket_table, 0, 4).text() == "15m"
+    assert table_item(first.trade_history.basket_table, 0, 3).text() == "15m"
     first_page_opened_at = tuple(
         table_item(first.trade_history.basket_table, row, 0).text() for row in range(51)
     )
@@ -182,22 +194,22 @@ def test_desktop_trade_history_filters_all_rows_and_survives_restart(
 
     # One Basket was opened each day, so a single day narrows 51 rows to one.
     newest_date = (datetime(2026, 1, 1, tzinfo=UTC) + timedelta(days=50)).date()
-    first.trade_history.from_date.setDate(qdate(newest_date))
-    first.trade_history.to_date.setDate(qdate(newest_date))
-    click(first.trade_history.search_button)
+    first.trade_history.basket_filters.from_date.setDate(qdate(newest_date))
+    first.trade_history.basket_filters.to_date.setDate(qdate(newest_date))
+    click(first.trade_history.basket_filters.search_button)
     qtbot.waitUntil(lambda: first.trade_history.basket_table.rowCount() == 1)
-    assert table_item(first.trade_history.basket_table, 0, 4).text() == "15m"
-    assert table_item(first.trade_history.basket_table, 0, 2).text() == "Futures"
-    assert first.trade_history.total_net_pnl.text() == "29.40 USDT"
+    assert table_item(first.trade_history.basket_table, 0, 3).text() == "15m"
+    assert table_item(first.trade_history.basket_table, 0, 1).text() == "Futures"
     assert basket_requests[-1] == TradeHistoryFilter(
         # The picked day is a Bangkok day, which opens at 17:00 UTC.
         opened_from_utc=datetime(2026, 2, 19, 17, 0, tzinfo=UTC),
         opened_before_utc=datetime(2026, 2, 20, 17, 0, tzinfo=UTC),
     )
 
-    click(first.trade_history.reset_button)
-    assert not first.trade_history.from_date.has_date()
-    assert not first.trade_history.to_date.has_date()
+    click(first.trade_history.basket_filters.reset_button)
+    assert first.trade_history.basket_filters.from_date.has_date()
+    assert first.trade_history.basket_filters.to_date.has_date()
+    show_every_day(first.trade_history.basket_filters, qtbot)
     qtbot.waitUntil(lambda: first.trade_history.basket_table.rowCount() == 51)
     first.close()
 
@@ -205,8 +217,9 @@ def test_desktop_trade_history_filters_all_rows_and_survives_restart(
     qtbot.addWidget(restarted)
     restarted.show()
     open_trade_history(restarted)
+    show_every_day(restarted.trade_history.basket_filters, qtbot)
     qtbot.waitUntil(lambda: restarted.trade_history.basket_table.rowCount() == 51)
-    assert table_item(restarted.trade_history.basket_table, 0, 4).text() == "15m"
+    assert table_item(restarted.trade_history.basket_table, 0, 3).text() == "15m"
 
 
 def test_trade_history_read_failure_is_fail_closed_and_sanitized(
@@ -239,10 +252,10 @@ def test_trade_history_read_failure_is_fail_closed_and_sanitized(
     qtbot.addWidget(window)
     window.show()
     open_trade_history(window)
+    show_every_day(window.trade_history.basket_filters, qtbot)
     qtbot.waitUntil(lambda: window.trade_history.basket_table.rowCount() == 1)
-    assert not window.trade_history.total_net_pnl.isHidden()
 
-    click(window.trade_history.search_button)
+    click(window.trade_history.basket_filters.search_button)
     qtbot.waitUntil(
         lambda: (
             window.trade_history.basket_state.text()
@@ -252,9 +265,6 @@ def test_trade_history_read_failure_is_fail_closed_and_sanitized(
 
     assert window.trade_history.basket_table.rowCount() == 1
     assert window.trade_history.fill_table.rowCount() == 0
-    assert not window.trade_history.total_net_pnl.isHidden()
-    assert not window.trade_history.total_net_pnl_label.isHidden()
-    assert window.trade_history.total_net_pnl.text() == "20.00 USDT"
     assert window.trade_history.retry_baskets_button.isVisible()
     assert "/private/tmp" not in window.trade_history.basket_state.text()
 
@@ -330,6 +340,7 @@ def test_trade_history_desktop_flow_has_no_forbidden_import_or_network(
     window.show()
     assert window.setup.isVisible()
     open_trade_history(window)
+    show_every_day(window.trade_history.basket_filters, qtbot)
     qtbot.waitUntil(
         lambda: window.trade_history.basket_state.text() == "No Position history"
     )
@@ -485,6 +496,7 @@ def test_opening_the_trade_half_first_shows_trades_not_baskets(
     window.show()
 
     window.workspace.show_tab(WorkspaceTab.TRADE_HISTORY)
+    show_every_day(window.trade_history.trade_filters, qtbot)
 
     qtbot.waitUntil(lambda: window.trade_history.fill_table.rowCount() > 0)
     assert window.trade_history.fill_table.isVisible()

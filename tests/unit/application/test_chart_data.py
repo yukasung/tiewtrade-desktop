@@ -527,7 +527,6 @@ def session() -> ConfiguredPaperSession:
             market_type=MarketType.SPOT,
             trade_mode=TradeMode.PAPER,
             available_capital=Decimal("1000"),
-            slippage_bps=Decimal("5"),
             entry_policy=EntryPolicy(max_entries=10),
             spot_policy=SpotTradingPolicy(trading_capital_ratio=Decimal("0.8")),
         ),

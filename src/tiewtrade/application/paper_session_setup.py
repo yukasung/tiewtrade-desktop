@@ -44,7 +44,6 @@ class PaperSessionSetupValues:
     timeframe: str
     available_capital: str
     max_entries: str
-    slippage_bps: str
     spot_trading_capital_percent: str | None
     futures_leverage: str | None
     preset_version: str = "rsi-step-grid-v1"
@@ -103,7 +102,6 @@ class CreatePaperSession:
         market_type = _market_type(values.market_type)
         available_capital = _decimal(values.available_capital, "available_capital")
         max_entries = _integer(values.max_entries, "max_entries")
-        slippage_bps = _decimal(values.slippage_bps, "slippage_bps")
 
         spot_policy: SpotTradingPolicy | None = None
         futures_policy: FuturesTradingPolicy | None = None
@@ -145,7 +143,6 @@ class CreatePaperSession:
                 market_type=market_type,
                 trade_mode=TradeMode.PAPER,
                 available_capital=available_capital,
-                slippage_bps=slippage_bps,
                 entry_policy=entry_policy,
                 spot_policy=spot_policy,
                 futures_policy=futures_policy,
@@ -163,7 +160,6 @@ def validate_paper_session(values: PaperSessionSetupValues) -> None:
     market_type = _market_type(values.market_type)
     available_capital = _decimal(values.available_capital, "available_capital")
     _integer(values.max_entries, "max_entries")
-    slippage_bps = _decimal(values.slippage_bps, "slippage_bps")
     try:
         validate_paper_symbol(values.symbol)
     except ValueError as error:
@@ -171,10 +167,6 @@ def validate_paper_session(values: PaperSessionSetupValues) -> None:
     if available_capital <= 0:
         raise PaperSessionValidationError(
             "available_capital", "Available Capital must be positive"
-        )
-    if not Decimal("0") <= slippage_bps < Decimal("10000"):
-        raise PaperSessionValidationError(
-            "slippage_bps", "Slippage must be below 10,000 bps"
         )
     if market_type is MarketType.SPOT:
         spot_trading_policy_from_percent(

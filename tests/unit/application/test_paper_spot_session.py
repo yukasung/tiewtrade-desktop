@@ -95,10 +95,10 @@ def test_pending_intent_fills_at_the_next_completed_candle_open() -> None:
     assert pending.signal_candle.open_time < fill_candle.open_time
     assert snapshot.entry_fill is not None
     assert snapshot.entry_fill.intent_id == pending.intent_id
-    assert snapshot.entry_fill.price == Decimal("120.30")
+    assert snapshot.entry_fill.price == Decimal("120")
     assert snapshot.basket_id == uuid5(session.session_id, "basket:1")
     assert snapshot.basket_entry_count == 1
-    assert snapshot.take_profit_price == Decimal("129.30")
+    assert snapshot.take_profit_price == Decimal("129")
 
 
 def test_snapshot_has_no_basket_id_before_first_entry() -> None:
@@ -1261,7 +1261,6 @@ def session_config(**overrides: object) -> SessionConfig:
         "market_type": MarketType.SPOT,
         "trade_mode": TradeMode.PAPER,
         "available_capital": Decimal("1000"),
-        "slippage_bps": Decimal("25"),
         "entry_policy": EntryPolicy(max_entries=4),
         "spot_policy": SpotTradingPolicy(trading_capital_ratio=Decimal("0.6")),
     }

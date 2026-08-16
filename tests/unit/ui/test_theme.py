@@ -72,6 +72,8 @@ def test_dark_theme_covers_current_semantic_object_names_without_dead_navigation
         "QPushButton#navigationButtonSelected",
         "QPushButton#unavailableRetryButton",
         "QLabel#environmentBadge",
+        "QLabel#sectionTitle",
+        "QPushButton#advancedButton",
     ):
         assert dead_selector not in DARK_THEME
 
@@ -88,7 +90,7 @@ def test_workspace_and_session_setup_labels_render_readably_on_dark_surfaces(
     form_label = next(
         label
         for label in workspace.setup.findChildren(QLabel)
-        if label.text() == "Trading setup"
+        if label.text() == "Market Type"
     )
 
     assert _palette_color(form_label, QPalette.ColorRole.WindowText) == QColor(
@@ -146,7 +148,7 @@ def test_calendar_popup_renders_with_dark_readable_palette(qtbot: QtBot) -> None
     qtbot.addWidget(page)
     page.setStyleSheet(DARK_THEME)
     page.show()
-    calendar = page.from_date.calendarWidget()
+    calendar = page.basket_filters.from_date.calendarWidget()
     calendar.show()
     calendar_view = calendar.findChild(QAbstractItemView)
 
@@ -185,7 +187,7 @@ def test_trade_history_scroll_surfaces_and_scrollbar_render_dark(
     qtbot.addWidget(page)
     page.setStyleSheet(DARK_THEME)
     # Short enough that the tables overflow, which is what is scrolled.
-    page.setFixedSize(1200, 140)
+    page.setFixedSize(1200, 120)
     page.show()
 
     scroll_area = page.scroll_area

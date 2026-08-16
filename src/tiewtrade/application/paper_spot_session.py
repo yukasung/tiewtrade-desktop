@@ -443,7 +443,7 @@ class PaperSpotSession:
             closed_entry = basket.close_entry(
                 fill.entry_number,
                 exit_price=fill.price,
-                    closed_at=fill.filled_at,
+                closed_at=fill.filled_at,
             )
             transition.lifecycle.release_fill()
             exits.append(PaperSpotEntryExit(fill=fill, closed=closed_entry))

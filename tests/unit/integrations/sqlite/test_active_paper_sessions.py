@@ -49,6 +49,24 @@ def test_retire_stopped_session_removes_only_active_registration(
     assert row["ended_at_utc"] == "2026-08-08T05:01:00+00:00"
 
 
+def test_retire_releases_a_session_whose_runtime_never_started(tmp_path: Path) -> None:
+    """A Session with no lifecycle row has nothing to stop, so it can go.
+
+    Holding on to one stranded it: startup refuses to run a Session with no
+    marker, so refusing to retire it too left Start Paper Bot failing every
+    time with no way out of it.
+    """
+    database = SQLiteDatabase(tmp_path / "tiewtrade.sqlite3")
+    database.migrate()
+    store = SQLiteActivePaperSessions(database)
+    session = configured_spot_session()
+    store.create(session)
+
+    store.retire(session.config.session_id, datetime(2026, 8, 8, 5, 1, tzinfo=UTC))
+
+    assert store.get_active() is None
+
+
 def test_retire_rejects_running_session_without_mutation(tmp_path: Path) -> None:
     database = SQLiteDatabase(tmp_path / "tiewtrade.sqlite3")
     database.migrate()
@@ -186,7 +204,7 @@ def test_migration_from_v2_preserves_trade_history_record(tmp_path: Path) -> Non
             """
         ).fetchone()
 
-    assert version == 9
+    assert version == 10
     assert basket_id == "basket-sentinel"
     assert bot_sessions_exists is not None
 

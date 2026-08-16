@@ -42,7 +42,7 @@ flowchart LR
 
 แผนภาพเปรียบเทียบผลลัพธ์เมื่อสร้าง Spot Session หรือ Futures Session แยกกันด้วยทุนตั้งต้นสมมติเท่ากัน: Spot ใช้ 160,000 สำหรับ Entries และกัน 40,000 เป็น Reserve ส่วน Futures ใช้ initial margin รวม 100,000, กัน Collateral Buffer 100,000 และที่ 5x มี target notional สูงสุด 50,000 ต่อ Entry
 
-ตัวเลขนี้เป็นตัวอย่างการคำนวณ policy ไม่ใช่คำแนะนำการลงทุนและไม่ใช่ยอดเงินจริง ราคา, quantity, fee, margin facts และ symbol rules ยังต้องผ่าน execution checks ของ Mode นั้น
+ตัวเลขนี้เป็นตัวอย่างการคำนวณ policy ไม่ใช่คำแนะนำการลงทุนและไม่ใช่ยอดเงินจริง ราคา, quantity, margin facts และ symbol rules ยังต้องผ่าน execution checks ของ Mode นั้น
 
 | Policy | Spot Session | Futures Session |
 | --- | --- | --- |
@@ -54,6 +54,6 @@ flowchart LR
 
 ## Policy Checks
 
-ก่อนส่ง execution request ระบบตรวจ Available Capital เป็นบวก, Trading Capital Ratio อยู่ระหว่าง 0–1, `max_entries` เป็นเลขคู่ 2–20, allocation ถูก Mode, Futures leverage อยู่ในช่วงที่อนุญาต และผลการปัดยังผ่าน minimum notional ค่าธรรมเนียม, slippage และ funding ไม่เปลี่ยนสัดส่วน allocation แต่ถูกบันทึกเพื่อคำนวณผลลัพธ์จริง
+ก่อนส่ง execution request ระบบตรวจ Available Capital เป็นบวก, Trading Capital Ratio อยู่ระหว่าง 0–1, `max_entries` เป็นเลขคู่ 2–20, allocation ถูก Mode, Futures leverage อยู่ในช่วงที่อนุญาต และผลการปัดยังผ่าน minimum notional
 
 Capital policy ใช้ร่วมกันระหว่าง Paper กับ Live เพื่อให้ผลการทดสอบสะท้อนข้อจำกัดเดียวกัน ความต่างของ execution อธิบายที่ [Paper Trading](/paper-trading) และ [Live Safety](/live-safety)

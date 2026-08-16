@@ -25,7 +25,6 @@ class SessionConfig:
     market_type: MarketType
     trade_mode: TradeMode
     available_capital: Decimal
-    slippage_bps: Decimal
     entry_policy: EntryPolicy
     spot_policy: SpotTradingPolicy | None
     futures_policy: FuturesTradingPolicy | None = None
@@ -33,8 +32,6 @@ class SessionConfig:
     def __post_init__(self) -> None:
         if self.available_capital <= 0:
             raise ValueError("available_capital must be positive")
-        if not Decimal("0") <= self.slippage_bps < Decimal("10000"):
-            raise ValueError("slippage_bps must be between 0 and 10000")
         if self.market_type is MarketType.SPOT and self.spot_policy is None:
             raise ValueError("spot_policy is required for Spot sessions")
         if self.market_type is MarketType.SPOT and self.futures_policy is not None:

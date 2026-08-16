@@ -28,7 +28,6 @@ def test_entry_fill_uses_session_capital_costs_and_symbol_rules() -> None:
         market_type=MarketType.SPOT,
         trade_mode=TradeMode.PAPER,
         available_capital=Decimal("1000"),
-        slippage_bps=Decimal("25"),
         entry_policy=EntryPolicy(max_entries=4),
         spot_policy=SpotTradingPolicy(trading_capital_ratio=Decimal("0.6")),
     )
@@ -47,41 +46,12 @@ def test_entry_fill_uses_session_capital_costs_and_symbol_rules() -> None:
     fill = executor.fill_entry(intent(session, signal_candle), fill_candle)
 
     assert fill is not None
-    assert fill.price == Decimal("101.49")
-    assert fill.quantity == Decimal("1.477")
+    assert fill.price == Decimal("101.23")
+    assert fill.quantity == Decimal("1.481")
     assert fill.filled_at == fill_candle.open_time
     entry_order_id = f"entry:{intent(session, signal_candle).intent_id}"
     assert fill.order_id == entry_order_id
     assert fill.fill_id == f"paper:{session.session_id}:{entry_order_id}:fill"
-
-
-def test_entry_fill_rounds_buy_slippage_up_to_the_next_tick() -> None:
-    session = SessionConfig(
-        session_id=UUID("00000000-0000-0000-0000-000000000079"),
-        preset_version="rsi-step-grid-v1",
-        market_type=MarketType.SPOT,
-        trade_mode=TradeMode.PAPER,
-        available_capital=Decimal("1000"),
-        slippage_bps=Decimal("0.5"),
-        entry_policy=EntryPolicy(max_entries=4),
-        spot_policy=SpotTradingPolicy(trading_capital_ratio=Decimal("0.6")),
-    )
-    executor = PaperSpotExecutor(
-        session,
-        SymbolRules(
-            symbol="BTCUSDT",
-            tick_size=Decimal("0.01"),
-            step_size=Decimal("0.001"),
-            min_notional=Decimal("5"),
-        ),
-    )
-    signal_candle = candle_at(0, open_price="100", high="102", low="99", close="101")
-    fill_candle = candle_at(5, open_price="100", high="102", low="99", close="101")
-
-    fill = executor.fill_entry(intent(session, signal_candle), fill_candle)
-
-    assert fill is not None
-    assert fill.price == Decimal("100.01")
 
 
 def test_entry_fill_rejects_quantity_below_minimum_notional() -> None:
@@ -91,7 +61,6 @@ def test_entry_fill_rejects_quantity_below_minimum_notional() -> None:
         market_type=MarketType.SPOT,
         trade_mode=TradeMode.PAPER,
         available_capital=Decimal("100"),
-        slippage_bps=Decimal("0"),
         entry_policy=EntryPolicy(max_entries=4),
         spot_policy=SpotTradingPolicy(trading_capital_ratio=Decimal("0.6")),
     )
@@ -122,7 +91,6 @@ def test_rejected_entry_warns_with_the_numbers_needed_to_fix_the_setup(
         market_type=MarketType.SPOT,
         trade_mode=TradeMode.PAPER,
         available_capital=Decimal("100"),
-        slippage_bps=Decimal("0"),
         entry_policy=EntryPolicy(max_entries=10),
         spot_policy=SpotTradingPolicy(trading_capital_ratio=Decimal("0.8")),
     )
@@ -192,7 +160,6 @@ def test_take_profit_target_touch_uses_sell_floor_price_and_exact_fee() -> None:
         market_type=MarketType.SPOT,
         trade_mode=TradeMode.PAPER,
         available_capital=Decimal("1000"),
-        slippage_bps=Decimal("25"),
         entry_policy=EntryPolicy(max_entries=4),
         spot_policy=SpotTradingPolicy(trading_capital_ratio=Decimal("0.6")),
     )
@@ -222,7 +189,7 @@ def test_take_profit_target_touch_uses_sell_floor_price_and_exact_fee() -> None:
 
     assert len(fills) == 1
     fill = fills[0]
-    assert fill.price == Decimal("100.74")
+    assert fill.price == Decimal("101")
     assert fill.quantity == Decimal("2")
     assert fill.filled_at == touch_candle.close_time
     # The Fill names the Entry it sold, which is what lets the others stay.
@@ -262,45 +229,6 @@ def test_take_profit_rejects_a_padded_near_match() -> None:
     )
 
 
-def test_take_profit_rejects_a_non_positive_sell_price_after_quantization() -> None:
-    session = SessionConfig(
-        session_id=UUID("00000000-0000-0000-0000-000000000079"),
-        preset_version="rsi-step-grid-v1",
-        market_type=MarketType.SPOT,
-        trade_mode=TradeMode.PAPER,
-        available_capital=Decimal("1000"),
-        slippage_bps=Decimal("9999.999"),
-        entry_policy=EntryPolicy(max_entries=4),
-        spot_policy=SpotTradingPolicy(trading_capital_ratio=Decimal("0.6")),
-    )
-    rules = SymbolRules(
-        symbol="BTCUSDT",
-        tick_size=Decimal("0.01"),
-        step_size=Decimal("0.001"),
-        min_notional=Decimal("0.001"),
-    )
-    basket = Basket(
-        UUID("00000000-0000-0000-0000-000000000092"),
-        EntryPolicy(max_entries=4),
-        Decimal("1"),
-    )
-    basket.add_entry(
-        price=Decimal("0.01"),
-        quantity=Decimal("1"),
-        filled_at=datetime(2026, 1, 1, tzinfo=UTC),
-        atr=Decimal("0"),
-        tick_size=rules.tick_size,
-    )
-    touch_candle = candle_at(5, open_price="1", high="1", low="0.01", close="1")
-
-    assert (
-        PaperSpotExecutor(session, rules).fill_take_profit(
-            basket, touch_candle, filled_at=touch_candle.close_time
-        )
-        == ()
-    )
-
-
 def test_stop_loss_target_touch_uses_sell_floor_price_and_exact_fee() -> None:
     session = SessionConfig(
         session_id=UUID("00000000-0000-0000-0000-000000000079"),
@@ -308,7 +236,6 @@ def test_stop_loss_target_touch_uses_sell_floor_price_and_exact_fee() -> None:
         market_type=MarketType.SPOT,
         trade_mode=TradeMode.PAPER,
         available_capital=Decimal("1000"),
-        slippage_bps=Decimal("25"),
         entry_policy=EntryPolicy(max_entries=4),
         spot_policy=SpotTradingPolicy(trading_capital_ratio=Decimal("0.6")),
     )
@@ -338,7 +265,7 @@ def test_stop_loss_target_touch_uses_sell_floor_price_and_exact_fee() -> None:
     )
 
     assert fill is not None
-    assert fill.price == Decimal("98.75")
+    assert fill.price == Decimal("99")
     assert fill.quantity == Decimal("2")
     assert fill.filled_at == touch_candle.close_time
     exit_order_id = f"stop-loss:{basket.basket_id}"
@@ -433,7 +360,6 @@ def spot_session() -> SessionConfig:
         market_type=MarketType.SPOT,
         trade_mode=TradeMode.PAPER,
         available_capital=Decimal("1000"),
-        slippage_bps=Decimal("0"),
         entry_policy=EntryPolicy(max_entries=4),
         spot_policy=SpotTradingPolicy(trading_capital_ratio=Decimal("0.6")),
     )

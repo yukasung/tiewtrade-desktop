@@ -35,9 +35,7 @@ def test_workspace_places_existing_features_in_one_screen(qtbot: QtBot) -> None:
         "Position History",
         "Trade History",
     ]
-    assert workspace.position_basket.state_label.text() == (
-        "No open Position"
-    )
+    assert workspace.position_basket.state_label.text() == ("No open Position")
     assert workspace.setup.isVisible()
 
 
@@ -222,8 +220,8 @@ def test_both_history_tabs_show_the_same_page_on_its_own_half(
     assert workspace.tab_pages.currentWidget() is workspace.trade_history
     assert workspace.trade_history.fill_table.isVisible()
     assert not workspace.trade_history.basket_table.isVisible()
-    # The filters are the page's, and stay put under either tab.
-    assert workspace.trade_history.search_button.isVisible()
+    # Each half brings its own filter with it.
+    assert workspace.trade_history.trade_filters.search_button.isVisible()
 
     workspace.show_tab(WorkspaceTab.POSITION_BASKET)
 

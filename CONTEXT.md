@@ -31,7 +31,7 @@ Paper และ Live ใช้ business rules ชุดเดียวกัน�
 
 ## Session Configuration
 
-`SessionConfig` เป็น configuration แบบ immutable ที่ระบุ Session, Preset version, Market Type, Trade Mode, Available Capital, `EntryPolicy`, market-specific capital policy, fee และ slippage
+`SessionConfig` เป็น configuration แบบ immutable ที่ระบุ Session, Preset version, Market Type, Trade Mode, Available Capital, `EntryPolicy` และ market-specific capital policy
 
 การตั้งค่า `LIVE` ไม่ใช่คำสั่งเริ่มการเทรด และไม่ข้าม Preflight, explicit confirmation หรือ reconciliation
 

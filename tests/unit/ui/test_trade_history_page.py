@@ -2,7 +2,6 @@ from datetime import date, timedelta
 from decimal import Decimal
 from time import perf_counter
 
-import pytest
 from PySide6.QtCore import QPoint, QRect, Qt
 from PySide6.QtGui import QBrush, QColor
 from PySide6.QtTest import QTest
@@ -16,22 +15,23 @@ from PySide6.QtWidgets import (
 from pytestqt.qtbot import QtBot
 
 from tests.support.qt_interactions import click, qdate, table_item
-from tests.support.qt_rendering import ink_colours
 from tests.support.trade_history_records import basket_result, trade_fill
 from tiewtrade.application.trade_history import (
     BasketHistoryResult,
     TradeFillHistoryItem,
 )
 from tiewtrade.trading.session_config import MarketType, TradeMode
+from tiewtrade.ui.blank_text import BLANK
 from tiewtrade.ui.display_time import display_today
-from tiewtrade.ui.table_column import Column
-from tiewtrade.ui.theme import DARK_THEME, NEGATIVE_COLOR, POSITIVE_COLOR
+from tiewtrade.ui.table_column import CENTER, Column
+from tiewtrade.ui.theme import POSITIVE_COLOR
 from tiewtrade.ui.trade_history_page import TradeHistoryPage
 from tiewtrade.ui.trade_history_presenter import (
     BASKET_COLUMNS,
     FILL_COLUMNS,
     QuickRange,
     TradeHistoryFilterValues,
+    default_filter_values,
 )
 from tiewtrade.ui.trade_history_workflow import HistoryTab
 
@@ -66,8 +66,12 @@ def assert_headers_match[Record](
         body = table.item(0, index)
         assert header is not None and body is not None
         assert header.text() == column.header
-        assert header.textAlignment() == column.alignment
-        assert body.textAlignment() == column.alignment
+        # Headings are centred over every column; only the cells follow the
+        # column, which is what keeps a run of figures on one right edge.
+        # A cell with nothing to show is centred too — see the test below.
+        assert header.textAlignment() == CENTER
+        expected = CENTER if body.text() == BLANK else column.alignment
+        assert body.textAlignment() == expected
 
 
 def test_page_exposes_filters_and_exact_table_columns(qtbot: QtBot) -> None:
@@ -75,19 +79,16 @@ def test_page_exposes_filters_and_exact_table_columns(qtbot: QtBot) -> None:
     qtbot.addWidget(page)
 
     assert page.basket_headers == (
-        "Opened At",
-        "Mode",
+        "Date",
         "Market",
-        "Symbol",
+        "Pair",
         "Timeframe",
-        "Entries",
         "Total",
         "Profit / Loss",
-        "Status",
     )
     assert page.fill_headers == (
-        "Filled At",
-        "Symbol",
+        "Date",
+        "Pair",
         "Side",
         "Price",
         "Quantity",
@@ -110,31 +111,100 @@ def test_page_exposes_filters_and_exact_table_columns(qtbot: QtBot) -> None:
     assert tuple(fill_headers) == page.fill_headers
 
 
+def test_a_cell_with_no_result_is_centred_rather_than_hung_on_the_right(
+    qtbot: QtBot,
+) -> None:
+    """A dash on the figures' edge would read as the smallest number there."""
+    page = TradeHistoryPage()
+    qtbot.addWidget(page)
+    entry = TradeFillHistoryItem(
+        fill=trade_fill(fill_id="entry", realized_pnl=Decimal("0")),
+        symbol="BTCUSDT",
+        timeframe="5m",
+        market_type=MarketType.SPOT,
+        trade_mode=TradeMode.PAPER,
+    )
+    exit_fill = TradeFillHistoryItem(
+        fill=trade_fill(fill_id="exit", realized_pnl=Decimal("20")),
+        symbol="BTCUSDT",
+        timeframe="5m",
+        market_type=MarketType.SPOT,
+        trade_mode=TradeMode.PAPER,
+    )
+    page.show_history_tab(HistoryTab.TRADES)
+
+    page.show_trades((entry, exit_fill))
+
+    blank = cell(page.fill_table, page.fill_headers, 0, "Profit / Loss")
+    figure = cell(page.fill_table, page.fill_headers, 1, "Profit / Loss")
+    assert blank.text() == BLANK
+    assert blank.textAlignment() == CENTER
+    # The column itself has not moved: a row that did realise something
+    # still hangs on the right with the rest of the figures.
+    assert figure.text() == "20.00 USDT"
+    assert figure.textAlignment() == Qt.AlignmentFlag.AlignRight | (
+        Qt.AlignmentFlag.AlignVCenter
+    )
+
+
+def test_the_last_column_does_not_swallow_the_spare_width(qtbot: QtBot) -> None:
+    """Profit / Loss ends both tables, and it is read against Total.
+
+    Stretching the last section hands it every pixel left over, which on a
+    wide window drags those figures to the far edge and away from the
+    column they are compared with. The spare width stays beside the table.
+    """
+    page = TradeHistoryPage()
+    qtbot.addWidget(page)
+
+    for table in (page.basket_table, page.fill_table):
+        assert table.horizontalHeader().stretchLastSection() is False
+
+
 def test_the_filter_bar_offers_quick_ranges_and_an_open_ended_date_range(
     qtbot: QtBot,
 ) -> None:
     page = TradeHistoryPage()
     qtbot.addWidget(page)
 
-    assert [chip.text() for chip in page.range_chips.values()] == [
+    assert [chip.text() for chip in page.basket_filters.range_chips.values()] == [
         "1 Day",
         "1 Week",
         "1 Month",
         "3 Months",
     ]
-    assert [chip.accessibleName() for chip in page.range_chips.values()] == [
+    chips = page.basket_filters.range_chips
+    assert [chip.accessibleName() for chip in chips.values()] == [
         "Last 1 Day",
         "Last 1 Week",
         "Last 1 Month",
         "Last 3 Months",
     ]
-    assert not any(chip.isChecked() for chip in page.range_chips.values())
-    assert page.from_date.accessibleName() == "From Date"
-    assert page.to_date.accessibleName() == "To Date"
-    # Nothing is picked to begin with, so the range is open at both ends.
-    assert page.filter_values() == TradeHistoryFilterValues()
-    assert page.from_date.specialValueText() == "YYYY-MM-DD"
-    assert page.to_date.specialValueText() == "YYYY-MM-DD"
+    assert page.basket_filters.from_date.accessibleName() == "From Date"
+    assert page.basket_filters.to_date.accessibleName() == "To Date"
+    assert page.basket_filters.from_date.specialValueText() == "YYYY-MM-DD"
+    assert page.basket_filters.to_date.specialValueText() == "YYYY-MM-DD"
+
+
+def test_the_filter_opens_on_today(qtbot: QtBot) -> None:
+    """A trader opening the page is asking how today went, not how it all went."""
+    page = TradeHistoryPage()
+    qtbot.addWidget(page)
+
+    assert page.basket_filters.range_chips[QuickRange.ONE_DAY].isChecked()
+    assert page.basket_filters.filter_values() == default_filter_values(display_today())
+
+
+def test_reset_returns_to_today_rather_than_clearing(qtbot: QtBot) -> None:
+    """Reset means back to how it opened, which is now a day rather than all."""
+    page = TradeHistoryPage()
+    qtbot.addWidget(page)
+    click(page.basket_filters.range_chips[QuickRange.THREE_MONTHS])
+
+    click(page.basket_filters.reset_button)
+
+    assert page.basket_filters.range_chips[QuickRange.ONE_DAY].isChecked()
+    assert page.basket_filters.filter_values() == default_filter_values(display_today())
 
 
 def test_showing_the_trade_half_swaps_only_which_table_is_read(
@@ -151,9 +221,9 @@ def test_showing_the_trade_half_swaps_only_which_table_is_read(
 
     assert page.fill_table.isVisible()
     assert not page.basket_table.isVisible()
-    # One filter bar serves both halves, so it does not change with them.
-    assert page.search_button.isVisible()
-    assert page.from_date.isVisible()
+    # Each half brings its own filter, so the bar changes with the table.
+    assert page.trade_filters.search_button.isVisible()
+    assert not page.basket_filters.search_button.isVisible()
 
 
 def test_basket_and_trade_results_render_independently(
@@ -174,9 +244,8 @@ def test_basket_and_trade_results_render_independently(
     page.show_history_tab(HistoryTab.TRADES)
     page.show_trades((item,))
 
-    assert page.total_items.text() == "1 total Positions"
     assert page.fill_table.rowCount() == 1
-    assert cell(page.fill_table, page.fill_headers, 0, "Symbol").text() == "ETHUSDT"
+    assert cell(page.fill_table, page.fill_headers, 0, "Pair").text() == "ETH/USDT"
     assert cell(page.fill_table, page.fill_headers, 0, "Total").text().endswith(" USDT")
     # The colour follows the side itself, not the word the column prints for it.
     assert cell(page.fill_table, page.fill_headers, 0, "Side").foreground() == QBrush(
@@ -191,7 +260,7 @@ def test_basket_and_trade_results_render_independently(
     page.show_history_tab(HistoryTab.TRADES)
 
     assert page.fill_table.rowCount() == 1
-    assert table_item(page.fill_table, 0, 1).text() == "ETHUSDT"
+    assert table_item(page.fill_table, 0, 1).text() == "ETH/USDT"
 
     page.show_trades_empty()
 
@@ -215,20 +284,21 @@ def test_initial_basket_failure_preserves_trade_tab_result(qtbot: QtBot) -> None
     assert page.fill_table.rowCount() == 1
 
 
-def test_inactive_basket_loading_does_not_lock_trade_filters(qtbot: QtBot) -> None:
+def test_loading_one_half_leaves_the_other_half_usable(qtbot: QtBot) -> None:
+    """Each filter is held only while its own table is being read."""
     page = TradeHistoryPage()
     qtbot.addWidget(page)
+
     page.set_baskets_loading(True)
-    assert not page.search_button.isEnabled()
+
+    assert not page.basket_filters.search_button.isEnabled()
     # A chip searches on the spot, so it is held back with the button.
-    assert not page.range_chips[QuickRange.ONE_WEEK].isEnabled()
+    assert not page.basket_filters.range_chips[QuickRange.ONE_WEEK].isEnabled()
+    assert page.trade_filters.search_button.isEnabled()
 
-    page.show_history_tab(HistoryTab.TRADES)
-
-    assert page.search_button.isEnabled()
-    assert page.range_chips[QuickRange.ONE_WEEK].isEnabled()
     page.set_trades_loading(True)
-    assert not page.search_button.isEnabled()
+
+    assert not page.trade_filters.search_button.isEnabled()
 
 
 def test_page_scrolls_vertically_without_squashing_filter_controls(
@@ -237,7 +307,7 @@ def test_page_scrolls_vertically_without_squashing_filter_controls(
     page = TradeHistoryPage()
     qtbot.addWidget(page)
     # Short enough that the tables cannot fit, which is what is scrolled to.
-    page.setFixedSize(1200, 140)
+    page.setFixedSize(1200, 120)
     page.show()
 
     vertical = page.scroll_area.verticalScrollBar()
@@ -245,14 +315,14 @@ def test_page_scrolls_vertically_without_squashing_filter_controls(
     qtbot.waitUntil(lambda: vertical.maximum() > 0)
 
     controls = (
-        *page.range_chips.values(),
-        page.from_date,
-        page.to_date,
-        page.reset_button,
-        page.search_button,
+        *page.basket_filters.range_chips.values(),
+        page.basket_filters.from_date,
+        page.basket_filters.to_date,
+        page.basket_filters.reset_button,
+        page.basket_filters.search_button,
     )
     control_rects = [
-        widget_rect_in_parent(control, page.filter_bar) for control in controls
+        widget_rect_in_parent(control, page.basket_filters) for control in controls
     ]
 
     assert all(rect.width() > 0 and rect.height() > 0 for rect in control_rects)
@@ -294,15 +364,15 @@ def test_keyboard_focus_skips_scroll_area_and_scrolls_to_lower_table(
     page = TradeHistoryPage()
     qtbot.addWidget(page)
     # Short enough that the tables cannot fit, which is what is scrolled to.
-    page.setFixedSize(1200, 140)
+    page.setFixedSize(1200, 120)
     page.show()
 
     scroll_bar = page.scroll_area.verticalScrollBar()
     qtbot.waitUntil(lambda: scroll_bar.maximum() > 0)
-    page.reset_button.setFocus()
-    qtbot.waitUntil(page.reset_button.hasFocus)
+    page.basket_filters.reset_button.setFocus()
+    qtbot.waitUntil(page.basket_filters.reset_button.hasFocus)
 
-    QTest.keyClick(page.reset_button, Qt.Key.Key_Tab)
+    QTest.keyClick(page.basket_filters.reset_button, Qt.Key.Key_Tab)
 
     assert page.basket_table.hasFocus()
     qtbot.waitUntil(lambda: scroll_bar.value() > 0)
@@ -319,17 +389,17 @@ def test_the_filter_row_reads_left_to_right_in_the_order_it_is_used(
     page.setFixedSize(1200, 600)
     page.show()
 
-    last_chip = page.range_chips[QuickRange.THREE_MONTHS]
+    last_chip = page.basket_filters.range_chips[QuickRange.THREE_MONTHS]
     last_chip.setFocus()
     qtbot.waitUntil(last_chip.hasFocus)
 
     # A date field holds its own sections, so it is entered and left as one.
     QTest.keyClick(last_chip, Qt.Key.Key_Tab)
-    assert page.from_date.hasFocus()
+    assert page.basket_filters.from_date.hasFocus()
 
-    page.search_button.setFocus()
-    QTest.keyClick(page.search_button, Qt.Key.Key_Tab)
-    assert page.reset_button.hasFocus()
+    page.basket_filters.search_button.setFocus()
+    QTest.keyClick(page.basket_filters.search_button, Qt.Key.Key_Tab)
+    assert page.basket_filters.reset_button.hasFocus()
 
 
 def test_apply_and_reset_emit_immutable_filter_values(qtbot: QtBot) -> None:
@@ -339,19 +409,20 @@ def test_apply_and_reset_emit_immutable_filter_values(qtbot: QtBot) -> None:
     resets: list[None] = []
     page.apply_filters_requested.connect(emitted.append)
     page.reset_requested.connect(lambda: resets.append(None))
-    page.from_date.setDate(qdate(date(2026, 1, 2)))
-    page.to_date.setDate(qdate(date(2026, 1, 3)))
+    page.basket_filters.from_date.setDate(qdate(date(2026, 1, 2)))
+    page.basket_filters.to_date.setDate(qdate(date(2026, 1, 3)))
 
-    click(page.search_button)
+    click(page.basket_filters.search_button)
     picked = TradeHistoryFilterValues(
         from_date=date(2026, 1, 2), to_date=date(2026, 1, 3)
     )
     assert emitted == [picked]
 
-    click(page.reset_button)
+    click(page.basket_filters.reset_button)
     assert resets == [None]
+    # Reset asks the workflow to read; it does not search on the page's behalf.
     assert emitted == [picked]
-    assert page.filter_values() == TradeHistoryFilterValues()
+    assert page.basket_filters.filter_values() == default_filter_values(display_today())
 
 
 def test_an_emptied_date_leaves_that_end_of_the_range_open(qtbot: QtBot) -> None:
@@ -359,14 +430,16 @@ def test_an_emptied_date_leaves_that_end_of_the_range_open(qtbot: QtBot) -> None
     page = TradeHistoryPage()
     qtbot.addWidget(page)
     page.show()
-    page.from_date.setDate(qdate(date(2026, 1, 2)))
-    page.to_date.setDate(qdate(date(2026, 1, 3)))
+    page.basket_filters.from_date.setDate(qdate(date(2026, 1, 2)))
+    page.basket_filters.to_date.setDate(qdate(date(2026, 1, 3)))
 
-    page.to_date.setFocus()
-    QTest.keyClick(page.to_date, Qt.Key.Key_Delete)
+    page.basket_filters.to_date.setFocus()
+    QTest.keyClick(page.basket_filters.to_date, Qt.Key.Key_Delete)
 
-    assert page.to_date.text() == "YYYY-MM-DD"
-    assert page.filter_values() == TradeHistoryFilterValues(from_date=date(2026, 1, 2))
+    assert page.basket_filters.to_date.text() == "YYYY-MM-DD"
+    assert page.basket_filters.filter_values() == TradeHistoryFilterValues(
+        from_date=date(2026, 1, 2)
+    )
 
 
 def test_a_quick_range_fills_both_dates_and_searches_at_once(qtbot: QtBot) -> None:
@@ -376,12 +449,12 @@ def test_a_quick_range_fills_both_dates_and_searches_at_once(qtbot: QtBot) -> No
     page.apply_filters_requested.connect(emitted.append)
     today = display_today()
 
-    click(page.range_chips[QuickRange.ONE_WEEK])
+    click(page.basket_filters.range_chips[QuickRange.ONE_WEEK])
 
     assert emitted == [
         TradeHistoryFilterValues(from_date=today - timedelta(days=6), to_date=today)
     ]
-    assert page.range_chips[QuickRange.ONE_WEEK].isChecked()
+    assert page.basket_filters.range_chips[QuickRange.ONE_WEEK].isChecked()
 
 
 def test_only_one_quick_range_is_in_force_and_a_typed_date_replaces_it(
@@ -390,21 +463,22 @@ def test_only_one_quick_range_is_in_force_and_a_typed_date_replaces_it(
     page = TradeHistoryPage()
     qtbot.addWidget(page)
 
-    click(page.range_chips[QuickRange.ONE_WEEK])
-    click(page.range_chips[QuickRange.ONE_MONTH])
+    click(page.basket_filters.range_chips[QuickRange.ONE_WEEK])
+    click(page.basket_filters.range_chips[QuickRange.ONE_MONTH])
 
-    assert not page.range_chips[QuickRange.ONE_WEEK].isChecked()
-    assert page.range_chips[QuickRange.ONE_MONTH].isChecked()
+    assert not page.basket_filters.range_chips[QuickRange.ONE_WEEK].isChecked()
+    assert page.basket_filters.range_chips[QuickRange.ONE_MONTH].isChecked()
 
-    page.from_date.setDate(qdate(date(2026, 1, 2)))
+    page.basket_filters.from_date.setDate(qdate(date(2026, 1, 2)))
 
-    assert not any(chip.isChecked() for chip in page.range_chips.values())
+    assert not any(
+        chip.isChecked() for chip in page.basket_filters.range_chips.values()
+    )
 
-    click(page.range_chips[QuickRange.ONE_DAY])
-    click(page.reset_button)
+    click(page.basket_filters.range_chips[QuickRange.ONE_MONTH])
+    click(page.basket_filters.reset_button)
 
-    assert not any(chip.isChecked() for chip in page.range_chips.values())
-    assert page.filter_values() == TradeHistoryFilterValues()
+    assert page.basket_filters.range_chips[QuickRange.ONE_DAY].isChecked()
 
 
 def test_the_filter_row_folds_instead_of_clipping_at_the_narrowest_window(
@@ -415,22 +489,22 @@ def test_the_filter_row_folds_instead_of_clipping_at_the_narrowest_window(
     qtbot.addWidget(page)
     page.setFixedSize(1004, 600)
     page.show()
-    qtbot.waitUntil(lambda: page.filter_bar.width() > 0)
+    qtbot.waitUntil(lambda: page.basket_filters.width() > 0)
 
-    assert page.filter_bar.line_count() == 1
+    assert page.basket_filters.line_count() == 1
 
     page.setFixedSize(588, 600)
-    qtbot.waitUntil(lambda: page.filter_bar.line_count() > 1)
+    qtbot.waitUntil(lambda: page.basket_filters.line_count() > 1)
 
-    bar = page.filter_bar.rect()
+    bar = page.basket_filters.rect()
     for control in (
-        *page.range_chips.values(),
-        page.from_date,
-        page.to_date,
-        page.search_button,
-        page.reset_button,
+        *page.basket_filters.range_chips.values(),
+        page.basket_filters.from_date,
+        page.basket_filters.to_date,
+        page.basket_filters.search_button,
+        page.basket_filters.reset_button,
     ):
-        assert bar.contains(widget_rect_in_parent(control, page.filter_bar))
+        assert bar.contains(widget_rect_in_parent(control, page.basket_filters))
     assert page.scroll_area.horizontalScrollBar().maximum() == 0
 
 
@@ -447,41 +521,6 @@ def test_tables_are_read_only_row_selection_surfaces(qtbot: QtBot) -> None:
     )
 
 
-@pytest.mark.parametrize(
-    ("value", "expected_text", "expected_colour"),
-    [
-        pytest.param(Decimal("1"), "1.00 USDT", POSITIVE_COLOR, id="profit"),
-        pytest.param(Decimal("-1"), "-1.00 USDT", NEGATIVE_COLOR, id="loss"),
-        pytest.param(Decimal("0"), "0.00 USDT", None, id="break-even"),
-    ],
-)
-def test_the_summary_is_painted_by_its_sign_rather_than_labelled(
-    qtbot: QtBot,
-    value: Decimal,
-    expected_text: str,
-    expected_colour: str | None,
-) -> None:
-    """The figure says the amount and the colour says the side, so no word does.
-
-    Read off the rendered pixels: the theme paints this label by object name,
-    which outranks anything a palette or a property could ask for.
-    """
-    page = TradeHistoryPage()
-    page.setStyleSheet(DARK_THEME)
-    qtbot.addWidget(page)
-    page.show()
-
-    page.show_baskets(history_result(realized_pnl=value))
-
-    assert page.total_net_pnl.text() == expected_text
-    inks = ink_colours(page.total_net_pnl)
-    if expected_colour is None:
-        assert POSITIVE_COLOR.lower() not in inks
-        assert NEGATIVE_COLOR.lower() not in inks
-    else:
-        assert expected_colour.lower() in inks
-
-
 def test_basket_refresh_loading_keeps_last_known_durable_result(
     qtbot: QtBot,
 ) -> None:
@@ -494,14 +533,12 @@ def test_basket_refresh_loading_keeps_last_known_durable_result(
 
     assert page.basket_table.rowCount() == 1
     assert page.basket_state.text() == "Loading trade history…"
-    assert not page.search_button.isEnabled()
-    assert not page.reset_button.isEnabled()
-    assert page.total_net_pnl.text() == "20.00 USDT"
-    assert not page.total_net_pnl.isHidden()
+    assert not page.basket_filters.search_button.isEnabled()
+    assert not page.basket_filters.reset_button.isEnabled()
 
     page.set_baskets_loading(False)
-    assert page.search_button.isEnabled()
-    assert page.reset_button.isEnabled()
+    assert page.basket_filters.search_button.isEnabled()
+    assert page.basket_filters.reset_button.isEnabled()
 
 
 def test_empty_basket_result_still_carries_its_summary_to_the_screen(
@@ -517,9 +554,6 @@ def test_empty_basket_result_still_carries_its_summary_to_the_screen(
     page.show_baskets_empty(empty_result)
 
     assert page.basket_state.text() == "No Position history"
-    assert page.total_net_pnl.text() == "0.01 USDT"
-    assert page.total_items.text() == "0 total Positions"
-    assert not page.total_net_pnl.isHidden()
     assert page.basket_table.rowCount() == 0
 
 
@@ -552,8 +586,6 @@ def test_initial_basket_failure_clears_only_trade_history_scope(qtbot: QtBot) ->
 
     assert page.basket_table.rowCount() == 0
     assert page.fill_table.rowCount() == 0
-    assert page.total_net_pnl.isHidden()
-    assert page.total_net_pnl_label.isHidden()
     assert page.basket_state.text() == "Trade History unavailable"
     assert page.retry_baskets_button.isVisible()
     assert not page.retry_fills_button.isVisible()
@@ -572,9 +604,6 @@ def test_basket_refresh_failure_keeps_last_known_durable_result(
     page.show_baskets_unavailable("Trade History unavailable")
 
     assert page.basket_table.rowCount() == 1
-    assert page.total_net_pnl.text() == "20.00 USDT"
-    assert not page.total_net_pnl.isHidden()
-    assert page.total_items.text() == "1 total Positions"
     assert page.basket_state.text() == "Stale · Trade History unavailable"
     assert page.retry_baskets_button.isVisible()
     assert not page.retry_fills_button.isVisible()
@@ -617,7 +646,9 @@ def test_retry_buttons_and_filter_error_are_scoped(qtbot: QtBot) -> None:
     page.fills_retry_requested.connect(lambda: fill_retries.append(None))
 
     page.show_filter_error("From Date must not be after To Date")
-    assert page.filter_error.text() == "From Date must not be after To Date"
+    assert (
+        page.basket_filters.filter_error.text() == "From Date must not be after To Date"
+    )
 
     page.show_baskets_unavailable("Trade History unavailable")
     click(page.retry_baskets_button)
@@ -698,3 +729,20 @@ def test_a_basket_result_does_not_change_which_half_is_read(qtbot: QtBot) -> Non
 
     assert page.fill_table.isVisible()
     assert not page.basket_table.isVisible()
+
+
+def test_each_half_keeps_its_own_range(qtbot: QtBot) -> None:
+    """Two tables answering two questions cannot share one answer."""
+    page = TradeHistoryPage()
+    qtbot.addWidget(page)
+    page.show()
+    opened_on = page.basket_filters.filter_values()
+
+    page.show_history_tab(HistoryTab.TRADES)
+    click(page.trade_filters.range_chips[QuickRange.ONE_MONTH])
+    page.show_history_tab(HistoryTab.BASKETS)
+
+    assert page.basket_filters.filter_values() == opened_on
+    assert page.basket_filters.range_chips[QuickRange.ONE_DAY].isChecked()
+    assert page.trade_filters.filter_values() != opened_on
+    assert page.trade_filters.range_chips[QuickRange.ONE_MONTH].isChecked()

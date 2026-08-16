@@ -63,7 +63,7 @@ def test_replayed_paper_spot_history_is_idempotent_after_sqlite_restart(
         current_fills = store.list_fills(BASKET_ID)
         if replay_number == 0:
             assert current_basket is not None
-            assert current_basket.realized_pnl == Decimal("14.15466")
+            assert current_basket.realized_pnl == Decimal("14.202")
             assert [fill.side for fill in current_fills] == [
                 FillSide.BUY,
                 FillSide.SELL,
@@ -83,7 +83,7 @@ def test_replayed_paper_spot_history_is_idempotent_after_sqlite_restart(
     assert basket is not None
     assert basket.basket_id == BASKET_ID
     assert basket.status is BasketStatus.CLOSED
-    assert basket.realized_pnl == Decimal("14.15466")
+    assert basket.realized_pnl == Decimal("14.202")
     assert len(fills) == 2
     assert [fill.side for fill in fills] == [FillSide.BUY, FillSide.SELL]
     assert fills[0].entry_number == 1
@@ -101,7 +101,6 @@ def paper_spot_session(
             market_type=MarketType.SPOT,
             trade_mode=TradeMode.PAPER,
             available_capital=Decimal("1000"),
-            slippage_bps=Decimal("2"),
             entry_policy=EntryPolicy(max_entries=4),
             spot_policy=SpotTradingPolicy(trading_capital_ratio=Decimal("0.6")),
         ),

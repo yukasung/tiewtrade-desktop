@@ -75,7 +75,7 @@ def test_manual_close_records_exit_fill_before_replacing_session() -> None:
     assert fill.order_id == f"manual-close:{basket_id}"
     assert fill.side is FillSide.SELL
     assert fill.entry_number is None
-    assert fill.price == Decimal("109.94")
+    assert fill.price == Decimal("110")
     assert closed.realized_pnl == fill.realized_pnl
 
 
@@ -192,8 +192,8 @@ def test_manual_close_quantizes_futures_short_exit_against_position() -> None:
 
     closed, fill = recorded[0]
     assert fill.side is FillSide.BUY
-    assert fill.price == Decimal("110.1")
-    assert closed.realized_pnl == Decimal("9.9")
+    assert fill.price == Decimal("110")
+    assert closed.realized_pnl == Decimal("10")
 
 
 def test_manual_close_rejects_live_session_before_reading_history() -> None:

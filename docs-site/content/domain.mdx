@@ -24,7 +24,7 @@ Bot Session เป็น ownership boundary โดยตรงของ Basket, 
 | **Candle** | ข้อมูล OHLC และ volume ของ BTCUSDT ช่วง 5 นาทีที่เปิดตรงขอบเวลา UTC Strategy รับเฉพาะ completed Candle |
 | **Entry Intent** | ผลการตัดสินใจแบบ deterministic ว่าจะเปิด Entry ลำดับใดจาก signal Candle และ ATR ใด พร้อม idempotency key ก่อน execution |
 | **Entry** | ส่วนหนึ่งของ Position ที่ Bot เปิดจาก Entry Intent และได้รับการยืนยันด้วย Fill หนึ่ง Basket มีได้สูงสุดตาม `max_entries` ของ Session |
-| **Fill** | ข้อเท็จจริงว่า Order ถูกจับคู่แล้ว พร้อมราคา quantity, fee และเวลาที่ใช้ปรับ state |
+| **Fill** | ข้อเท็จจริงว่า Order ถูกจับคู่แล้ว พร้อมราคา quantity และเวลาที่ใช้ปรับ state |
 
 Entry Intent ยังไม่ใช่ Entry ที่เกิดขึ้นจริง การเปลี่ยน state ต้องอาศัย Fill เพื่อป้องกันการนับ Position จากเพียงความพยายามส่ง Order
 

@@ -39,7 +39,6 @@ def test_session_requires_paper_futures_configuration_and_matching_preset() -> N
         market_type=MarketType.SPOT,
         trade_mode=TradeMode.PAPER,
         available_capital=session.available_capital,
-        slippage_bps=session.slippage_bps,
         entry_policy=session.entry_policy,
         spot_policy=SpotTradingPolicy(trading_capital_ratio=Decimal("0.8")),
     )
@@ -506,7 +505,6 @@ def futures_session() -> SessionConfig:
         market_type=MarketType.FUTURES,
         trade_mode=TradeMode.PAPER,
         available_capital=Decimal("1000"),
-        slippage_bps=Decimal("0"),
         entry_policy=EntryPolicy(max_entries=2),
         spot_policy=None,
         futures_policy=FuturesTradingPolicy.v1(leverage=5),

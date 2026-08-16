@@ -80,14 +80,11 @@ def test_basket_columns_format_utc_and_every_column() -> None:
 
     assert read(BASKET_COLUMNS, basket) == (
         "2026-01-01 07:00:00",
-        "Paper",
         "Spot",
-        "BTCUSDT",
+        "BTC/USDT",
         "5m",
-        "1",
         "200.00 USDT",
         "20.00 USDT",
-        "Closed",
     )
 
 
@@ -102,12 +99,13 @@ def test_fill_columns_include_symbol_and_total_for_cross_basket_history() -> Non
 
     assert read(FILL_COLUMNS, item) == (
         "2026-01-01 07:00:00",
-        "BTCUSDT",
+        "BTC/USDT",
         "Buy",
         "100",
         "2",
         "200.00 USDT",
-        "0.00 USDT",
+        # A Buy has realised nothing yet, so the column says so.
+        "—",
     )
 
 

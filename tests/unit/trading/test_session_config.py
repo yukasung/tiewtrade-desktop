@@ -23,7 +23,6 @@ def make_config(**overrides: object) -> SessionConfig:
         "market_type": MarketType.SPOT,
         "trade_mode": TradeMode.PAPER,
         "available_capital": Decimal("1000"),
-        "slippage_bps": Decimal("2"),
         "entry_policy": EntryPolicy(max_entries=10),
         "spot_policy": SpotTradingPolicy(trading_capital_ratio=Decimal("0.80")),
         "futures_policy": None,
@@ -111,19 +110,6 @@ def test_session_configuration_is_immutable() -> None:
 def test_session_requires_positive_capital(capital: Decimal) -> None:
     with pytest.raises(ValueError, match="available_capital"):
         make_config(available_capital=capital)
-
-
-def test_session_rejects_negative_slippage() -> None:
-    with pytest.raises(ValueError):
-        make_config(slippage_bps=Decimal("-1"))
-
-
-@pytest.mark.parametrize("slippage_bps", [Decimal("10000"), Decimal("10000.001")])
-def test_session_rejects_slippage_of_ten_thousand_basis_points_or_more(
-    slippage_bps: Decimal,
-) -> None:
-    with pytest.raises(ValueError, match="slippage_bps"):
-        make_config(slippage_bps=slippage_bps)
 
 
 def test_live_configuration_is_only_data_and_does_not_start_execution() -> None:

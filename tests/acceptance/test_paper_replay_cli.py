@@ -8,7 +8,7 @@ import pytest
 FIXTURE_PATH = Path("tests/fixtures/btcusdt_5m_tracer.csv")
 EXPECTED_JSON = (
     '{"accepted_candles":40,"closed_baskets":1,"current_entries":0,'
-    '"realized_pnl":"14.15466"}\n'
+    '"realized_pnl":"14.202"}\n'
 )
 
 

@@ -35,7 +35,7 @@ Execution เป็น seam ที่แยก side effects ออกจาก b
 
 | Mode | Market Type | Adapter responsibility |
 | --- | --- | --- |
-| Paper | Spot/Futures | จำลอง Fill, fee และ slippage โดยไม่ส่งคำสั่งจริง; Paper Futures Phase แรกบันทึก Funding Fee เป็น `0.00` |
+| Paper | Spot/Futures | จำลอง Fill โดยไม่ส่งคำสั่งจริงและไม่คิดต้นทุนการเทรด |
 | Live | Spot | ส่งคำสั่ง Spot หลัง Preflight, idempotency และ reconciliation |
 | Live | Futures | จัดการ Futures order, margin, leverage, funding และ reconciliation |
 
@@ -62,7 +62,7 @@ Market identity ต้องเป็นข้อมูลจาก configuratio
 | `max_entries` | `EntryPolicy` | ใช้ร่วมกันทุก Market Type และตรึงตลอด Session |
 | `trading_capital_ratio` | `SpotTradingPolicy` | ใช้เฉพาะ Spot, รับจาก form และตรึงตลอด Session |
 
-ค่าต้นทุนและความเสี่ยง เช่น fee, slippage, funding, leverage, margin mode และ collateral buffer ต้องถูกแยกตาม market/execution policy และ validate ก่อนสร้าง runtime
+ค่าความเสี่ยง เช่น leverage, margin mode และ collateral buffer ต้องถูกแยกตาม market/execution policy และ validate ก่อนสร้าง runtime
 
 Configuration นี้ไม่มี side effect และไม่เลือกหรือเรียก adapter โดยตรง การเลือก adapter ต้องเกิดที่ application composition seam และ `TradeMode.LIVE` ต้องผ่าน Preflight กับ explicit confirmation ก่อนเสมอ
 
@@ -101,7 +101,7 @@ orchestration เริ่ม Paper Runtime ต่อจากการสร้
 
 Application layer เป็นเจ้าของ `ClosePaperPosition` use case สำหรับ Paper Session
 เมื่อผู้ใช้ยืนยันเริ่ม Session ใหม่ขณะมี Open Basket โดยคำนวณ Paper exit Fill จาก
-ราคาตลาดล่าสุด, fee และ slippage ของ Session แล้วให้ SQLite Trade History บันทึก
+ราคาตลาดล่าสุดของ Session แล้วให้ SQLite Trade History บันทึก
 closed Basket กับ exit Fill ใน transaction เดียว UI ต้อง retire Session หลังการบันทึก
 สำเร็จเท่านั้น โดย orchestration นี้ทำงานผ่าน background worker และใช้ราคาที่ public
 market-data controller ส่งเข้า application-owned `LatestMarketPrice` แยกจาก ephemeral

@@ -79,6 +79,9 @@ class TradingWorkspace(QWidget):
         self.tabs = QTabBar()
         self.tabs.setObjectName("workspaceTabs")
         self.tabs.setExpanding(False)
+        # Qt rules a line under the strip to close off a pane below it. There
+        # is no pane here, only the table these tabs name.
+        self.tabs.setDrawBase(False)
         self.tabs.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         for title in _TAB_TITLES:
             self.tabs.addTab(title)
@@ -160,10 +163,13 @@ class TradingWorkspace(QWidget):
         primary_layout.setContentsMargins(0, 0, 0, 0)
         primary_layout.setSpacing(12)
         primary_layout.addWidget(self.chart, 3)
+        # The tabs and the table they switch between are one surface, so the
+        # padding belongs out here rather than as a border between them.
         tabbed = QWidget()
+        tabbed.setObjectName("workspaceTabbedPane")
         tabbed_layout = QVBoxLayout(tabbed)
-        tabbed_layout.setContentsMargins(0, 0, 0, 0)
-        tabbed_layout.setSpacing(0)
+        tabbed_layout.setContentsMargins(16, 8, 16, 0)
+        tabbed_layout.setSpacing(8)
         tabbed_layout.addWidget(self.tabs)
         tabbed_layout.addWidget(self.tab_pages, 1)
         primary_layout.addWidget(tabbed, 2)

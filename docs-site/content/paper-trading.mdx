@@ -5,7 +5,7 @@ description: Conservative fill, deterministic replay และการป้อ
 
 # Paper Trading
 
-Paper Trading ใช้ conservative candle fill เพื่อให้ผลลัพธ์ทำซ้ำได้และไม่สมมติลำดับราคาภายใน Candle ที่ข้อมูล OHLC ไม่ได้บอก Session ตรึง Preset version, fee และ slippage configuration ไว้ตลอดรอบ
+Paper Trading ใช้ conservative candle fill เพื่อให้ผลลัพธ์ทำซ้ำได้และไม่สมมติลำดับราคาภายใน Candle ที่ข้อมูล OHLC ไม่ได้บอก Session ตรึง Preset version ไว้ตลอดรอบ
 
 ## Candle Timing
 
@@ -19,7 +19,7 @@ sequenceDiagram
     participant B as Basket
 
     N->>B: Create Entry Intent with ATR
-    N1->>B: Fill Entry at open with slippage and fee
+    N1->>B: Fill Entry at open
     B->>B: Use latest completed Candle ATR and recalculate Take Profit
     N1-->>B: Take Profit is not eligible in Fill Candle
     N2->>B: Fill Take Profit if range touches target
@@ -27,13 +27,13 @@ sequenceDiagram
 
 แผนภาพแสดง timing ที่ตัด look-ahead bias: สัญญาณเกิดหลัง Candle N ปิด, Entry Fill ที่ราคาเปิด Candle N+1 และ Take Profit เริ่มมีสิทธิ์ Fill ตั้งแต่ Candle ถัดจาก Entry Fill แม้ช่วงราคาของ Candle N+1 จะคร่อม target ก็ตาม
 
-Buy Fill รวม slippage ตาม configuration แล้วปัด quantity ตาม step size ตรวจ minimum notional และคำนวณ fee ด้วย Decimal ณ ราคาเปิด N+1 completed Candle ล่าสุดคือ Candle N ระบบจึงอ่าน ATR(14) ล่าสุด ณ Fill และใช้สร้าง Take Profit หลัง Fill โดยไม่ผูก target กับ ATR snapshot ใน Entry Intent
+Buy Fill ใช้ราคาเปิดของ Candle N+1 ปัดตาม tick size แล้วปัด quantity ตาม step size และตรวจ minimum notional completed Candle ล่าสุดคือ Candle N ระบบจึงอ่าน ATR(14) ล่าสุด ณ Fill และใช้สร้าง Take Profit หลัง Fill โดยไม่ผูก target กับ ATR snapshot ใน Entry Intent
 
 ## Execution Costs
 
-Spot บันทึก entry fee, exit fee และ slippage Paper Futures Phase แรกบันทึก Funding Fee เป็น `0.00` และยังไม่จำลอง funding จาก Binance
+Paper execution ไม่คิดต้นทุนการเทรด ไม่มีทั้ง fee และ slippage: Fill ได้ราคาเปิดของ Candle หรือราคาเป้าโดยตรง ปัดตาม tick size ของ Symbol เท่านั้น
 
-Fee rate และ slippage เป็นส่วนของ immutable Bot Session configuration และต้องไม่ติดลบ การแก้ fee หรือ slippage configuration ต้องเริ่ม Session ใหม่เพื่อไม่ให้ผลลัพธ์ช่วงเดียวกันเปลี่ยนกลางทาง
+เหตุผลคือ Paper Trading มีไว้ตอบว่ากลยุทธ์เองทำงานหรือไม่ ต้นทุนที่ปนเข้ามาทำให้อ่านคำตอบนั้นไม่ออก
 
 ## Deterministic Replay
 
@@ -43,6 +43,6 @@ Determinism อาศัย stable ordering, deterministic identifiers, กา�
 
 ## Boundaries
 
-Paper adapter ไม่มี credentials และไม่ส่ง Live Order. Strategy, capital, Basket และ Entry Pair policies เป็นชุดเดียวกับ Live แต่ Fill model แยกจาก Live execution อย่างชัดเจน Paper Futures Phase แรกใช้ Funding Fee `0.00` และไม่ใช้ Testnet เป็นตัวแทน safety
+Paper adapter ไม่มี credentials และไม่ส่ง Live Order. Strategy, capital, Basket และ Entry Pair policies เป็นชุดเดียวกับ Live แต่ Fill model แยกจาก Live execution อย่างชัดเจน Paper Futures ไม่ใช้ Testnet เป็นตัวแทน safety
 
 Replay ที่ปิด Basket ได้เป็นหลักฐานของ vertical slice ด้าน Strategy และ execution timing แต่ Paper Trading Complete ยังรวม persistence, Recovery, one Active Bot Session, Paper Futures และ UI ด้วย

@@ -24,12 +24,12 @@ from tiewtrade.trading.spot_policy import SpotTradingPolicy
 _INSERT_SQL = """
 INSERT INTO bot_sessions (
     session_id, trade_mode, market_type, symbol, timeframe, preset_version,
-    available_capital, max_entries, slippage_bps,
+    available_capital, max_entries,
     spot_trading_capital_ratio, futures_policy_version, futures_leverage,
     futures_trading_capital_ratio, futures_collateral_buffer_ratio,
     futures_maintenance_margin_rate, futures_margin_mode,
     futures_position_mode, created_at_utc, ended_at_utc
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 """
 
 
@@ -87,10 +87,13 @@ class SQLiteActivePaperSessions:
                 "SELECT state FROM paper_runtime_lifecycle WHERE session_id = ?",
                 (str(session_id),),
             ).fetchone()
-            if (
-                active is None
-                or lifecycle is None
-                or lifecycle["state"]
+            # A missing lifecycle row means the runtime never started, so
+            # there is nothing to stop and no work to lose. Refusing that
+            # case used to strand a Session that could neither run nor be
+            # replaced, leaving Start Paper Bot failing for good.
+            if active is None or (
+                lifecycle is not None
+                and lifecycle["state"]
                 not in {
                     "stopped",
                     "blocked",
@@ -154,7 +157,6 @@ def _session_from_row(row: sqlite3.Row) -> ConfiguredPaperSession:
         market_type=market_type,
         trade_mode=TradeMode(row["trade_mode"]),
         available_capital=Decimal(row["available_capital"]),
-        slippage_bps=Decimal(row["slippage_bps"]),
         entry_policy=EntryPolicy(row["max_entries"]),
         spot_policy=spot_policy,
         futures_policy=futures_policy,
@@ -189,7 +191,6 @@ def _session_values(session: ConfiguredPaperSession) -> tuple[object, ...]:
         config.preset_version,
         str(config.available_capital),
         config.entry_policy.max_entries,
-        str(config.slippage_bps),
         None if spot is None else str(spot.trading_capital_ratio),
         None if futures is None else futures.version,
         None if futures is None else futures.leverage,

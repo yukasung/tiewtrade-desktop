@@ -26,8 +26,6 @@ def test_trading_tables_are_named_and_scroll_horizontally(qtbot: QtBot) -> None:
         )
     )
 
-    assert workspace.trade_history.total_net_pnl.text() == "-1.25 USDT"
-
     tables = (
         workspace.position_basket.table,
         workspace.trade_history.basket_table,
@@ -58,26 +56,26 @@ def test_the_history_filter_bar_fits_the_narrowest_supported_window(
     workspace.show_tab(WorkspaceTab.BASKET_HISTORY)
     page = workspace.trade_history
     # Too narrow for one row beside the Bot Control, so the bar folds in two.
-    qtbot.waitUntil(lambda: page.filter_bar.line_count() == 2)
+    qtbot.waitUntil(lambda: page.basket_filters.line_count() == 2)
     qtbot.waitUntil(
-        lambda: page.filter_bar.height() >= page.filter_bar.sizeHint().height()
+        lambda: page.basket_filters.height() >= page.basket_filters.sizeHint().height()
     )
 
     # A chip's own label is its period, so it names the window it stands for.
-    for chip in page.range_chips.values():
+    for chip in page.basket_filters.range_chips.values():
         assert chip.accessibleName().startswith("Last ")
-    assert page.from_date.accessibleName() == "From Date"
-    assert page.to_date.accessibleName() == "To Date"
+    assert page.basket_filters.from_date.accessibleName() == "From Date"
+    assert page.basket_filters.to_date.accessibleName() == "To Date"
 
-    bar = page.filter_bar.rect()
+    bar = page.basket_filters.rect()
     for control in (
-        *page.range_chips.values(),
-        page.from_date,
-        page.to_date,
-        page.search_button,
-        page.reset_button,
+        *page.basket_filters.range_chips.values(),
+        page.basket_filters.from_date,
+        page.basket_filters.to_date,
+        page.basket_filters.search_button,
+        page.basket_filters.reset_button,
     ):
         assert bar.contains(
-            QRect(control.mapTo(page.filter_bar, QPoint(0, 0)), control.size())
+            QRect(control.mapTo(page.basket_filters, QPoint(0, 0)), control.size())
         )
     assert page.scroll_area.horizontalScrollBar().maximum() == 0

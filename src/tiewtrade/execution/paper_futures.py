@@ -56,16 +56,10 @@ class PaperFuturesExecutor:
         self, intent: EntryIntent, candle: Candle
     ) -> PaperFuturesEntryFill | None:
         self._require_matching_symbol(candle)
-        slippage = self._slippage
         if intent.side is PositionSide.LONG:
-            raw_price = candle.open * (Decimal("1") + slippage)
-            price = self._symbol_rules.ceil_price(raw_price)
+            price = self._symbol_rules.ceil_price(candle.open)
         else:
-            raw_price = candle.open * (Decimal("1") - slippage)
-            price = self._symbol_rules.floor_price(raw_price)
-
-        if not price.is_finite() or price <= 0:
-            return None
+            price = self._symbol_rules.floor_price(candle.open)
 
         quantity = self._symbol_rules.floor_quantity(
             self._capital_plan.target_notional_per_entry / price
@@ -94,15 +88,11 @@ class PaperFuturesExecutor:
         if basket.position_side is PositionSide.LONG:
             if candle.high < basket.take_profit_price:
                 return None
-            price = self._symbol_rules.floor_price(
-                basket.take_profit_price * (Decimal("1") - self._slippage)
-            )
+            price = self._symbol_rules.floor_price(basket.take_profit_price)
         else:
             if candle.low > basket.take_profit_price:
                 return None
-            price = self._symbol_rules.ceil_price(
-                basket.take_profit_price * (Decimal("1") + self._slippage)
-            )
+            price = self._symbol_rules.ceil_price(basket.take_profit_price)
 
         return self._exit_fill(
             basket=basket,
@@ -123,15 +113,11 @@ class PaperFuturesExecutor:
             raise ValueError("liquidation_price must be finite and positive")
 
         if basket.position_side is PositionSide.LONG:
-            raw_price = min(candle.open, liquidation_price) * (
-                Decimal("1") - self._slippage
-            )
-            price = self._symbol_rules.floor_price(raw_price)
+            # The gap is what makes a liquidation fill worse than its
+            # threshold, so the open still wins when it opened through it.
+            price = self._symbol_rules.floor_price(min(candle.open, liquidation_price))
         else:
-            raw_price = max(candle.open, liquidation_price) * (
-                Decimal("1") + self._slippage
-            )
-            price = self._symbol_rules.ceil_price(raw_price)
+            price = self._symbol_rules.ceil_price(max(candle.open, liquidation_price))
 
         return self._exit_fill(
             basket=basket,
@@ -139,10 +125,6 @@ class PaperFuturesExecutor:
             close_reason=BasketCloseReason.LIQUIDATION,
             filled_at=candle.close_time,
         )
-
-    @property
-    def _slippage(self) -> Decimal:
-        return self._session.slippage_bps / Decimal("10000")
 
     def _require_matching_symbol(self, candle: Candle) -> None:
         if candle.symbol != self._symbol_rules.symbol:

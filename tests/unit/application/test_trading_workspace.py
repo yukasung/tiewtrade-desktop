@@ -75,9 +75,7 @@ def test_position_basket_helpers_preserve_and_validate_basket_data() -> None:
     assert loading_position_basket_tab(ready).basket is ready.basket
     assert stale_position_basket_tab(ready).data_as_of_utc is OBSERVED_AT
     assert (
-        failed_position_basket_tab(
-            ready, "Position data is unavailable"
-        ).message
+        failed_position_basket_tab(ready, "Position data is unavailable").message
         == "Position data is unavailable"
     )
     with pytest.raises(ValueError, match="message must be sanitized"):

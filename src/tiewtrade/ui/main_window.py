@@ -92,9 +92,9 @@ class ChartSources:
     facts: ChartFactRelay | None = None
     start_feed: Callable[[ConfiguredPaperSession], None] | None = None
     stop_feed: Callable[[], None] | None = None
-    select_view: (
-        Callable[[ConfiguredPaperSession, ChartViewSelection], None] | None
-    ) = None
+    select_view: Callable[[ConfiguredPaperSession, ChartViewSelection], None] | None = (
+        None
+    )
     clock: Callable[[], datetime] = lambda: datetime.now(UTC)
 
 
@@ -350,6 +350,11 @@ class MainWindow(QMainWindow):
         ):
             message = (
                 "Paper Bot is still stopping. Wait for it to stop, then try again."
+            )
+        elif str(_error) == "Active Paper Session cannot be retired":
+            message = (
+                "The existing Paper Session is still running somewhere. "
+                "Stop it, or restart the application."
             )
         self.setup.show_field_error(
             "available_capital",

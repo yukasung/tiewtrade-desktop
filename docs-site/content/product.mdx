@@ -39,7 +39,7 @@ flowchart LR
 
 ลำดับนี้เป็น gate แบบสะสม: Live Spot เริ่มได้เมื่อ Paper ครบทุก acceptance criterion และ Live Futures เริ่มได้เมื่อ Live Spot ผ่านแล้วเท่านั้น ทั้งสองขั้น Live ยังต้องได้รับการอนุมัติอย่างชัดแจ้งจากผู้ใช้
 
-Paper Trading Complete ต้องพิสูจน์ completed Candle ที่ต่อเนื่อง, Strategy และ lifecycle ที่ถูกต้อง, deterministic replay, fee/slippage, Funding Fee `0.00` ใน Paper Futures Phase แรก, Recovery ที่ไม่สร้าง Entry หรือ Order ซ้ำ, one Active Bot Session และ UI ที่แสดง state สำคัญ
+Paper Trading Complete ต้องพิสูจน์ completed Candle ที่ต่อเนื่อง, Strategy และ lifecycle ที่ถูกต้อง, deterministic replay, Recovery ที่ไม่สร้าง Entry หรือ Order ซ้ำ, one Active Bot Session และ UI ที่แสดง state สำคัญ
 
 Live Spot เพิ่ม Preflight, idempotency, Reconciliation และ safe shutdown โดยทดสอบกับ fake adapter ก่อน ส่วน Live Futures เพิ่ม Cross Margin, leverage cap, Collateral Buffer, funding และข้อเท็จจริงที่เกี่ยวกับ liquidation
 

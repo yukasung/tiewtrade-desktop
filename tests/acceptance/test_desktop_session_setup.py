@@ -12,6 +12,7 @@ from typing import TypeVar
 from uuid import UUID
 
 import pytest
+from PySide6.QtCore import QPoint, QRect
 from PySide6.QtWidgets import QApplication, QMessageBox, QPushButton
 from pytest import MonkeyPatch
 from pytestqt.qtbot import QtBot
@@ -82,7 +83,6 @@ class _SessionCase:
     market_type: str
     timeframe: str
     max_entries: int
-    slippage_bps: str
     spot_ratio: str | None
     futures_leverage: int | None
 
@@ -157,11 +157,11 @@ class _AcceptancePublicCandleSource:
     "case",
     [
         pytest.param(
-            _SessionCase("spot", "5m", 10, "5", "80", None),
+            _SessionCase("spot", "5m", 10, "80", None),
             id="spot",
         ),
         pytest.param(
-            _SessionCase("futures", "5m", 10, "5", None, 3),
+            _SessionCase("futures", "5m", 10, None, 3),
             id="futures",
         ),
     ],
@@ -335,7 +335,7 @@ def test_desktop_restart_blocked_runtime_reopens_setup_form(
     active_sessions = SQLiteActivePaperSessions(database)
     session = (
         CreatePaperSession(create_active=active_sessions.create)
-        .execute(_setup_values(_SessionCase("spot", "5m", 10, "5", "80", None)))
+        .execute(_setup_values(_SessionCase("spot", "5m", 10, "80", None)))
         .session
     )
     lifecycle = SQLitePaperRuntimeLifecycle(database)
@@ -396,11 +396,11 @@ def test_desktop_restart_blocked_runtime_reopens_setup_form(
     "case",
     [
         pytest.param(
-            _SessionCase("spot", "15m", 12, "5", "80", None),
+            _SessionCase("spot", "15m", 12, "80", None),
             id="spot",
         ),
         pytest.param(
-            _SessionCase("futures", "1h", 14, "8", None, 4),
+            _SessionCase("futures", "1h", 14, None, 4),
             id="futures",
         ),
     ],
@@ -453,7 +453,6 @@ def test_desktop_fake_snapshots_render_orders_and_basket_without_manual_trading(
     assert start_calls == 0
     # One row per Entry taken, with only the Basket's total framing them.
     assert window.workspace.position_basket.table.rowCount() == 1
-    assert table_item(window.workspace.position_basket.table, 0, 0).text() == "#1"
     lifecycle = PositionBasketTable.HEADERS.index("Status")
     assert table_item(window.workspace.position_basket.table, 0, lifecycle).text() == (
         "Active"
@@ -474,7 +473,7 @@ def test_spot_partial_fills_keep_one_order_and_basket_entry_across_tabs(
     active_sessions = SQLiteActivePaperSessions(database)
     session = (
         CreatePaperSession(create_active=active_sessions.create)
-        .execute(_setup_values(_SessionCase("spot", "5m", 10, "5", "80", None)))
+        .execute(_setup_values(_SessionCase("spot", "5m", 10, "80", None)))
         .session
     )
     store = SQLiteTradeHistory(database)
@@ -539,12 +538,20 @@ def test_spot_partial_fills_keep_one_order_and_basket_entry_across_tabs(
 
     # Two Fills of the same Entry stay one row: a Partial Fill is not an Entry.
     assert window.workspace.position_basket.table.rowCount() == 1
-    assert table_item(window.workspace.position_basket.table, 0, 0).text() == "#1"
     window.workspace.show_tab(WorkspaceTab.BASKET_HISTORY)
+    # The page opens on today; this fixture is dated, so widen to reach it.
+    qtbot.waitUntil(window.trade_history.basket_filters.search_button.isEnabled)
+    window.trade_history.basket_filters.from_date.clear_date()
+    window.trade_history.basket_filters.to_date.clear_date()
+    click(window.trade_history.basket_filters.search_button)
     qtbot.waitUntil(lambda: window.trade_history.basket_table.rowCount() == 1)
-    assert table_item(window.trade_history.basket_table, 0, 5).text() == "1"
     # Both Fills are still recorded; the Trade History tab is where they read.
     window.workspace.show_tab(WorkspaceTab.TRADE_HISTORY)
+    # The Trades half carries its own range and opens on today as well.
+    qtbot.waitUntil(window.trade_history.trade_filters.search_button.isEnabled)
+    window.trade_history.trade_filters.from_date.clear_date()
+    window.trade_history.trade_filters.to_date.clear_date()
+    click(window.trade_history.trade_filters.search_button)
     qtbot.waitUntil(lambda: window.trade_history.fill_table.rowCount() == 2)
     assert _trade_side_effect_counts(database) == initial_counts
 
@@ -557,7 +564,6 @@ def test_spot_partial_fills_keep_one_order_and_basket_entry_across_tabs(
                 market_type="spot",
                 timeframe="15m",
                 max_entries=12,
-                slippage_bps="5",
                 spot_ratio="80",
                 futures_leverage=None,
             ),
@@ -568,7 +574,6 @@ def test_spot_partial_fills_keep_one_order_and_basket_entry_across_tabs(
                 market_type="futures",
                 timeframe="1h",
                 max_entries=14,
-                slippage_bps="8",
                 spot_ratio=None,
                 futures_leverage=4,
             ),
@@ -724,11 +729,11 @@ def test_desktop_paper_session_create_overview_and_restart_restore(
     "case",
     [
         pytest.param(
-            _SessionCase("spot", "15m", 12, "5", "80", None),
+            _SessionCase("spot", "15m", 12, "80", None),
             id="spot",
         ),
         pytest.param(
-            _SessionCase("futures", "1h", 14, "8", None, 4),
+            _SessionCase("futures", "1h", 14, None, 4),
             id="futures",
         ),
     ],
@@ -883,7 +888,6 @@ def test_desktop_session_sqlite_write_failure_after_setup_fails_closed(
             market_type="spot",
             timeframe="15m",
             max_entries=12,
-            slippage_bps="5",
             spot_ratio="80",
             futures_leverage=None,
         ),
@@ -896,7 +900,6 @@ def test_desktop_session_sqlite_write_failure_after_setup_fails_closed(
     assert window.setup.timeframe.currentData() == "15m"
     assert window.setup.max_entries.value() == 12
     assert window.setup.spot_ratio.text() == "80"
-    assert window.setup.slippage_bps.text() == "5"
     assert not window.overview.isVisible()
     assert SQLiteActivePaperSessions(durable_database).get_active() is None
 
@@ -927,7 +930,6 @@ def test_desktop_session_validation_failure_after_setup_preserves_input(
             market_type="spot",
             timeframe="15m",
             max_entries=12,
-            slippage_bps="5",
             spot_ratio="80",
             futures_leverage=None,
         ),
@@ -946,7 +948,6 @@ def test_desktop_session_validation_failure_after_setup_preserves_input(
     assert window.setup.timeframe.currentData() == "15m"
     assert window.setup.max_entries.value() == 12
     assert window.setup.spot_ratio.text() == "80"
-    assert window.setup.slippage_bps.text() == "5"
     assert not window.overview.isVisible()
     assert store.get_active() is None
 
@@ -1112,8 +1113,6 @@ def _enter_form_values(window: MainWindow, case: _SessionCase) -> None:
     setup.timeframe.setCurrentIndex(setup.timeframe.findData(case.timeframe))
     setup.available_capital.setText("200000")
     setup.max_entries.setValue(case.max_entries)
-    setup.advanced_toggle.click()
-    setup.slippage_bps.setText(case.slippage_bps)
     if case.market_type == "spot":
         assert case.spot_ratio is not None
         setup.spot_ratio.setText(case.spot_ratio)
@@ -1129,7 +1128,6 @@ def _setup_values(case: _SessionCase) -> PaperSessionSetupValues:
         timeframe=case.timeframe,
         available_capital="200000",
         max_entries=str(case.max_entries),
-        slippage_bps=case.slippage_bps,
         spot_trading_capital_percent=case.spot_ratio,
         futures_leverage=(
             None if case.futures_leverage is None else str(case.futures_leverage)
@@ -1216,7 +1214,6 @@ def _assert_durable_session_matches_case(
     assert config.preset_version == "rsi-step-grid-v1"
     assert config.available_capital == Decimal("200000")
     assert config.entry_policy.max_entries == case.max_entries
-    assert config.slippage_bps == Decimal(case.slippage_bps)
     assert session.market_data.symbol == "BTCUSDT"
     assert session.market_data.timeframe == case.timeframe
     assert session.created_at_utc == expected_created_at
@@ -1260,7 +1257,6 @@ def _assert_overview_matches_case(
     assert window.overview.preset_value.text() == "RSI Step Grid v1"
     assert window.overview.available_capital_value.text() == "200000 USDT"
     assert window.overview.max_entries_value.text() == str(case.max_entries)
-    assert window.overview.slippage_value.text() == f"{case.slippage_bps} bps"
     assert window.overview.created_at_value.text() == display_timestamp(
         expected_created_at
     )
@@ -1419,3 +1415,50 @@ def _block_network(monkeypatch: MonkeyPatch) -> None:
     monkeypatch.setattr(socket, "create_connection", fail_network_attempt)
     monkeypatch.setattr(socket, "getaddrinfo", fail_network_attempt)
     monkeypatch.setattr(socket.socket, "connect", fail_network_attempt)
+
+
+@pytest.mark.parametrize("market_type", ["spot", "futures"])
+def test_the_whole_form_fits_the_smallest_window(
+    monkeypatch: MonkeyPatch,
+    qtbot: QtBot,
+    tmp_path: Path,
+    market_type: str,
+) -> None:
+    """Every setting is on the form at once, so all of it has to fit.
+
+    There is about 90px of room left over. Nothing folds away any more, so
+    a field added later spends that room for good — which is why this is
+    pinned rather than left to be noticed.
+    """
+    _block_network(monkeypatch)
+    database = SQLiteDatabase(tmp_path / "tiewtrade.sqlite3")
+    database.migrate()
+    history = SQLiteTradeHistory(database)
+    window = MainWindow(
+        create_session=CreatePaperSession(
+            create_active=SQLiteActivePaperSessions(database).create
+        ).execute,
+        load_active=SQLiteActivePaperSessions(database).get_active,
+        list_basket_history=history.list_basket_history,
+        list_trade_fills=history.list_trade_fills,
+    )
+    qtbot.addWidget(window)
+    window.setFixedSize(1024, 700)
+    window.show()
+    qtbot.waitUntil(window.setup.isVisible)
+    # The form is held while the active Session is looked for.
+    qtbot.waitUntil(window.setup.create_button.isEnabled)
+
+    window.setup.market_type.setCurrentIndex(
+        window.setup.market_type.findData(market_type)
+    )
+
+    scroll = window.workspace.bot_control_scroll
+    assert scroll.verticalScrollBar().maximum() == 0
+    # The button the form exists to reach is on screen, not below the fold.
+    start = window.setup.create_button
+    assert (
+        scroll.viewport()
+        .rect()
+        .contains(QRect(start.mapTo(scroll.viewport(), QPoint(0, 0)), start.size()))
+    )

@@ -12,13 +12,20 @@ from tiewtrade.application.trade_history import (
 )
 from tiewtrade.trading.trade_history import BasketResult
 from tiewtrade.ui.background_task import BackgroundTask
+from tiewtrade.ui.display_time import display_today
 from tiewtrade.ui.trade_history_presenter import (
     TradeHistoryFilterValues,
+    default_filter_values,
     trade_history_filter,
 )
 
 ListBasketHistory = Callable[[TradeHistoryFilter], BasketHistoryResult]
 ListTradeFills = Callable[[TradeHistoryFilter], tuple[TradeFillHistoryItem, ...]]
+
+
+def _default_filters() -> TradeHistoryFilter:
+    """Today, read fresh — an app left open overnight resets to the new day."""
+    return trade_history_filter(default_filter_values(display_today()))
 
 
 class HistoryTab(Enum):
@@ -61,7 +68,12 @@ class TradeHistoryWorkflow(QObject):
             thread_pool if thread_pool is not None else QThreadPool.globalInstance()
         )
 
-        self._filters = TradeHistoryFilter()
+        # Each half is read over its own range: the two tables answer
+        # different questions, so one filter cannot stand for both.
+        self._filters: dict[HistoryTab, TradeHistoryFilter] = {
+            HistoryTab.BASKETS: _default_filters(),
+            HistoryTab.TRADES: _default_filters(),
+        }
         self._closed = False
         self._baskets_are_loading = False
 
@@ -93,14 +105,14 @@ class TradeHistoryWorkflow(QObject):
             self.filter_invalid.emit(str(error))
             return
 
-        self._filters = filters
+        self._filters[self._active_tab] = filters
         self._request_active_tab()
 
     @Slot()
     def reset_filters(self) -> None:
         if self._closed:
             return
-        self._filters = TradeHistoryFilter()
+        self._filters[self._active_tab] = _default_filters()
         self._request_active_tab()
 
     def select_tab(self, tab: HistoryTab) -> None:
@@ -119,7 +131,7 @@ class TradeHistoryWorkflow(QObject):
         list_trade_fills = self._list_trade_fills
         if list_trade_fills is None:
             return
-        filters = self._filters
+        filters = self._filters[HistoryTab.TRADES]
         if self._trade_tasks:
             if filters != self._latest_trade_filters:
                 self._trade_generation += 1
@@ -191,14 +203,14 @@ class TradeHistoryWorkflow(QObject):
             not self._closed
             and self._active_tab is HistoryTab.TRADES
             and generation == self._trade_generation
-            and filters == self._filters
+            and filters == self._filters[HistoryTab.TRADES]
         )
 
     def _request_basket_history(self) -> None:
         list_basket_history = self._list_basket_history
         if list_basket_history is None or self._closed:
             return
-        filters = self._filters
+        filters = self._filters[HistoryTab.BASKETS]
         if self._basket_tasks and filters != self._latest_basket_filters:
             self._basket_generation += 1
             self._latest_basket_filters = filters
@@ -269,7 +281,7 @@ class TradeHistoryWorkflow(QObject):
             not self._closed
             and self._active_tab is HistoryTab.BASKETS
             and generation == self._basket_generation
-            and filters == self._filters
+            and filters == self._filters[HistoryTab.BASKETS]
         )
 
     @staticmethod
@@ -284,7 +296,10 @@ class TradeHistoryWorkflow(QObject):
 
     @Slot()
     def retry_baskets(self) -> None:
-        if self._closed or self._failed_basket_filters != self._filters:
+        if (
+            self._closed
+            or self._failed_basket_filters != self._filters[HistoryTab.BASKETS]
+        ):
             return
         self._request_basket_history()
 
@@ -293,7 +308,7 @@ class TradeHistoryWorkflow(QObject):
         if (
             self._closed
             or self._active_tab is not HistoryTab.TRADES
-            or self._failed_trade_filters != self._filters
+            or self._failed_trade_filters != self._filters[HistoryTab.TRADES]
         ):
             return
         self._request_trades()

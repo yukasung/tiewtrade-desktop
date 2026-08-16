@@ -101,7 +101,6 @@ Short = weighted_average_entry_price - (ATR(14) * 3)
 - Paper Futures ยังตรวจทั้ง Take Profit และ Liquidation ที่ candle ปิด เพราะการ Fill
   Take Profit ทันทีขณะที่ Liquidation ยังรอ candle ปิด จะทำให้ผลการเทรดดูดีเกินจริง
 - เมื่อ Basket ปิดสมบูรณ์ สามารถเริ่ม Basket ใหม่ในเดือน UTC เดียวกันได้ทันที
-- ค่าธรรมเนียมไม่ถูกบวกเข้าไปในราคา Take Profit แต่ต้องถูกนำไปคำนวณ realized PnL
 
 ## 6. Entry Pair และ Cooldown Month
 
@@ -152,12 +151,11 @@ Paper Trading ใช้ conservative candle fill เพื่อให้ replay
 
 - สัญญาณจาก completed candle `N` สร้าง Entry Intent
 - Entry Fill ที่ราคาเปิดของ candle `N+1`
-- คำนวณ fee และ slippage ด้วยค่าที่กำหนดใน Session
 - Take Profit เริ่มทำงานหลัง Entry Fill และ Fill เมื่อช่วงราคาของ candle ถัดจาก candle ที่ Entry Fill แตะระดับ Limit เพื่อหลีกเลี่ยงการสมมติลำดับราคา intrabar
-- Paper Futures Phase แรกบันทึก Funding Fee เป็น `0.00` และยังไม่จำลอง funding
 - Paper Futures execution contract รองรับ `LONG` และ `SHORT` แต่ RSI Step Grid Preset v1 ยังสร้างเฉพาะ `LONG`
-- Trading Fee Rate ต้องตั้งแต่ 0 และน้อยกว่า 1 ส่วน slippage ต้องตั้งแต่ 0 และน้อยกว่า 10,000 bps
-- fee และ slippage configuration ต้องถูกตรึงตลอด Session
+- Paper execution ไม่คิดต้นทุนการเทรดใด ๆ ทั้ง fee และ slippage: Fill ได้ราคาเปิดของ candle
+  หรือราคาเป้าโดยตรง ปัดตาม tick size ของ Symbol เท่านั้น กำไรที่รายงานจึงเป็นผลของราคา
+  ล้วน ๆ ให้เห็นว่ากลยุทธ์เองทำงานหรือไม่
 - เมื่อใช้ข้อมูลตลาดและ Preset version เดิม Paper replay ต้องให้ผลลัพธ์เดิม
 
 Paper, Live Spot และ Live Futures ใช้ strategy, capital และ lifecycle policies ร่วมกัน แต่ใช้ execution adapter แยกกัน
@@ -231,7 +229,7 @@ Basket อยู่ และไม่ retire หรือปิด Position โ
 
 `Start Paper Bot` เป็น action เดียวสำหรับสร้างหรือแทนที่ Session: ระบบต้อง validate
 configuration ก่อนทำ side effect; หาก Session เดิมมี Position ค้าง ให้ขอการยืนยันเพียงครั้ง
-เดียวเพื่อบันทึก market close พร้อม fee, slippage และ `manual-close` audit Fill โดยใช้ราคา
+เดียวเพื่อบันทึก market close พร้อม `manual-close` audit Fill โดยใช้ราคา
 public market data ที่ fresh ไม่เกิน 30 วินาที จากนั้นจึง retire Session เดิม สร้าง immutable
 Session ใหม่ และเริ่ม Bot อัตโนมัติ หากราคาไม่สด, stop runtime, close, retire หรือ start
 ล้มเหลว ระบบต้องไม่สร้าง Session ใหม่ และคงฟอร์มไว้ให้ผู้ใช้แก้ไขหรือกด Start ซ้ำได้
@@ -301,7 +299,7 @@ SQLite เก็บข้อมูลที่ไม่ใช่ secret ได�
 - Basket และ Entry Pair state
 - Entry Intent
 - Order และ Fill
-- PnL, fee, slippage และ funding
+- PnL
 - Notification
 - Recovery/Reconciliation record
 - Operational audit event
@@ -316,7 +314,6 @@ SQLite เก็บข้อมูลที่ไม่ใช่ secret ได�
 - RSI Step Grid ทำงานตรงตาม Versioned Preset
 - Basket Take Profit, Entry Pair และ Cooldown Month ผ่าน automated tests
 - Paper Fill ไม่มี look-ahead bias และ replay ได้ผลเดิม
-- fee และ slippage ถูกคำนวณและบันทึก โดย Paper Futures Phase แรกบันทึก Funding Fee เป็น `0.00`
 - Paper Futures ใช้ Trading Capital และ Collateral Buffer อย่างละ 50%, One-way Mode, Cross Margin, leverage จำนวนเต็ม 1x–5x ที่ตรึงตลอด Session และ Liquidation แบบ deterministic
 - Restart แล้วกู้ Session และ Basket ได้โดยไม่สร้าง Entry หรือ Order ซ้ำ
 - ระบบบังคับหนึ่ง Active Bot Session สำหรับ installation

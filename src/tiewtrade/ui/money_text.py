@@ -19,6 +19,8 @@ Position tab and another in Trade History.
 
 from decimal import Decimal
 
+from tiewtrade.ui.blank_text import BLANK
+
 QUOTE_ASSET = "USDT"
 
 
@@ -30,3 +32,14 @@ def price_text(value: Decimal) -> str:
 def money_text(value: Decimal) -> str:
     """An amount as it reads on screen: grouped, and to the cent."""
     return f"{value:,.2f} {QUOTE_ASSET}"
+
+
+def realized_text(value: Decimal) -> str:
+    """A realised result, or a dash where a trade has not produced one.
+
+    An Entry realises nothing, so printing 0.00 USDT beside it reads as a
+    trade that closed at break-even rather than one that has not closed.
+    Exactly zero is the test, not zero to the cent: a result of 0.001 did
+    happen, and rounding it away to a dash would hide that it did.
+    """
+    return BLANK if value == 0 else money_text(value)

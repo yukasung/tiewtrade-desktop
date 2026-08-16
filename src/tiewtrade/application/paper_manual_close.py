@@ -63,11 +63,7 @@ class ClosePaperPosition:
         long_position = basket.market_type is MarketType.SPOT or (
             entries[0].side is FillSide.BUY
         )
-        slippage = session.config.slippage_bps / Decimal("10000")
-        raw_exit_price = execution_price * (
-            Decimal("1") - slippage if long_position else Decimal("1") + slippage
-        )
-        exit_price = (raw_exit_price / tick_size).to_integral_value(
+        exit_price = (execution_price / tick_size).to_integral_value(
             rounding=ROUND_DOWN if long_position else ROUND_CEILING
         ) * tick_size
         quantity = sum((fill.quantity for fill in entries), Decimal("0"))

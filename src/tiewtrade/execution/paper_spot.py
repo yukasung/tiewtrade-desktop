@@ -54,9 +54,7 @@ class PaperSpotExecutor:
     ) -> PaperSpotEntryFill | None:
         self._require_matching_symbol(candle)
 
-        price = self._symbol_rules.ceil_price(
-            candle.open * (Decimal("1") + self._session.slippage_bps / Decimal("10000"))
-        )
+        price = self._symbol_rules.ceil_price(candle.open)
         quantity = self._symbol_rules.floor_quantity(
             self._capital_plan.entry_notional / price
         )
@@ -86,12 +84,7 @@ class PaperSpotExecutor:
 
         fills: list[PaperSpotExitFill] = []
         for entry in basket.entries_reaching_take_profit(candle.high, candle.low):
-            price = self._symbol_rules.floor_price(
-                entry.take_profit_price
-                * (Decimal("1") - self._session.slippage_bps / Decimal("10000"))
-            )
-            if price <= 0:
-                continue
+            price = self._symbol_rules.floor_price(entry.take_profit_price)
             order_id = f"take-profit:{basket.basket_id}:{entry.entry_number}"
             fills.append(
                 PaperSpotExitFill(
@@ -113,12 +106,7 @@ class PaperSpotExecutor:
         if basket.stop_loss_price is None or candle.low > basket.stop_loss_price:
             return None
 
-        price = self._symbol_rules.floor_price(
-            basket.stop_loss_price
-            * (Decimal("1") - self._session.slippage_bps / Decimal("10000"))
-        )
-        if price <= 0:
-            return None
+        price = self._symbol_rules.floor_price(basket.stop_loss_price)
 
         quantity = basket.total_quantity
         order_id = f"stop-loss:{basket.basket_id}"

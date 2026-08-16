@@ -23,7 +23,7 @@ class UnsupportedDatabaseSchemaError(ValueError):
 
 
 class SQLiteDatabase:
-    _SCHEMA_VERSION = 9
+    _SCHEMA_VERSION = 10
     _BUSY_TIMEOUT_MS = 5_000
 
     def __init__(self, path: Path) -> None:
@@ -58,7 +58,7 @@ class SQLiteDatabase:
                 raise UnsupportedDatabaseSchemaError(version, self._SCHEMA_VERSION)
             if version == self._SCHEMA_VERSION:
                 return
-            if 1 <= version <= 8:
+            if 1 <= version <= 9:
                 _require_drop_column_support()
                 self._keep_a_copy(connection, version)
 
@@ -95,6 +95,8 @@ class SQLiteDatabase:
                     )
                 if 1 <= version <= 8:
                     _migrate_drop_fees_v9(connection)
+                if 1 <= version <= 9:
+                    _migrate_drop_slippage_v10(connection)
                 connection.execute(f"PRAGMA user_version = {self._SCHEMA_VERSION}")
         finally:
             connection.close()
@@ -202,6 +204,16 @@ def _migrate_drop_fees_v9(connection: sqlite3.Connection) -> None:
         connection.execute("ALTER TABLE bot_sessions DROP COLUMN fee_rate")
 
 
+def _migrate_drop_slippage_v10(connection: sqlite3.Connection) -> None:
+    """Take the last execution cost out of a Session's configuration.
+
+    Nothing is renamed or recomputed: slippage only ever moved the price a
+    fill was given, which is already written into every Fill that was taken.
+    """
+    if _has_column(connection, "bot_sessions", "slippage_bps"):
+        connection.execute("ALTER TABLE bot_sessions DROP COLUMN slippage_bps")
+
+
 def _has_column(connection: sqlite3.Connection, table: str, column: str) -> bool:
     return _table_exists(connection, table) and not _column_is_missing(
         connection, table, column
@@ -244,7 +256,6 @@ def _create_bot_sessions_schema(connection: sqlite3.Connection) -> None:
             max_entries INTEGER NOT NULL CHECK (
                 max_entries BETWEEN 2 AND 20 AND max_entries % 2 = 0
             ),
-            slippage_bps TEXT NOT NULL,
             spot_trading_capital_ratio TEXT,
             futures_policy_version TEXT,
             futures_leverage INTEGER,

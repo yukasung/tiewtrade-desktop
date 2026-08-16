@@ -199,8 +199,10 @@ class ChartWorkflow(QObject):
             or selection is None
             or snapshot is None
             or snapshot.state not in {ChartReadState.READY, ChartReadState.EMPTY}
-            # A chart-only view of another market never shows session fills.
-            or selection.market_data_config() != session.market_data
+            # Fills belong to a Pair, not to a timeframe: the same trade is
+            # drawn on whatever candles are on screen. Only a chart of some
+            # other Pair has no business showing this Session's trades.
+            or selection.symbol != session.market_data.symbol
         ):
             return
         if self._fills_task is not None:
@@ -587,6 +589,14 @@ class ChartWorkflow(QObject):
             return
         self._snapshot = updated
         self.snapshot_changed.emit(updated)
+        # Fills were read for the completed range, but the forming candle
+        # stretches the drawn span past it, so a fill inside that candle has
+        # never been asked for. Without this the marker for a fresh Entry
+        # stays missing until the candle closes — a moment on 1m, but hours
+        # on 4h, and every timeframe change starts the wait over.
+        forming = snapshot.in_progress_candle
+        if forming is None or forming.open_time != candle.open_time:
+            self.refresh_fills()
 
     def _clear_in_progress_candle(
         self,
@@ -652,12 +662,20 @@ class ChartWorkflow(QObject):
         return replace(session, market_data=selection.market_data_config())
 
     def _normalize_snapshot(self, snapshot: ChartSnapshot) -> ChartSnapshot:
+        """Drop the Session's fills from a chart of some other Pair.
+
+        The fills are read by Session, not by Pair, so a chart of another
+        Pair would otherwise badge trades that never happened on it. A
+        different timeframe of the same Pair keeps them — it is the same
+        trade seen at another resolution, and ChartMarker already rounds
+        each fill to the candle it belongs to.
+        """
         session = self._session
         selection = self._selection
         if (
             session is None
             or selection is None
-            or selection.market_data_config() == session.market_data
+            or selection.symbol == session.market_data.symbol
         ):
             return snapshot
         return ChartSnapshot(

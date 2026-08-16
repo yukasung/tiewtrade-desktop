@@ -20,7 +20,7 @@ from tests.support.paper_trade_history_acceptance import (
     spot_candles,
     spot_history,
 )
-from tests.support.qt_interactions import table_item
+from tests.support.qt_interactions import click, table_item
 from tiewtrade.application.session_persistence import SessionPersistenceBlockedError
 from tiewtrade.application.trade_history import TradeHistoryFilter
 from tiewtrade.integrations.sqlite.database import SQLiteDatabase
@@ -39,6 +39,14 @@ from tiewtrade.trading.trade_history import (
 )
 from tiewtrade.ui.main_window import MainWindow
 from tiewtrade.ui.trading_workspace import WorkspaceTab
+
+
+def _show_every_day(window: MainWindow, qtbot: QtBot) -> None:
+    """Widen past the day the page opens on, to reach a dated fixture."""
+    qtbot.waitUntil(window.trade_history.basket_filters.search_button.isEnabled)
+    window.trade_history.basket_filters.from_date.clear_date()
+    window.trade_history.basket_filters.to_date.clear_date()
+    click(window.trade_history.basket_filters.search_button)
 
 
 def test_sqlite_failure_blocks_new_paper_entry_fail_closed(tmp_path: Path) -> None:
@@ -150,7 +158,7 @@ def test_open_basket_duplicate_and_partial_fills_remain_deterministic(
         closed_basket_id,
         open_history.basket.basket_id,
     }
-    assert first_page.realized_pnl == Decimal("14.15466")
+    assert first_page.realized_pnl == Decimal("14.202")
     assert first_open_page.items == (updated_open_basket,)
     assert first_open_page.realized_pnl == Decimal("0")
     assert len(first_fills) == 2
@@ -188,15 +196,15 @@ def test_paper_execution_history_survives_restart_and_reaches_desktop(
     }
 
     assert len(before_restart.items) == 2
-    assert before_restart.realized_pnl == Decimal("2336.32646")
+    assert before_restart.realized_pnl == Decimal("2370.222")
     futures, spot = before_restart.items
     assert futures.basket_id == futures_basket_id
     assert futures.status is BasketStatus.CLOSED
-    assert futures.realized_pnl == Decimal("2322.1718")
+    assert futures.realized_pnl == Decimal("2356.0200")
     assert futures.leverage == 3
     assert spot.basket_id == spot_basket_id
     assert spot.status is BasketStatus.CLOSED
-    assert spot.realized_pnl == Decimal("14.15466")
+    assert spot.realized_pnl == Decimal("14.202")
     for fills in before_fills.values():
         assert [fill.side for fill in fills] == [FillSide.BUY, FillSide.SELL]
         assert all(fill.source is FillSource.PAPER_EXECUTOR for fill in fills)
@@ -216,58 +224,56 @@ def test_paper_execution_history_survives_restart_and_reaches_desktop(
     qtbot.addWidget(window)
     window.show()
     window.workspace.show_tab(WorkspaceTab.BASKET_HISTORY)
+    _show_every_day(window, qtbot)
 
     qtbot.waitUntil(lambda: window.trade_history.basket_table.rowCount() == 2)
-    assert window.trade_history.total_net_pnl.text() == "2,336.33 USDT"
     assert _table_row_text(window.trade_history.basket_table, 0) == (
         "2026-01-01 09:05:00",
-        "Paper",
         "Futures",
-        "BTCUSDT",
+        "BTC/USDT",
         "5m",
-        "1",
-        "29,999.95 USDT",
-        "2,322.17 USDT",
-        "Closed",
+        "29,999.99 USDT",
+        "2,356.02 USDT",
     )
     window.workspace.show_tab(WorkspaceTab.TRADE_HISTORY)
+    _show_every_day(window, qtbot)
     qtbot.waitUntil(lambda: window.trade_history.fill_table.rowCount() == 4)
     assert set(_table_rows_text(window.trade_history.fill_table)) == {
         (
             "2026-01-01 09:05:00",
-            "BTCUSDT",
+            "BTC/USDT",
             "Buy",
-            "95.6",
-            "313.807",
-            "29,999.95 USDT",
-            "0.00 USDT",
+            "95.5",
+            "314.136",
+            "29,999.99 USDT",
+            "—",
         ),
         (
-            "2026-01-01 09:45:00",
-            "BTCUSDT",
+            "2026-01-01 09:40:00",
+            "BTC/USDT",
             "Sell",
             "103.0",
-            "313.807",
-            "32,322.12 USDT",
-            "2,322.17 USDT",
+            "314.136",
+            "32,356.01 USDT",
+            "2,356.02 USDT",
         ),
         (
             "2026-01-01 09:05:00",
-            "BTCUSDT",
+            "BTC/USDT",
             "Buy",
-            "95.02",
+            "95",
             "1.578",
-            "149.94 USDT",
-            "0.00 USDT",
+            "149.91 USDT",
+            "—",
         ),
         (
-            "2026-01-01 09:50:00",
-            "BTCUSDT",
+            "2026-01-01 09:45:00",
+            "BTC/USDT",
             "Sell",
-            "103.99",
+            "104",
             "1.578",
-            "164.10 USDT",
-            "14.15 USDT",
+            "164.11 USDT",
+            "14.20 USDT",
         ),
     }
 
