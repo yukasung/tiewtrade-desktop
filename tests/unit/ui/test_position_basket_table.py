@@ -7,7 +7,6 @@ from PySide6.QtGui import QBrush, QColor
 from PySide6.QtWidgets import QTableWidgetItem
 from pytestqt.qtbot import QtBot
 
-from tests.support.qt_rendering import ink_colours
 from tests.support.workspace_snapshots import basket_entries, basket_snapshot
 from tiewtrade.application.trading_workspace import (
     BasketEntryGate,
@@ -20,7 +19,7 @@ from tiewtrade.application.trading_workspace import (
     stale_position_basket_tab,
 )
 from tiewtrade.ui.position_basket_table import PositionBasketTable
-from tiewtrade.ui.theme import DARK_THEME, NEGATIVE_COLOR, POSITIVE_COLOR
+from tiewtrade.ui.theme import NEGATIVE_COLOR, POSITIVE_COLOR
 
 OBSERVED_AT = datetime(2026, 8, 2, 1, 2, 4, tzinfo=UTC)
 
@@ -97,6 +96,7 @@ def test_each_entry_of_the_basket_is_its_own_row(qtbot: QtBot) -> None:
         "Date",
         "Entry Price",
         "Take Profit",
+        "Average",
         "Quantity",
         "Total",
         "Unrealized P/L",
@@ -107,6 +107,7 @@ def test_each_entry_of_the_basket_is_its_own_row(qtbot: QtBot) -> None:
         "Date": "2026-08-02 08:00:00",
         "Entry Price": "66,000.0000",
         "Take Profit": "67,000.0000",
+        "Average": "66,000.1250",
         "Quantity": "0.00300000",
         "Total": "198.00 USDT",
         "Unrealized P/L": "0.96 USDT",
@@ -152,11 +153,13 @@ def test_money_is_grouped_and_a_quantity_is_not(qtbot: QtBot) -> None:
     assert row["Quantity"] == "0.00300000"
 
 
-def test_only_the_total_frames_the_entries(qtbot: QtBot) -> None:
-    """The sum is the one fact no row carries; the rest of the tab is Entries.
+def test_every_row_restates_the_basket_average(qtbot: QtBot) -> None:
+    """The Basket's own price, beside the prices its Entries actually paid.
 
-    The symbol and market are named by the chart and the session panel, so the
-    table does not spend a line repeating them.
+    It is the same figure on every row because it is the Basket's, not the
+    row's — and it is neither price paid, which is the whole reason to print
+    it. Nothing else frames the table: the symbol and market are named by the
+    chart and the session panel, so the table does not repeat them.
     """
     widget = PositionBasketTable()
     qtbot.addWidget(widget)
@@ -165,26 +168,33 @@ def test_only_the_total_frames_the_entries(qtbot: QtBot) -> None:
         ready_position_basket_tab(_futures_basket(), observed_at_utc=OBSERVED_AT)
     )
 
-    assert widget.total_label.text() == (
-        "2 Entries · Total 0.00600000 · Average 66,000.1250 · Unrealized 1.93 USDT"
-    )
-    assert widget.total_label.accessibleName() == "Position total"
+    assert _cell(widget, "Average", 0).text() == "66,000.1250"
+    assert _cell(widget, "Average", 1).text() == "66,000.1250"
+    assert _cell(widget, "Entry Price", 0).text() == "66,000.0000"
+    assert _cell(widget, "Entry Price", 1).text() == "66,000.2500"
+    assert not hasattr(widget, "total_label")
     assert not hasattr(widget, "basket_label")
 
 
-def test_a_single_entry_basket_reads_as_one_entry(qtbot: QtBot) -> None:
+def test_a_single_entry_basket_averages_to_the_one_price_it_paid(
+    qtbot: QtBot,
+) -> None:
     widget = PositionBasketTable()
     qtbot.addWidget(widget)
 
     widget.show_snapshot(
         ready_position_basket_tab(
-            basket_snapshot(entry_count=1, entries=basket_entries("64000")),
+            basket_snapshot(
+                entry_count=1,
+                entries=basket_entries("64000"),
+                average_entry_price=Decimal("64000"),
+            ),
             observed_at_utc=OBSERVED_AT,
         )
     )
 
     assert widget.table.rowCount() == 1
-    assert widget.total_label.text().startswith("1 Entry · ")
+    assert _cell(widget, "Average", 0).text() == _cell(widget, "Entry Price", 0).text()
 
 
 def test_a_moved_column_carries_its_own_reading(
@@ -225,6 +235,7 @@ def test_columns_align_numbers_right_and_text_left(qtbot: QtBot) -> None:
 
     assert widget.ALIGNMENTS == (
         left,
+        right,
         right,
         right,
         right,
@@ -340,7 +351,6 @@ def test_position_basket_states_preserve_or_clear_application_facts(
 
     assert widget.table.rowCount() == 0
     assert widget.state_label.text() == "No open Position"
-    assert widget.total_label.isHidden()
 
 
 def test_empty_position_basket_state_is_centered_in_table_body(qtbot: QtBot) -> None:
@@ -376,35 +386,3 @@ def test_position_basket_ignores_wrong_snapshot_type(qtbot: QtBot) -> None:
 
     assert widget.table.rowCount() == 2
     assert widget.table.accessibleName() == "Position"
-
-
-@pytest.mark.parametrize(
-    ("unrealized_pnl", "expected_colour"),
-    [
-        pytest.param(Decimal("1.926"), POSITIVE_COLOR, id="profit"),
-        pytest.param(Decimal("-0.15132"), NEGATIVE_COLOR, id="loss"),
-        pytest.param(Decimal("0"), None, id="break-even"),
-    ],
-)
-def test_the_total_is_painted_by_its_sign(
-    qtbot: QtBot, unrealized_pnl: Decimal, expected_colour: str | None
-) -> None:
-    """The same reading the Trade History summary gives, given the same way."""
-    widget = PositionBasketTable()
-    widget.setStyleSheet(DARK_THEME)
-    qtbot.addWidget(widget)
-    widget.show()
-
-    widget.show_snapshot(
-        ready_position_basket_tab(
-            basket_snapshot(unrealized_pnl=unrealized_pnl),
-            observed_at_utc=OBSERVED_AT,
-        )
-    )
-
-    inks = ink_colours(widget.total_label)
-    if expected_colour is None:
-        assert POSITIVE_COLOR.lower() not in inks
-        assert NEGATIVE_COLOR.lower() not in inks
-    else:
-        assert expected_colour.lower() in inks

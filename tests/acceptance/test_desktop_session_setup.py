@@ -451,13 +451,14 @@ def test_desktop_fake_snapshots_render_orders_and_basket_without_manual_trading(
     )
 
     assert start_calls == 0
-    # One row per Entry taken, with only the Basket's total framing them.
+    # One row per Entry taken, each restating the Basket it belongs to.
     assert window.workspace.position_basket.table.rowCount() == 1
     lifecycle = PositionBasketTable.HEADERS.index("Status")
     assert table_item(window.workspace.position_basket.table, 0, lifecycle).text() == (
         "Active"
     )
-    assert window.workspace.position_basket.total_label.text().startswith("1 Entry · ")
+    average = PositionBasketTable.HEADERS.index("Average")
+    assert table_item(window.workspace.position_basket.table, 0, average).text() != ""
     assert _manual_order_buttons(window) == ()
     assert _trade_side_effect_counts(database) == initial_counts
 

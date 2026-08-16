@@ -19,7 +19,7 @@ from tiewtrade.application.trading_workspace import (
 from tiewtrade.ui.display_time import display_timestamp
 from tiewtrade.ui.entry_gate_display import blocked_entry_reason
 from tiewtrade.ui.money_text import money_text, price_text
-from tiewtrade.ui.sign_state import paint_by_sign, sign_colour
+from tiewtrade.ui.sign_state import sign_colour
 from tiewtrade.ui.table_column import (
     CENTER,
     LEFT,
@@ -77,15 +77,24 @@ def _pnl_colour(row: _Row) -> str | None:
     return sign_colour(row.entry.unrealized_pnl)
 
 
+def _average_entry_price(row: _Row) -> str:
+    """What the Basket paid on average, restated on every Entry that moved it.
+
+    Read in the same format as the price each row paid, since the pair is only
+    worth printing to be compared.
+    """
+    return price_text(row.basket.average_entry_price)
+
+
 class PositionBasketTable(QWidget):
     """Every Entry of the open Basket, one row each.
 
     A trader enters the same Basket more than once, so an averaged single row
     hides the prices actually paid. The rows are the Entries, each with the
     price it paid and the target it is sold at. Facts the Basket holds for all
-    of them — its lifecycle — are restated on every row so a row can be read
-    on its own; the market it trades and the totals it sums to, which no row
-    can carry, frame the table instead.
+    of them — its average and its lifecycle — are restated on every row so a
+    row can be read on its own; the market it trades, which no row can carry,
+    frames the table instead.
     """
 
     # Measured numbers hang on the right so their digits line up and a minus
@@ -96,6 +105,8 @@ class PositionBasketTable(QWidget):
         Column("Entry Price", RIGHT, _price),
         # Beside the price paid, so the distance left to run reads at a glance.
         Column("Take Profit", RIGHT, _take_profit_price),
+        # The Basket's own price, following the two each row paid and aims at.
+        Column("Average", RIGHT, _average_entry_price),
         Column("Quantity", RIGHT, _quantity),
         Column("Total", RIGHT, _notional),
         Column("Unrealized P/L", RIGHT, _pnl, _pnl_colour),
@@ -116,17 +127,11 @@ class PositionBasketTable(QWidget):
         self.state_label.setAccessibleName("Position status")
         self.state_label.setProperty("stateMessage", True)
         self.state_label.setWordWrap(True)
-        self.total_label = QLabel()
-        self.total_label.setObjectName("positionBasketTotal")
-        self.total_label.setAccessibleName("Position total")
-        self.total_label.setWordWrap(True)
-        self.total_label.setVisible(False)
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.addWidget(self.state_label)
         layout.addWidget(self.table, 1)
-        layout.addWidget(self.total_label)
 
     @property
     def headers(self) -> tuple[str, ...]:
@@ -151,27 +156,6 @@ class PositionBasketTable(QWidget):
             for index, row in enumerate(rows):
                 for position, column in enumerate(self.COLUMNS):
                     self.table.setItem(index, position, table_item(column, row))
-        self._show_basket_total(basket)
-
-    def _show_basket_total(self, basket: BasketSnapshot | None) -> None:
-        """What the Basket sums to, which no single Entry row can carry.
-
-        The symbol and market it trades are not restated here: the chart above
-        and the session panel beside it already name them, and a third copy
-        only takes a line away from the Entries.
-        """
-        if basket is None:
-            self.total_label.setVisible(False)
-            return
-        self.total_label.setText(
-            f"{basket.entry_count} "
-            f"{'Entry' if basket.entry_count == 1 else 'Entries'} · "
-            f"Total {format(basket.total_quantity, 'f')} · "
-            f"Average {price_text(basket.average_entry_price)} · "
-            f"Unrealized {money_text(basket.unrealized_pnl)}"
-        )
-        paint_by_sign(self.total_label, basket.unrealized_pnl)
-        self.total_label.setVisible(True)
 
     def _show_state(self, snapshot: PositionBasketTabSnapshot) -> None:
         text = self._state_text(snapshot)
