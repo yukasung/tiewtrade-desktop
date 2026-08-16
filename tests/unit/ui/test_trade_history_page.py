@@ -83,6 +83,7 @@ def test_page_exposes_filters_and_exact_table_columns(qtbot: QtBot) -> None:
         "Market",
         "Pair",
         "Timeframe",
+        "Entries",
         "Total",
         "Profit / Loss",
     )

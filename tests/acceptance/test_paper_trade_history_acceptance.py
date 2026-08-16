@@ -232,6 +232,7 @@ def test_paper_execution_history_survives_restart_and_reaches_desktop(
         "Futures",
         "BTC/USDT",
         "5m",
+        "1",
         "29,999.99 USDT",
         "2,356.02 USDT",
     )

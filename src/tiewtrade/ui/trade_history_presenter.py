@@ -87,6 +87,11 @@ BASKET_COLUMNS: tuple[Column[BasketResult], ...] = (
     Column("Market", CENTER, lambda basket: display_enum(basket.market_type.value)),
     Column("Pair", LEFT, lambda basket: pair_text(basket.symbol)),
     Column("Timeframe", CENTER, lambda basket: basket.timeframe),
+    # How many Entries the round took, which is also part of why it ended: a
+    # completed Entry Pair is what starts a Cooldown Month, and a Session out
+    # of Entries never opens again. The Total alone cannot tell one large
+    # Entry from four that scaled in.
+    Column("Entries", CENTER, lambda basket: str(basket.entry_count)),
     # "Total" is what an exchange calls price × quantity, and what the Fills
     # table beside this one already calls it. One word for one idea.
     Column("Total", RIGHT, lambda basket: usdt_text(basket.invested_notional)),
@@ -96,9 +101,8 @@ BASKET_COLUMNS: tuple[Column[BasketResult], ...] = (
         lambda basket: realized_text(basket.realized_pnl),
         lambda basket: sign_colour(basket.realized_pnl),
     ),
-    # Mode, Entries and Status are on the record but off the screen: a Paper
-    # Bot writes only Paper, and how many Entries a round took is a fact about
-    # how it was built rather than how it did.
+    # Mode and Status are on the record but off the screen: a Paper Bot writes
+    # only Paper, and a round listed here is read by what it realised.
 )
 
 FILL_COLUMNS: tuple[Column[TradeFillHistoryItem], ...] = (

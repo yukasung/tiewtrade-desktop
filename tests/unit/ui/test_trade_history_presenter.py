@@ -76,16 +76,20 @@ def test_a_recorded_figure_reads_to_the_cent_whatever_it_was_stored_as(
 
 
 def test_basket_columns_format_utc_and_every_column() -> None:
-    basket = basket_result()
+    """A round that scaled in: the Entries it took are read off the row."""
+    basket = basket_result(entry_count=4)
 
     assert read(BASKET_COLUMNS, basket) == (
         "2026-01-01 07:00:00",
         "Spot",
         "BTC/USDT",
         "5m",
+        "4",
         "200.00 USDT",
         "20.00 USDT",
     )
+    # One Entry counts as one, rather than reading as the absence of a count.
+    assert read(BASKET_COLUMNS, basket_result())[4] == "1"
 
 
 def test_fill_columns_include_symbol_and_total_for_cross_basket_history() -> None:

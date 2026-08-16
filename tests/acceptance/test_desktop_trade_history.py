@@ -94,6 +94,7 @@ def test_desktop_trade_history_reads_durable_spot_and_futures_records(
         "Futures",
         "BTC/USDT",
         "5m",
+        "1",
         "200.00 USDT",
         "29.40 USDT",
     )
@@ -102,6 +103,7 @@ def test_desktop_trade_history_reads_durable_spot_and_futures_records(
         "Spot",
         "BTC/USDT",
         "5m",
+        "1",
         "200.00 USDT",
         "20.00 USDT",
     )
