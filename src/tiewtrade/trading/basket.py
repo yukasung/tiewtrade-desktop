@@ -66,7 +66,6 @@ class BasketEntry:
     entry_number: int
     price: Decimal
     quantity: Decimal
-    fee: Decimal
     filled_at: datetime
     take_profit_price: Decimal
 
@@ -79,9 +78,7 @@ class ClosedEntry:
     quantity: Decimal
     entry_price: Decimal
     exit_price: Decimal
-    gross_realized_pnl: Decimal
-    trading_fees: Decimal
-    net_realized_pnl: Decimal
+    realized_pnl: Decimal
     closed_at: datetime
 
 
@@ -92,15 +89,13 @@ class _SettledEntries:
     count: int = 0
     quantity: Decimal = Decimal("0")
     notional: Decimal = Decimal("0")
-    gross_realized_pnl: Decimal = Decimal("0")
-    trading_fees: Decimal = Decimal("0")
+    realized_pnl: Decimal = Decimal("0")
 
     def record(self, entry: "BasketEntry", closed: "ClosedEntry") -> None:
         self.count += 1
         self.quantity += entry.quantity
         self.notional += entry.price * entry.quantity
-        self.gross_realized_pnl += closed.gross_realized_pnl
-        self.trading_fees += closed.trading_fees
+        self.realized_pnl += closed.realized_pnl
 
 
 @dataclass(frozen=True, slots=True)
@@ -109,17 +104,10 @@ class ClosedBasket:
     entry_count: int
     average_entry_price: Decimal
     exit_price: Decimal
-    gross_realized_pnl: Decimal
-    trading_fees: Decimal
-    funding_fee: Decimal
-    net_realized_pnl: Decimal
+    realized_pnl: Decimal
     closed_at: datetime
     position_side: PositionSide = PositionSide.LONG
     close_reason: BasketCloseReason = BasketCloseReason.TAKE_PROFIT
-
-    @property
-    def realized_pnl(self) -> Decimal:
-        return self.net_realized_pnl
 
 
 class Basket:
@@ -208,10 +196,6 @@ class Basket:
         return sum((entry.quantity for entry in self._entries), Decimal("0"))
 
     @property
-    def entry_fees(self) -> Decimal:
-        return sum((entry.fee for entry in self._entries), Decimal("0"))
-
-    @property
     def average_entry_price(self) -> Decimal:
         if self.is_empty:
             raise ValueError("basket is empty")
@@ -226,7 +210,6 @@ class Basket:
         *,
         price: Decimal,
         quantity: Decimal,
-        fee: Decimal,
         filled_at: datetime,
         atr: Decimal,
         tick_size: Decimal,
@@ -243,7 +226,6 @@ class Basket:
             raise ValueError("opposite-side Entry is not allowed in One-way Mode")
         _require_positive(price, "price")
         _require_positive(quantity, "quantity")
-        _require_non_negative(fee, "fee")
         _require_non_negative(atr, "atr")
         _require_positive(tick_size, "tick_size")
 
@@ -294,7 +276,6 @@ class Basket:
                 entry_number=entry_number,
                 price=price,
                 quantity=quantity,
-                fee=fee,
                 filled_at=filled_at,
                 take_profit_price=take_profit_price,
             )
@@ -320,7 +301,6 @@ class Basket:
         entry_number: int,
         *,
         exit_price: Decimal,
-        exit_fee: Decimal,
         closed_at: datetime,
     ) -> ClosedEntry:
         """Take one Entry out of the Basket, leaving the others where they are."""
@@ -328,7 +308,6 @@ class Basket:
         if self.is_closed:
             raise ValueError("basket is closed")
         _require_positive(exit_price, "exit_price")
-        _require_non_negative(exit_fee, "exit_fee")
         entry = next(
             (item for item in self._entries if item.entry_number == entry_number),
             None,
@@ -337,18 +316,15 @@ class Basket:
             raise ValueError("basket has no open Entry with that number")
 
         if self.position_side is PositionSide.LONG:
-            gross_realized_pnl = (exit_price - entry.price) * entry.quantity
+            realized_pnl = (exit_price - entry.price) * entry.quantity
         else:
-            gross_realized_pnl = (entry.price - exit_price) * entry.quantity
-        trading_fees = entry.fee + exit_fee
+            realized_pnl = (entry.price - exit_price) * entry.quantity
         closed = ClosedEntry(
             entry_number=entry.entry_number,
             quantity=entry.quantity,
             entry_price=entry.price,
             exit_price=exit_price,
-            gross_realized_pnl=gross_realized_pnl,
-            trading_fees=trading_fees,
-            net_realized_pnl=gross_realized_pnl - trading_fees,
+            realized_pnl=realized_pnl,
             closed_at=closed_at,
         )
         self._entries.remove(entry)
@@ -373,16 +349,12 @@ class Basket:
         if not self.is_closed or not self.is_empty:
             raise ValueError("basket still holds an Entry")
         settled = self._settled
-        net_realized_pnl = settled.gross_realized_pnl - settled.trading_fees
         return ClosedBasket(
             basket_id=self.basket_id,
             entry_count=settled.count,
             average_entry_price=settled.notional / settled.quantity,
             exit_price=exit_price,
-            gross_realized_pnl=settled.gross_realized_pnl,
-            trading_fees=settled.trading_fees,
-            funding_fee=Decimal("0"),
-            net_realized_pnl=net_realized_pnl,
+            realized_pnl=settled.realized_pnl,
             closed_at=closed_at,
             position_side=self.position_side,
             close_reason=close_reason,
@@ -392,7 +364,6 @@ class Basket:
         self,
         *,
         exit_price: Decimal,
-        exit_fee: Decimal,
         closed_at: datetime,
         close_reason: BasketCloseReason = BasketCloseReason.TAKE_PROFIT,
     ) -> ClosedBasket:
@@ -402,10 +373,9 @@ class Basket:
         if self.is_empty:
             raise ValueError("basket is empty")
         _require_positive(exit_price, "exit_price")
-        _require_non_negative(exit_fee, "exit_fee")
 
         if self.position_side is PositionSide.LONG:
-            gross_realized_pnl = sum(
+            realized_pnl = sum(
                 (
                     (exit_price - entry.price) * entry.quantity
                     for entry in self._entries
@@ -413,7 +383,7 @@ class Basket:
                 Decimal("0"),
             )
         else:
-            gross_realized_pnl = sum(
+            realized_pnl = sum(
                 (
                     (entry.price - exit_price) * entry.quantity
                     for entry in self._entries
@@ -422,10 +392,7 @@ class Basket:
             )
         # Entries that already sold are part of this Basket's result too.
         settled = self._settled
-        gross_realized_pnl += settled.gross_realized_pnl
-        trading_fees = self.entry_fees + exit_fee + settled.trading_fees
-        funding_fee = Decimal("0")
-        net_realized_pnl = gross_realized_pnl - trading_fees - funding_fee
+        realized_pnl += settled.realized_pnl
         total_quantity = self.total_quantity + settled.quantity
         total_notional = (
             sum(
@@ -439,10 +406,7 @@ class Basket:
             entry_count=self.entry_count + settled.count,
             average_entry_price=total_notional / total_quantity,
             exit_price=exit_price,
-            gross_realized_pnl=gross_realized_pnl,
-            trading_fees=trading_fees,
-            funding_fee=funding_fee,
-            net_realized_pnl=net_realized_pnl,
+            realized_pnl=realized_pnl,
             closed_at=closed_at,
             position_side=self.position_side,
             close_reason=close_reason,

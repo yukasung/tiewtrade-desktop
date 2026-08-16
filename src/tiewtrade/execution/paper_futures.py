@@ -19,7 +19,6 @@ class PaperFuturesEntryFill:
     side: PositionSide
     price: Decimal
     quantity: Decimal
-    fee: Decimal
     filled_at: datetime
 
 
@@ -31,7 +30,6 @@ class PaperFuturesExitFill:
     close_reason: BasketCloseReason
     price: Decimal
     quantity: Decimal
-    fee: Decimal
     filled_at: datetime
 
 
@@ -83,7 +81,6 @@ class PaperFuturesExecutor:
             side=intent.side,
             price=price,
             quantity=quantity,
-            fee=Decimal("0"),
             filled_at=candle.open_time,
         )
 
@@ -177,6 +174,5 @@ class PaperFuturesExecutor:
             close_reason=close_reason,
             price=price,
             quantity=quantity,
-            fee=Decimal("0"),
             filled_at=filled_at,
         )

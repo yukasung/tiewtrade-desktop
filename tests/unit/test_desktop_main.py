@@ -678,7 +678,7 @@ def test_concurrent_session_load_and_history_query_serialize_v1_migration(
             row[1] for row in connection.execute("PRAGMA table_info(basket_results)")
         }
 
-    assert schema_version == 8
+    assert schema_version == 9
     assert "leverage" in basket_columns
 
 

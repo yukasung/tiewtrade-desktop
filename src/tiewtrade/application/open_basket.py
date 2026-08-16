@@ -24,7 +24,6 @@ class OpenBasketEntry:
     entry_number: int
     price: Decimal
     quantity: Decimal
-    fee: Decimal
     filled_at: datetime
     atr: Decimal
 
@@ -74,7 +73,6 @@ def reopen_basket(
         basket.add_entry(
             price=entry.price,
             quantity=entry.quantity,
-            fee=entry.fee,
             filled_at=entry.filled_at,
             atr=entry.atr,
             tick_size=tick_size,

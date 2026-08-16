@@ -20,7 +20,6 @@ class PaperSpotHistoryContext:
     symbol: str
     timeframe: str
     preset_version: str
-    commission_asset: str
 
     @property
     def session_identity(self) -> PaperSpotSessionIdentity:
@@ -65,8 +64,6 @@ class PaperSpotSQLiteHistory:
             price=fill.price,
             quantity=fill.quantity,
             notional=fill.price * fill.quantity,
-            commission=fill.fee,
-            commission_asset=self._context.commission_asset,
             realized_pnl=Decimal("0"),
             source=FillSource.PAPER_EXECUTOR,
             entry_atr=entry_atr,
@@ -107,9 +104,7 @@ class PaperSpotSQLiteHistory:
             price=fill.price,
             quantity=fill.quantity,
             notional=fill.price * fill.quantity,
-            commission=fill.fee,
-            commission_asset=self._context.commission_asset,
-            realized_pnl=closed.net_realized_pnl,
+            realized_pnl=closed.realized_pnl,
             source=FillSource.PAPER_EXECUTOR,
             closes_entry_number=closed.entry_number,
         )
@@ -118,21 +113,14 @@ class PaperSpotSQLiteHistory:
                 existing,
                 closed_at_utc=closed_basket.closed_at,
                 entry_count=closed_basket.entry_count,
-                gross_realized_pnl=closed_basket.gross_realized_pnl,
-                trading_fees=closed_basket.trading_fees,
-                funding_fee=closed_basket.funding_fee,
-                net_realized_pnl=closed_basket.net_realized_pnl,
+                realized_pnl=closed_basket.realized_pnl,
                 status=BasketStatus.CLOSED,
             )
             return self._store.record_closed_basket(basket, normalized_fill)
 
-        gross_realized_pnl = existing.gross_realized_pnl + closed.gross_realized_pnl
-        trading_fees = existing.trading_fees + fill.fee
         basket = replace(
             existing,
-            gross_realized_pnl=gross_realized_pnl,
-            trading_fees=trading_fees,
-            net_realized_pnl=(gross_realized_pnl - trading_fees - existing.funding_fee),
+            realized_pnl=existing.realized_pnl + closed.realized_pnl,
         )
         return self._store.record_entry_exit_fill(basket, normalized_fill)
 
@@ -159,19 +147,14 @@ class PaperSpotSQLiteHistory:
             price=fill.price,
             quantity=fill.quantity,
             notional=fill.price * fill.quantity,
-            commission=fill.fee,
-            commission_asset=self._context.commission_asset,
-            realized_pnl=closed.net_realized_pnl,
+            realized_pnl=closed.realized_pnl,
             source=FillSource.PAPER_EXECUTOR,
         )
         basket = replace(
             existing,
             closed_at_utc=closed.closed_at,
             entry_count=closed.entry_count,
-            gross_realized_pnl=closed.gross_realized_pnl,
-            trading_fees=closed.trading_fees,
-            funding_fee=closed.funding_fee,
-            net_realized_pnl=closed.net_realized_pnl,
+            realized_pnl=closed.realized_pnl,
             status=BasketStatus.CLOSED,
         )
         return self._store.record_closed_basket(basket, normalized_fill)

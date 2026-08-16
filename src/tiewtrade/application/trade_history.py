@@ -41,7 +41,7 @@ class TradeHistoryFilter:
 @dataclass(frozen=True, slots=True)
 class BasketHistoryResult:
     items: tuple[BasketResult, ...]
-    net_realized_pnl: Decimal
+    realized_pnl: Decimal
 
 
 @dataclass(frozen=True, slots=True)

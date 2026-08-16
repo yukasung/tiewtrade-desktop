@@ -36,7 +36,6 @@ def spot_fill(price: str, quantity: str, *, minute: int = 0) -> PaperSpotEntryFi
         intent_id=f"intent-{minute}",
         price=Decimal(price),
         quantity=Decimal(quantity),
-        fee=Decimal("0"),
         filled_at=FILLED_AT.replace(minute=minute),
     )
 
@@ -49,7 +48,6 @@ def futures_fill(price: str, quantity: str) -> PaperFuturesEntryFill:
         side=PositionSide.SHORT,
         price=Decimal(price),
         quantity=Decimal(quantity),
-        fee=Decimal("0"),
         filled_at=FILLED_AT,
     )
 

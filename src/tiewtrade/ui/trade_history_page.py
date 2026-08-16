@@ -368,8 +368,8 @@ class TradeHistoryPage(QWidget):
 
         self._has_basket_result = True
         self.total_net_pnl_label.setVisible(True)
-        self.total_net_pnl.setText(usdt_text(result.net_realized_pnl))
-        paint_by_sign(self.total_net_pnl, result.net_realized_pnl)
+        self.total_net_pnl.setText(usdt_text(result.realized_pnl))
+        paint_by_sign(self.total_net_pnl, result.realized_pnl)
         self.total_net_pnl.setVisible(True)
         self.total_items.setText(f"{len(result.items)} total Positions")
         self.retry_baskets_button.setVisible(False)

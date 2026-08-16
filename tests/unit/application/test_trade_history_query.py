@@ -55,4 +55,4 @@ def test_history_read_models_preserve_durable_facts() -> None:
     )
 
     assert item.fill.notional == Decimal("200")
-    assert BasketHistoryResult(items=(), net_realized_pnl=Decimal("0")).items == ()
+    assert BasketHistoryResult(items=(), realized_pnl=Decimal("0")).items == ()

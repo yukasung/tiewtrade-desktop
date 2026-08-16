@@ -43,33 +43,26 @@ def test_sqlite_history_serves_application_query_after_restart(
         closed_at_utc=closed_at,
         entry_count=1,
         invested_notional=Decimal("100.000000000000000001"),
-        gross_realized_pnl=Decimal("10.000000000000000001"),
-        trading_fees=Decimal("0.2"),
-        funding_fee=Decimal("0"),
-        net_realized_pnl=Decimal("9.800000000000000001"),
+        realized_pnl=Decimal("9.800000000000000001"),
         status=BasketStatus.CLOSED,
     )
     opened = replace(
         closed,
         closed_at_utc=None,
-        gross_realized_pnl=Decimal("0"),
-        trading_fees=Decimal("0.1"),
-        net_realized_pnl=Decimal("-0.1"),
+        realized_pnl=Decimal("-0.1"),
         status=BasketStatus.OPEN,
     )
     buy = trade_fill(
         "buy-fill",
         side=FillSide.BUY,
         filled_at_utc=opened_at,
-        commission=Decimal("0.1"),
         realized_pnl=Decimal("0"),
     )
     sell = trade_fill(
         "sell-fill",
         side=FillSide.SELL,
         filled_at_utc=closed_at,
-        commission=Decimal("0.1"),
-        realized_pnl=closed.net_realized_pnl,
+        realized_pnl=closed.realized_pnl,
     )
     history.record_open_basket(opened, buy)
     history.record_closed_basket(closed, sell)
@@ -80,7 +73,7 @@ def test_sqlite_history_serves_application_query_after_restart(
     )
 
     assert page.items == (closed,)
-    assert page.net_realized_pnl == Decimal("9.800000000000000001")
+    assert page.realized_pnl == Decimal("9.800000000000000001")
     assert reopened.list_fills(BASKET_ID) == (buy, sell)
 
 
@@ -89,7 +82,6 @@ def trade_fill(
     *,
     side: FillSide,
     filled_at_utc: datetime,
-    commission: Decimal,
     realized_pnl: Decimal,
 ) -> TradeFill:
     return TradeFill(
@@ -104,8 +96,6 @@ def trade_fill(
         price=Decimal("100"),
         quantity=Decimal("1"),
         notional=Decimal("100"),
-        commission=commission,
-        commission_asset="USDT",
         realized_pnl=realized_pnl,
         source=FillSource.PAPER_EXECUTOR,
     )

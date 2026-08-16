@@ -284,7 +284,7 @@ def test_empty_trade_history_still_carries_its_summary_to_the_screen(
         items=(),
         # The smallest amount that still reads on screen, so a summary quietly
         # dropped cannot pass as one that was merely too small to see.
-        net_realized_pnl=Decimal("0.01"),
+        realized_pnl=Decimal("0.01"),
     )
     window = MainWindow(
         create_session=unused_create,
@@ -416,7 +416,7 @@ def test_basket_and_trade_retries_are_wired_to_their_own_tab(
             raise RuntimeError("private basket failure")
         return BasketHistoryResult(
             items=(basket,),
-            net_realized_pnl=Decimal("0"),
+            realized_pnl=Decimal("0"),
         )
 
     def fail_trades_once(
@@ -461,7 +461,7 @@ def test_trade_history_filter_and_reset_requests_are_wired(qtbot: QtBot) -> None
 
     def list_basket_history(filters: TradeHistoryFilter) -> BasketHistoryResult:
         basket_calls.append(filters)
-        return BasketHistoryResult(items=(basket,), net_realized_pnl=Decimal("0"))
+        return BasketHistoryResult(items=(basket,), realized_pnl=Decimal("0"))
 
     window = MainWindow(
         create_session=unused_create,
@@ -1758,7 +1758,6 @@ def test_an_open_position_shows_before_any_bot_is_started(qtbot: QtBot) -> None:
                     entry_number=1,
                     price=Decimal("100"),
                     quantity=Decimal("2"),
-                    fee=Decimal("0.2"),
                     filled_at=datetime(2026, 8, 1, 12, tzinfo=UTC),
                     atr=Decimal("2"),
                 ),

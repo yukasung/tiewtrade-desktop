@@ -1,5 +1,18 @@
+import shutil
 import sqlite3
 from pathlib import Path
+
+
+class UnsupportedSQLiteError(RuntimeError):
+    """SQLite too old to drop a column, which the fee migration must do."""
+
+
+def _require_drop_column_support() -> None:
+    if sqlite3.sqlite_version_info < (3, 35):
+        raise UnsupportedSQLiteError(
+            f"SQLite 3.35 or newer is required to migrate this database, "
+            f"and this build has {sqlite3.sqlite_version}"
+        )
 
 
 class UnsupportedDatabaseSchemaError(ValueError):
@@ -10,7 +23,7 @@ class UnsupportedDatabaseSchemaError(ValueError):
 
 
 class SQLiteDatabase:
-    _SCHEMA_VERSION = 8
+    _SCHEMA_VERSION = 9
     _BUSY_TIMEOUT_MS = 5_000
 
     def __init__(self, path: Path) -> None:
@@ -24,6 +37,19 @@ class SQLiteDatabase:
         connection.execute("PRAGMA foreign_keys = ON")
         return connection
 
+    def _keep_a_copy(self, connection: sqlite3.Connection, version: int) -> None:
+        """A copy of the file before the first migration that discards data.
+
+        Every migration before this one only ever added. This one drops the
+        fee columns, so the shape it leaves cannot be undone from the file it
+        leaves, and a trader's own record is what is in it.
+        """
+        backup = self._path.with_suffix(f"{self._path.suffix}.v{version}.bak")
+        if backup.exists() or not self._path.exists():
+            return
+        connection.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+        shutil.copy2(self._path, backup)
+
     def migrate(self) -> None:
         connection = self.connect()
         try:
@@ -32,6 +58,9 @@ class SQLiteDatabase:
                 raise UnsupportedDatabaseSchemaError(version, self._SCHEMA_VERSION)
             if version == self._SCHEMA_VERSION:
                 return
+            if 1 <= version <= 8:
+                _require_drop_column_support()
+                self._keep_a_copy(connection, version)
 
             with connection:
                 if version == 0:
@@ -64,6 +93,8 @@ class SQLiteDatabase:
                     connection.execute(
                         "ALTER TABLE trade_fills ADD COLUMN closes_entry_number INTEGER"
                     )
+                if 1 <= version <= 8:
+                    _migrate_drop_fees_v9(connection)
                 connection.execute(f"PRAGMA user_version = {self._SCHEMA_VERSION}")
         finally:
             connection.close()
@@ -87,10 +118,7 @@ def _create_schema(connection: sqlite3.Connection) -> None:
             closed_at_utc TEXT,
             entry_count INTEGER NOT NULL CHECK (entry_count > 0),
             invested_notional TEXT NOT NULL,
-            gross_realized_pnl TEXT NOT NULL,
-            trading_fees TEXT NOT NULL,
-            funding_fee TEXT NOT NULL,
-            net_realized_pnl TEXT NOT NULL,
+            realized_pnl TEXT NOT NULL,
             status TEXT NOT NULL CHECK (status IN ('open', 'closed'))
         )
         """
@@ -109,8 +137,6 @@ def _create_schema(connection: sqlite3.Connection) -> None:
             price TEXT NOT NULL,
             quantity TEXT NOT NULL,
             notional TEXT NOT NULL,
-            commission TEXT NOT NULL,
-            commission_asset TEXT NOT NULL,
             realized_pnl TEXT NOT NULL,
             source TEXT NOT NULL CHECK (
                 source IN ('paper_executor', 'binance')
@@ -150,6 +176,38 @@ def _create_chart_history_indexes(connection: sqlite3.Connection) -> None:
     )
 
 
+def _migrate_drop_fees_v9(connection: sqlite3.Connection) -> None:
+    """Take the fee columns out, keeping what each Basket actually realised.
+
+    net_realized_pnl is renamed rather than recomputed: it is the money that
+    moved, and it stays true of the trades it records however the simulation
+    charges from here on. What is lost is the breakdown of a past result into
+    gross and fees, which is the concept being removed.
+
+    Each table is guarded on its own because a database created before this
+    version may have reached here through _create_schema or
+    _create_bot_sessions_schema, which already emit the shape without fees.
+    """
+    if _has_column(connection, "basket_results", "trading_fees"):
+        connection.execute(
+            "ALTER TABLE basket_results RENAME COLUMN net_realized_pnl TO realized_pnl"
+        )
+        connection.execute("ALTER TABLE basket_results DROP COLUMN gross_realized_pnl")
+        connection.execute("ALTER TABLE basket_results DROP COLUMN trading_fees")
+        connection.execute("ALTER TABLE basket_results DROP COLUMN funding_fee")
+    if _has_column(connection, "trade_fills", "commission"):
+        connection.execute("ALTER TABLE trade_fills DROP COLUMN commission")
+        connection.execute("ALTER TABLE trade_fills DROP COLUMN commission_asset")
+    if _has_column(connection, "bot_sessions", "fee_rate"):
+        connection.execute("ALTER TABLE bot_sessions DROP COLUMN fee_rate")
+
+
+def _has_column(connection: sqlite3.Connection, table: str, column: str) -> bool:
+    return _table_exists(connection, table) and not _column_is_missing(
+        connection, table, column
+    )
+
+
 def _column_is_missing(connection: sqlite3.Connection, table: str, column: str) -> bool:
     """Whether a table is there to alter and still without the column."""
     if not _table_exists(connection, table):
@@ -186,7 +244,6 @@ def _create_bot_sessions_schema(connection: sqlite3.Connection) -> None:
             max_entries INTEGER NOT NULL CHECK (
                 max_entries BETWEEN 2 AND 20 AND max_entries % 2 = 0
             ),
-            fee_rate TEXT NOT NULL,
             slippage_bps TEXT NOT NULL,
             spot_trading_capital_ratio TEXT,
             futures_policy_version TEXT,

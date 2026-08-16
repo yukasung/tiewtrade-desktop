@@ -315,8 +315,6 @@ def trade_fill(fill_id: str, side: FillSide) -> TradeFill:
         price=Decimal("101.25"),
         quantity=Decimal("0.1"),
         notional=Decimal("10.125"),
-        commission=Decimal("0.01"),
-        commission_asset="USDT",
         realized_pnl=Decimal("0"),
         source=FillSource.PAPER_EXECUTOR,
     )

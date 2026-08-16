@@ -263,7 +263,6 @@ class PaperFuturesSession:
         candidate_basket.add_entry(
             price=fill.price,
             quantity=fill.quantity,
-            fee=fill.fee,
             filled_at=fill.filled_at,
             atr=intent.atr,
             tick_size=self._symbol_rules.tick_size,
@@ -311,11 +310,10 @@ class PaperFuturesSession:
         assert self._basket is not None
         closed = self._basket.close(
             exit_price=exit_fill.price,
-            exit_fee=exit_fill.fee,
             closed_at=exit_fill.filled_at,
             close_reason=exit_fill.close_reason,
         )
-        self._wallet_balance += closed.net_realized_pnl
+        self._wallet_balance += closed.realized_pnl
         self._account_equity = self._wallet_balance
         self._basket = None
         self._liquidation_price = None

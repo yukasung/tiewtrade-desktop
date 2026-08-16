@@ -21,7 +21,6 @@ class PaperSpotEntryFill:
     intent_id: str
     price: Decimal
     quantity: Decimal
-    fee: Decimal
     filled_at: datetime
 
 
@@ -31,7 +30,6 @@ class PaperSpotExitFill:
     fill_id: str
     price: Decimal
     quantity: Decimal
-    fee: Decimal
     filled_at: datetime
     # The Entry this Fill closed, when it closed one rather than the Basket.
     # A stop loss and a manual close take the whole position and leave it None.
@@ -73,7 +71,6 @@ class PaperSpotExecutor:
             intent_id=intent.intent_id,
             price=price,
             quantity=quantity,
-            fee=Decimal("0"),
             filled_at=candle.open_time,
         )
 
@@ -102,7 +99,6 @@ class PaperSpotExecutor:
                     fill_id=f"paper:{self._session.session_id}:{order_id}:fill",
                     price=price,
                     quantity=entry.quantity,
-                    fee=Decimal("0"),
                     filled_at=filled_at,
                     entry_number=entry.entry_number,
                 )
@@ -131,7 +127,6 @@ class PaperSpotExecutor:
             fill_id=f"paper:{self._session.session_id}:{order_id}:fill",
             price=price,
             quantity=quantity,
-            fee=Decimal("0"),
             filled_at=filled_at,
         )
 

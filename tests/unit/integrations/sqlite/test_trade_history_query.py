@@ -40,7 +40,7 @@ def basket(
     market_type: MarketType = MarketType.SPOT,
     trade_mode: TradeMode = TradeMode.PAPER,
     status: BasketStatus = BasketStatus.CLOSED,
-    net_realized_pnl: Decimal = Decimal("0"),
+    realized_pnl: Decimal = Decimal("0"),
 ) -> BasketResult:
     closed = status is BasketStatus.CLOSED
     return BasketResult(
@@ -55,10 +55,7 @@ def basket(
         closed_at_utc=opened_at_utc + timedelta(hours=1) if closed else None,
         entry_count=1,
         invested_notional=Decimal("100"),
-        gross_realized_pnl=net_realized_pnl if closed else Decimal("0"),
-        trading_fees=Decimal("0"),
-        funding_fee=Decimal("0"),
-        net_realized_pnl=net_realized_pnl if closed else Decimal("0"),
+        realized_pnl=realized_pnl if closed else Decimal("0"),
         status=status,
         leverage=3 if market_type is MarketType.FUTURES else None,
     )
@@ -83,10 +80,8 @@ def fill(
         price=Decimal("100"),
         quantity=Decimal("1"),
         notional=Decimal("100"),
-        commission=Decimal("0"),
-        commission_asset="USDT",
         realized_pnl=(
-            basket_result.net_realized_pnl if side is FillSide.SELL else Decimal("0")
+            basket_result.realized_pnl if side is FillSide.SELL else Decimal("0")
         ),
         source=FillSource.PAPER_EXECUTOR,
     )
@@ -96,8 +91,7 @@ def record(history: SQLiteTradeHistory, result: BasketResult) -> None:
     opened = replace(
         result,
         closed_at_utc=None,
-        gross_realized_pnl=Decimal("0"),
-        net_realized_pnl=Decimal("0"),
+        realized_pnl=Decimal("0"),
         status=BasketStatus.OPEN,
     )
     history.record_open_basket(
@@ -130,17 +124,17 @@ def test_list_basket_history_returns_latest_first_with_an_exact_summary(
         basket(
             LOW_ID,
             opened_at_utc=latest,
-            net_realized_pnl=Decimal("9999999999999999999999999999"),
+            realized_pnl=Decimal("9999999999999999999999999999"),
         ),
         basket(
             HIGH_ID,
             opened_at_utc=latest,
-            net_realized_pnl=Decimal("0.1"),
+            realized_pnl=Decimal("0.1"),
         ),
         basket(
             OLD_ID,
             opened_at_utc=latest - timedelta(days=1),
-            net_realized_pnl=Decimal("0.000000000000000001"),
+            realized_pnl=Decimal("0.000000000000000001"),
         ),
     )
     for result in records:
@@ -155,7 +149,7 @@ def test_list_basket_history_returns_latest_first_with_an_exact_summary(
         LOW_ID,
         OLD_ID,
     ]
-    assert history_result.net_realized_pnl == Decimal(
+    assert history_result.realized_pnl == Decimal(
         "9999999999999999999999999999.100000000000000001"
     )
 
@@ -167,13 +161,13 @@ def test_list_basket_history_filters_every_supported_dimension(
     target = basket(
         HIGH_ID,
         opened_at_utc=boundary,
-        net_realized_pnl=Decimal("5.123"),
+        realized_pnl=Decimal("5.123"),
     )
     alternatives = (
         basket(
             LOW_ID,
             opened_at_utc=boundary - timedelta(microseconds=1),
-            net_realized_pnl=Decimal("2.5"),
+            realized_pnl=Decimal("2.5"),
         ),
         basket(
             OLD_ID,
@@ -226,10 +220,10 @@ def test_list_basket_history_filters_every_supported_dimension(
         ),
     )
 
-    for filters, expected, expected_net_realized_pnl in cases:
+    for filters, expected, expected_realized_pnl in cases:
         page = history.list_basket_history(filters)
         assert page.items == expected
-        assert page.net_realized_pnl == expected_net_realized_pnl
+        assert page.realized_pnl == expected_realized_pnl
 
     exact = history.list_basket_history(
         TradeHistoryFilter(
@@ -244,7 +238,7 @@ def test_list_basket_history_filters_every_supported_dimension(
     )
 
     assert exact.items == (target,)
-    assert exact.net_realized_pnl == Decimal("5.123")
+    assert exact.realized_pnl == Decimal("5.123")
 
 
 def test_open_filter_has_zero_closed_basket_summary(
@@ -260,7 +254,7 @@ def test_open_filter_has_zero_closed_basket_summary(
     result = history.list_basket_history(TradeHistoryFilter(status=BasketStatus.OPEN))
 
     assert result.items == (opened,)
-    assert result.net_realized_pnl == Decimal("0")
+    assert result.realized_pnl == Decimal("0")
 
 
 def test_list_fills_uses_execution_time_then_fill_id(
@@ -295,7 +289,7 @@ def test_list_basket_history_returns_all_matching_rows_without_pagination(
     result = history.list_basket_history(TradeHistoryFilter(symbol="BTCUSDT"))
 
     assert result.items == (newest, oldest)
-    assert result.net_realized_pnl == Decimal("0")
+    assert result.realized_pnl == Decimal("0")
 
 
 def test_list_trade_fills_filters_joined_baskets_and_orders_newest_first(

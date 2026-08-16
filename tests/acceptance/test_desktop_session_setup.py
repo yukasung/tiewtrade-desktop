@@ -484,7 +484,6 @@ def test_spot_partial_fills_keep_one_order_and_basket_entry_across_tabs(
             symbol=session.market_data.symbol,
             timeframe=session.market_data.timeframe,
             preset_version=session.config.preset_version,
-            commission_asset="USDT",
         ),
         store,
     )
@@ -496,7 +495,6 @@ def test_spot_partial_fills_keep_one_order_and_basket_entry_across_tabs(
             fill_id="fill-1",
             price=Decimal("66000.1250"),
             quantity=Decimal("0.00100000"),
-            fee=Decimal("0.0660001250"),
             filled_at=observed_at,
         ),
         PaperSpotEntryFill(
@@ -505,7 +503,6 @@ def test_spot_partial_fills_keep_one_order_and_basket_entry_across_tabs(
             fill_id="fill-2",
             price=Decimal("66000.1250"),
             quantity=Decimal("0.00050000"),
-            fee=Decimal("0.0330000625"),
             filled_at=observed_at + timedelta(seconds=1),
         ),
     )

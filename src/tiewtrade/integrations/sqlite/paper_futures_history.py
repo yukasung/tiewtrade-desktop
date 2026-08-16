@@ -28,7 +28,6 @@ class PaperFuturesHistoryContext:
     symbol: str
     timeframe: str
     preset_version: str
-    commission_asset: str
     leverage: int
 
     def __post_init__(self) -> None:
@@ -82,8 +81,6 @@ class PaperFuturesSQLiteHistory:
             price=fill.price,
             quantity=fill.quantity,
             notional=fill.price * fill.quantity,
-            commission=fill.fee,
-            commission_asset=self._context.commission_asset,
             realized_pnl=Decimal("0"),
             source=FillSource.PAPER_EXECUTOR,
         )
@@ -101,10 +98,7 @@ class PaperFuturesSQLiteHistory:
                 closed_at_utc=None,
                 entry_count=1,
                 invested_notional=normalized_fill.notional,
-                gross_realized_pnl=Decimal("0"),
-                trading_fees=normalized_fill.commission,
-                funding_fee=PAPER_FUTURES_FUNDING_FEE,
-                net_realized_pnl=-normalized_fill.commission,
+                realized_pnl=Decimal("0"),
                 status=BasketStatus.OPEN,
                 leverage=self._context.leverage,
             )
@@ -123,13 +117,6 @@ class PaperFuturesSQLiteHistory:
                 else existing.entry_count + 1
             ),
             invested_notional=existing.invested_notional + normalized_fill.notional,
-            trading_fees=existing.trading_fees + normalized_fill.commission,
-            net_realized_pnl=(
-                existing.gross_realized_pnl
-                - existing.trading_fees
-                - normalized_fill.commission
-                - existing.funding_fee
-            ),
         )
         return self._store.record_entry_fill(basket, normalized_fill)
 
@@ -144,8 +131,6 @@ class PaperFuturesSQLiteHistory:
             raise ValueError("closed Basket does not match basket_id")
         if closed.position_side is not fill.side:
             raise ValueError("closed Basket and exit Fill use different sides")
-        if closed.funding_fee != 0:
-            raise ValueError("Paper Futures Funding Fee must be 0.00")
 
         existing = self._store.get_basket(basket_id)
         if existing is None:
@@ -163,9 +148,7 @@ class PaperFuturesSQLiteHistory:
             price=fill.price,
             quantity=fill.quantity,
             notional=fill.price * fill.quantity,
-            commission=fill.fee,
-            commission_asset=self._context.commission_asset,
-            realized_pnl=closed.net_realized_pnl,
+            realized_pnl=closed.realized_pnl,
             source=FillSource.PAPER_EXECUTOR,
         )
         basket = replace(
@@ -173,10 +156,7 @@ class PaperFuturesSQLiteHistory:
             leverage=self._context.leverage,
             closed_at_utc=closed.closed_at,
             entry_count=closed.entry_count,
-            gross_realized_pnl=closed.gross_realized_pnl,
-            trading_fees=closed.trading_fees,
-            funding_fee=PAPER_FUTURES_FUNDING_FEE,
-            net_realized_pnl=closed.net_realized_pnl,
+            realized_pnl=closed.realized_pnl,
             status=BasketStatus.CLOSED,
         )
         return self._store.record_closed_basket(basket, normalized_fill)

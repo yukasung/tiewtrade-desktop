@@ -388,7 +388,6 @@ class PaperSpotSession:
         transition.basket.add_entry(
             price=fill.price,
             quantity=fill.quantity,
-            fee=fill.fee,
             filled_at=fill.filled_at,
             atr=intent.atr,
             tick_size=self._symbol_rules.tick_size,
@@ -444,8 +443,7 @@ class PaperSpotSession:
             closed_entry = basket.close_entry(
                 fill.entry_number,
                 exit_price=fill.price,
-                exit_fee=fill.fee,
-                closed_at=fill.filled_at,
+                    closed_at=fill.filled_at,
             )
             transition.lifecycle.release_fill()
             exits.append(PaperSpotEntryExit(fill=fill, closed=closed_entry))
@@ -474,7 +472,6 @@ class PaperSpotSession:
         assert transition.basket is not None
         closed = transition.basket.close(
             exit_price=exit_fill.price,
-            exit_fee=exit_fill.fee,
             closed_at=exit_fill.filled_at,
             close_reason=close_reason,
         )

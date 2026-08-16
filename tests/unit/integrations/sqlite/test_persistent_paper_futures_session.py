@@ -72,7 +72,6 @@ def entry_fill() -> PaperFuturesEntryFill:
         side=PositionSide.LONG,
         price=Decimal("100"),
         quantity=Decimal("2"),
-        fee=Decimal("0.2"),
         filled_at=FILLED_AT,
     )
 
@@ -87,7 +86,6 @@ def exit_fill(
         close_reason=reason,
         price=Decimal("110"),
         quantity=Decimal("2"),
-        fee=Decimal("0.22"),
         filled_at=FILLED_AT,
     )
 
@@ -100,10 +98,7 @@ def closed_basket(
         entry_count=1,
         average_entry_price=Decimal("100"),
         exit_price=Decimal("110"),
-        gross_realized_pnl=Decimal("20"),
-        trading_fees=Decimal("0.42"),
-        funding_fee=Decimal("0"),
-        net_realized_pnl=Decimal("19.58"),
+        realized_pnl=Decimal("20"),
         closed_at=FILLED_AT,
         position_side=PositionSide.LONG,
         close_reason=reason,

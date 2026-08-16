@@ -50,7 +50,6 @@ def history_context() -> PaperFuturesHistoryContext:
         symbol="BTCUSDT",
         timeframe="5m",
         preset_version="rsi-step-grid-v1",
-        commission_asset="USDT",
         leverage=3,
     )
 
@@ -65,7 +64,6 @@ def test_history_context_rejects_leverage_outside_session_cap(
             symbol="BTCUSDT",
             timeframe="5m",
             preset_version="rsi-step-grid-v1",
-            commission_asset="USDT",
             leverage=leverage,  # type: ignore[arg-type]
         )
 
@@ -86,7 +84,6 @@ def entry_fill(
         side=side,
         price=price,
         quantity=quantity,
-        fee=price * quantity * Decimal("0.001"),
         filled_at=OPENED_AT + timedelta(hours=sequence - 1),
     )
 
@@ -103,7 +100,6 @@ def exit_fill(
         close_reason=BasketCloseReason.TAKE_PROFIT,
         price=Decimal("110") if side is PositionSide.LONG else Decimal("90"),
         quantity=Decimal("2"),
-        fee=Decimal("0.22") if side is PositionSide.LONG else Decimal("0.18"),
         filled_at=CLOSED_AT,
     )
 
@@ -112,17 +108,13 @@ def closed_basket(
     *,
     side: PositionSide = PositionSide.LONG,
 ) -> ClosedBasket:
-    trading_fees = Decimal("0.42") if side is PositionSide.LONG else Decimal("0.38")
     gross_pnl = Decimal("20")
     return ClosedBasket(
         basket_id=BASKET_ID,
         entry_count=1,
         average_entry_price=Decimal("100"),
         exit_price=Decimal("110") if side is PositionSide.LONG else Decimal("90"),
-        gross_realized_pnl=gross_pnl,
-        trading_fees=trading_fees,
-        funding_fee=Decimal("0"),
-        net_realized_pnl=gross_pnl - trading_fees,
+        realized_pnl=gross_pnl,
         closed_at=CLOSED_AT,
         position_side=side,
         close_reason=BasketCloseReason.TAKE_PROFIT,
@@ -149,10 +141,7 @@ def test_long_entry_creates_futures_basket_and_buy_fill(
     assert basket.leverage == 3
     assert basket.entry_count == 1
     assert basket.invested_notional == Decimal("200")
-    assert basket.trading_fees == Decimal("0.200")
-    assert basket.funding_fee == Decimal("0.00")
-    assert basket.funding_fee.as_tuple().exponent == -2
-    assert basket.net_realized_pnl == Decimal("-0.200")
+    assert basket.realized_pnl == Decimal("0")
     assert basket.status is BasketStatus.OPEN
     assert len(fills) == 1
     assert fills[0].side is FillSide.BUY
@@ -192,8 +181,7 @@ def test_second_entry_updates_notional_fees_and_entry_count(
     assert basket is not None
     assert basket.entry_count == 2
     assert basket.invested_notional == Decimal("290")
-    assert basket.trading_fees == Decimal("0.290")
-    assert basket.net_realized_pnl == Decimal("-0.290")
+    assert basket.realized_pnl == Decimal("0")
 
 
 def test_partial_fill_for_same_order_does_not_increment_entry_count(
@@ -213,7 +201,6 @@ def test_partial_fill_for_same_order_does_not_increment_entry_count(
         side=first.side,
         price=Decimal("101"),
         quantity=Decimal("0.5"),
-        fee=Decimal("0.0505"),
         filled_at=first.filled_at + timedelta(seconds=1),
     )
 
@@ -227,7 +214,6 @@ def test_partial_fill_for_same_order_does_not_increment_entry_count(
     assert basket is not None
     assert basket.entry_count == 1
     assert basket.invested_notional == Decimal("250.5")
-    assert basket.trading_fees == Decimal("0.2505")
     assert len(store.list_fills(BASKET_ID)) == 2
 
 
@@ -245,7 +231,6 @@ def test_existing_basket_rejects_changed_session_leverage(
         symbol="BTCUSDT",
         timeframe="5m",
         preset_version="rsi-step-grid-v1",
-        commission_asset="USDT",
         leverage=4,
     )
 
@@ -291,13 +276,10 @@ def test_close_uses_shared_pnl_and_opposite_fill_side(
     fills = store.list_fills(BASKET_ID)
     assert basket is not None
     assert basket.status is BasketStatus.CLOSED
-    assert basket.gross_realized_pnl == closed.gross_realized_pnl
-    assert basket.trading_fees == closed.trading_fees
-    assert basket.funding_fee == Decimal("0.00")
-    assert basket.funding_fee.as_tuple().exponent == -2
-    assert basket.net_realized_pnl == closed.net_realized_pnl
+    assert basket.realized_pnl == closed.realized_pnl
+    assert basket.realized_pnl == closed.realized_pnl
     assert [item.side for item in fills] == [entry_side, exit_side]
-    assert fills[-1].realized_pnl == closed.net_realized_pnl
+    assert fills[-1].realized_pnl == closed.realized_pnl
 
 
 def test_duplicate_entry_and_close_are_idempotent(
@@ -332,37 +314,6 @@ def test_duplicate_entry_and_close_are_idempotent(
 
     assert store.get_basket(BASKET_ID) == persisted
     assert len(store.list_fills(BASKET_ID)) == 2
-
-
-def test_mapper_rejects_nonzero_paper_funding(
-    history: PaperFuturesSQLiteHistory,
-) -> None:
-    history.record_entry(
-        basket_id=BASKET_ID,
-        entry_number=1,
-        fill=entry_fill(),
-    )
-    invalid = closed_basket()
-    invalid = ClosedBasket(
-        basket_id=invalid.basket_id,
-        entry_count=invalid.entry_count,
-        average_entry_price=invalid.average_entry_price,
-        exit_price=invalid.exit_price,
-        gross_realized_pnl=invalid.gross_realized_pnl,
-        trading_fees=invalid.trading_fees,
-        funding_fee=Decimal("1"),
-        net_realized_pnl=invalid.net_realized_pnl - Decimal("1"),
-        closed_at=invalid.closed_at,
-        position_side=invalid.position_side,
-        close_reason=invalid.close_reason,
-    )
-
-    with pytest.raises(ValueError, match="Funding Fee must be 0.00"):
-        history.record_close(
-            basket_id=BASKET_ID,
-            fill=exit_fill(),
-            closed=invalid,
-        )
 
 
 @pytest.mark.parametrize(

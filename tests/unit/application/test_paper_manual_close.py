@@ -37,10 +37,7 @@ def test_manual_close_records_exit_fill_before_replacing_session() -> None:
         closed_at_utc=None,
         entry_count=1,
         invested_notional=Decimal("100"),
-        gross_realized_pnl=Decimal("0"),
-        trading_fees=Decimal("0.1"),
-        funding_fee=Decimal("0"),
-        net_realized_pnl=Decimal("-0.1"),
+        realized_pnl=Decimal("-0.1"),
         status=BasketStatus.OPEN,
     )
     entry = TradeFill(
@@ -55,8 +52,6 @@ def test_manual_close_records_exit_fill_before_replacing_session() -> None:
         price=Decimal("100"),
         quantity=Decimal("1"),
         notional=Decimal("100"),
-        commission=Decimal("0.1"),
-        commission_asset="USDT",
         realized_pnl=Decimal("0"),
         source=FillSource.PAPER_EXECUTOR,
     )
@@ -81,7 +76,7 @@ def test_manual_close_records_exit_fill_before_replacing_session() -> None:
     assert fill.side is FillSide.SELL
     assert fill.entry_number is None
     assert fill.price == Decimal("109.94")
-    assert closed.net_realized_pnl == fill.realized_pnl
+    assert closed.realized_pnl == fill.realized_pnl
 
 
 def test_manual_close_fails_when_history_does_not_record_close() -> None:
@@ -100,10 +95,7 @@ def test_manual_close_fails_when_history_does_not_record_close() -> None:
         closed_at_utc=None,
         entry_count=1,
         invested_notional=Decimal("100"),
-        gross_realized_pnl=Decimal("0"),
-        trading_fees=Decimal("0.1"),
-        funding_fee=Decimal("0"),
-        net_realized_pnl=Decimal("-0.1"),
+        realized_pnl=Decimal("-0.1"),
         status=BasketStatus.OPEN,
     )
     entry = TradeFill(
@@ -118,8 +110,6 @@ def test_manual_close_fails_when_history_does_not_record_close() -> None:
         price=Decimal("100"),
         quantity=Decimal("1"),
         notional=Decimal("100"),
-        commission=Decimal("0.1"),
-        commission_asset="USDT",
         realized_pnl=Decimal("0"),
         source=FillSource.PAPER_EXECUTOR,
     )
@@ -168,10 +158,7 @@ def test_manual_close_quantizes_futures_short_exit_against_position() -> None:
         closed_at_utc=None,
         entry_count=1,
         invested_notional=Decimal("120"),
-        gross_realized_pnl=Decimal("0"),
-        trading_fees=Decimal("0.12"),
-        funding_fee=Decimal("0"),
-        net_realized_pnl=Decimal("-0.12"),
+        realized_pnl=Decimal("-0.12"),
         status=BasketStatus.OPEN,
         leverage=3,
     )
@@ -187,8 +174,6 @@ def test_manual_close_quantizes_futures_short_exit_against_position() -> None:
         price=Decimal("120"),
         quantity=Decimal("1"),
         notional=Decimal("120"),
-        commission=Decimal("0.12"),
-        commission_asset="USDT",
         realized_pnl=Decimal("0"),
         source=FillSource.PAPER_EXECUTOR,
     )
@@ -208,7 +193,7 @@ def test_manual_close_quantizes_futures_short_exit_against_position() -> None:
     closed, fill = recorded[0]
     assert fill.side is FillSide.BUY
     assert fill.price == Decimal("110.1")
-    assert closed.gross_realized_pnl == Decimal("9.9")
+    assert closed.realized_pnl == Decimal("9.9")
 
 
 def test_manual_close_rejects_live_session_before_reading_history() -> None:

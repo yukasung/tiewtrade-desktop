@@ -370,7 +370,6 @@ class PaperRuntimeController:
                     symbol=session.market_data.symbol,
                     timeframe=session.market_data.timeframe,
                     preset_version=session.config.preset_version,
-                    commission_asset=_commission_asset(session.market_data.symbol),
                 ),
                 self._trade_history,
             )
@@ -408,7 +407,6 @@ class PaperRuntimeController:
                 symbol=session.market_data.symbol,
                 timeframe=session.market_data.timeframe,
                 preset_version=session.config.preset_version,
-                commission_asset=_commission_asset(session.market_data.symbol),
                 leverage=futures_policy.leverage,
             ),
             self._trade_history,
@@ -840,7 +838,6 @@ def read_open_basket_state(
                 entry_number=fill.entry_number,
                 price=fill.price,
                 quantity=fill.quantity,
-                fee=fill.commission,
                 filled_at=fill.filled_at_utc,
                 atr=fill.entry_atr,
             )
@@ -852,12 +849,6 @@ def read_open_basket_state(
         entries=tuple(entries),
         closed_basket_count=trade_history.count_closed_baskets(session_id),
     )
-
-
-def _commission_asset(symbol: str) -> str:
-    if not symbol.endswith("USDT"):
-        raise ValueError("Paper Runtime requires a USDT quote asset")
-    return "USDT"
 
 
 def _remaining_seconds(deadline: float) -> float:

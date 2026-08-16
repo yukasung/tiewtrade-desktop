@@ -29,7 +29,6 @@ def test_long_entry_uses_next_open_adverse_slippage_and_target_notional() -> Non
     assert fill.side is PositionSide.LONG
     assert fill.price == Decimal("100.1")
     assert fill.quantity == Decimal("299.7")
-    assert fill.fee == Decimal("0")
     assert fill.filled_at == fill_candle.open_time
 
 
@@ -42,7 +41,6 @@ def test_short_entry_uses_adverse_downward_slippage() -> None:
     assert fill.side is PositionSide.SHORT
     assert fill.price == Decimal("99.9")
     assert fill.quantity == Decimal("300.3")
-    assert fill.fee == Decimal("0")
 
 
 def test_short_entry_returns_none_when_quantized_price_is_zero() -> None:
@@ -96,7 +94,6 @@ def test_long_take_profit_uses_adverse_downward_price() -> None:
     assert fill.close_reason is BasketCloseReason.TAKE_PROFIT
     assert fill.price == Decimal("105.8")
     assert fill.quantity == Decimal("2")
-    assert fill.fee == Decimal("0")
     assert fill.filled_at == current.close_time
     assert fill.order_id == ("take_profit:00000000-0000-0000-0000-000000000108")
     assert fill.fill_id == (
@@ -118,7 +115,6 @@ def test_short_take_profit_uses_adverse_upward_price() -> None:
     assert fill.close_reason is BasketCloseReason.TAKE_PROFIT
     assert fill.price == Decimal("94.1")
     assert fill.quantity == Decimal("2")
-    assert fill.fee == Decimal("0")
     assert fill.order_id == ("take_profit:00000000-0000-0000-0000-000000000108")
     assert fill.fill_id == (
         "paper:00000000-0000-0000-0000-000000000107:"
@@ -179,7 +175,6 @@ def test_liquidation_wins_over_take_profit_and_uses_gap_aware_price() -> None:
     assert liquidation.close_reason is BasketCloseReason.LIQUIDATION
     assert liquidation.price == Decimal("69.9")
     assert liquidation.quantity == Decimal("2")
-    assert liquidation.fee == Decimal("0")
     assert liquidation.filled_at == current.close_time
     assert liquidation.order_id == ("liquidation:00000000-0000-0000-0000-000000000108")
     assert liquidation.fill_id == (
@@ -210,7 +205,6 @@ def test_short_liquidation_uses_gap_aware_adverse_price() -> None:
     assert fill.close_reason is BasketCloseReason.LIQUIDATION
     assert fill.price == Decimal("130.2")
     assert fill.quantity == Decimal("2")
-    assert fill.fee == Decimal("0")
     assert fill.order_id == ("liquidation:00000000-0000-0000-0000-000000000108")
     assert fill.fill_id == (
         "paper:00000000-0000-0000-0000-000000000107:"
@@ -432,7 +426,6 @@ def basket(
     result.add_entry(
         price=Decimal(entry_price),
         quantity=Decimal("2"),
-        fee=Decimal("0.2"),
         filled_at=datetime(2026, 1, 1, tzinfo=UTC),
         atr=Decimal("2"),
         tick_size=Decimal("0.1"),

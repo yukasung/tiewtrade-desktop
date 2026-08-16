@@ -111,7 +111,6 @@ def spot_history(
             symbol=_MARKET_DATA.symbol,
             timeframe=_MARKET_DATA.timeframe,
             preset_version=_PRESET.version,
-            commission_asset="USDT",
         ),
         store,
     )
@@ -127,7 +126,6 @@ def futures_history(
             symbol=_MARKET_DATA.symbol,
             timeframe=_MARKET_DATA.timeframe,
             preset_version=_PRESET.version,
-            commission_asset="USDT",
             leverage=3,
         ),
         store,

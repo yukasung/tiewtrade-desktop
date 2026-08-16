@@ -122,8 +122,6 @@ def test_open_basket_duplicate_and_partial_fills_remain_deterministic(
         price=first_fill.price,
         quantity=Decimal("0.001"),
         notional=first_fill.price * Decimal("0.001"),
-        commission=(first_fill.price * Decimal("0.001")) * Decimal("0.001"),
-        commission_asset=first_fill.commission_asset,
         realized_pnl=Decimal("0"),
         source=first_fill.source,
     )
@@ -133,12 +131,7 @@ def test_open_basket_duplicate_and_partial_fills_remain_deterministic(
         invested_notional=(
             open_history.basket.invested_notional + partial_fill.notional
         ),
-        trading_fees=open_history.basket.trading_fees + partial_fill.commission,
-        net_realized_pnl=(
-            open_history.basket.gross_realized_pnl
-            - (open_history.basket.trading_fees + partial_fill.commission)
-            - open_history.basket.funding_fee
-        ),
+        realized_pnl=open_history.basket.realized_pnl,
     )
 
     assert history.record_entry_fill(updated_open_basket, partial_fill) is True
@@ -157,9 +150,9 @@ def test_open_basket_duplicate_and_partial_fills_remain_deterministic(
         closed_basket_id,
         open_history.basket.basket_id,
     }
-    assert first_page.net_realized_pnl == Decimal("14.15466")
+    assert first_page.realized_pnl == Decimal("14.15466")
     assert first_open_page.items == (updated_open_basket,)
-    assert first_open_page.net_realized_pnl == Decimal("0")
+    assert first_open_page.realized_pnl == Decimal("0")
     assert len(first_fills) == 2
     assert {fill.order_id for fill in first_fills} == {first_fill.order_id}
     assert {fill.entry_number for fill in first_fills} == {1}
@@ -195,16 +188,15 @@ def test_paper_execution_history_survives_restart_and_reaches_desktop(
     }
 
     assert len(before_restart.items) == 2
-    assert before_restart.net_realized_pnl == Decimal("2336.32646")
+    assert before_restart.realized_pnl == Decimal("2336.32646")
     futures, spot = before_restart.items
     assert futures.basket_id == futures_basket_id
     assert futures.status is BasketStatus.CLOSED
-    assert futures.net_realized_pnl == Decimal("2322.1718")
+    assert futures.realized_pnl == Decimal("2322.1718")
     assert futures.leverage == 3
-    assert futures.funding_fee == Decimal("0.00")
     assert spot.basket_id == spot_basket_id
     assert spot.status is BasketStatus.CLOSED
-    assert spot.net_realized_pnl == Decimal("14.15466")
+    assert spot.realized_pnl == Decimal("14.15466")
     for fills in before_fills.values():
         assert [fill.side for fill in fills] == [FillSide.BUY, FillSide.SELL]
         assert all(fill.source is FillSource.PAPER_EXECUTOR for fill in fills)
@@ -247,7 +239,6 @@ def test_paper_execution_history_survives_restart_and_reaches_desktop(
             "Buy",
             "95.6",
             "313.807",
-            "0.00 USDT",
             "29,999.95 USDT",
             "0.00 USDT",
         ),
@@ -257,7 +248,6 @@ def test_paper_execution_history_survives_restart_and_reaches_desktop(
             "Sell",
             "103.0",
             "313.807",
-            "0.00 USDT",
             "32,322.12 USDT",
             "2,322.17 USDT",
         ),
@@ -267,7 +257,6 @@ def test_paper_execution_history_survives_restart_and_reaches_desktop(
             "Buy",
             "95.02",
             "1.578",
-            "0.00 USDT",
             "149.94 USDT",
             "0.00 USDT",
         ),
@@ -277,7 +266,6 @@ def test_paper_execution_history_survives_restart_and_reaches_desktop(
             "Sell",
             "103.99",
             "1.578",
-            "0.00 USDT",
             "164.10 USDT",
             "14.15 USDT",
         ),

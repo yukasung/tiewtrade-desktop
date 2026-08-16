@@ -38,11 +38,11 @@ from tiewtrade.ui.trade_history_workflow import HistoryTab
 
 def history_result(
     *items: object,
-    net_realized_pnl: Decimal = Decimal("19.58"),
+    realized_pnl: Decimal = Decimal("20"),
 ) -> BasketHistoryResult:
     return BasketHistoryResult(
         items=items,  # type: ignore[arg-type]
-        net_realized_pnl=net_realized_pnl,
+        realized_pnl=realized_pnl,
     )
 
 
@@ -91,7 +91,6 @@ def test_page_exposes_filters_and_exact_table_columns(qtbot: QtBot) -> None:
         "Side",
         "Price",
         "Quantity",
-        "Fee",
         "Total",
         "Profit / Loss",
     )
@@ -171,7 +170,7 @@ def test_basket_and_trade_results_render_independently(
     page = TradeHistoryPage()
     qtbot.addWidget(page)
 
-    page.show_baskets(BasketHistoryResult((basket,), Decimal("19.58")))
+    page.show_baskets(BasketHistoryResult((basket,), Decimal("20")))
     page.show_history_tab(HistoryTab.TRADES)
     page.show_trades((item,))
 
@@ -188,7 +187,7 @@ def test_basket_and_trade_results_render_independently(
     ).foreground() == QBrush(QColor(POSITIVE_COLOR))
 
     page.show_history_tab(HistoryTab.BASKETS)
-    page.show_baskets(BasketHistoryResult((basket,), Decimal("19.58")))
+    page.show_baskets(BasketHistoryResult((basket,), Decimal("20")))
     page.show_history_tab(HistoryTab.TRADES)
 
     assert page.fill_table.rowCount() == 1
@@ -472,7 +471,7 @@ def test_the_summary_is_painted_by_its_sign_rather_than_labelled(
     qtbot.addWidget(page)
     page.show()
 
-    page.show_baskets(history_result(net_realized_pnl=value))
+    page.show_baskets(history_result(realized_pnl=value))
 
     assert page.total_net_pnl.text() == expected_text
     inks = ink_colours(page.total_net_pnl)
@@ -497,7 +496,7 @@ def test_basket_refresh_loading_keeps_last_known_durable_result(
     assert page.basket_state.text() == "Loading trade history…"
     assert not page.search_button.isEnabled()
     assert not page.reset_button.isEnabled()
-    assert page.total_net_pnl.text() == "19.58 USDT"
+    assert page.total_net_pnl.text() == "20.00 USDT"
     assert not page.total_net_pnl.isHidden()
 
     page.set_baskets_loading(False)
@@ -513,7 +512,7 @@ def test_empty_basket_result_still_carries_its_summary_to_the_screen(
     qtbot.addWidget(page)
     # The smallest amount that still reads on screen, so a summary quietly
     # dropped cannot pass as one that was merely too small to see.
-    empty_result = history_result(net_realized_pnl=Decimal("0.01"))
+    empty_result = history_result(realized_pnl=Decimal("0.01"))
 
     page.show_baskets_empty(empty_result)
 
@@ -573,7 +572,7 @@ def test_basket_refresh_failure_keeps_last_known_durable_result(
     page.show_baskets_unavailable("Trade History unavailable")
 
     assert page.basket_table.rowCount() == 1
-    assert page.total_net_pnl.text() == "19.58 USDT"
+    assert page.total_net_pnl.text() == "20.00 USDT"
     assert not page.total_net_pnl.isHidden()
     assert page.total_items.text() == "1 total Positions"
     assert page.basket_state.text() == "Stale · Trade History unavailable"

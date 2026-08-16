@@ -71,7 +71,7 @@ class ClosePaperPosition:
             rounding=ROUND_DOWN if long_position else ROUND_CEILING
         ) * tick_size
         quantity = sum((fill.quantity for fill in entries), Decimal("0"))
-        gross_realized_pnl = sum(
+        realized_pnl = sum(
             (
                 (exit_price - fill.price) * fill.quantity
                 if long_position
@@ -80,9 +80,6 @@ class ClosePaperPosition:
             ),
             start=Decimal("0"),
         )
-        exit_fee = Decimal("0")
-        trading_fees = basket.trading_fees + exit_fee
-        net_realized_pnl = gross_realized_pnl - trading_fees - basket.funding_fee
         closed_at = self._clock()
         order_id = f"manual-close:{basket.basket_id}"
         fill = TradeFill(
@@ -97,17 +94,13 @@ class ClosePaperPosition:
             price=exit_price,
             quantity=quantity,
             notional=exit_price * quantity,
-            commission=exit_fee,
-            commission_asset="USDT",
-            realized_pnl=net_realized_pnl,
+            realized_pnl=realized_pnl,
             source=FillSource.PAPER_EXECUTOR,
         )
         closed = replace(
             basket,
             closed_at_utc=closed_at,
-            gross_realized_pnl=gross_realized_pnl,
-            trading_fees=trading_fees,
-            net_realized_pnl=net_realized_pnl,
+            realized_pnl=realized_pnl,
             status=BasketStatus.CLOSED,
         )
         recorded = self._record_closed(closed, fill)

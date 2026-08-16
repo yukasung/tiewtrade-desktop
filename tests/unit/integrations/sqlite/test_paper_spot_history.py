@@ -47,7 +47,6 @@ def history(store: SQLiteTradeHistory) -> PaperSpotSQLiteHistory:
             symbol="BTCUSDT",
             timeframe="5m",
             preset_version="rsi-step-grid-v1",
-            commission_asset="USDT",
         ),
         store,
     )
@@ -93,7 +92,6 @@ def entry_fill() -> PaperSpotEntryFill:
         fill_id=f"paper:{SESSION_ID}:entry:intent-1:fill",
         price=Decimal("100"),
         quantity=Decimal("2"),
-        fee=Decimal("0.2"),
         filled_at=OPENED_AT,
     )
 
@@ -104,7 +102,6 @@ def exit_fill() -> PaperSpotExitFill:
         fill_id=f"paper:{SESSION_ID}:take-profit:{BASKET_ID}:fill",
         price=Decimal("110"),
         quantity=Decimal("2"),
-        fee=Decimal("0.22"),
         filled_at=CLOSED_AT,
     )
 
@@ -115,10 +112,7 @@ def closed_basket() -> ClosedBasket:
         entry_count=1,
         average_entry_price=Decimal("100"),
         exit_price=Decimal("110"),
-        gross_realized_pnl=Decimal("20"),
-        trading_fees=Decimal("0.42"),
-        funding_fee=Decimal("0"),
-        net_realized_pnl=Decimal("19.58"),
+        realized_pnl=Decimal("20"),
         closed_at=CLOSED_AT,
     )
 
@@ -149,10 +143,7 @@ def test_entry_fill_creates_exact_open_basket_and_buy_fill(
         closed_at_utc=None,
         entry_count=1,
         invested_notional=Decimal("200"),
-        gross_realized_pnl=Decimal("0"),
-        trading_fees=Decimal("0.2"),
-        funding_fee=Decimal("0"),
-        net_realized_pnl=Decimal("-0.2"),
+        realized_pnl=Decimal("0"),
         status=BasketStatus.OPEN,
     )
     assert store.list_fills(BASKET_ID) == (
@@ -168,8 +159,6 @@ def test_entry_fill_creates_exact_open_basket_and_buy_fill(
             price=Decimal("100"),
             quantity=Decimal("2"),
             notional=Decimal("200"),
-            commission=Decimal("0.2"),
-            commission_asset="USDT",
             realized_pnl=Decimal("0"),
             source=FillSource.PAPER_EXECUTOR,
             entry_atr=ENTRY_ATR,
@@ -193,7 +182,6 @@ def test_second_entry_replaces_open_aggregate_and_records_another_buy_fill(
         fill_id=f"paper:{SESSION_ID}:entry:intent-2:fill",
         price=Decimal("90"),
         quantity=Decimal("1"),
-        fee=Decimal("0.09"),
         filled_at=OPENED_AT + timedelta(hours=1),
     )
 
@@ -210,12 +198,10 @@ def test_second_entry_replaces_open_aggregate_and_records_another_buy_fill(
     assert basket.opened_at_utc == OPENED_AT
     assert basket.entry_count == 2
     assert basket.invested_notional == Decimal("290")
-    assert basket.trading_fees == Decimal("0.29")
-    assert basket.net_realized_pnl == Decimal("-0.29")
+    assert basket.realized_pnl == Decimal("0")
     assert [fill.side for fill in fills] == [FillSide.BUY, FillSide.BUY]
     assert fills[1].entry_number == 2
     assert fills[1].notional == Decimal("90")
-    assert fills[1].commission == Decimal("0.09")
 
 
 def test_partial_fill_for_same_spot_order_does_not_increment_entry_count(
@@ -228,7 +214,6 @@ def test_partial_fill_for_same_spot_order_does_not_increment_entry_count(
         fill_id="fill-1",
         price=Decimal("100"),
         quantity=Decimal("0.001"),
-        fee=Decimal("0.1"),
         filled_at=OPENED_AT,
     )
     partial = PaperSpotEntryFill(
@@ -237,7 +222,6 @@ def test_partial_fill_for_same_spot_order_does_not_increment_entry_count(
         fill_id="fill-2",
         price=Decimal("100"),
         quantity=Decimal("0.0005"),
-        fee=Decimal("0.05"),
         filled_at=OPENED_AT + timedelta(seconds=1),
     )
 
@@ -252,7 +236,6 @@ def test_partial_fill_for_same_spot_order_does_not_increment_entry_count(
     assert basket is not None
     assert basket.entry_count == 1
     assert basket.invested_notional == Decimal("0.1500")
-    assert basket.trading_fees == Decimal("0.15")
     assert tuple(fill.order_id for fill in store.list_fills(BASKET_ID)) == (
         "entry-order-1",
         "entry-order-1",
@@ -271,7 +254,6 @@ def test_concurrent_partial_fills_update_spot_basket_aggregate_atomically(
             symbol="BTCUSDT",
             timeframe="5m",
             preset_version="rsi-step-grid-v1",
-            commission_asset="USDT",
         ),
         store,
     )
@@ -281,7 +263,6 @@ def test_concurrent_partial_fills_update_spot_basket_aggregate_atomically(
         fill_id="fill-1",
         price=Decimal("100"),
         quantity=Decimal("0.001"),
-        fee=Decimal("0.1"),
         filled_at=OPENED_AT,
     )
     partials = (
@@ -291,7 +272,6 @@ def test_concurrent_partial_fills_update_spot_basket_aggregate_atomically(
             fill_id="fill-2",
             price=Decimal("100"),
             quantity=Decimal("0.0005"),
-            fee=Decimal("0.05"),
             filled_at=OPENED_AT + timedelta(seconds=1),
         ),
         PaperSpotEntryFill(
@@ -300,7 +280,6 @@ def test_concurrent_partial_fills_update_spot_basket_aggregate_atomically(
             fill_id="fill-3",
             price=Decimal("100"),
             quantity=Decimal("0.00025"),
-            fee=Decimal("0.025"),
             filled_at=OPENED_AT + timedelta(seconds=2),
         ),
     )
@@ -321,7 +300,6 @@ def test_concurrent_partial_fills_update_spot_basket_aggregate_atomically(
     assert basket is not None
     assert basket.entry_count == 1
     assert basket.invested_notional == Decimal("0.17500")
-    assert basket.trading_fees == Decimal("0.175")
     assert tuple(fill.fill_id for fill in store.list_fills(BASKET_ID)) == (
         "fill-1",
         "fill-2",
@@ -344,7 +322,6 @@ def test_entry_exit_keeps_the_basket_open_and_adds_what_it_realised(
         fill_id=f"paper:{SESSION_ID}:take-profit:{BASKET_ID}:1:fill",
         price=Decimal("110"),
         quantity=Decimal("2"),
-        fee=Decimal("0.22"),
         filled_at=OPENED_AT + timedelta(hours=1),
         entry_number=1,
     )
@@ -357,9 +334,7 @@ def test_entry_exit_keeps_the_basket_open_and_adds_what_it_realised(
             quantity=Decimal("2"),
             entry_price=Decimal("100"),
             exit_price=Decimal("110"),
-            gross_realized_pnl=Decimal("20"),
-            trading_fees=Decimal("0.42"),
-            net_realized_pnl=Decimal("19.58"),
+            realized_pnl=Decimal("20"),
             closed_at=OPENED_AT + timedelta(hours=1),
         ),
         closed_basket=None,
@@ -372,12 +347,11 @@ def test_entry_exit_keeps_the_basket_open_and_adds_what_it_realised(
     # The Basket stays open for the Entries that have not sold.
     assert basket.status is BasketStatus.OPEN
     assert basket.closed_at_utc is None
-    assert basket.gross_realized_pnl == Decimal("20")
-    assert basket.trading_fees == Decimal("0.42")
-    assert basket.net_realized_pnl == Decimal("19.58")
+    assert basket.realized_pnl == Decimal("20")
+    assert basket.realized_pnl == Decimal("20")
     assert len(fills) == 2
     assert fills[1].closes_entry_number == 1
-    assert fills[1].realized_pnl == Decimal("19.58")
+    assert fills[1].realized_pnl == Decimal("20")
 
 
 def test_close_records_exact_closed_basket_and_sell_fill(
@@ -404,10 +378,8 @@ def test_close_records_exact_closed_basket_and_sell_fill(
     assert basket.opened_at_utc == OPENED_AT
     assert basket.closed_at_utc == CLOSED_AT
     assert basket.invested_notional == Decimal("200")
-    assert basket.gross_realized_pnl == Decimal("20")
-    assert basket.trading_fees == Decimal("0.42")
-    assert basket.funding_fee == Decimal("0")
-    assert basket.net_realized_pnl == Decimal("19.58")
+    assert basket.realized_pnl == Decimal("20")
+    assert basket.realized_pnl == Decimal("20")
     assert [fill.side for fill in fills] == [FillSide.BUY, FillSide.SELL]
     assert fills[1] == TradeFill(
         fill_id=exit_fill().fill_id,
@@ -421,9 +393,7 @@ def test_close_records_exact_closed_basket_and_sell_fill(
         price=Decimal("110"),
         quantity=Decimal("2"),
         notional=Decimal("220"),
-        commission=Decimal("0.22"),
-        commission_asset="USDT",
-        realized_pnl=Decimal("19.58"),
+        realized_pnl=Decimal("20"),
         source=FillSource.PAPER_EXECUTOR,
     )
 

@@ -24,12 +24,12 @@ from tiewtrade.trading.spot_policy import SpotTradingPolicy
 _INSERT_SQL = """
 INSERT INTO bot_sessions (
     session_id, trade_mode, market_type, symbol, timeframe, preset_version,
-    available_capital, max_entries, fee_rate, slippage_bps,
+    available_capital, max_entries, slippage_bps,
     spot_trading_capital_ratio, futures_policy_version, futures_leverage,
     futures_trading_capital_ratio, futures_collateral_buffer_ratio,
     futures_maintenance_margin_rate, futures_margin_mode,
     futures_position_mode, created_at_utc, ended_at_utc
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 """
 
 
@@ -189,7 +189,6 @@ def _session_values(session: ConfiguredPaperSession) -> tuple[object, ...]:
         config.preset_version,
         str(config.available_capital),
         config.entry_policy.max_entries,
-        "0",
         str(config.slippage_bps),
         None if spot is None else str(spot.trading_capital_ratio),
         None if futures is None else futures.version,

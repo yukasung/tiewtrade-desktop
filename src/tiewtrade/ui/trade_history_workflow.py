@@ -278,8 +278,8 @@ class TradeHistoryWorkflow(QObject):
             isinstance(result, BasketHistoryResult)
             and isinstance(result.items, tuple)
             and all(isinstance(item, BasketResult) for item in result.items)
-            and isinstance(result.net_realized_pnl, Decimal)
-            and result.net_realized_pnl.is_finite()
+            and isinstance(result.realized_pnl, Decimal)
+            and result.realized_pnl.is_finite()
         )
 
     @Slot()

@@ -86,7 +86,7 @@ def test_basket_columns_format_utc_and_every_column() -> None:
         "5m",
         "1",
         "200.00 USDT",
-        "19.58 USDT",
+        "20.00 USDT",
         "Closed",
     )
 
@@ -106,14 +106,13 @@ def test_fill_columns_include_symbol_and_total_for_cross_basket_history() -> Non
         "Buy",
         "100",
         "2",
-        "0.20 USDT",
         "200.00 USDT",
         "0.00 USDT",
     )
 
 
 @pytest.mark.parametrize(
-    ("net_realized_pnl", "expected"),
+    ("realized_pnl", "expected"),
     [
         pytest.param(Decimal("1"), POSITIVE_COLOR, id="profit"),
         pytest.param(Decimal("-1"), NEGATIVE_COLOR, id="loss"),
@@ -121,14 +120,11 @@ def test_fill_columns_include_symbol_and_total_for_cross_basket_history() -> Non
     ],
 )
 def test_pnl_colour_is_read_from_the_figure_not_from_its_label(
-    net_realized_pnl: Decimal, expected: str | None
+    realized_pnl: Decimal, expected: str | None
 ) -> None:
     """Rewording the label cannot silently drop the colour that goes with it."""
     basket = basket_result(
-        gross_realized_pnl=net_realized_pnl,
-        trading_fees=Decimal("0"),
-        funding_fee=Decimal("0"),
-        net_realized_pnl=net_realized_pnl,
+        realized_pnl=realized_pnl,
     )
 
     assert colour_of(BASKET_COLUMNS, "Profit / Loss", basket) == expected

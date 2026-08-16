@@ -92,10 +92,10 @@ def test_desktop_trade_history_reads_durable_spot_and_futures_records(
         "5m",
         "1",
         "200.00 USDT",
-        "19.58 USDT",
+        "20.00 USDT",
         "Closed",
     )
-    assert window.trade_history.total_net_pnl.text() == "48.98 USDT"
+    assert window.trade_history.total_net_pnl.text() == "49.40 USDT"
     window.workspace.show_tab(WorkspaceTab.TRADE_HISTORY)
     qtbot.waitUntil(lambda: window.trade_history.fill_table.rowCount() == 4)
     assert _table_rows_text(window.trade_history.fill_table) == (
@@ -105,7 +105,6 @@ def test_desktop_trade_history_reads_durable_spot_and_futures_records(
             "Sell",
             "100",
             "2",
-            "0.20 USDT",
             "200.00 USDT",
             "29.40 USDT",
         ),
@@ -115,7 +114,6 @@ def test_desktop_trade_history_reads_durable_spot_and_futures_records(
             "Buy",
             "100",
             "2",
-            "0.20 USDT",
             "200.00 USDT",
             "0.00 USDT",
         ),
@@ -125,9 +123,8 @@ def test_desktop_trade_history_reads_durable_spot_and_futures_records(
             "Sell",
             "100",
             "2",
-            "0.20 USDT",
             "200.00 USDT",
-            "19.58 USDT",
+            "20.00 USDT",
         ),
         (
             "2026-01-01 07:00:00",
@@ -135,7 +132,6 @@ def test_desktop_trade_history_reads_durable_spot_and_futures_records(
             "Buy",
             "100",
             "2",
-            "0.20 USDT",
             "200.00 USDT",
             "0.00 USDT",
         ),
@@ -164,10 +160,7 @@ def test_desktop_trade_history_filters_all_rows_and_survives_restart(
                 timeframe="15m" if index == 50 else "5m",
                 market_type=(MarketType.FUTURES if index == 50 else MarketType.SPOT),
                 leverage=3 if index == 50 else None,
-                gross_realized_pnl=(Decimal("30") if index == 50 else Decimal("20")),
-                trading_fees=(Decimal("0.6") if index == 50 else Decimal("0.42")),
-                funding_fee=Decimal("0.00") if index == 50 else Decimal("0"),
-                net_realized_pnl=(Decimal("29.4") if index == 50 else Decimal("19.58")),
+                realized_pnl=(Decimal("29.4") if index == 50 else Decimal("20")),
             ),
         )
     first = _composed_window(
@@ -231,7 +224,7 @@ def test_trade_history_read_failure_is_fail_closed_and_sanitized(
         if basket_calls == 1:
             return BasketHistoryResult(
                 items=(basket,),
-                net_realized_pnl=basket.net_realized_pnl,
+                realized_pnl=basket.realized_pnl,
             )
         raise TradeHistoryUnavailableError(
             "SQLite failed at /private/tmp/tiewtrade.sqlite3"
@@ -261,7 +254,7 @@ def test_trade_history_read_failure_is_fail_closed_and_sanitized(
     assert window.trade_history.fill_table.rowCount() == 0
     assert not window.trade_history.total_net_pnl.isHidden()
     assert not window.trade_history.total_net_pnl_label.isHidden()
-    assert window.trade_history.total_net_pnl.text() == "19.58 USDT"
+    assert window.trade_history.total_net_pnl.text() == "20.00 USDT"
     assert window.trade_history.retry_baskets_button.isVisible()
     assert "/private/tmp" not in window.trade_history.basket_state.text()
 
@@ -356,10 +349,7 @@ def _record_spot_and_futures_history(history: SQLiteTradeHistory) -> None:
             leverage=3,
             opened_at_utc=futures_opened_at,
             closed_at_utc=futures_opened_at + timedelta(hours=1),
-            gross_realized_pnl=Decimal("30"),
-            trading_fees=Decimal("0.6"),
-            funding_fee=Decimal("0.00"),
-            net_realized_pnl=Decimal("29.4"),
+            realized_pnl=Decimal("29.4"),
         ),
     )
 
@@ -369,10 +359,7 @@ def _record_closed(history: SQLiteTradeHistory, closed: BasketResult) -> None:
     opened = replace(
         closed,
         closed_at_utc=None,
-        gross_realized_pnl=Decimal("0"),
-        trading_fees=Decimal("0"),
-        funding_fee=Decimal("0"),
-        net_realized_pnl=Decimal("0"),
+        realized_pnl=Decimal("0"),
         status=BasketStatus.OPEN,
     )
     buy = trade_fill(
@@ -390,7 +377,7 @@ def _record_closed(history: SQLiteTradeHistory, closed: BasketResult) -> None:
         side=FillSide.SELL,
         entry_number=None,
         filled_at_utc=closed.closed_at_utc,
-        realized_pnl=closed.net_realized_pnl,
+        realized_pnl=closed.realized_pnl,
     )
     history.record_open_basket(opened, buy)
     history.record_closed_basket(closed, sell)

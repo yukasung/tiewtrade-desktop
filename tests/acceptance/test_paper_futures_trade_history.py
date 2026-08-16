@@ -37,7 +37,6 @@ def test_paper_futures_history_survives_restart_and_duplicate_replay(
         symbol="BTCUSDT",
         timeframe="5m",
         preset_version="rsi-step-grid-v1",
-        commission_asset="USDT",
         leverage=3,
     )
     persistent = create_persistent_paper_futures_session(
@@ -77,18 +76,8 @@ def test_paper_futures_history_survives_restart_and_duplicate_replay(
     assert basket.invested_notional == (
         entry_snapshot.entry_fill.price * entry_snapshot.entry_fill.quantity
     )
-    assert basket.gross_realized_pnl == (
-        close_snapshot.closed_basket.gross_realized_pnl
-    )
-    assert basket.trading_fees == close_snapshot.closed_basket.trading_fees
-    assert basket.funding_fee == Decimal("0.00")
-    assert basket.funding_fee.as_tuple().exponent == -2
-    assert basket.net_realized_pnl == close_snapshot.closed_basket.net_realized_pnl
+    assert basket.realized_pnl == close_snapshot.closed_basket.realized_pnl
     assert [fill.side for fill in fills] == [FillSide.BUY, FillSide.SELL]
-    assert [fill.commission for fill in fills] == [
-        entry_snapshot.entry_fill.fee,
-        close_snapshot.exit_fill.fee,
-    ]
 
     replay_history = PaperFuturesSQLiteHistory(context, reopened)
     assert not replay_history.record_entry(

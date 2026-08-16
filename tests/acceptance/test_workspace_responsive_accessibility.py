@@ -19,12 +19,10 @@ def test_trading_tables_are_named_and_scroll_horizontally(qtbot: QtBot) -> None:
         BasketHistoryResult(
             items=(
                 basket_result(
-                    gross_realized_pnl=Decimal("-1"),
-                    trading_fees=Decimal("0.25"),
-                    net_realized_pnl=Decimal("-1.25"),
+                    realized_pnl=Decimal("-1.25"),
                 ),
             ),
-            net_realized_pnl=Decimal("-1.25"),
+            realized_pnl=Decimal("-1.25"),
         )
     )
 

@@ -27,9 +27,9 @@ from tiewtrade.ui.trade_history_workflow import (
 def result_with(*items: BasketResult) -> BasketHistoryResult:
     return BasketHistoryResult(
         items=tuple(items),
-        net_realized_pnl=sum(
+        realized_pnl=sum(
             (
-                item.net_realized_pnl
+                item.realized_pnl
                 for item in items
                 if item.status is BasketStatus.CLOSED
             ),
@@ -273,14 +273,14 @@ def test_basket_failure_is_sanitized_and_retry_reuses_latest_filters(
         pytest.param(
             BasketHistoryResult(
                 items=(basket_result(),),
-                net_realized_pnl=Decimal("NaN"),
+                realized_pnl=Decimal("NaN"),
             ),
             id="not-a-number",
         ),
         pytest.param(
             BasketHistoryResult(
                 items=cast(tuple[BasketResult, ...], (object(),)),
-                net_realized_pnl=Decimal("0"),
+                realized_pnl=Decimal("0"),
             ),
             id="not-a-basket",
         ),

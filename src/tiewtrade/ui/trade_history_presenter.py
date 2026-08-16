@@ -77,13 +77,11 @@ BASKET_COLUMNS: tuple[Column[BasketResult], ...] = (
     # "Total" is what an exchange calls price × quantity, and what the Fills
     # table beside this one already calls it. One word for one idea.
     Column("Total", RIGHT, lambda basket: usdt_text(basket.invested_notional)),
-    # Gross PnL, Fees and Funding Fee are the three terms Net PnL is made of,
-    # and Net PnL is the figure that is read. The record still holds all three.
     Column(
         "Profit / Loss",
         RIGHT,
-        lambda basket: usdt_text(basket.net_realized_pnl),
-        lambda basket: sign_colour(basket.net_realized_pnl),
+        lambda basket: usdt_text(basket.realized_pnl),
+        lambda basket: sign_colour(basket.realized_pnl),
     ),
     Column("Status", LEFT, lambda basket: display_enum(basket.status.value)),
 )
@@ -99,7 +97,6 @@ FILL_COLUMNS: tuple[Column[TradeFillHistoryItem], ...] = (
     ),
     Column("Price", RIGHT, lambda item: price_text(item.fill.price)),
     Column("Quantity", RIGHT, lambda item: decimal_text(item.fill.quantity)),
-    Column("Fee", RIGHT, lambda item: usdt_text(item.fill.commission)),
     Column("Total", RIGHT, lambda item: usdt_text(item.fill.notional)),
     Column(
         "Profit / Loss",

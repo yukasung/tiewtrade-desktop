@@ -49,7 +49,6 @@ def test_entry_fill_uses_session_capital_costs_and_symbol_rules() -> None:
     assert fill is not None
     assert fill.price == Decimal("101.49")
     assert fill.quantity == Decimal("1.477")
-    assert fill.fee == Decimal("0")
     assert fill.filled_at == fill_candle.open_time
     entry_order_id = f"entry:{intent(session, signal_candle).intent_id}"
     assert fill.order_id == entry_order_id
@@ -211,7 +210,6 @@ def test_take_profit_target_touch_uses_sell_floor_price_and_exact_fee() -> None:
     basket.add_entry(
         price=Decimal("100"),
         quantity=Decimal("2"),
-        fee=Decimal("0.2"),
         filled_at=datetime(2026, 1, 1, tzinfo=UTC),
         atr=Decimal("1"),
         tick_size=rules.tick_size,
@@ -226,7 +224,6 @@ def test_take_profit_target_touch_uses_sell_floor_price_and_exact_fee() -> None:
     fill = fills[0]
     assert fill.price == Decimal("100.74")
     assert fill.quantity == Decimal("2")
-    assert fill.fee == Decimal("0")
     assert fill.filled_at == touch_candle.close_time
     # The Fill names the Entry it sold, which is what lets the others stay.
     assert fill.entry_number == 1
@@ -245,7 +242,6 @@ def test_take_profit_rejects_a_padded_near_match() -> None:
     basket.add_entry(
         price=Decimal("100"),
         quantity=Decimal("2"),
-        fee=Decimal("0.2"),
         filled_at=datetime(2026, 1, 1, tzinfo=UTC),
         atr=Decimal("1"),
         tick_size=rules.tick_size,
@@ -291,7 +287,6 @@ def test_take_profit_rejects_a_non_positive_sell_price_after_quantization() -> N
     basket.add_entry(
         price=Decimal("0.01"),
         quantity=Decimal("1"),
-        fee=Decimal("0"),
         filled_at=datetime(2026, 1, 1, tzinfo=UTC),
         atr=Decimal("0"),
         tick_size=rules.tick_size,
@@ -332,7 +327,6 @@ def test_stop_loss_target_touch_uses_sell_floor_price_and_exact_fee() -> None:
     basket.add_entry(
         price=Decimal("100"),
         quantity=Decimal("2"),
-        fee=Decimal("0.2"),
         filled_at=datetime(2026, 1, 1, tzinfo=UTC),
         atr=Decimal("1"),
         tick_size=rules.tick_size,
@@ -346,7 +340,6 @@ def test_stop_loss_target_touch_uses_sell_floor_price_and_exact_fee() -> None:
     assert fill is not None
     assert fill.price == Decimal("98.75")
     assert fill.quantity == Decimal("2")
-    assert fill.fee == Decimal("0")
     assert fill.filled_at == touch_candle.close_time
     exit_order_id = f"stop-loss:{basket.basket_id}"
     assert fill.order_id == exit_order_id
@@ -363,7 +356,6 @@ def test_stop_loss_does_not_trigger_when_basket_has_no_multiplier_configured() -
     basket.add_entry(
         price=Decimal("100"),
         quantity=Decimal("2"),
-        fee=Decimal("0.2"),
         filled_at=datetime(2026, 1, 1, tzinfo=UTC),
         atr=Decimal("1"),
         tick_size=rules.tick_size,
@@ -388,7 +380,6 @@ def test_stop_loss_does_not_trigger_when_candle_low_stays_above_target() -> None
     basket.add_entry(
         price=Decimal("100"),
         quantity=Decimal("2"),
-        fee=Decimal("0.2"),
         filled_at=datetime(2026, 1, 1, tzinfo=UTC),
         atr=Decimal("1"),
         tick_size=rules.tick_size,
@@ -415,7 +406,6 @@ def test_stop_loss_rejects_a_padded_near_match() -> None:
     basket.add_entry(
         price=Decimal("100"),
         quantity=Decimal("2"),
-        fee=Decimal("0.2"),
         filled_at=datetime(2026, 1, 1, tzinfo=UTC),
         atr=Decimal("1"),
         tick_size=rules.tick_size,
