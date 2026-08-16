@@ -66,6 +66,35 @@ class ConfiguredPaperSession:
             raise ValueError("new Paper Session must be active")
 
 
+def setup_values_of(session: ConfiguredPaperSession) -> PaperSessionSetupValues:
+    """The values a form shows for a Session it was filled from.
+
+    Written once so that "the form still describes this Session" is a
+    comparison rather than a guess: the widgets are filled from here, and
+    what comes back out of them is read against the same strings. A second
+    formatter would let a trailing zero read as an edit nobody made.
+    """
+    config = session.config
+    spot_policy = config.spot_policy
+    futures_policy = config.futures_policy
+    return PaperSessionSetupValues(
+        market_type=config.market_type.value,
+        symbol=session.market_data.symbol,
+        timeframe=session.market_data.timeframe,
+        available_capital=format(config.available_capital, "f"),
+        max_entries=str(config.entry_policy.max_entries),
+        spot_trading_capital_percent=(
+            None
+            if spot_policy is None
+            else format(spot_policy.trading_capital_ratio * Decimal("100"), "f")
+        ),
+        futures_leverage=(
+            None if futures_policy is None else str(futures_policy.leverage)
+        ),
+        preset_version=config.preset_version,
+    )
+
+
 @dataclass(frozen=True, slots=True)
 class PaperSessionCreateOutcome:
     session: ConfiguredPaperSession

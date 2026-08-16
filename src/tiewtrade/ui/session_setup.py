@@ -1,5 +1,4 @@
 from collections.abc import Iterable
-from decimal import Decimal
 
 from PySide6.QtCore import Signal, Slot
 from PySide6.QtWidgets import (
@@ -18,6 +17,7 @@ from tiewtrade.application.paper_session_setup import (
     ConfiguredPaperSession,
     PaperSessionSetupValues,
     preset_choices,
+    setup_values_of,
 )
 from tiewtrade.application.paper_symbols import PAPER_SYMBOLS
 from tiewtrade.market_data.config import SUPPORTED_V1_TIMEFRAME_CHOICES
@@ -123,24 +123,23 @@ class SessionSetupWidget(QWidget):
         )
 
     def set_values_from_session(self, session: ConfiguredPaperSession) -> None:
-        config = session.config
-        self.market_type.setCurrentIndex(
-            self.market_type.findData(config.market_type.value)
-        )
-        self.symbol.setCurrentIndex(self.symbol.findData(session.market_data.symbol))
-        self.timeframe.setCurrentIndex(
-            self.timeframe.findData(session.market_data.timeframe)
-        )
-        self.available_capital.setText(format(config.available_capital, "f"))
-        self.max_entries.setValue(config.entry_policy.max_entries)
-        if config.spot_policy is not None:
-            self.spot_ratio.setText(
-                format(config.spot_policy.trading_capital_ratio * Decimal("100"), "f")
-            )
-        if config.futures_policy is not None:
-            self.leverage.setValue(config.futures_policy.leverage)
+        """Show a Session on the form, in the strings it is read back in.
+
+        Filled from `setup_values_of` rather than from the config directly, so
+        an untouched form compares equal to the Session it came from.
+        """
+        values = setup_values_of(session)
+        self.market_type.setCurrentIndex(self.market_type.findData(values.market_type))
+        self.symbol.setCurrentIndex(self.symbol.findData(values.symbol))
+        self.timeframe.setCurrentIndex(self.timeframe.findData(values.timeframe))
+        self.available_capital.setText(values.available_capital)
+        self.max_entries.setValue(int(values.max_entries))
+        if values.spot_trading_capital_percent is not None:
+            self.spot_ratio.setText(values.spot_trading_capital_percent)
+        if values.futures_leverage is not None:
+            self.leverage.setValue(int(values.futures_leverage))
         self._populate_strategy()
-        strategy_index = self.strategy.findData(config.preset_version)
+        strategy_index = self.strategy.findData(values.preset_version)
         if strategy_index >= 0:
             self.strategy.setCurrentIndex(strategy_index)
         self.clear_errors()

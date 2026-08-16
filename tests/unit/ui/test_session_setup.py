@@ -1,7 +1,16 @@
+import pytest
 from pytestqt.qtbot import QtBot
 
+from tests.support.paper_session_setup import (
+    configured_futures_session,
+    configured_spot_session,
+)
 from tests.support.qt_interactions import click
-from tiewtrade.application.paper_session_setup import PaperSessionSetupValues
+from tiewtrade.application.paper_session_setup import (
+    ConfiguredPaperSession,
+    PaperSessionSetupValues,
+    setup_values_of,
+)
 from tiewtrade.trading.futures_policy import FuturesTradingPolicy
 from tiewtrade.ui.session_setup import SessionSetupWidget
 
@@ -184,3 +193,27 @@ def test_field_error_is_rendered_next_to_its_input(qtbot: QtBot) -> None:
     assert widget.available_capital_error.text() == (
         "Available Capital must be positive"
     )
+
+
+@pytest.mark.parametrize(
+    "session",
+    [
+        pytest.param(configured_spot_session(), id="spot"),
+        pytest.param(configured_futures_session(), id="futures"),
+    ],
+)
+def test_a_form_filled_from_a_session_reads_back_as_that_session(
+    qtbot: QtBot, session: ConfiguredPaperSession
+) -> None:
+    """The comparison "nothing was edited" rests on this being exact.
+
+    A form that came out of a Session must read back as the same values, or
+    an untouched field reads as an edit and the window asks a question about
+    a change nobody made.
+    """
+    widget = SessionSetupWidget()
+    qtbot.addWidget(widget)
+
+    widget.set_values_from_session(session)
+
+    assert widget.values() == setup_values_of(session)

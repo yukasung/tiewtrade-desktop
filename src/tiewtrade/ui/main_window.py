@@ -20,6 +20,7 @@ from tiewtrade.application.paper_session_setup import (
     ConfiguredPaperSession,
     PaperSessionSetupValues,
     PaperSessionValidationError,
+    setup_values_of,
     validate_paper_session,
 )
 from tiewtrade.application.trading_workspace import (
@@ -27,6 +28,7 @@ from tiewtrade.application.trading_workspace import (
     BotRuntimeState,
     empty_position_basket_tab,
     failed_position_basket_tab,
+    loading_position_basket_tab,
     ready_position_basket_tab,
 )
 from tiewtrade.ui.background_task import BackgroundTask
@@ -47,6 +49,7 @@ from tiewtrade.ui.session_workflow import (
     LoadActiveSession,
     SessionWorkflow,
 )
+from tiewtrade.ui.take_profit_confirmation import sells_on_start_message
 from tiewtrade.ui.trade_history_workflow import (
     ListBasketHistory,
     ListTradeFills,
@@ -55,6 +58,11 @@ from tiewtrade.ui.trade_history_workflow import (
 from tiewtrade.ui.trading_workspace import TradingWorkspace
 
 WORKER_SHUTDOWN_TIMEOUT_MS = 5_000
+
+# A question put to the trader, answered by calling the confirmation it is
+# handed. The same shape the Stop confirmation takes, so both can be given a
+# plain callable in a test rather than a dialog to click.
+TakeProfitConfirmation = Callable[[str, Callable[[], None]], None]
 
 
 @dataclass(frozen=True, slots=True)
@@ -115,8 +123,14 @@ class MainWindow(QMainWindow):
         bot: BotActions = NO_BOT,
         chart: ChartSources = NO_CHART,
         thread_pool: QThreadPool | None = None,
+        take_profit_confirmation: TakeProfitConfirmation | None = None,
     ) -> None:
         super().__init__()
+        self._take_profit_confirmation = (
+            take_profit_confirmation or self._open_take_profit_confirmation
+        )
+        self._take_profit_confirmation_pending = False
+        self._take_profit_confirmation_dialog: QMessageBox | None = None
         self._thread_pool = thread_pool or QThreadPool.globalInstance()
         self._load_chart = chart.load
         self._close_position = bot.close_position
@@ -124,6 +138,7 @@ class MainWindow(QMainWindow):
         self._read_open_basket = bot.read_open_basket
         self._open_basket: ReopenedBasket | None = None
         self._open_basket_task: BackgroundTask | None = None
+        self._open_basket_reread: ConfiguredPaperSession | None = None
         self._last_chart_candle: ChartCandle | None = None
         self._clock = chart.clock
         self._retire_session = bot.retire_session
@@ -166,7 +181,7 @@ class MainWindow(QMainWindow):
             parent=self,
         )
         self._workflow.busy_changed.connect(self._set_busy)
-        self._workflow.workspace_changed.connect(self.workspace.show_workspace_snapshot)
+        self._workflow.workspace_changed.connect(self._show_workspace_snapshot)
         self._workflow.setup_required.connect(self._show_setup)
         self._workflow.session_ready.connect(self._show_session)
         self._workflow.validation_failed.connect(self._show_validation_error)
@@ -183,7 +198,7 @@ class MainWindow(QMainWindow):
             parent=self,
         )
         self._lifecycle_workflow.snapshot_changed.connect(self._bot_control_changed)
-        self.workspace.start_bot_requested.connect(self._lifecycle_workflow.start_bot)
+        self.workspace.start_bot_requested.connect(self._start_requested)
         self.workspace.stop_bot_requested.connect(self._stop_requested)
 
         self._chart_workflow = ChartWorkflow(
@@ -260,6 +275,18 @@ class MainWindow(QMainWindow):
             self._lifecycle_workflow.snapshot.workspace.basket is not None
         )
         if persisted_position or visible_position:
+            sells = self._sells_on_start_message()
+            if sells is not None:
+                self._ask_about_a_position_at_its_target(sells)
+                return
+            if raw_values == setup_values_of(self._replacement_session):
+                # Nothing was asked for and nothing is at its target, so
+                # Start means "run this Session on" and there is nothing to
+                # put a question about. A dialog here would ask about
+                # nothing, which is what teaches a hand to click the default
+                # unread — and the default closes a Position at market.
+                self._resume_replacement_session()
+                return
             answer = QMessageBox.question(
                 self,
                 "Close Paper Position?",
@@ -273,6 +300,45 @@ class MainWindow(QMainWindow):
                 self._resume_replacement_session()
                 return
         self._replace_session()
+
+    def _ask_about_a_position_at_its_target(self, sells: str) -> None:
+        """Ask about the sale that is waiting, not about replacing a Session.
+
+        A Position whose target the price has already reached is what the
+        trader is deciding about, so that is what the question is about. The
+        two ways out of it are named: selling at the targets the Entries were
+        given, or selling the lot at the price now — which is a different
+        trade, and no longer something a stray Enter can pick.
+        """
+        dialog = QMessageBox(self)
+        dialog.setWindowTitle("Take Profit reached")
+        dialog.setIcon(QMessageBox.Icon.Warning)
+        dialog.setText("Sell this Position at its Take Profit?")
+        dialog.setInformativeText(
+            f"{sells}\n\n"
+            "Close at Market sells the whole Position at the price now instead, "
+            "and starts a new Paper Bot with the values on this form.\n\n"
+            "Cancel leaves the Position open and the Bot stopped."
+        )
+        sell_button = dialog.addButton(
+            "Sell at Take Profit", QMessageBox.ButtonRole.AcceptRole
+        )
+        close_button = dialog.addButton(
+            "Close at Market", QMessageBox.ButtonRole.DestructiveRole
+        )
+        cancel_button = dialog.addButton("Cancel", QMessageBox.ButtonRole.RejectRole)
+        dialog.setDefaultButton(cancel_button)
+        dialog.setEscapeButton(cancel_button)
+        dialog.exec()
+        clicked = dialog.clickedButton()
+        if clicked is sell_button:
+            self._resume_replacement_session()
+        elif clicked is close_button:
+            self._replace_session()
+        else:
+            # Nothing was decided, so the form's edits describe a Session that
+            # is not being made.
+            self._replacement_values = None
 
     def _resume_replacement_session(self) -> None:
         """Run the Session that is already there on, position and all.
@@ -294,7 +360,78 @@ class MainWindow(QMainWindow):
             )
             return
         self.setup.set_values_from_session(session)
+        # Started without asking again: getting here means the trader was
+        # asked what to do with this Position and answered "leave it open",
+        # in a question that already said what leaving it open would sell.
+        self._start_now()
+
+    @Slot()
+    def _start_requested(self) -> None:
+        """Start the Bot, asking first when starting is itself a sale.
+
+        A Position left open goes on being marked while nothing runs, so the
+        price can reach an Entry's target with no Bot to act on it. The first
+        live tick after a Start sells every such Entry at once, at the target
+        it was given rather than at the price on screen — and there is no way
+        back from a Fill. The routes that put no question of their own come
+        through here, which is where this one is put.
+        """
+        message = self._sells_on_start_message()
+        if message is None:
+            self._start_now()
+            return
+        if self._take_profit_confirmation_pending:
+            return
+        self._take_profit_confirmation_pending = True
+        self._take_profit_confirmation(message, self._confirm_start)
+
+    def _start_now(self) -> None:
+        """The one line that starts the Bot, whichever question preceded it."""
         self._lifecycle_workflow.start_bot()
+
+    def _sells_on_start_message(self) -> str | None:
+        """What a Start would sell now, or nothing to say about it.
+
+        A Basket nobody has read back, a Futures Session — which never takes
+        one back — and a chart with no price yet all answer the same way:
+        there is nothing the question could truthfully be about.
+        """
+        open_basket = self._open_basket
+        candle = self._last_chart_candle
+        if open_basket is None or candle is None:
+            return None
+        return sells_on_start_message(open_basket, candle.close)
+
+    def _confirm_start(self) -> None:
+        self._take_profit_confirmation_pending = False
+        self._start_now()
+
+    def _open_take_profit_confirmation(
+        self, message: str, confirm: Callable[[], None]
+    ) -> None:
+        dialog = QMessageBox(self)
+        dialog.setWindowTitle("Sell at Take Profit?")
+        dialog.setIcon(QMessageBox.Icon.Warning)
+        dialog.setText("Start the Bot and sell at once?")
+        dialog.setInformativeText(message)
+        start_button = dialog.addButton("Start Bot", QMessageBox.ButtonRole.AcceptRole)
+        cancel_button = dialog.addButton("Cancel", QMessageBox.ButtonRole.RejectRole)
+        # The confirmed answer is the one that cannot be taken back, so the
+        # key an impatient hand hits is the one that changes nothing.
+        dialog.setDefaultButton(cancel_button)
+        dialog.setEscapeButton(cancel_button)
+        dialog.setWindowModality(Qt.WindowModality.WindowModal)
+
+        def finish(_result: int) -> None:
+            if dialog.clickedButton() is start_button:
+                confirm()
+            else:
+                self._take_profit_confirmation_pending = False
+            dialog.deleteLater()
+
+        dialog.finished.connect(finish)
+        self._take_profit_confirmation_dialog = dialog
+        dialog.open()
 
     def _replace_session(self) -> None:
         session = self._replacement_session
@@ -334,6 +471,11 @@ class MainWindow(QMainWindow):
         self._replacement_session = None
         self._replacement_succeeded = True
         self._start_after_create = True
+        # The Position this was holding has just been closed, so the copy the
+        # window kept describes something that is no longer there. Reading a
+        # new one takes a trip to the database, and the Start that follows
+        # must not ask about a Basket that has already been sold.
+        self._open_basket = None
 
     @Slot(object)
     def _replacement_failed(self, _error: object) -> None:
@@ -412,8 +554,15 @@ class MainWindow(QMainWindow):
         """
         self._open_basket = None
         read_open_basket = self._read_open_basket
-        if read_open_basket is None or self._open_basket_task is not None:
+        if read_open_basket is None:
             return
+        if self._open_basket_task is not None:
+            # A read is already on its way, and the Basket it saw may be older
+            # than the one being asked about now. It is asked again when that
+            # one lands, rather than dropped and the tab left saying nothing.
+            self._open_basket_reread = session
+            return
+        self._open_basket_reread = None
         task = BackgroundTask(lambda: read_open_basket(session))
         task.signals.succeeded.connect(self._open_basket_read)
         task.signals.failed.connect(self._open_basket_unreadable)
@@ -446,12 +595,34 @@ class MainWindow(QMainWindow):
     @Slot()
     def _open_basket_read_finished(self) -> None:
         self._open_basket_task = None
+        session = self._open_basket_reread
+        if session is not None:
+            self._read_open_basket_of(session)
+
+    @Slot(object)
+    def _show_workspace_snapshot(self, value: object) -> None:
+        """The Runtime's view of the tabs, then the Basket that outlives it.
+
+        A stopped Runtime holds no Basket, so its snapshot paints the Position
+        tab empty. The Basket the window read from the database goes back
+        straight after: a tab reading "No open Position" over an open one is
+        the single answer that is never true.
+        """
+        self.workspace.show_workspace_snapshot(value)
+        self._show_open_basket()
 
     def _show_open_basket(self) -> None:
         """Mark the Position nobody is running yet on the price of the moment."""
         open_basket = self._open_basket
+        if open_basket is None:
+            return
         candle = self._last_chart_candle
-        if open_basket is None or candle is None:
+        if candle is None:
+            # Held, but with no price to mark it on yet. Waiting is the true
+            # answer; an empty tab would be the untrue one.
+            self.workspace.position_basket.show_snapshot(
+                loading_position_basket_tab(empty_position_basket_tab())
+            )
             return
         observed_at = self._clock()
         self.workspace.position_basket.show_snapshot(
@@ -478,15 +649,17 @@ class MainWindow(QMainWindow):
         elif value.state is BotRuntimeState.STOPPED:
             # Whatever the Bot left open is the tab's to show again.
             self._read_open_basket_of(value.session)
-        else:
-            self._show_open_basket()
+        # The snapshot just shown carries no Basket while the Bot is stopped,
+        # so it painted the tab empty. Put the stored one back — after the
+        # branch above, so a running Runtime keeps the tab to itself.
+        self._show_open_basket()
         if (
             self._pending_start_session == value.session
             and value.state is BotRuntimeState.CONFIGURED
             and BotControlAction.START in value.available_actions
         ):
             self._pending_start_session = None
-            self._lifecycle_workflow.start_bot()
+            self._start_requested()
             return
         if value.state is BotRuntimeState.CONFIGURED:
             self._show_editable_setup(value)
