@@ -1,16 +1,13 @@
 from collections.abc import Sequence
 from datetime import date
-from typing import Any
 
 from PySide6.QtCore import QDate, QEvent, QObject, QSignalBlocker, Qt, Signal, Slot
 from PySide6.QtGui import QKeyEvent, QResizeEvent
 from PySide6.QtWidgets import (
-    QAbstractItemView,
     QButtonGroup,
     QDateEdit,
     QFrame,
     QHBoxLayout,
-    QHeaderView,
     QLabel,
     QLayout,
     QPushButton,
@@ -27,8 +24,8 @@ from tiewtrade.application.trade_history import (
     TradeFillHistoryItem,
 )
 from tiewtrade.ui.display_time import display_today
-from tiewtrade.ui.table_column import CENTER, Column, headers, table_item
-from tiewtrade.ui.table_empty_state import TableEmptyStateOverlay
+from tiewtrade.ui.history_section import HistorySection
+from tiewtrade.ui.table_column import Column, headers, table_item
 from tiewtrade.ui.trade_history_presenter import (
     BASKET_COLUMNS,
     DEFAULT_QUICK_RANGE,
@@ -44,6 +41,7 @@ from tiewtrade.ui.trade_history_workflow import HistoryTab
 EMPTY_DATE = QDate(1752, 9, 14)
 
 NO_BASKET_HISTORY = "No Position history"
+NO_TRADE_HISTORY = "No trade history"
 
 LINE_SPACING = 24
 GROUP_SPACING = 6
@@ -404,20 +402,40 @@ class TradeHistoryPage(QWidget):
             bar.apply_filters_requested.connect(self.apply_filters_requested)
             bar.reset_requested.connect(self.reset_requested)
 
-        self.basket_table = self._table(
-            "basketHistoryTable", "Position History", BASKET_COLUMNS
+        self.baskets = HistorySection(
+            filters=self.basket_filters,
+            columns=BASKET_COLUMNS,
+            table_object_name="basketHistoryTable",
+            state_object_name="basketState",
+            retry_object_name="retryBasketsButton",
+            accessible_name="Position History",
+            empty_message=NO_BASKET_HISTORY,
+            # A round is read, not picked: there is nothing to do with one.
+            selectable=False,
         )
-        self.basket_empty_state = TableEmptyStateOverlay(self.basket_table)
-        self.basket_table.setSelectionMode(QAbstractItemView.SelectionMode.NoSelection)
-        self.basket_state = self._state_label("basketState", "Position History status")
-        self.retry_baskets_button = self._retry_button("retryBasketsButton")
-        self.retry_baskets_button.clicked.connect(self.baskets_retry_requested)
+        self.baskets.retry_requested.connect(self.baskets_retry_requested)
+        self.fills = HistorySection(
+            filters=self.trade_filters,
+            columns=FILL_COLUMNS,
+            table_object_name="tradeFillsTable",
+            state_object_name="fillState",
+            retry_object_name="retryFillsButton",
+            accessible_name="Trade Fills",
+            empty_message=NO_TRADE_HISTORY,
+        )
+        self.fills.retry_requested.connect(self.fills_retry_requested)
 
-        self.fill_table = self._table("tradeFillsTable", "Trade Fills", FILL_COLUMNS)
-        self.fill_empty_state = TableEmptyStateOverlay(self.fill_table)
-        self.fill_state = self._state_label("fillState", "Trade Fills status")
-        self.retry_fills_button = self._retry_button("retryFillsButton")
-        self.retry_fills_button.clicked.connect(self.fills_retry_requested)
+        # The halves are reached by name all over the window and its tests,
+        # which read better than the section they now live on.
+        self.basket_table = self.baskets.table
+        self.basket_empty_state = self.baskets.empty_state
+        self.basket_state = self.baskets.state
+        self.retry_baskets_button = self.baskets.retry_button
+        self.fill_table = self.fills.table
+        self.fill_empty_state = self.fills.empty_state
+        self.fill_state = self.fills.state
+        self.retry_fills_button = self.fills.retry_button
+
         self.history_stack = QStackedWidget()
         self.history_stack.setObjectName("historyStack")
 
@@ -439,7 +457,7 @@ class TradeHistoryPage(QWidget):
             return
         if not self._has_basket_result:
             self._clear_basket_result()
-        self._set_basket_state("Loading trade history…")
+        self.baskets.show_state("Loading trade history…")
         self.retry_baskets_button.setVisible(False)
 
     @Slot(object)
@@ -449,11 +467,9 @@ class TradeHistoryPage(QWidget):
         self._has_basket_result = True
         self.retry_baskets_button.setVisible(False)
         if result.items:
-            self.basket_empty_state.clear_message()
-            self.basket_state.clear()
-            self.basket_state.setVisible(False)
+            self.baskets.clear_state()
         else:
-            self._set_basket_state(NO_BASKET_HISTORY)
+            self.baskets.show_state(NO_BASKET_HISTORY)
 
     @Slot(object)
     def show_baskets_empty(self, result: BasketHistoryResult) -> None:
@@ -462,10 +478,10 @@ class TradeHistoryPage(QWidget):
     @Slot(str)
     def show_baskets_unavailable(self, message: str) -> None:
         if self._has_basket_result:
-            self._set_basket_state(f"Stale · {message}")
+            self.baskets.show_state(f"Stale · {message}")
         else:
             self._clear_basket_result()
-            self._set_basket_state(message)
+            self.baskets.show_state(message)
         self.retry_baskets_button.setVisible(True)
 
     @Slot(str)
@@ -476,10 +492,7 @@ class TradeHistoryPage(QWidget):
     def show_trades(self, items: tuple[TradeFillHistoryItem, ...]) -> None:
         self._fills_loading = False
         fill_table(self.fill_table, FILL_COLUMNS, items)
-        self.fill_empty_state.clear_message()
-        self.fill_state.clear()
-        self.fill_state.setVisible(False)
-        self.retry_fills_button.setVisible(False)
+        self.fills.clear_state()
 
     @Slot(bool)
     def set_trades_loading(self, loading: bool) -> None:
@@ -487,23 +500,23 @@ class TradeHistoryPage(QWidget):
         self._refresh_filter_controls()
         if not loading:
             return
-        self._set_fill_state("Loading trade history…")
+        self.fills.show_state("Loading trade history…")
         self.retry_fills_button.setVisible(False)
 
     @Slot()
     def show_trades_empty(self) -> None:
         self._fills_loading = False
         self._clear_fill_result()
-        self._set_fill_state("No trade history")
+        self.fills.show_state(NO_TRADE_HISTORY)
 
     @Slot(str)
     def show_trades_unavailable(self, message: str) -> None:
         self._fills_loading = False
         if self.fill_table.rowCount() > 0:
-            self._set_fill_state(f"Stale · {message}")
+            self.fills.show_state(f"Stale · {message}")
         else:
             self._clear_fill_result()
-            self._set_fill_state(message)
+            self.fills.show_state(message)
         self.retry_fills_button.setVisible(True)
 
     def show_history_tab(self, tab: HistoryTab) -> None:
@@ -548,36 +561,13 @@ class TradeHistoryPage(QWidget):
         root.setContentsMargins(0, 0, 0, 0)
         root.setSpacing(14)
 
-        basket_page = QWidget()
-        basket_layout = QVBoxLayout(basket_page)
-        basket_layout.setContentsMargins(0, 0, 0, 0)
-        basket_layout.setSpacing(10)
-        basket_layout.addWidget(self.basket_filters)
-        basket_layout.addWidget(self.basket_table, 1)
-        basket_layout.addLayout(
-            self._state_row(self.basket_state, self.retry_baskets_button)
-        )
-
-        trade_page = QWidget()
-        trade_layout = QVBoxLayout(trade_page)
-        trade_layout.setContentsMargins(0, 0, 0, 0)
-        trade_layout.setSpacing(10)
-        trade_layout.addWidget(self.trade_filters)
-        trade_layout.addWidget(self.fill_table, 1)
-        trade_layout.addLayout(
-            self._state_row(self.fill_state, self.retry_fills_button)
-        )
-
-        self.history_stack.addWidget(basket_page)
-        self.history_stack.addWidget(trade_page)
+        self.history_stack.addWidget(self.baskets)
+        self.history_stack.addWidget(self.fills)
         root.addWidget(self.history_stack, 1)
 
         # Each half reads its own filter and then its own table.
-        for bar, table in (
-            (self.basket_filters, self.basket_table),
-            (self.trade_filters, self.fill_table),
-        ):
-            chain = (*bar.focus_chain(), table)
+        for section in (self.baskets, self.fills):
+            chain = section.focus_chain()
             for earlier, later in zip(chain, chain[1:], strict=False):
                 QWidget.setTabOrder(earlier, later)
 
@@ -585,11 +575,8 @@ class TradeHistoryPage(QWidget):
         outer.addWidget(self.scroll_area)
 
     def _clear_fill_result(self) -> None:
-        self._clear_table(self.fill_table)
-        self.fill_empty_state.clear_message()
-        self.fill_state.clear()
-        self.fill_state.setVisible(False)
-        self.retry_fills_button.setVisible(False)
+        self.fills.clear_rows()
+        self.fills.clear_state()
 
     def _refresh_filter_controls(self) -> None:
         """Each half's filter is held only while that half is reading."""
@@ -601,96 +588,6 @@ class TradeHistoryPage(QWidget):
             return self.basket_filters
         return self.trade_filters
 
-    def _set_basket_state(self, message: str) -> None:
-        """Nothing found reads inside the empty table; anything else reads below it."""
-        self.basket_state.setText(message)
-        if message == NO_BASKET_HISTORY:
-            self.basket_empty_state.show_message(message)
-            self.basket_state.setVisible(False)
-            return
-        self.basket_empty_state.clear_message()
-        self.basket_state.setVisible(True)
-
-    def _set_fill_state(self, message: str) -> None:
-        self.fill_state.setText(message)
-        if message == "No trade history":
-            self.fill_empty_state.show_message(message)
-            self.fill_state.setVisible(False)
-            return
-        self.fill_empty_state.clear_message()
-        self.fill_state.setVisible(True)
-
-    @staticmethod
-    def _table(
-        object_name: str,
-        accessible_name: str,
-        columns: tuple[Column[Any], ...],
-    ) -> QTableWidget:
-        table = QTableWidget(0, len(columns))
-        table.setObjectName(object_name)
-        table.setAccessibleName(accessible_name)
-        table.setHorizontalHeaderLabels(list(headers(columns)))
-        # Headings sit centred over every column, whichever way the values
-        # under them run. The cells keep their own alignment, so figures
-        # still line up on one right edge to be read down.
-        for index in range(len(columns)):
-            header_item = table.horizontalHeaderItem(index)
-            if header_item is not None:
-                header_item.setTextAlignment(CENTER)
-        table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
-        table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
-        table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
-        table.setAlternatingRowColors(True)
-        table.setSortingEnabled(False)
-        table.setWordWrap(False)
-        table.verticalHeader().setVisible(False)
-        # Deliberately not ResizeToContents: that mode re-measures every row
-        # of a column on every cell written, which froze the window for
-        # seconds on each refresh. `fill_table` measures once instead.
-        table.horizontalHeader().setSectionResizeMode(
-            QHeaderView.ResizeMode.Interactive
-        )
-        # The last column here holds figures, right aligned. Stretching it
-        # would hand it all the room left over and push those figures to the
-        # far edge, away from the Total they are read against. The spare
-        # width is better left empty beside the table.
-        table.horizontalHeader().setStretchLastSection(False)
-        return table
-
-    @staticmethod
-    def _state_label(object_name: str, accessible_name: str) -> QLabel:
-        label = QLabel()
-        label.setObjectName(object_name)
-        label.setAccessibleName(accessible_name)
-        label.setProperty("stateMessage", True)
-        label.setWordWrap(True)
-        label.setVisible(False)
-        return label
-
-    @staticmethod
-    def _retry_button(object_name: str) -> QPushButton:
-        button = QPushButton("Try Again")
-        button.setObjectName(object_name)
-        button.setProperty("retryButton", True)
-        button.setVisible(False)
-        return button
-
-    @staticmethod
-    def _state_row(message: QLabel, retry: QPushButton) -> QHBoxLayout:
-        row = QHBoxLayout()
-        row.addWidget(message)
-        row.addStretch()
-        row.addWidget(retry)
-        return row
-
-    @staticmethod
-    def _clear_table(table: QTableWidget) -> None:
-        blocker = QSignalBlocker(table)
-        table.clearSelection()
-        table.setCurrentCell(-1, -1)
-        table.setRowCount(0)
-        del blocker
-
     def _clear_basket_result(self) -> None:
         self._has_basket_result = False
-        self._clear_table(self.basket_table)
+        self.baskets.clear_rows()
