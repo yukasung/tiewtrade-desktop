@@ -39,8 +39,7 @@ make run
 ```bash
 PYTHONPATH=src .venv/bin/python -m tiewtrade.paper_replay_main \
   tests/fixtures/btcusdt_5m_tracer.csv \
-  --available-capital 1000 \
-  --trading-capital-ratio 0.6 \
+  --capital-per-entry 250 \
   --max-entries 4
 ```
 

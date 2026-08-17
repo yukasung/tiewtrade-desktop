@@ -22,9 +22,8 @@ def test_configuration_controls_have_explicit_accessible_names(qtbot: QtBot) -> 
     assert widget.market_type.accessibleName() == "Market Type"
     assert widget.symbol.accessibleName() == "Pair"
     assert widget.timeframe.accessibleName() == "Timeframe"
-    assert widget.available_capital.accessibleName() == "Available Capital (USDT)"
+    assert widget.capital_per_entry.accessibleName() == "Amount (USDT)"
     assert widget.max_entries.accessibleName() == "Maximum Entries"
-    assert widget.spot_ratio.accessibleName() == "Spot Trading Capital (%)"
     assert widget.leverage.accessibleName() == "Futures Leverage"
     assert widget.create_button.accessibleName() == "Start Paper Bot"
 
@@ -38,9 +37,8 @@ def test_default_form_builds_paper_spot_values(qtbot: QtBot) -> None:
     assert values.market_type == "spot"
     assert values.symbol == "BTCUSDT"
     assert values.timeframe == "5m"
-    assert values.available_capital == ""
+    assert values.capital_per_entry == ""
     assert values.max_entries == "10"
-    assert values.spot_trading_capital_percent == "80"
     assert values.futures_leverage is None
     assert values.preset_version == "rsi-step-grid-v1"
     assert widget.trade_mode_label.text() == "Paper"
@@ -83,7 +81,7 @@ def test_selected_symbol_is_included_in_the_start_request(qtbot: QtBot) -> None:
 
 
 def test_every_setting_is_on_the_form_from_the_start(qtbot: QtBot) -> None:
-    """Nothing is folded away — only the other market's row is put aside."""
+    """Nothing is folded away — only the Futures row waits its turn."""
     widget = SessionSetupWidget()
     qtbot.addWidget(widget)
     widget.show()
@@ -93,23 +91,21 @@ def test_every_setting_is_on_the_form_from_the_start(qtbot: QtBot) -> None:
     assert widget.market_type.isVisible()
     assert widget.symbol.isVisible()
     assert widget.timeframe.isVisible()
-    assert widget.available_capital.isVisible()
+    assert widget.capital_per_entry.isVisible()
     assert widget.max_entries.isVisible()
-    assert widget.spot_ratio.isVisible()
     assert widget.leverage.isVisible() is False
+    # Spot asks for no number of its own, so there is no row to hide for it.
+    assert not hasattr(widget, "spot_ratio")
+    assert not hasattr(widget, "spot_row")
 
 
-def test_futures_selection_swaps_the_leverage_row_in_for_the_spot_ratio(
-    qtbot: QtBot,
-) -> None:
+def test_futures_selection_brings_the_leverage_row_in(qtbot: QtBot) -> None:
     widget = SessionSetupWidget()
     qtbot.addWidget(widget)
 
     widget.market_type.setCurrentIndex(widget.market_type.findData("futures"))
 
-    assert widget.spot_row.isHidden()
     assert widget.futures_row.isHidden() is False
-    assert widget.values().spot_trading_capital_percent is None
     assert widget.values().futures_leverage == "1"
 
 
@@ -145,7 +141,7 @@ def test_switching_back_to_spot_removes_futures_input_from_request(
 
     assert values.market_type == "spot"
     assert values.futures_leverage is None
-    assert values.spot_trading_capital_percent == widget.spot_ratio.text()
+    assert widget.futures_row.isHidden()
 
 
 def test_timeframe_field_offers_every_supported_value(qtbot: QtBot) -> None:
@@ -162,7 +158,7 @@ def test_timeframe_field_offers_every_supported_value(qtbot: QtBot) -> None:
 def test_submit_emits_current_values_once(qtbot: QtBot) -> None:
     widget = SessionSetupWidget()
     qtbot.addWidget(widget)
-    widget.available_capital.setText("200000")
+    widget.capital_per_entry.setText("200000")
 
     with qtbot.waitSignal(widget.create_requested) as signal:
         click(widget.create_button)
@@ -188,11 +184,9 @@ def test_field_error_is_rendered_next_to_its_input(qtbot: QtBot) -> None:
     widget = SessionSetupWidget()
     qtbot.addWidget(widget)
 
-    widget.show_field_error("available_capital", "Available Capital must be positive")
+    widget.show_field_error("capital_per_entry", "Amount must be positive")
 
-    assert widget.available_capital_error.text() == (
-        "Available Capital must be positive"
-    )
+    assert widget.capital_per_entry_error.text() == ("Amount must be positive")
 
 
 @pytest.mark.parametrize(

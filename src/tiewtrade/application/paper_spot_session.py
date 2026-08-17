@@ -18,6 +18,7 @@ from tiewtrade.market_data.completed_candle_stream import (
     CompletedCandleStream,
 )
 from tiewtrade.market_data.config import MarketDataConfig
+from tiewtrade.market_data.warm_up import require_warm_up_candle
 from tiewtrade.strategies.entry_intent import EntryIntent
 from tiewtrade.strategies.indicators import IndicatorSnapshot, WilderIndicators
 from tiewtrade.strategies.protocols import EntryStrategy, StrategyPreset
@@ -321,11 +322,7 @@ class PaperSpotSession:
         if self._state is not PaperSpotSessionState.ACTIVE:
             raise PaperSpotSessionError("Paper Spot session is not active")
         for candle in candles:
-            if (
-                self._candles.accept(candle, received_at)
-                is not CandleAcceptance.ACCEPTED
-            ):
-                raise ValueError("warm-up requires new completed candles")
+            require_warm_up_candle(self._candles, candle, received_at)
             self._indicators.update(candle)
 
     def _new_transition(self) -> _PaperSpotTransition:

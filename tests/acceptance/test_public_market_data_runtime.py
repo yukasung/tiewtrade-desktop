@@ -31,7 +31,6 @@ from tiewtrade.market_data.source_errors import (
 from tiewtrade.strategies.rsi_step_grid.preset import RsiStepGridPreset
 from tiewtrade.trading.entry_policy import EntryPolicy
 from tiewtrade.trading.session_config import MarketType, SessionConfig, TradeMode
-from tiewtrade.trading.spot_policy import SpotTradingPolicy
 from tiewtrade.trading.symbol_rules import SymbolRules
 
 _NOW = datetime(2026, 1, 1, 1, 20, tzinfo=UTC)
@@ -295,9 +294,8 @@ def configured_paper_spot_session(
             preset_version=preset.version,
             market_type=MarketType.SPOT,
             trade_mode=TradeMode.PAPER,
-            available_capital=Decimal("1000"),
+            capital_per_entry=Decimal("1000"),
             entry_policy=EntryPolicy(max_entries=4),
-            spot_policy=SpotTradingPolicy(trading_capital_ratio=Decimal("0.6")),
         ),
         market_data,
         SymbolRules(

@@ -6,6 +6,7 @@ from uuid import UUID, uuid4
 
 from tiewtrade.application.paper_symbols import validate_paper_symbol
 from tiewtrade.market_data.config import MarketDataConfig
+from tiewtrade.strategies.protocols import StrategyPreset
 from tiewtrade.strategies.registry import (
     StrategyDefinition,
     strategy_definition_for,
@@ -14,7 +15,6 @@ from tiewtrade.strategies.registry import (
 from tiewtrade.trading.entry_policy import EntryPolicy
 from tiewtrade.trading.futures_policy import FuturesTradingPolicy
 from tiewtrade.trading.session_config import MarketType, SessionConfig, TradeMode
-from tiewtrade.trading.spot_policy import SpotTradingPolicy
 
 
 @dataclass(frozen=True, slots=True)
@@ -42,9 +42,8 @@ class PaperSessionSetupValues:
     market_type: str
     symbol: str
     timeframe: str
-    available_capital: str
+    capital_per_entry: str
     max_entries: str
-    spot_trading_capital_percent: str | None
     futures_leverage: str | None
     preset_version: str = "rsi-step-grid-v1"
 
@@ -75,19 +74,13 @@ def setup_values_of(session: ConfiguredPaperSession) -> PaperSessionSetupValues:
     formatter would let a trailing zero read as an edit nobody made.
     """
     config = session.config
-    spot_policy = config.spot_policy
     futures_policy = config.futures_policy
     return PaperSessionSetupValues(
         market_type=config.market_type.value,
         symbol=session.market_data.symbol,
         timeframe=session.market_data.timeframe,
-        available_capital=format(config.available_capital, "f"),
+        capital_per_entry=format(config.capital_per_entry, "f"),
         max_entries=str(config.entry_policy.max_entries),
-        spot_trading_capital_percent=(
-            None
-            if spot_policy is None
-            else format(spot_policy.trading_capital_ratio * Decimal("100"), "f")
-        ),
         futures_leverage=(
             None if futures_policy is None else str(futures_policy.leverage)
         ),
@@ -127,109 +120,97 @@ class CreatePaperSession:
         self._clock = clock
 
     def execute(self, values: PaperSessionSetupValues) -> PaperSessionCreateOutcome:
-        validate_paper_session(values)
-        market_type = _market_type(values.market_type)
-        available_capital = _decimal(values.available_capital, "available_capital")
-        max_entries = _integer(values.max_entries, "max_entries")
-
-        spot_policy: SpotTradingPolicy | None = None
-        futures_policy: FuturesTradingPolicy | None = None
-        if market_type is MarketType.SPOT:
-            spot_policy = spot_trading_policy_from_percent(
-                _required(
-                    values.spot_trading_capital_percent,
-                    "spot_trading_capital_percent",
-                )
-            )
-        else:
-            leverage = _integer(
-                _required(values.futures_leverage, "futures_leverage"),
-                "futures_leverage",
-            )
-            futures_policy = _validate_field(
-                "futures_leverage", lambda: FuturesTradingPolicy.v1(leverage)
-            )
-
-        preset = _validate_field(
-            "preset_version",
-            lambda: _strategy_definition_for_market_type(
-                values.preset_version, market_type
-            ).build_preset(),
-        )
-        entry_policy = _validate_field("max_entries", lambda: EntryPolicy(max_entries))
-        market_data = _validate_field(
-            "timeframe",
-            lambda: MarketDataConfig(
-                symbol=values.symbol,
-                timeframe=values.timeframe,
-            ),
-        )
+        setup = _parse(values)
         config = _validate_field(
-            "available_capital",
+            "capital_per_entry",
             lambda: SessionConfig(
                 session_id=self._session_ids(),
-                preset_version=preset.version,
-                market_type=market_type,
+                preset_version=setup.preset.version,
+                market_type=setup.market_type,
                 trade_mode=TradeMode.PAPER,
-                available_capital=available_capital,
-                entry_policy=entry_policy,
-                spot_policy=spot_policy,
-                futures_policy=futures_policy,
+                capital_per_entry=setup.capital_per_entry,
+                entry_policy=setup.entry_policy,
+                futures_policy=setup.futures_policy,
             ),
         )
         session = ConfiguredPaperSession(
             config=config,
-            market_data=market_data,
+            market_data=setup.market_data,
             created_at_utc=self._clock(),
         )
         return self._create_active(session)
 
 
 def validate_paper_session(values: PaperSessionSetupValues) -> None:
+    """Whether a form could start a Session, asked without starting one.
+
+    The form asks this on its own so it can mark the field at fault before a
+    Session is written. It is the same reading `CreatePaperSession` does, not
+    a second one kept in step by hand: a rule added here is a rule the use
+    case enforces, and one it enforces cannot pass this.
+    """
+    _parse(values)
+
+
+@dataclass(frozen=True, slots=True)
+class _ParsedSetup:
+    """A form read into the values a Session is built from."""
+
+    market_type: MarketType
+    capital_per_entry: Decimal
+    entry_policy: EntryPolicy
+    futures_policy: FuturesTradingPolicy | None
+    market_data: MarketDataConfig
+    preset: StrategyPreset
+
+
+def _parse(values: PaperSessionSetupValues) -> _ParsedSetup:
+    """Read a form, reporting the first field that cannot be read.
+
+    The order fields are read in is the order they are reported in, so a form
+    with more than one thing wrong marks the same field every time.
+    """
     market_type = _market_type(values.market_type)
-    available_capital = _decimal(values.available_capital, "available_capital")
-    _integer(values.max_entries, "max_entries")
+    capital_per_entry = _decimal(values.capital_per_entry, "capital_per_entry")
+    max_entries = _integer(values.max_entries, "max_entries")
     try:
         validate_paper_symbol(values.symbol)
     except ValueError as error:
         raise PaperSessionValidationError("symbol", str(error)) from error
-    if available_capital <= 0:
+    if capital_per_entry <= 0:
         raise PaperSessionValidationError(
-            "available_capital", "Available Capital must be positive"
+            "capital_per_entry", "Amount must be positive"
         )
-    if market_type is MarketType.SPOT:
-        spot_trading_policy_from_percent(
-            _required(
-                values.spot_trading_capital_percent,
-                "spot_trading_capital_percent",
-            )
-        )
-    else:
+
+    futures_policy: FuturesTradingPolicy | None = None
+    if market_type is MarketType.FUTURES:
         leverage = _integer(
             _required(values.futures_leverage, "futures_leverage"),
             "futures_leverage",
         )
-        _validate_field("futures_leverage", lambda: FuturesTradingPolicy.v1(leverage))
-    _validate_field(
-        "max_entries",
-        lambda: EntryPolicy(_integer(values.max_entries, "max_entries")),
-    )
-    _validate_field(
+        futures_policy = _validate_field(
+            "futures_leverage", lambda: FuturesTradingPolicy.v1(leverage)
+        )
+
+    entry_policy = _validate_field("max_entries", lambda: EntryPolicy(max_entries))
+    market_data = _validate_field(
         "timeframe",
         lambda: MarketDataConfig(symbol=values.symbol, timeframe=values.timeframe),
     )
-    _validate_field(
+    preset = _validate_field(
         "preset_version",
         lambda: _strategy_definition_for_market_type(
             values.preset_version, market_type
-        ),
+        ).build_preset(),
     )
-
-
-def spot_trading_policy_from_percent(value: str) -> SpotTradingPolicy:
-    field = "spot_trading_capital_percent"
-    ratio = _decimal(value, field) / Decimal("100")
-    return _validate_field(field, lambda: SpotTradingPolicy(ratio))
+    return _ParsedSetup(
+        market_type=market_type,
+        capital_per_entry=capital_per_entry,
+        entry_policy=entry_policy,
+        futures_policy=futures_policy,
+        market_data=market_data,
+        preset=preset,
+    )
 
 
 def _strategy_definition_for_market_type(

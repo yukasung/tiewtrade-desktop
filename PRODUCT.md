@@ -122,10 +122,9 @@ Lifecycle:
 
 ### 7.1 Spot
 
-- ผู้ใช้กำหนด `trading_capital_ratio` ก่อนเริ่ม Session โดยค่าเริ่มต้นเท่ากับ 80%
-- Spot Reserve Ratio คำนวณจาก `1 - trading_capital_ratio`
-- Quote notional ต่อ Entry: Trading Capital หาร `max_entries`
-- Reserve ไม่ถูกนำไปคำนวณขนาด Entry
+- Spot ใช้ Available Capital ทั้งจำนวนเป็น Trading Capital ไม่มี Reserve และไม่มี
+  สัดส่วนให้ผู้ใช้กำหนด
+- Quote notional ต่อ Entry: Available Capital หาร `max_entries`
 
 ### 7.2 Futures
 

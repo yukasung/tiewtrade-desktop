@@ -8,7 +8,6 @@ from tiewtrade.replay.paper_spot import ReplayResult, run_paper_spot_replay
 from tiewtrade.strategies.rsi_step_grid.preset import RsiStepGridPreset
 from tiewtrade.trading.entry_policy import EntryPolicy
 from tiewtrade.trading.session_config import MarketType, SessionConfig, TradeMode
-from tiewtrade.trading.spot_policy import SpotTradingPolicy
 from tiewtrade.trading.symbol_rules import SymbolRules
 
 FIXTURE_PATH = Path(__file__).parents[1] / "fixtures" / "btcusdt_5m_tracer.csv"
@@ -22,10 +21,10 @@ def test_replaying_the_tracer_fixture_is_deterministic() -> None:
     assert first.accepted_candles == 40
     assert first.current_entries == 0
     assert first.closed_baskets == 1
-    assert first.realized_pnl == Decimal("14.202")
+    assert first.realized_pnl == Decimal("23.679")
     assert first.to_json() == (
         '{"accepted_candles":40,"closed_baskets":1,'
-        '"current_entries":0,"realized_pnl":"14.202"}'
+        '"current_entries":0,"realized_pnl":"23.679"}'
     )
 
 
@@ -38,9 +37,8 @@ def replay_fixture() -> ReplayResult:
             preset_version="rsi-step-grid-v1",
             market_type=MarketType.SPOT,
             trade_mode=TradeMode.PAPER,
-            available_capital=Decimal("1000"),
+            capital_per_entry=Decimal("250"),
             entry_policy=EntryPolicy(max_entries=4),
-            spot_policy=SpotTradingPolicy(trading_capital_ratio=Decimal("0.6")),
         ),
         market_data=market_data,
         symbol_rules=SymbolRules(

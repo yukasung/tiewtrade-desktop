@@ -83,7 +83,7 @@ def trade_history_filter(values: TradeHistoryFilterValues) -> TradeHistoryFilter
 
 
 BASKET_COLUMNS: tuple[Column[BasketResult], ...] = (
-    Column("Date", LEFT, lambda basket: local_text(basket.opened_at_utc)),
+    Column("Date", LEFT, lambda basket: display_timestamp(basket.opened_at_utc)),
     Column("Market", CENTER, lambda basket: display_enum(basket.market_type.value)),
     Column("Pair", LEFT, lambda basket: pair_text(basket.symbol)),
     Column("Timeframe", CENTER, lambda basket: basket.timeframe),
@@ -94,7 +94,7 @@ BASKET_COLUMNS: tuple[Column[BasketResult], ...] = (
     Column("Entries", CENTER, lambda basket: str(basket.entry_count)),
     # "Total" is what an exchange calls price × quantity, and what the Fills
     # table beside this one already calls it. One word for one idea.
-    Column("Total", RIGHT, lambda basket: usdt_text(basket.invested_notional)),
+    Column("Total", RIGHT, lambda basket: money_text(basket.invested_notional)),
     Column(
         "Profit / Loss",
         RIGHT,
@@ -106,7 +106,7 @@ BASKET_COLUMNS: tuple[Column[BasketResult], ...] = (
 )
 
 FILL_COLUMNS: tuple[Column[TradeFillHistoryItem], ...] = (
-    Column("Date", LEFT, lambda item: local_text(item.fill.filled_at_utc)),
+    Column("Date", LEFT, lambda item: display_timestamp(item.fill.filled_at_utc)),
     Column("Pair", LEFT, lambda item: pair_text(item.symbol)),
     Column(
         "Side",
@@ -116,7 +116,7 @@ FILL_COLUMNS: tuple[Column[TradeFillHistoryItem], ...] = (
     ),
     Column("Price", RIGHT, lambda item: price_text(item.fill.price)),
     Column("Quantity", RIGHT, lambda item: decimal_text(item.fill.quantity)),
-    Column("Total", RIGHT, lambda item: usdt_text(item.fill.notional)),
+    Column("Total", RIGHT, lambda item: money_text(item.fill.notional)),
     Column(
         "Profit / Loss",
         RIGHT,
@@ -144,14 +144,6 @@ def _utc_start(value: date | None) -> datetime | None:
         tzinfo=DISPLAY_TIMEZONE,
     )
     return local.astimezone(UTC)
-
-
-def local_text(value: datetime) -> str:
-    return display_timestamp(value)
-
-
-def usdt_text(value: Decimal) -> str:
-    return money_text(value)
 
 
 def decimal_text(value: Decimal) -> str:

@@ -20,7 +20,6 @@ from tiewtrade.strategies.rsi_step_grid.preset import RsiStepGridPreset
 from tiewtrade.trading.entry_policy import EntryPolicy
 from tiewtrade.trading.futures_policy import FuturesTradingPolicy
 from tiewtrade.trading.session_config import MarketType, SessionConfig, TradeMode
-from tiewtrade.trading.spot_policy import SpotTradingPolicy
 
 
 class FakePublicCandleSource:
@@ -128,13 +127,8 @@ def session_config(market_type: MarketType) -> SessionConfig:
         preset_version="rsi-step-grid-v1",
         market_type=market_type,
         trade_mode=TradeMode.PAPER,
-        available_capital=Decimal("1000"),
+        capital_per_entry=Decimal("1000"),
         entry_policy=EntryPolicy(max_entries=4),
-        spot_policy=(
-            SpotTradingPolicy(trading_capital_ratio=Decimal("0.6"))
-            if market_type is MarketType.SPOT
-            else None
-        ),
         futures_policy=(
             FuturesTradingPolicy.v1(leverage=3)
             if market_type is MarketType.FUTURES

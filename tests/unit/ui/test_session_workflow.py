@@ -38,9 +38,8 @@ def _spot_values() -> PaperSessionSetupValues:
         market_type="spot",
         symbol="BTCUSDT",
         timeframe="5m",
-        available_capital="200000",
+        capital_per_entry="200000",
         max_entries="10",
-        spot_trading_capital_percent="80",
         futures_leverage=None,
     )
 
@@ -223,7 +222,7 @@ def test_create_emits_durable_session_and_can_run_again_after_finish(
 def test_validation_failure_emits_field_error_and_setup(qtbot: QtBot) -> None:
     def reject(values: PaperSessionSetupValues) -> PaperSessionCreateOutcome:
         raise PaperSessionValidationError(
-            "available_capital", "Available Capital must be positive"
+            "capital_per_entry", "Amount must be positive"
         )
 
     workflow, thread_pool = _workflow(create_session=reject, load_active=lambda: None)
@@ -241,7 +240,7 @@ def test_validation_failure_emits_field_error_and_setup(qtbot: QtBot) -> None:
     workflow.create(_spot_values())
 
     qtbot.waitUntil(
-        lambda: errors == [("available_capital", "Available Capital must be positive")]
+        lambda: errors == [("capital_per_entry", "Amount must be positive")]
     )
     qtbot.waitUntil(
         lambda: events == ["busy:True", "validation", "setup", "busy:False"]

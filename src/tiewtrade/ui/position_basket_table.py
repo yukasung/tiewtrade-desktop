@@ -77,24 +77,19 @@ def _pnl_colour(row: _Row) -> str | None:
     return sign_colour(row.entry.unrealized_pnl)
 
 
-def _average_entry_price(row: _Row) -> str:
-    """What the Basket paid on average, restated on every Entry that moved it.
-
-    Read in the same format as the price each row paid, since the pair is only
-    worth printing to be compared.
-    """
-    return price_text(row.basket.average_entry_price)
-
-
 class PositionBasketTable(QWidget):
     """Every Entry of the open Basket, one row each.
 
     A trader enters the same Basket more than once, so an averaged single row
     hides the prices actually paid. The rows are the Entries, each with the
-    price it paid and the target it is sold at. Facts the Basket holds for all
-    of them — its average and its lifecycle — are restated on every row so a
-    row can be read on its own; the market it trades, which no row can carry,
-    frames the table instead.
+    price it paid and the target it is sold at.
+
+    Every column reads at the same level — the Entry's own. The Basket's
+    average used to be restated on every row, which read as a third price
+    beside the two the row paid and aimed at, and invited the target to be
+    read as measured from it. It is measured from the Entry's own price, so
+    the average is no longer printed here. Only the lifecycle, one gate for
+    every Entry, is still the Basket's.
     """
 
     # Measured numbers hang on the right so their digits line up and a minus
@@ -105,8 +100,6 @@ class PositionBasketTable(QWidget):
         Column("Entry Price", RIGHT, _price),
         # Beside the price paid, so the distance left to run reads at a glance.
         Column("Take Profit", RIGHT, _take_profit_price),
-        # The Basket's own price, following the two each row paid and aims at.
-        Column("Average", RIGHT, _average_entry_price),
         Column("Quantity", RIGHT, _quantity),
         Column("Total", RIGHT, _notional),
         Column("Unrealized P/L", RIGHT, _pnl, _pnl_colour),

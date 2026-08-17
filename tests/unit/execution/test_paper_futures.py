@@ -13,7 +13,6 @@ from tiewtrade.trading.entry_policy import EntryPolicy
 from tiewtrade.trading.futures_policy import FuturesTradingPolicy
 from tiewtrade.trading.position import PositionSide
 from tiewtrade.trading.session_config import MarketType, SessionConfig, TradeMode
-from tiewtrade.trading.spot_policy import SpotTradingPolicy
 from tiewtrade.trading.symbol_rules import SymbolRules
 
 
@@ -303,9 +302,8 @@ def test_executor_rejects_non_paper_or_non_futures_configuration() -> None:
         preset_version=session.preset_version,
         market_type=MarketType.SPOT,
         trade_mode=TradeMode.PAPER,
-        available_capital=session.available_capital,
+        capital_per_entry=session.capital_per_entry,
         entry_policy=session.entry_policy,
-        spot_policy=SpotTradingPolicy(trading_capital_ratio=Decimal("0.8")),
     )
     with pytest.raises(ValueError, match="Paper Futures"):
         PaperFuturesExecutor(spot_session, rules)
@@ -330,9 +328,8 @@ def futures_session(*, leverage: int = 1) -> SessionConfig:
         preset_version="rsi-step-grid-v1",
         market_type=MarketType.FUTURES,
         trade_mode=TradeMode.PAPER,
-        available_capital=Decimal("40000"),
+        capital_per_entry=Decimal("10000.0"),
         entry_policy=EntryPolicy(max_entries=2),
-        spot_policy=None,
         futures_policy=FuturesTradingPolicy.v1(leverage=leverage),
     )
 

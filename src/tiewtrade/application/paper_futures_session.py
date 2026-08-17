@@ -17,6 +17,7 @@ from tiewtrade.market_data.completed_candle_stream import (
     CompletedCandleStream,
 )
 from tiewtrade.market_data.config import MarketDataConfig
+from tiewtrade.market_data.warm_up import require_warm_up_candle
 from tiewtrade.strategies.entry_intent import EntryIntent
 from tiewtrade.strategies.indicators import IndicatorSnapshot, WilderIndicators
 from tiewtrade.strategies.protocols import StrategyPreset
@@ -117,10 +118,9 @@ class PaperFuturesSession:
         self._candles = CompletedCandleStream(market_data)
         self._executor = PaperFuturesExecutor(session, symbol_rules)
         self._margin = FuturesMarginModel(futures_policy)
-        self._capital_plan = FuturesCapitalPlan.from_available(
-            session.available_capital,
+        self._capital_plan = FuturesCapitalPlan.from_capital_per_entry(
+            session.capital_per_entry,
             futures_policy,
-            session.entry_policy,
         )
         self._indicators = WilderIndicators(preset)
         self._strategy = strategy_definition_for(preset.version).build_strategy(
@@ -132,8 +132,8 @@ class PaperFuturesSession:
         self._basket: Basket | None = None
         self._pending_intent: EntryIntent | None = None
         self._liquidation_price: Decimal | None = None
-        self._wallet_balance = session.available_capital
-        self._account_equity = session.available_capital
+        self._wallet_balance = session.session_capital
+        self._account_equity = session.session_capital
         self._latest_mark_price: Decimal | None = None
         self._closed_basket_count = 0
         self._terminal_exit_fill: PaperFuturesExitFill | None = None
@@ -226,11 +226,7 @@ class PaperFuturesSession:
         if self._state is not PaperFuturesSessionState.ACTIVE:
             raise PaperFuturesSessionError("Paper Futures session is not active")
         for candle in candles:
-            if (
-                self._candles.accept(candle, received_at)
-                is not CandleAcceptance.ACCEPTED
-            ):
-                raise ValueError("warm-up requires new completed candles")
+            require_warm_up_candle(self._candles, candle, received_at)
             self._indicators.update(candle)
 
     def _fill_pending_intent(self, candle: Candle) -> PaperFuturesEntryFill | None:

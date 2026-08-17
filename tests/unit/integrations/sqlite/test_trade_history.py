@@ -448,7 +448,7 @@ def test_migration_creates_versioned_history_schema_and_indexes(tmp_path: Path) 
             for row in connection.execute("PRAGMA table_info(trade_fills)")
         }
 
-    assert version == 10
+    assert version == 12
     assert "paper_runtime_lifecycle" in table_names
     assert {"basket_results", "trade_fills"} <= table_names
     assert {
@@ -544,7 +544,7 @@ def test_migration_from_legacy_schema_adds_session_fill_history_index(
 def test_migration_rejects_future_schema_version(tmp_path: Path) -> None:
     database = SQLiteDatabase(tmp_path / "history.sqlite3")
     with database.connect() as connection:
-        connection.execute("PRAGMA user_version = 11")
+        connection.execute("PRAGMA user_version = 13")
 
     with pytest.raises(ValueError, match="newer than supported"):
         database.migrate()
@@ -616,7 +616,7 @@ def test_migration_from_v1_preserves_spot_basket_with_null_leverage(
             "SELECT leverage FROM basket_results WHERE basket_id = ?",
             (str(legacy.basket_id),),
         ).fetchone()[0]
-    assert version == 10
+    assert version == 12
     assert leverage is None
     assert SQLiteTradeHistory(database).get_basket(legacy.basket_id) == legacy
 
@@ -666,7 +666,7 @@ def test_migration_from_v6_keeps_fills_and_leaves_their_atr_unknown(
 
     with database.connect() as connection:
         version = connection.execute("PRAGMA user_version").fetchone()[0]
-    assert version == 10
+    assert version == 12
     assert history.list_fills(basket.basket_id) == (legacy_fill,)
     assert history.list_fills(basket.basket_id)[0].entry_atr is None
 
@@ -819,7 +819,7 @@ def test_migration_to_v9_keeps_what_each_basket_realised(tmp_path: Path) -> None
         }
         broken = connection.execute("PRAGMA foreign_key_check").fetchall()
 
-    assert version == 10
+    assert version == 12
     # The stored text is carried across untouched, not recomputed.
     assert realized == "20"
     assert not columns & {"gross_realized_pnl", "trading_fees", "funding_fee"}
@@ -833,7 +833,7 @@ def test_migration_to_v9_keeps_what_each_basket_realised(tmp_path: Path) -> None
     database.migrate()
 
     with database.connect() as connection:
-        assert connection.execute("PRAGMA user_version").fetchone()[0] == 10
+        assert connection.execute("PRAGMA user_version").fetchone()[0] == 12
 
 
 def _create_v8_schema(connection: sqlite3.Connection) -> None:
@@ -927,7 +927,7 @@ def test_migration_to_v10_takes_slippage_out_of_a_session(tmp_path: Path) -> Non
         sessions = connection.execute("SELECT COUNT(*) FROM bot_sessions").fetchone()[0]
         broken = connection.execute("PRAGMA foreign_key_check").fetchall()
 
-    assert version == 10
+    assert version == 12
     assert "slippage_bps" not in columns
     # The Session itself survives; only what it charged is gone.
     assert sessions == 1
@@ -937,4 +937,4 @@ def test_migration_to_v10_takes_slippage_out_of_a_session(tmp_path: Path) -> Non
     database.migrate()
 
     with database.connect() as connection:
-        assert connection.execute("PRAGMA user_version").fetchone()[0] == 10
+        assert connection.execute("PRAGMA user_version").fetchone()[0] == 12

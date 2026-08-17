@@ -49,17 +49,17 @@ Paper และ Live ใช้ business rules ชุดเดียวกัน�
 - `market_type` — `SPOT` หรือ `FUTURES`
 - `trade_mode` — `PAPER` หรือ `LIVE`
 - `available_capital` และ `preset_version`
-- `trading_capital_ratio` และ `max_entries` — เลือกจาก form ก่อนเริ่ม Session
+- `max_entries` — เลือกจาก form ก่อนเริ่ม Session
 
 ระบบใช้ `UTC` เป็น timezone กลางเสมอ และไม่เปิดให้เปลี่ยน timezone ใน session configuration
 
-ค่าจาก form ต้องผ่าน validation แล้วสร้างเป็น immutable Session policy ห้ามเปลี่ยนระหว่าง Session โดย `trading_capital_ratio` ต้องมากกว่า 0 และน้อยกว่า 1 ส่วน `max_entries` ต้องเป็นเลขคู่ตั้งแต่ 2–20
+ค่าจาก form ต้องผ่าน validation แล้วสร้างเป็น immutable Session policy ห้ามเปลี่ยนระหว่าง Session โดย `max_entries` ต้องเป็นเลขคู่ตั้งแต่ 2–20
 
 RSI parameters, take-profit rule, Entry Pair และ Cooldown Month ยังคงอยู่ใน Strategy Preset หรือ product policy และไม่ใช่ค่าที่ผู้ใช้เปลี่ยนระหว่าง Session
 
 กฎเฉพาะตลาดต้องถูกตรวจสอบที่ boundary ก่อนเริ่ม session:
 
-- Spot ใช้ Spot capital policy
+- Spot ไม่มี capital policy ของตัวเอง: เทรด Available Capital ทั้งจำนวน แบ่งเท่ากันตาม `max_entries`
 - Futures ใช้ `FuturesTradingPolicy` ที่กำหนด One-way Mode, Cross Margin, leverage และ collateral buffer
 - Paper และ Live ใช้ business/risk policy เดียวกัน แต่ใช้ execution adapter แยกกัน
 

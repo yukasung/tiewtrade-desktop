@@ -9,6 +9,10 @@ from tiewtrade.application.paper_session_setup import (
     PaperSessionUnavailableError,
 )
 from tiewtrade.application.paper_symbols import validate_paper_symbol
+from tiewtrade.integrations.sqlite.connection_cleanup import (
+    close_if_open,
+    rollback_if_open,
+)
 from tiewtrade.integrations.sqlite.database import SQLiteDatabase
 from tiewtrade.market_data.config import MarketDataConfig
 from tiewtrade.strategies.registry import strategy_definition_for
@@ -19,17 +23,16 @@ from tiewtrade.trading.futures_policy import (
     PositionMode,
 )
 from tiewtrade.trading.session_config import MarketType, SessionConfig, TradeMode
-from tiewtrade.trading.spot_policy import SpotTradingPolicy
 
 _INSERT_SQL = """
 INSERT INTO bot_sessions (
     session_id, trade_mode, market_type, symbol, timeframe, preset_version,
-    available_capital, max_entries,
-    spot_trading_capital_ratio, futures_policy_version, futures_leverage,
+    capital_per_entry, max_entries,
+    futures_policy_version, futures_leverage,
     futures_trading_capital_ratio, futures_collateral_buffer_ratio,
     futures_maintenance_margin_rate, futures_margin_mode,
     futures_position_mode, created_at_utc, ended_at_utc
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 """
 
 
@@ -50,15 +53,15 @@ class SQLiteActivePaperSessions:
             connection.commit()
             return PaperSessionCreateOutcome(session=session, created=True)
         except sqlite3.Error as error:
-            _rollback_if_open(connection)
+            rollback_if_open(connection)
             raise PaperSessionUnavailableError(
                 "Active Paper Session write failed"
             ) from error
         except BaseException:
-            _rollback_if_open(connection)
+            rollback_if_open(connection)
             raise
         finally:
-            _close_if_open(connection)
+            close_if_open(connection)
 
     def get_active(self) -> ConfiguredPaperSession | None:
         connection: sqlite3.Connection | None = None
@@ -70,7 +73,7 @@ class SQLiteActivePaperSessions:
                 "Active Paper Session read failed"
             ) from error
         finally:
-            _close_if_open(connection)
+            close_if_open(connection)
         return result
 
     def retire(self, session_id: UUID, ended_at_utc: datetime) -> None:
@@ -108,15 +111,15 @@ class SQLiteActivePaperSessions:
             )
             connection.commit()
         except sqlite3.Error as error:
-            _rollback_if_open(connection)
+            rollback_if_open(connection)
             raise PaperSessionUnavailableError(
                 "Active Paper Session retirement failed"
             ) from error
         except BaseException:
-            _rollback_if_open(connection)
+            rollback_if_open(connection)
             raise
         finally:
-            _close_if_open(connection)
+            close_if_open(connection)
 
 
 def _session_from_row(row: sqlite3.Row) -> ConfiguredPaperSession:
@@ -133,11 +136,6 @@ def _session_from_row(row: sqlite3.Row) -> ConfiguredPaperSession:
             "Active Paper Session read failed"
         ) from error
     market_type = MarketType(row["market_type"])
-    spot_policy = (
-        SpotTradingPolicy(Decimal(row["spot_trading_capital_ratio"]))
-        if market_type is MarketType.SPOT
-        else None
-    )
     futures_policy = (
         FuturesTradingPolicy(
             version=row["futures_policy_version"],
@@ -156,9 +154,8 @@ def _session_from_row(row: sqlite3.Row) -> ConfiguredPaperSession:
         preset_version=row["preset_version"],
         market_type=market_type,
         trade_mode=TradeMode(row["trade_mode"]),
-        available_capital=Decimal(row["available_capital"]),
+        capital_per_entry=Decimal(row["capital_per_entry"]),
         entry_policy=EntryPolicy(row["max_entries"]),
-        spot_policy=spot_policy,
         futures_policy=futures_policy,
     )
     return ConfiguredPaperSession(
@@ -180,7 +177,6 @@ def _find_active(connection: sqlite3.Connection) -> ConfiguredPaperSession | Non
 
 def _session_values(session: ConfiguredPaperSession) -> tuple[object, ...]:
     config = session.config
-    spot = config.spot_policy
     futures = config.futures_policy
     return (
         str(config.session_id),
@@ -189,9 +185,8 @@ def _session_values(session: ConfiguredPaperSession) -> tuple[object, ...]:
         session.market_data.symbol,
         session.market_data.timeframe,
         config.preset_version,
-        str(config.available_capital),
+        str(config.capital_per_entry),
         config.entry_policy.max_entries,
-        None if spot is None else str(spot.trading_capital_ratio),
         None if futures is None else futures.version,
         None if futures is None else futures.leverage,
         None if futures is None else str(futures.trading_capital_ratio),
@@ -202,19 +197,3 @@ def _session_values(session: ConfiguredPaperSession) -> tuple[object, ...]:
         session.created_at_utc.isoformat(),
         None,
     )
-
-
-def _rollback_if_open(connection: sqlite3.Connection | None) -> None:
-    if connection is not None:
-        try:
-            connection.rollback()
-        except sqlite3.Error:
-            pass
-
-
-def _close_if_open(connection: sqlite3.Connection | None) -> None:
-    if connection is not None:
-        try:
-            connection.close()
-        except sqlite3.Error:
-            pass

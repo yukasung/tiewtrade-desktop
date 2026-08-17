@@ -221,10 +221,8 @@ def test_configured_paper_futures_entry_and_replay_are_deterministic() -> None:
 
     assert first == second
     entry_snapshot = next(snapshot for snapshot in first if snapshot.entry_fill)
-    assert entry_snapshot.capital_plan.trading_capital == Decimal("100000.0")
-    assert entry_snapshot.capital_plan.collateral_buffer == Decimal("100000.0")
-    assert entry_snapshot.capital_plan.initial_margin_per_entry == Decimal("10000.0")
-    assert entry_snapshot.capital_plan.target_notional_per_entry == Decimal("30000.0")
+    assert entry_snapshot.capital_plan.initial_margin_per_entry == Decimal("10000")
+    assert entry_snapshot.capital_plan.target_notional_per_entry == Decimal("30000")
     assert entry_snapshot.entry_fill is not None
     assert entry_snapshot.entry_fill.side is PositionSide.LONG
 
@@ -232,10 +230,18 @@ def test_configured_paper_futures_entry_and_replay_are_deterministic() -> None:
 def test_configured_adverse_candle_terminates_session_with_liquidation() -> None:
     snapshots = replay(configured_liquidation_candles())
 
-    snapshot = snapshots[-1]
+    # Where the walk down finally takes it, rather than a fixed candle: how
+    # far the price must fall depends on what the Session put at risk.
+    liquidated = next(
+        index
+        for index, item in enumerate(snapshots)
+        if item.state is PaperFuturesSessionState.LIQUIDATED
+    )
+    snapshot = snapshots[liquidated]
 
-    assert all(item.state is PaperFuturesSessionState.ACTIVE for item in snapshots[:-1])
-    assert snapshots[-2].state is PaperFuturesSessionState.ACTIVE
+    assert all(
+        item.state is PaperFuturesSessionState.ACTIVE for item in snapshots[:liquidated]
+    )
     assert snapshot.accepted
     assert snapshot.exit_fill is not None
     assert snapshot.exit_fill.close_reason is BasketCloseReason.LIQUIDATION
@@ -275,9 +281,8 @@ def replay(candles: list[Candle]) -> list[PaperFuturesSessionSnapshot]:
             preset_version="rsi-step-grid-v1",
             market_type=MarketType.FUTURES,
             trade_mode=TradeMode.PAPER,
-            available_capital=Decimal("200000"),
+            capital_per_entry=Decimal("10000"),
             entry_policy=EntryPolicy(max_entries=10),
-            spot_policy=None,
             futures_policy=FuturesTradingPolicy.v1(leverage=3),
         ),
         market_data,

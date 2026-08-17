@@ -10,6 +10,7 @@ from tiewtrade.market_data.completed_candle_stream import (
     CompletedCandleStream,
 )
 from tiewtrade.market_data.config import MarketDataConfig
+from tiewtrade.market_data.warm_up import require_warm_up_candle
 
 
 class CandlePipelineInputError(ValueError):
@@ -72,11 +73,7 @@ class CompletedCandlePipeline:
             if len(candles) < expected_count:
                 raise ValueError("insufficient warm-up candles")
             for candle in candles:
-                if (
-                    self._candles.accept(candle, received_at)
-                    is not CandleAcceptance.ACCEPTED
-                ):
-                    raise ValueError("warm-up requires new completed candles")
+                require_warm_up_candle(self._candles, candle, received_at)
         except Exception as error:
             raise CandlePipelineInputError from error
         try:

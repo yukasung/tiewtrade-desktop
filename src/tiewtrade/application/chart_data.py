@@ -169,114 +169,20 @@ class ChartSnapshot:
         session: ConfiguredPaperSession | None,
         _session_facts: tuple[UUID, str, str] | None,
     ) -> None:
-        if session is not None and _session_facts is not None:
-            raise ValueError("ChartSnapshot accepts one Session source")
-        if session is not None:
-            session_id = session.config.session_id
-            symbol = session.market_data.symbol
-            timeframe = session.market_data.timeframe
-        elif _session_facts is not None:
-            session_id, symbol, timeframe = _session_facts
-        else:
-            raise ValueError("ChartSnapshot requires a ConfiguredPaperSession")
+        session_id, symbol, timeframe = _session_identity(session, _session_facts)
         object.__setattr__(self, "session_id", session_id)
         object.__setattr__(self, "symbol", symbol)
         object.__setattr__(self, "timeframe", timeframe)
 
-        if not self.symbol:
-            raise ValueError("Session symbol must not be empty")
-        if not self.timeframe:
-            raise ValueError("Session timeframe must not be empty")
-        _require_utc(self.observed_at_utc, "observed_at_utc")
-        if self.chart_range.end > self.observed_at_utc:
-            raise ValueError("ChartRange end must not be after observed_at_utc")
-        if not isinstance(self.state, ChartReadState):
-            raise ValueError("state must be a ChartReadState")
-        if self.message is not None and self.state is not ChartReadState.UNAVAILABLE:
-            raise ValueError("message is only valid for unavailable ChartSnapshot")
-        if self.state is ChartReadState.UNAVAILABLE and not self.message:
-            raise ValueError("unavailable ChartSnapshot requires a message")
-        if self.state in {ChartReadState.LOADING, ChartReadState.UNAVAILABLE} and (
-            self.candles or self.fills
-        ):
-            raise ValueError("loading or unavailable ChartSnapshot cannot contain data")
-        if self.state is ChartReadState.EMPTY and self.candles:
-            raise ValueError("empty ChartSnapshot cannot contain candles")
-
-        in_progress_candle = self.in_progress_candle
-        if in_progress_candle is not None:
-            if self.state not in {ChartReadState.READY, ChartReadState.EMPTY}:
-                raise ValueError(
-                    "in_progress_candle requires a ready or empty ChartSnapshot"
-                )
-            if not isinstance(in_progress_candle, Candle):
-                raise ValueError("in_progress_candle must be a Candle")
-            if in_progress_candle.symbol != self.symbol:
-                raise ValueError("in_progress_candle symbol must match Session")
-            if in_progress_candle.timeframe != self.timeframe:
-                raise ValueError("in_progress_candle timeframe must match Session")
-            if in_progress_candle.open_time != self.chart_range.end:
-                raise ValueError(
-                    "in_progress_candle open_time must match ChartRange end"
-                )
-            if not (
-                in_progress_candle.open_time
-                <= self.observed_at_utc
-                < in_progress_candle.close_time
-            ):
-                raise ValueError(
-                    "in_progress_candle must be observed inside its interval"
-                )
-
-        previous_open_time: datetime | None = None
-        for candle in self.candles:
-            if not isinstance(candle, Candle):
-                raise ValueError("candles must be Candle values")
-            if candle.symbol != self.symbol:
-                raise ValueError("candle symbol must match Session")
-            if candle.timeframe != self.timeframe:
-                raise ValueError("candle timeframe must match Session")
-            if candle.close_time > self.observed_at_utc:
-                raise ValueError("candle must be completed by observed_at_utc")
-            if (
-                candle.open_time < self.chart_range.start
-                or candle.close_time > self.chart_range.end
-            ):
-                raise ValueError("candle must be completed inside ChartRange")
-            if (
-                previous_open_time is not None
-                and candle.open_time <= previous_open_time
-            ):
-                raise ValueError("candles must have ascending unique open_time values")
-            previous_open_time = candle.open_time
-
-        markers: list[ChartMarker] = []
-        fill_ids: set[str] = set()
-        for fill in self.fills:
-            if fill.session_id != self.session_id:
-                raise ValueError("fill session must match Session")
-            if not self.visible_range.contains(fill.filled_at_utc):
-                raise ValueError("fill must be inside the visible range")
-            if fill.fill_id in fill_ids:
-                raise ValueError("fills must have unique fill_id values")
-            fill_ids.add(fill.fill_id)
-            markers.append(ChartMarker.from_fill(fill, self.timeframe))
-        object.__setattr__(self, "markers", tuple(markers))
-
-        if self.state in {ChartReadState.LOADING, ChartReadState.UNAVAILABLE} and (
-            self.rsi.values
-            or self.rsi.state is not None
-            or self.atr.values
-            or self.atr.state is not None
-        ):
-            raise ValueError(
-                "loading or unavailable ChartSnapshot cannot carry indicators"
-            )
-        candle_open_times = {candle.open_time for candle in self.candles}
-        if not candle_open_times.issuperset(self.rsi.values):
-            raise ValueError("RSI open_time must match a ChartSnapshot candle")
-        if not candle_open_times.issuperset(self.atr.values):
-            raise ValueError("ATR open_time must match a ChartSnapshot candle")
+        _require_session_facts(symbol=symbol, timeframe=timeframe)
+        _require_state_matches_data(self)
+        _require_in_progress_candle(self)
+        _require_completed_candles(self)
+        # Reading the fills is also what rejects them, so the markers are
+        # taken here rather than after the indicators: a fill that cannot be
+        # drawn is the older complaint of the two, and stays the one reported.
+        object.__setattr__(self, "markers", _markers_of(self))
+        _require_indicators(self)
 
     @property
     def visible_range(self) -> ChartRange:
@@ -341,3 +247,154 @@ def append_completed_candle(snapshot: ChartSnapshot, candle: Candle) -> ChartSna
 def follows(candles: tuple[Candle, ...], candle: Candle) -> bool:
     """Whether this candle comes after every candle in an ascending tuple."""
     return not candles or candle.open_time > candles[-1].open_time
+
+
+def _session_identity(
+    session: ConfiguredPaperSession | None,
+    session_facts: tuple[UUID, str, str] | None,
+) -> tuple[UUID, str, str]:
+    """Which Session a snapshot is of, from whichever source names it.
+
+    A snapshot is normally built from the Session itself. The facts are the
+    way a derived snapshot carries the same identity forward without holding
+    the whole configuration — but only one of the two may answer, because two
+    answers is a snapshot that could be of two different Sessions.
+    """
+    if session is not None and session_facts is not None:
+        raise ValueError("ChartSnapshot accepts one Session source")
+    if session is not None:
+        return (
+            session.config.session_id,
+            session.market_data.symbol,
+            session.market_data.timeframe,
+        )
+    if session_facts is not None:
+        return session_facts
+    raise ValueError("ChartSnapshot requires a ConfiguredPaperSession")
+
+
+def _require_session_facts(*, symbol: str, timeframe: str) -> None:
+    if not symbol:
+        raise ValueError("Session symbol must not be empty")
+    if not timeframe:
+        raise ValueError("Session timeframe must not be empty")
+
+
+def _require_state_matches_data(snapshot: "ChartSnapshot") -> None:
+    """What a snapshot is allowed to carry, given what it says it is.
+
+    A snapshot that is still loading or could not be read has nothing to
+    show, so carrying candles would let a screen draw data while telling the
+    reader there is none.
+    """
+    _require_utc(snapshot.observed_at_utc, "observed_at_utc")
+    if snapshot.chart_range.end > snapshot.observed_at_utc:
+        raise ValueError("ChartRange end must not be after observed_at_utc")
+    if not isinstance(snapshot.state, ChartReadState):
+        raise ValueError("state must be a ChartReadState")
+    if (
+        snapshot.message is not None
+        and snapshot.state is not ChartReadState.UNAVAILABLE
+    ):
+        raise ValueError("message is only valid for unavailable ChartSnapshot")
+    if snapshot.state is ChartReadState.UNAVAILABLE and not snapshot.message:
+        raise ValueError("unavailable ChartSnapshot requires a message")
+    if snapshot.state in {ChartReadState.LOADING, ChartReadState.UNAVAILABLE} and (
+        snapshot.candles or snapshot.fills
+    ):
+        raise ValueError("loading or unavailable ChartSnapshot cannot contain data")
+    if snapshot.state is ChartReadState.EMPTY and snapshot.candles:
+        raise ValueError("empty ChartSnapshot cannot contain candles")
+
+
+def _require_in_progress_candle(snapshot: "ChartSnapshot") -> None:
+    """The forming candle, which sits past the completed range, not inside it.
+
+    It is the one candle the snapshot holds that is still being observed, so
+    it has to be the next one after the range and the moment of observation
+    has to fall within it — otherwise it is a completed candle in the wrong
+    place, or a future one nothing has seen yet.
+    """
+    candle = snapshot.in_progress_candle
+    if candle is None:
+        return
+    if snapshot.state not in {ChartReadState.READY, ChartReadState.EMPTY}:
+        raise ValueError("in_progress_candle requires a ready or empty ChartSnapshot")
+    if not isinstance(candle, Candle):
+        raise ValueError("in_progress_candle must be a Candle")
+    if candle.symbol != snapshot.symbol:
+        raise ValueError("in_progress_candle symbol must match Session")
+    if candle.timeframe != snapshot.timeframe:
+        raise ValueError("in_progress_candle timeframe must match Session")
+    if candle.open_time != snapshot.chart_range.end:
+        raise ValueError("in_progress_candle open_time must match ChartRange end")
+    if not candle.open_time <= snapshot.observed_at_utc < candle.close_time:
+        raise ValueError("in_progress_candle must be observed inside its interval")
+
+
+def _require_completed_candles(snapshot: "ChartSnapshot") -> None:
+    """Candles of this Session, inside this range, in the order they closed.
+
+    Ascending unique open times are what let the chart draw by position
+    rather than by searching: a repeated or out-of-order candle would be
+    drawn where a different minute belongs.
+    """
+    previous_open_time: datetime | None = None
+    for candle in snapshot.candles:
+        if not isinstance(candle, Candle):
+            raise ValueError("candles must be Candle values")
+        if candle.symbol != snapshot.symbol:
+            raise ValueError("candle symbol must match Session")
+        if candle.timeframe != snapshot.timeframe:
+            raise ValueError("candle timeframe must match Session")
+        if candle.close_time > snapshot.observed_at_utc:
+            raise ValueError("candle must be completed by observed_at_utc")
+        if (
+            candle.open_time < snapshot.chart_range.start
+            or candle.close_time > snapshot.chart_range.end
+        ):
+            raise ValueError("candle must be completed inside ChartRange")
+        if previous_open_time is not None and candle.open_time <= previous_open_time:
+            raise ValueError("candles must have ascending unique open_time values")
+        previous_open_time = candle.open_time
+
+
+def _markers_of(snapshot: "ChartSnapshot") -> tuple[ChartMarker, ...]:
+    """The marks the fills leave on the chart, and the reading that makes them.
+
+    Reading a fill and refusing it are the same pass: a fill of another
+    Session, one outside the span being drawn, or a duplicate is one there is
+    no mark to make for, so it is rejected where it would have been drawn.
+    """
+    markers: list[ChartMarker] = []
+    fill_ids: set[str] = set()
+    for fill in snapshot.fills:
+        if fill.session_id != snapshot.session_id:
+            raise ValueError("fill session must match Session")
+        if not snapshot.visible_range.contains(fill.filled_at_utc):
+            raise ValueError("fill must be inside the visible range")
+        if fill.fill_id in fill_ids:
+            raise ValueError("fills must have unique fill_id values")
+        fill_ids.add(fill.fill_id)
+        markers.append(ChartMarker.from_fill(fill, snapshot.timeframe))
+    return tuple(markers)
+
+
+def _require_indicators(snapshot: "ChartSnapshot") -> None:
+    """Indicators only where there is a candle they were read off.
+
+    An indicator value at a time the snapshot has no candle for is a reading
+    of something not on the chart, which the chart would draw anyway.
+    """
+    if snapshot.state in {ChartReadState.LOADING, ChartReadState.UNAVAILABLE} and (
+        snapshot.rsi.values
+        or snapshot.rsi.state is not None
+        or snapshot.atr.values
+        or snapshot.atr.state is not None
+    ):
+        raise ValueError("loading or unavailable ChartSnapshot cannot carry indicators")
+    candle_open_times = {candle.open_time for candle in snapshot.candles}
+    if not candle_open_times.issuperset(snapshot.rsi.values):
+        raise ValueError("RSI open_time must match a ChartSnapshot candle")
+    if not candle_open_times.issuperset(snapshot.atr.values):
+        raise ValueError("ATR open_time must match a ChartSnapshot candle")

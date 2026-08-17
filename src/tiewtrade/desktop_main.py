@@ -1,5 +1,7 @@
 import asyncio
-from collections.abc import Callable
+from collections.abc import AsyncIterator, Awaitable, Callable, Coroutine
+from contextlib import asynccontextmanager
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
@@ -13,7 +15,6 @@ from tiewtrade.application.bot_control import (
 )
 from tiewtrade.application.chart_data import (
     ChartRange,
-    ChartSnapshot,
 )
 from tiewtrade.application.chart_history import ChartHistory
 from tiewtrade.application.chart_realtime_feed import ChartOnlyFeedController
@@ -30,16 +31,9 @@ from tiewtrade.application.paper_runtime import (
 from tiewtrade.application.paper_session_setup import (
     ConfiguredPaperSession,
     CreatePaperSession,
-    PaperSessionCreateOutcome,
-    PaperSessionSetupValues,
     validate_paper_session,
 )
 from tiewtrade.application.paper_symbols import paper_symbol_rules
-from tiewtrade.application.trade_history import (
-    BasketHistoryResult,
-    TradeFillHistoryItem,
-    TradeHistoryFilter,
-)
 from tiewtrade.application.trading_workspace import BotRuntimeState
 from tiewtrade.decimal_context import configure_decimal_context
 from tiewtrade.integrations.binance.public_endpoints import BinancePublicEndpoints
@@ -306,72 +300,100 @@ def _symbol_rules_for(session: ConfiguredPaperSession) -> SymbolRules:
     )
 
 
-def run_desktop(database_path: Path | None = None) -> int:
-    configure_decimal_context()
-    resolved_database_path = database_path or default_database_path()
-    database = SQLiteDatabase(resolved_database_path)
-    store = SQLiteActivePaperSessions(database)
-    history = SQLiteTradeHistory(database)
-    latest_market_price = LatestMarketPrice()
+@asynccontextmanager
+async def _public_market_data(
+    session: ConfiguredPaperSession,
+) -> AsyncIterator[BinancePublicMarketData]:
+    """A public market-data source for a Session, closed however the work ends.
 
-    async def load_latest_price(session: ConfiguredPaperSession) -> Decimal:
-        source = BinancePublicMarketData(
-            BinancePublicEndpoints.for_market_type(session.config.market_type)
-        )
-        try:
-            return await source.load_latest_price(session.market_data)
-        finally:
-            await source.close()
-
-    manual_close_price = ManualClosePrice(
-        observed=latest_market_price,
-        quote=lambda session: asyncio.run(load_latest_price(session)),
-        max_age=_MANUAL_CLOSE_PRICE_MAX_AGE,
+    The source holds a connection, so every use is a borrow rather than a
+    build: leaving one open after a failed read is a socket the desktop keeps
+    for the rest of its run.
+    """
+    source = BinancePublicMarketData(
+        BinancePublicEndpoints.for_market_type(session.config.market_type)
     )
+    try:
+        yield source
+    finally:
+        await source.close()
+
+
+def _migrate_first[**Params, Result](
+    prepare_database: Callable[[], None],
+    work: Callable[Params, Result],
+) -> Callable[Params, Result]:
+    """The same work, with the database brought up to date before it runs.
+
+    Migration is deferred until something actually needs the file, so that a
+    desktop that never opens a Session never touches it. That makes "has the
+    database been prepared?" a question every entry point has to answer, and
+    the answer is the same one each time — so it is asked here rather than as
+    a first line each of them could forget.
+    """
+
+    def with_prepared_database(*args: Params.args, **kwargs: Params.kwargs) -> Result:
+        prepare_database()
+        return work(*args, **kwargs)
+
+    return with_prepared_database
+
+
+def _migrate_first_async[**Params, Result](
+    prepare_database: Callable[[], None],
+    work: Callable[Params, Awaitable[Result]],
+) -> Callable[Params, Coroutine[object, object, Result]]:
+    """`_migrate_first` for work that is awaited rather than called."""
+
+    async def with_prepared_database(
+        *args: Params.args, **kwargs: Params.kwargs
+    ) -> Result:
+        prepare_database()
+        return await work(*args, **kwargs)
+
+    return with_prepared_database
+
+
+@dataclass(frozen=True, slots=True)
+class _DesktopStores:
+    """What a desktop run reads and writes, and the migration they all need."""
+
+    store: SQLiteActivePaperSessions
+    history: SQLiteTradeHistory
+    prepare: Callable[[], None]
+
+
+def _bot_actions(
+    stores: _DesktopStores,
+    *,
+    runtime_actions: _PaperRuntimeActions,
+    runtime_snapshots: RuntimeSnapshotRelay,
+    manual_close_price: ManualClosePrice,
+    shutdown_runtime: Callable[[], None],
+) -> BotActions:
+    """Everything the window can ask of the Bot behind it."""
+    history = stores.history
     close_paper_position = ClosePaperPosition(
         find_open_basket=history.find_open_basket,
         list_fills=history.list_fills,
         record_closed=history.record_closed_basket,
     )
-    create_session = CreatePaperSession(create_active=store.create)
-    database_preparation_lock = Lock()
 
-    def prepare_database() -> None:
-        with database_preparation_lock:
-            resolved_database_path.parent.mkdir(parents=True, exist_ok=True)
-            try:
-                database.migrate()
-            except UnsupportedDatabaseSchemaError as error:
-                raise DatabaseCompatibilityError from error
-
-    def create_after_migration(
-        values: PaperSessionSetupValues,
-    ) -> PaperSessionCreateOutcome:
-        prepare_database()
-        return create_session.execute(values)
-
-    def load_after_migration() -> ConfiguredPaperSession | None:
-        prepare_database()
-        return store.get_active()
-
-    def retire_after_migration(session: ConfiguredPaperSession) -> None:
-        prepare_database()
+    def retire_session(session: ConfiguredPaperSession) -> None:
+        # Asked of the Runtime rather than of the record, because a Session
+        # whose worker is still running is one whose last write has not landed.
         if not runtime_actions.new_session_available(session):
             raise RuntimeError("Paper Runtime worker is still active")
-        store.retire(session.config.session_id, datetime.now(UTC))
+        stores.store.retire(session.config.session_id, datetime.now(UTC))
 
-    def close_position_after_migration(session: ConfiguredPaperSession) -> None:
-        prepare_database()
+    def close_position(session: ConfiguredPaperSession) -> None:
         close_paper_position.execute(
             session,
             market_price=lambda: manual_close_price.get(session),
             tick_size=_symbol_rules_for(session).tick_size,
         )
 
-    def read_open_basket_after_migration(
-        session: ConfiguredPaperSession,
-    ) -> ReopenedBasket | None:
-        prepare_database()
+    def read_open_basket(session: ConfiguredPaperSession) -> ReopenedBasket | None:
         state = read_open_basket_state(history, session.config.session_id)
         if state is None or session.config.market_type is not MarketType.SPOT:
             return None
@@ -384,46 +406,41 @@ def run_desktop(database_path: Path | None = None) -> int:
             tick_size=_symbol_rules_for(session).tick_size,
         )
 
-    def list_trade_fills_after_migration(
-        filters: TradeHistoryFilter,
-    ) -> tuple[TradeFillHistoryItem, ...]:
-        prepare_database()
-        return history.list_trade_fills(filters)
-
-    def list_basket_history_after_migration(
-        filters: TradeHistoryFilter,
-    ) -> BasketHistoryResult:
-        prepare_database()
-        return history.list_basket_history(filters)
-
-    runtime_snapshots = RuntimeSnapshotRelay()
-    chart_fact_relay = ChartFactRelay()
-    chart_feed = ChartOnlyFeedController(
-        source_factory=BinancePublicMarketData,
-        latest_market_price=latest_market_price,
-    )
-    runtime_actions = _PaperRuntimeActions(
-        lifecycle=SQLitePaperRuntimeLifecycle(database),
-        trade_history=history,
+    return BotActions(
+        start=runtime_actions.start,
+        stop=runtime_actions.stop,
+        initialize=runtime_actions.initialize,
         runtime_snapshots=runtime_snapshots,
-        prepare_database=prepare_database,
+        shutdown_runtime=shutdown_runtime,
+        stop_for_replacement=runtime_actions.stop_for_replacement,
+        close_position=_migrate_first(stores.prepare, close_position),
+        has_open_position=lambda session: (
+            history.find_open_basket(session.config.session_id) is not None
+        ),
+        retire_session=_migrate_first(stores.prepare, retire_session),
+        read_open_basket=_migrate_first(stores.prepare, read_open_basket),
     )
+
+
+def _chart_sources(
+    stores: _DesktopStores,
+    *,
+    chart_fact_relay: ChartFactRelay,
+    chart_feed: ChartOnlyFeedController,
+) -> ChartSources:
+    """Everything the Chart reads, and the feed that keeps it current."""
+    history = stores.history
 
     async def load_chart_candles(
         session: ConfiguredPaperSession,
         chart_range: ChartRange,
     ) -> tuple[Candle, ...]:
-        source = BinancePublicMarketData(
-            BinancePublicEndpoints.for_market_type(session.config.market_type)
-        )
-        try:
+        async with _public_market_data(session) as source:
             return await source.load_range(
                 session.market_data,
                 start=chart_range.start,
                 end=chart_range.end,
             )
-        finally:
-            await source.close()
 
     def list_chart_fills(
         session_id: UUID,
@@ -440,38 +457,13 @@ def run_desktop(database_path: Path | None = None) -> int:
         list_fills=list_chart_fills,
     )
 
-    async def load_chart(
-        session: ConfiguredPaperSession,
-        chart_range: ChartRange,
-    ) -> ChartSnapshot:
-        prepare_database()
-        return await chart_history.load(session, chart_range)
-
-    async def refresh_chart(
-        session: ConfiguredPaperSession,
-        snapshot: ChartSnapshot,
-        candle: Candle,
-    ) -> ChartSnapshot:
-        prepare_database()
-        return await chart_history.refresh_completed(session, snapshot, candle)
-
-    async def load_chart_fills(
+    async def load_fills(
         session: ConfiguredPaperSession,
         chart_range: ChartRange,
     ) -> tuple[TradeFill, ...]:
-        prepare_database()
         return list_chart_fills(session.config.session_id, chart_range)
 
-    def start_chart_feed(session: ConfiguredPaperSession) -> None:
-        select_chart_view(
-            session,
-            ChartViewSelection(
-                symbol=session.market_data.symbol,
-                timeframe=session.market_data.timeframe,
-            ),
-        )
-
-    def select_chart_view(
+    def select_view(
         session: ConfiguredPaperSession,
         selection: ChartViewSelection,
     ) -> None:
@@ -483,37 +475,91 @@ def run_desktop(database_path: Path | None = None) -> int:
             selection,
         )
 
+    def start_feed(session: ConfiguredPaperSession) -> None:
+        select_view(
+            session,
+            ChartViewSelection(
+                symbol=session.market_data.symbol,
+                timeframe=session.market_data.timeframe,
+            ),
+        )
+
+    return ChartSources(
+        load=_migrate_first_async(stores.prepare, chart_history.load),
+        refresh=_migrate_first_async(stores.prepare, chart_history.refresh_completed),
+        load_fills=_migrate_first_async(stores.prepare, load_fills),
+        facts=chart_fact_relay,
+        start_feed=start_feed,
+        select_view=select_view,
+    )
+
+
+def run_desktop(database_path: Path | None = None) -> int:
+    configure_decimal_context()
+    resolved_database_path = database_path or default_database_path()
+    database = SQLiteDatabase(resolved_database_path)
+    store = SQLiteActivePaperSessions(database)
+    history = SQLiteTradeHistory(database)
+    latest_market_price = LatestMarketPrice()
+    database_preparation_lock = Lock()
+
+    def prepare_database() -> None:
+        with database_preparation_lock:
+            resolved_database_path.parent.mkdir(parents=True, exist_ok=True)
+            try:
+                database.migrate()
+            except UnsupportedDatabaseSchemaError as error:
+                raise DatabaseCompatibilityError from error
+
+    stores = _DesktopStores(store=store, history=history, prepare=prepare_database)
+
+    async def load_latest_price(session: ConfiguredPaperSession) -> Decimal:
+        async with _public_market_data(session) as source:
+            return await source.load_latest_price(session.market_data)
+
+    manual_close_price = ManualClosePrice(
+        observed=latest_market_price,
+        quote=lambda session: asyncio.run(load_latest_price(session)),
+        max_age=_MANUAL_CLOSE_PRICE_MAX_AGE,
+    )
+    create_session = CreatePaperSession(create_active=store.create)
+
+    runtime_snapshots = RuntimeSnapshotRelay()
+    chart_fact_relay = ChartFactRelay()
+    chart_feed = ChartOnlyFeedController(
+        source_factory=BinancePublicMarketData,
+        latest_market_price=latest_market_price,
+    )
+    runtime_actions = _PaperRuntimeActions(
+        lifecycle=SQLitePaperRuntimeLifecycle(database),
+        trade_history=history,
+        runtime_snapshots=runtime_snapshots,
+        prepare_database=prepare_database,
+    )
+
     def shutdown_desktop_runtimes() -> None:
         chart_feed.close()
         runtime_actions.shutdown()
 
     return run_desktop_ui(
-        create_session=create_after_migration,
-        load_active=load_after_migration,
-        list_basket_history=list_basket_history_after_migration,
-        list_trade_fills=list_trade_fills_after_migration,
-        validate_session=validate_paper_session,
-        bot=BotActions(
-            start=runtime_actions.start,
-            stop=runtime_actions.stop,
-            initialize=runtime_actions.initialize,
-            runtime_snapshots=runtime_snapshots,
-            shutdown_runtime=shutdown_desktop_runtimes,
-            stop_for_replacement=runtime_actions.stop_for_replacement,
-            close_position=close_position_after_migration,
-            has_open_position=lambda session: (
-                history.find_open_basket(session.config.session_id) is not None
-            ),
-            retire_session=retire_after_migration,
-            read_open_basket=read_open_basket_after_migration,
+        create_session=_migrate_first(prepare_database, create_session.execute),
+        load_active=_migrate_first(prepare_database, store.get_active),
+        list_basket_history=_migrate_first(
+            prepare_database, history.list_basket_history
         ),
-        chart=ChartSources(
-            load=load_chart,
-            refresh=refresh_chart,
-            load_fills=load_chart_fills,
-            facts=chart_fact_relay,
-            start_feed=start_chart_feed,
-            select_view=select_chart_view,
+        list_trade_fills=_migrate_first(prepare_database, history.list_trade_fills),
+        validate_session=validate_paper_session,
+        bot=_bot_actions(
+            stores,
+            runtime_actions=runtime_actions,
+            runtime_snapshots=runtime_snapshots,
+            manual_close_price=manual_close_price,
+            shutdown_runtime=shutdown_desktop_runtimes,
+        ),
+        chart=_chart_sources(
+            stores,
+            chart_fact_relay=chart_fact_relay,
+            chart_feed=chart_feed,
         ),
     )
 

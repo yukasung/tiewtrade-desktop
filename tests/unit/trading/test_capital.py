@@ -6,38 +6,29 @@ import pytest
 from tiewtrade.trading.capital import FuturesCapitalPlan, SpotCapitalPlan
 from tiewtrade.trading.entry_policy import EntryPolicy
 from tiewtrade.trading.futures_policy import FuturesTradingPolicy
-from tiewtrade.trading.spot_policy import SpotTradingPolicy
 from tiewtrade.trading.symbol_rules import SymbolRules
 
 
-def test_spot_capital_uses_form_policy_to_allocate_equal_entries() -> None:
-    spot_policy = SpotTradingPolicy(trading_capital_ratio=Decimal("0.75"))
-    entry_policy = EntryPolicy(max_entries=12)
-    plan = SpotCapitalPlan.from_available(Decimal("1000"), spot_policy, entry_policy)
+def test_a_spot_entry_spends_what_the_trader_stated() -> None:
+    """No division: the figure asked for is the figure an Entry spends."""
+    plan = SpotCapitalPlan.from_capital_per_entry(Decimal("1000"))
 
-    assert plan.trading_capital == Decimal("750")
-    assert plan.reserve == Decimal("250")
-    assert plan.entry_notional == Decimal("62.5")
+    assert plan.entry_notional == Decimal("1000")
+    # How many Entries a Basket may take is a gate, not a divisor.
+    assert not hasattr(plan, "capital_per_entry")
+    assert not hasattr(plan, "trading_capital")
+    assert not hasattr(plan, "reserve")
 
 
-def test_spot_trading_policy_is_immutable() -> None:
-    policy = SpotTradingPolicy(trading_capital_ratio=Decimal("0.80"))
+def test_spot_capital_plan_is_immutable() -> None:
+    plan = SpotCapitalPlan.from_capital_per_entry(Decimal("1000"))
 
     with pytest.raises(FrozenInstanceError):
-        policy.trading_capital_ratio = Decimal("0.75")  # type: ignore[misc]
-
-
-@pytest.mark.parametrize(
-    "ratio",
-    [Decimal("-0.1"), Decimal("0"), Decimal("1"), Decimal("1.1")],
-)
-def test_spot_trading_policy_rejects_invalid_ratio(ratio: Decimal) -> None:
-    with pytest.raises(ValueError, match="trading_capital_ratio"):
-        SpotTradingPolicy(trading_capital_ratio=ratio)
+        plan.entry_notional = Decimal("1")  # type: ignore[misc]
 
 
 @pytest.mark.parametrize("max_entries", [1, 3, 22])
-def test_spot_trading_policy_requires_even_entries_between_two_and_twenty(
+def test_spot_capital_requires_even_entries_between_two_and_twenty(
     max_entries: int,
 ) -> None:
     with pytest.raises(ValueError, match="max_entries"):
@@ -45,7 +36,7 @@ def test_spot_trading_policy_requires_even_entries_between_two_and_twenty(
 
 
 @pytest.mark.parametrize(
-    "available",
+    "capital_per_entry",
     [
         Decimal("0"),
         Decimal("-1"),
@@ -54,44 +45,38 @@ def test_spot_trading_policy_requires_even_entries_between_two_and_twenty(
         Decimal("-Infinity"),
     ],
 )
-def test_spot_capital_plan_rejects_invalid_available_capital(
-    available: Decimal,
+def test_spot_capital_plan_rejects_invalid_capital_per_entry(
+    capital_per_entry: Decimal,
 ) -> None:
-    with pytest.raises(ValueError, match="available capital"):
-        SpotCapitalPlan.from_available(
-            available,
-            SpotTradingPolicy(trading_capital_ratio=Decimal("0.80")),
-            EntryPolicy(max_entries=10),
-        )
+    with pytest.raises(ValueError, match="capital per Entry"):
+        SpotCapitalPlan.from_capital_per_entry(capital_per_entry)
 
 
-def test_futures_capital_plan_uses_half_for_trading_and_half_for_buffer() -> None:
-    plan = FuturesCapitalPlan.from_available(
-        Decimal("200000"),
-        FuturesTradingPolicy.v1(leverage=3),
-        EntryPolicy(max_entries=10),
+def test_a_futures_entry_commits_the_margin_and_opens_it_levered() -> None:
+    """The figure stated is what leaves the wallet, whatever the leverage."""
+    plan = FuturesCapitalPlan.from_capital_per_entry(
+        Decimal("10000"), FuturesTradingPolicy.v1(leverage=3)
     )
 
-    assert plan.available_capital == Decimal("200000")
-    assert plan.trading_capital == Decimal("100000.0")
-    assert plan.collateral_buffer == Decimal("100000.0")
-    assert plan.initial_margin_per_entry == Decimal("10000.0")
-    assert plan.target_notional_per_entry == Decimal("30000.0")
+    assert plan.initial_margin_per_entry == Decimal("10000")
+    assert plan.target_notional_per_entry == Decimal("30000")
+    # The wallet ratios sized nothing here any more, so the plan does not
+    # carry halves of a total it was never given.
+    assert not hasattr(plan, "trading_capital")
+    assert not hasattr(plan, "collateral_buffer")
 
 
 def test_futures_capital_plan_is_immutable() -> None:
-    plan = FuturesCapitalPlan.from_available(
-        Decimal("200000"),
-        FuturesTradingPolicy.v1(leverage=3),
-        EntryPolicy(max_entries=10),
+    plan = FuturesCapitalPlan.from_capital_per_entry(
+        Decimal("10000"), FuturesTradingPolicy.v1(leverage=3)
     )
 
     with pytest.raises(FrozenInstanceError):
-        plan.available_capital = Decimal("1")  # type: ignore[misc]
+        plan.initial_margin_per_entry = Decimal("1")  # type: ignore[misc]
 
 
 @pytest.mark.parametrize(
-    "available",
+    "capital_per_entry",
     [
         Decimal("0"),
         Decimal("-1"),
@@ -100,14 +85,12 @@ def test_futures_capital_plan_is_immutable() -> None:
         Decimal("-Infinity"),
     ],
 )
-def test_futures_capital_plan_rejects_invalid_available_capital(
-    available: Decimal,
+def test_futures_capital_plan_rejects_invalid_capital_per_entry(
+    capital_per_entry: Decimal,
 ) -> None:
-    with pytest.raises(ValueError, match="available capital"):
-        FuturesCapitalPlan.from_available(
-            available,
-            FuturesTradingPolicy.v1(leverage=3),
-            EntryPolicy(max_entries=10),
+    with pytest.raises(ValueError, match="capital per Entry"):
+        FuturesCapitalPlan.from_capital_per_entry(
+            capital_per_entry, FuturesTradingPolicy.v1(leverage=3)
         )
 
 

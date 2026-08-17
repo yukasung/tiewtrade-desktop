@@ -96,7 +96,6 @@ def test_each_entry_of_the_basket_is_its_own_row(qtbot: QtBot) -> None:
         "Date",
         "Entry Price",
         "Take Profit",
-        "Average",
         "Quantity",
         "Total",
         "Unrealized P/L",
@@ -107,7 +106,6 @@ def test_each_entry_of_the_basket_is_its_own_row(qtbot: QtBot) -> None:
         "Date": "2026-08-02 08:00:00",
         "Entry Price": "66,000.0000",
         "Take Profit": "67,000.0000",
-        "Average": "66,000.1250",
         "Quantity": "0.00300000",
         "Total": "198.00 USDT",
         "Unrealized P/L": "0.96 USDT",
@@ -153,13 +151,14 @@ def test_money_is_grouped_and_a_quantity_is_not(qtbot: QtBot) -> None:
     assert row["Quantity"] == "0.00300000"
 
 
-def test_every_row_restates_the_basket_average(qtbot: QtBot) -> None:
-    """The Basket's own price, beside the prices its Entries actually paid.
+def test_no_price_column_reads_at_the_basket_level(qtbot: QtBot) -> None:
+    """Only the prices the row itself paid and aims at.
 
-    It is the same figure on every row because it is the Basket's, not the
-    row's — and it is neither price paid, which is the whole reason to print
-    it. Nothing else frames the table: the symbol and market are named by the
-    chart and the session panel, so the table does not repeat them.
+    The Basket's average was once restated on every row, where it read as a
+    third price beside those two and invited the target to be read as measured
+    from it. The target is measured from the Entry's own price, so the average
+    is not printed here at all — and nothing takes its place, no summary label
+    and no total.
     """
     widget = PositionBasketTable()
     qtbot.addWidget(widget)
@@ -168,17 +167,17 @@ def test_every_row_restates_the_basket_average(qtbot: QtBot) -> None:
         ready_position_basket_tab(_futures_basket(), observed_at_utc=OBSERVED_AT)
     )
 
-    assert _cell(widget, "Average", 0).text() == "66,000.1250"
-    assert _cell(widget, "Average", 1).text() == "66,000.1250"
+    assert "Average" not in widget.headers
     assert _cell(widget, "Entry Price", 0).text() == "66,000.0000"
     assert _cell(widget, "Entry Price", 1).text() == "66,000.2500"
     assert not hasattr(widget, "total_label")
     assert not hasattr(widget, "basket_label")
 
 
-def test_a_single_entry_basket_averages_to_the_one_price_it_paid(
+def test_a_single_entry_basket_reads_the_one_price_it_paid(
     qtbot: QtBot,
 ) -> None:
+    """One Entry, one price and one target — no averaged figure to compare."""
     widget = PositionBasketTable()
     qtbot.addWidget(widget)
 
@@ -194,7 +193,8 @@ def test_a_single_entry_basket_averages_to_the_one_price_it_paid(
     )
 
     assert widget.table.rowCount() == 1
-    assert _cell(widget, "Average", 0).text() == _cell(widget, "Entry Price", 0).text()
+    assert _cell(widget, "Entry Price", 0).text() == "64,000"
+    assert "Average" not in widget.headers
 
 
 def test_a_moved_column_carries_its_own_reading(
@@ -235,7 +235,6 @@ def test_columns_align_numbers_right_and_text_left(qtbot: QtBot) -> None:
 
     assert widget.ALIGNMENTS == (
         left,
-        right,
         right,
         right,
         right,

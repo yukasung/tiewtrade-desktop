@@ -5,7 +5,6 @@ from uuid import UUID
 
 from tiewtrade.trading.entry_policy import EntryPolicy
 from tiewtrade.trading.futures_policy import FuturesTradingPolicy
-from tiewtrade.trading.spot_policy import SpotTradingPolicy
 
 
 class TradeMode(StrEnum):
@@ -24,19 +23,27 @@ class SessionConfig:
     preset_version: str
     market_type: MarketType
     trade_mode: TradeMode
-    available_capital: Decimal
+    capital_per_entry: Decimal
     entry_policy: EntryPolicy
-    spot_policy: SpotTradingPolicy | None
+    # Spot needs no policy of its own: it spends the same on every Entry, as
+    # many as the Entry policy allows. Futures is the market that has more to
+    # say — leverage, margin mode and a collateral buffer.
     futures_policy: FuturesTradingPolicy | None = None
 
     def __post_init__(self) -> None:
-        if self.available_capital <= 0:
-            raise ValueError("available_capital must be positive")
-        if self.market_type is MarketType.SPOT and self.spot_policy is None:
-            raise ValueError("spot_policy is required for Spot sessions")
+        if self.capital_per_entry <= 0:
+            raise ValueError("capital_per_entry must be positive")
         if self.market_type is MarketType.SPOT and self.futures_policy is not None:
             raise ValueError("futures_policy is not valid for Spot sessions")
         if self.market_type is MarketType.FUTURES and self.futures_policy is None:
             raise ValueError("futures_policy is required for Futures sessions")
-        if self.market_type is MarketType.FUTURES and self.spot_policy is not None:
-            raise ValueError("spot_policy is not valid for Futures sessions")
+
+    @property
+    def session_capital(self) -> Decimal:
+        """The most this Session ever commits: every Entry it may take.
+
+        The trader states what one Entry spends, so this is the only total
+        the Session has — and it is the one a Futures wallet is measured
+        against, since nothing else here says how much money is at risk.
+        """
+        return self.capital_per_entry * Decimal(self.entry_policy.max_entries)

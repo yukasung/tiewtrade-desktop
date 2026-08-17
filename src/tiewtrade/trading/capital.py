@@ -1,65 +1,59 @@
 from dataclasses import dataclass
 from decimal import Decimal
 
-from tiewtrade.trading.entry_policy import EntryPolicy
 from tiewtrade.trading.futures_policy import FuturesTradingPolicy
-from tiewtrade.trading.spot_policy import SpotTradingPolicy
+
+
+def _require_capital_per_entry(capital_per_entry: Decimal) -> None:
+    """The one thing both markets ask of the capital they are handed.
+
+    Every Entry either market sizes is this figure, so a plan built from
+    nothing, a negative, or a NaN would carry that on into every Entry rather
+    than failing where it started.
+    """
+    if not capital_per_entry.is_finite() or capital_per_entry <= 0:
+        raise ValueError("capital per Entry must be finite and positive")
 
 
 @dataclass(frozen=True, slots=True)
 class SpotCapitalPlan:
-    available_capital: Decimal
-    trading_capital: Decimal
-    reserve: Decimal
+    """What one Spot Entry spends.
+
+    The trader states it rather than a wallet to divide up: the quotient was
+    the only figure anything ever read, and how many Entries a Basket may take
+    is a gate on the Basket, not a divisor on the money.
+    """
+
     entry_notional: Decimal
 
     @classmethod
-    def from_available(
-        cls,
-        available: Decimal,
-        spot_policy: SpotTradingPolicy,
-        entry_policy: EntryPolicy,
-    ) -> "SpotCapitalPlan":
-        if not available.is_finite() or available <= 0:
-            raise ValueError("available capital must be finite and positive")
-
-        trading_capital = available * spot_policy.trading_capital_ratio
-        reserve = available - trading_capital
-        return cls(
-            available_capital=available,
-            trading_capital=trading_capital,
-            reserve=reserve,
-            entry_notional=trading_capital / Decimal(entry_policy.max_entries),
-        )
+    def from_capital_per_entry(cls, capital_per_entry: Decimal) -> "SpotCapitalPlan":
+        _require_capital_per_entry(capital_per_entry)
+        return cls(entry_notional=capital_per_entry)
 
 
 @dataclass(frozen=True, slots=True)
 class FuturesCapitalPlan:
-    available_capital: Decimal
-    trading_capital: Decimal
-    collateral_buffer: Decimal
+    """What one Futures Entry commits, and the position that commitment opens.
+
+    The figure the trader states is the margin: it is what leaves the wallet
+    per Entry whatever the leverage, which is the number a position is sized
+    against rather than the one it is worth.
+    """
+
     initial_margin_per_entry: Decimal
     target_notional_per_entry: Decimal
 
     @classmethod
-    def from_available(
+    def from_capital_per_entry(
         cls,
-        available: Decimal,
+        capital_per_entry: Decimal,
         futures_policy: FuturesTradingPolicy,
-        entry_policy: EntryPolicy,
     ) -> "FuturesCapitalPlan":
-        if not available.is_finite() or available <= 0:
-            raise ValueError("available capital must be finite and positive")
-
-        trading_capital = available * futures_policy.trading_capital_ratio
-        collateral_buffer = available * futures_policy.collateral_buffer_ratio
-        initial_margin = trading_capital / Decimal(entry_policy.max_entries)
+        _require_capital_per_entry(capital_per_entry)
         return cls(
-            available_capital=available,
-            trading_capital=trading_capital,
-            collateral_buffer=collateral_buffer,
-            initial_margin_per_entry=initial_margin,
+            initial_margin_per_entry=capital_per_entry,
             target_notional_per_entry=(
-                initial_margin * Decimal(futures_policy.leverage)
+                capital_per_entry * Decimal(futures_policy.leverage)
             ),
         )

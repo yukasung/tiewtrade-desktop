@@ -1,6 +1,11 @@
 from dataclasses import dataclass
 from decimal import Decimal
 
+from tiewtrade.strategies.preset_rules import (
+    minimum_warm_up_candles,
+    require_shared_preset_rules,
+)
+
 _V1_VERSION = "fast-test-v1"
 _V1_RSI_PERIOD = 14
 _V1_ATR_PERIOD = 14
@@ -35,19 +40,13 @@ class FastTestPreset:
     stop_loss_atr_multiplier: Decimal | None
 
     def __post_init__(self) -> None:
-        if not self.version:
-            raise ValueError("version must not be empty")
-        if self.rsi_period <= 0:
-            raise ValueError("rsi_period must be positive")
-        if self.atr_period <= 0:
-            raise ValueError("atr_period must be positive")
-        if self.take_profit_atr_multiplier <= 0:
-            raise ValueError("take_profit_atr_multiplier must be positive")
-        if (
-            self.stop_loss_atr_multiplier is not None
-            and self.stop_loss_atr_multiplier <= 0
-        ):
-            raise ValueError("stop_loss_atr_multiplier must be positive")
+        require_shared_preset_rules(
+            version=self.version,
+            rsi_period=self.rsi_period,
+            atr_period=self.atr_period,
+            take_profit_atr_multiplier=self.take_profit_atr_multiplier,
+            stop_loss_atr_multiplier=self.stop_loss_atr_multiplier,
+        )
         if self.version != _V1_VERSION:
             raise ValueError("unsupported preset version")
         if (
@@ -60,7 +59,7 @@ class FastTestPreset:
 
     @property
     def minimum_warm_up_candles(self) -> int:
-        return max(self.rsi_period + 1, self.atr_period)
+        return minimum_warm_up_candles(self.rsi_period, self.atr_period)
 
     @classmethod
     def v1(cls) -> "FastTestPreset":

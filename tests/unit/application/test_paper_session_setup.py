@@ -24,9 +24,8 @@ def spot_values() -> PaperSessionSetupValues:
         market_type="spot",
         symbol="BTCUSDT",
         timeframe="5m",
-        available_capital="200000",
+        capital_per_entry="200000",
         max_entries="10",
-        spot_trading_capital_percent="80",
         futures_leverage=None,
     )
 
@@ -53,8 +52,7 @@ def test_create_spot_session_builds_immutable_configuration() -> None:
     assert outcome.session.market_data.symbol == "BTCUSDT"
     assert outcome.session.market_data.timeframe == "5m"
     assert outcome.session.config.entry_policy.max_entries == 10
-    assert outcome.session.config.spot_policy is not None
-    assert outcome.session.config.spot_policy.trading_capital_ratio == Decimal("0.8")
+    assert outcome.session.config.capital_per_entry == Decimal("200000")
     assert outcome.session.config.futures_policy is None
     assert outcome.session.created_at_utc == CREATED_AT
     assert recorded == [outcome.session]
@@ -77,9 +75,8 @@ def test_create_paper_session_accepts_ethusdt() -> None:
 @pytest.mark.parametrize(
     ("field", "value"),
     [
-        ("available_capital", "0"),
+        ("capital_per_entry", "0"),
         ("max_entries", "3"),
-        ("spot_trading_capital_percent", "100"),
     ],
 )
 def test_invalid_input_reports_the_exact_field(field: str, value: str) -> None:
@@ -99,7 +96,7 @@ def test_invalid_input_reports_the_exact_field(field: str, value: str) -> None:
 @pytest.mark.parametrize(
     ("field", "value"),
     [
-        ("available_capital", "not-a-number"),
+        ("capital_per_entry", "not-a-number"),
         ("max_entries", "10.5"),
     ],
 )
@@ -120,9 +117,8 @@ def test_malformed_input_reports_the_exact_field(field: str, value: str) -> None
 @pytest.mark.parametrize(
     ("field", "value"),
     [
-        ("available_capital", "Infinity"),
-        ("available_capital", "NaN"),
-        ("spot_trading_capital_percent", "NaN"),
+        ("capital_per_entry", "Infinity"),
+        ("capital_per_entry", "NaN"),
     ],
 )
 def test_non_finite_input_reports_the_exact_field(field: str, value: str) -> None:
@@ -143,7 +139,6 @@ def test_create_futures_session_builds_v1_policy() -> None:
     values = replace(
         spot_values(),
         market_type="futures",
-        spot_trading_capital_percent=None,
         futures_leverage="3",
     )
     use_case = CreatePaperSession(
@@ -156,7 +151,6 @@ def test_create_futures_session_builds_v1_policy() -> None:
 
     policy = outcome.session.config.futures_policy
     assert outcome.session.config.market_type is MarketType.FUTURES
-    assert outcome.session.config.spot_policy is None
     assert policy is not None
     assert policy.leverage == 3
     assert policy.margin_mode.value == "cross"
@@ -167,7 +161,6 @@ def test_futures_session_requires_leverage() -> None:
     values = replace(
         spot_values(),
         market_type="futures",
-        spot_trading_capital_percent=None,
         futures_leverage=None,
     )
     use_case = CreatePaperSession(

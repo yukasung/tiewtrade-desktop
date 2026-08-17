@@ -56,9 +56,6 @@ def completed_candle() -> Candle:
 
 def capital_plan() -> FuturesCapitalPlan:
     return FuturesCapitalPlan(
-        available_capital=Decimal("200000"),
-        trading_capital=Decimal("100000"),
-        collateral_buffer=Decimal("100000"),
         initial_margin_per_entry=Decimal("10000"),
         target_notional_per_entry=Decimal("30000"),
     )

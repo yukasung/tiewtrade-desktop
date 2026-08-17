@@ -40,7 +40,6 @@ from tiewtrade.trading.session_config import (
     SessionConfig,
     TradeMode,
 )
-from tiewtrade.trading.spot_policy import SpotTradingPolicy
 from tiewtrade.trading.symbol_rules import SymbolRules
 
 
@@ -715,7 +714,7 @@ def test_a_reopened_basket_leaves_out_the_entries_that_already_sold() -> None:
 
 
 def test_minimum_notional_rejection_releases_strategy_to_create_a_new_intent() -> None:
-    application = paper_session(min_notional=Decimal("200"))
+    application = paper_session(min_notional=Decimal("400"))
     first_intent = arm_entry_intent(application)
     rejected_candle = candle(125, open_price="120", close_price="121")
 
@@ -1260,9 +1259,10 @@ def session_config(**overrides: object) -> SessionConfig:
         "preset_version": "rsi-step-grid-v1",
         "market_type": MarketType.SPOT,
         "trade_mode": TradeMode.PAPER,
-        "available_capital": Decimal("1000"),
+        # 1000 over four Entries was 250 an Entry: the same size, stated the
+        # way the form states it now.
+        "capital_per_entry": Decimal("250"),
         "entry_policy": EntryPolicy(max_entries=4),
-        "spot_policy": SpotTradingPolicy(trading_capital_ratio=Decimal("0.6")),
     }
     values.update(overrides)
     return SessionConfig(**values)  # type: ignore[arg-type]

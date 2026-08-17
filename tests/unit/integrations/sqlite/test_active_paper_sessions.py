@@ -2,6 +2,7 @@ import sqlite3
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 from datetime import UTC, datetime
+from decimal import Decimal
 from pathlib import Path
 from threading import Barrier
 from uuid import UUID
@@ -20,7 +21,11 @@ from tiewtrade.application.paper_session_setup import (
 from tiewtrade.integrations.sqlite.active_paper_sessions import (
     SQLiteActivePaperSessions,
 )
-from tiewtrade.integrations.sqlite.database import SQLiteDatabase
+from tiewtrade.integrations.sqlite.database import (
+    _V11_BOT_SESSIONS_COLUMNS,
+    _V11_BOT_SESSIONS_TABLE_SQL,
+    SQLiteDatabase,
+)
 from tiewtrade.integrations.sqlite.paper_runtime_lifecycle import (
     SQLitePaperRuntimeLifecycle,
 )
@@ -204,9 +209,202 @@ def test_migration_from_v2_preserves_trade_history_record(tmp_path: Path) -> Non
             """
         ).fetchone()
 
-    assert version == 10
+    assert version == 12
     assert basket_id == "basket-sentinel"
     assert bot_sessions_exists is not None
+
+
+def test_migration_to_v11_takes_the_spot_ratio_out_of_a_session(
+    tmp_path: Path,
+) -> None:
+    """A Session started under a ratio keeps running, trading all of it now."""
+    path = tmp_path / "tiewtrade.sqlite3"
+    database = SQLiteDatabase(path)
+    database.migrate()
+    store = SQLiteActivePaperSessions(database)
+    session = configured_spot_session()
+    store.create(session)
+    # The lifecycle points at the Session, so the rebuild has a reference to
+    # keep pointing somewhere; without one the migration passes by luck.
+    SQLitePaperRuntimeLifecycle(database).mark_stopped(
+        session.config.session_id, datetime(2026, 8, 8, 5, 0, tzinfo=UTC)
+    )
+    with database.connect() as connection:
+        _restore_v10_bot_sessions(connection)
+
+    database.migrate()
+
+    with database.connect() as connection:
+        version = connection.execute("PRAGMA user_version").fetchone()[0]
+        columns = {
+            row["name"] for row in connection.execute("PRAGMA table_info(bot_sessions)")
+        }
+        indexes = {
+            row["name"] for row in connection.execute("PRAGMA index_list(bot_sessions)")
+        }
+        broken_references = connection.execute("PRAGMA foreign_key_check").fetchall()
+        lifecycle_target = next(
+            row["table"]
+            for row in connection.execute(
+                "PRAGMA foreign_key_list(paper_runtime_lifecycle)"
+            )
+        )
+
+    assert version == 12
+    assert "spot_trading_capital_ratio" not in columns
+    # The one guarantee the rebuilt table has to keep carrying.
+    assert "bot_sessions_single_active_idx" in indexes
+    # The lifecycle still points at the Session, not at a table left behind.
+    assert broken_references == []
+    assert lifecycle_target == "bot_sessions"
+    assert store.get_active() == session
+    assert path.with_suffix(".sqlite3.v10.bak").exists()
+
+
+@pytest.mark.parametrize(
+    ("session", "total", "expected_per_entry"),
+    [
+        pytest.param(configured_spot_session(), "200000", Decimal("20000"), id="spot"),
+        pytest.param(
+            configured_futures_session(), "200000", Decimal("10000"), id="futures"
+        ),
+    ],
+)
+def test_migration_to_v12_keeps_every_session_trading_the_size_it_was(
+    tmp_path: Path,
+    session: ConfiguredPaperSession,
+    total: str,
+    expected_per_entry: Decimal,
+) -> None:
+    """A wallet total becomes what it was already spending on one Entry.
+
+    Renamed rather than converted, an old 200,000 would come back as two
+    hundred thousand per Entry and trade a hundred times the size it was
+    started with. Spot divided the total by its Entries; Futures took half of
+    it first.
+    """
+    path = tmp_path / "tiewtrade.sqlite3"
+    database = SQLiteDatabase(path)
+    database.migrate()
+    store = SQLiteActivePaperSessions(database)
+    store.create(session)
+    with database.connect() as connection:
+        _restore_v11_bot_sessions(connection, total)
+
+    database.migrate()
+
+    active = store.get_active()
+    assert active is not None
+    assert active.config.capital_per_entry == expected_per_entry
+    # Everything else about the Session is carried across untouched.
+    assert active.config.session_id == session.config.session_id
+    assert active.config.entry_policy == session.config.entry_policy
+
+
+def _restore_v11_bot_sessions(connection: sqlite3.Connection, total: str) -> None:
+    """Put the Session back in the shape v11 wrote it: a wallet total."""
+    connection.execute("PRAGMA foreign_keys = OFF")
+    connection.execute(_V11_BOT_SESSIONS_TABLE_SQL.format(table="v11_bot_sessions"))
+    connection.execute(
+        f"""
+        INSERT INTO v11_bot_sessions ({_V11_BOT_SESSIONS_COLUMNS})
+        SELECT
+            session_id, trade_mode, market_type, symbol, timeframe,
+            preset_version, '{total}', max_entries,
+            futures_policy_version, futures_leverage,
+            futures_trading_capital_ratio, futures_collateral_buffer_ratio,
+            futures_maintenance_margin_rate, futures_margin_mode,
+            futures_position_mode, created_at_utc, ended_at_utc
+        FROM bot_sessions
+        """
+    )
+    connection.execute("DROP TABLE bot_sessions")
+    connection.execute("ALTER TABLE v11_bot_sessions RENAME TO bot_sessions")
+    connection.execute(
+        """
+        CREATE UNIQUE INDEX bot_sessions_single_active_idx
+        ON bot_sessions ((1))
+        WHERE ended_at_utc IS NULL
+        """
+    )
+    connection.execute("PRAGMA user_version = 11")
+
+
+def _restore_v10_bot_sessions(connection: sqlite3.Connection) -> None:
+    """Put a Session back in the shape v10 wrote it, ratio column and all.
+
+    Built beside the migrated table and renamed over it, the way the migration
+    itself has to, so the lifecycle's reference is never pointed at a table
+    that is about to be dropped. Enforcement is off for the swap.
+    """
+    connection.execute("PRAGMA foreign_keys = OFF")
+    connection.execute(
+        """
+        CREATE TABLE v10_bot_sessions (
+            session_id TEXT PRIMARY KEY,
+            trade_mode TEXT NOT NULL,
+            market_type TEXT NOT NULL,
+            symbol TEXT NOT NULL,
+            timeframe TEXT NOT NULL,
+            preset_version TEXT NOT NULL,
+            available_capital TEXT NOT NULL,
+            max_entries INTEGER NOT NULL,
+            spot_trading_capital_ratio TEXT,
+            futures_policy_version TEXT,
+            futures_leverage INTEGER,
+            futures_trading_capital_ratio TEXT,
+            futures_collateral_buffer_ratio TEXT,
+            futures_maintenance_margin_rate TEXT,
+            futures_margin_mode TEXT,
+            futures_position_mode TEXT,
+            created_at_utc TEXT NOT NULL,
+            ended_at_utc TEXT,
+            CHECK (
+                (
+                    market_type = 'spot'
+                    AND spot_trading_capital_ratio IS NOT NULL
+                    AND futures_policy_version IS NULL
+                )
+                OR
+                (
+                    market_type = 'futures'
+                    AND spot_trading_capital_ratio IS NULL
+                    AND futures_policy_version IS NOT NULL
+                )
+            )
+        )
+        """
+    )
+    connection.execute(
+        """
+        INSERT INTO v10_bot_sessions (
+            session_id, trade_mode, market_type, symbol, timeframe,
+            preset_version, available_capital, max_entries,
+            spot_trading_capital_ratio, futures_policy_version, futures_leverage,
+            futures_trading_capital_ratio, futures_collateral_buffer_ratio,
+            futures_maintenance_margin_rate, futures_margin_mode,
+            futures_position_mode, created_at_utc, ended_at_utc
+        )
+        SELECT
+            session_id, trade_mode, market_type, symbol, timeframe,
+            preset_version, capital_per_entry * max_entries, max_entries,
+            '0.8', futures_policy_version, futures_leverage,
+            futures_trading_capital_ratio, futures_collateral_buffer_ratio,
+            futures_maintenance_margin_rate, futures_margin_mode,
+            futures_position_mode, created_at_utc, ended_at_utc
+        FROM bot_sessions
+        """
+    )
+    connection.execute("DROP TABLE bot_sessions")
+    connection.execute("ALTER TABLE v10_bot_sessions RENAME TO bot_sessions")
+    connection.execute(
+        """
+        CREATE UNIQUE INDEX bot_sessions_single_active_idx
+        ON bot_sessions ((1))
+        WHERE ended_at_utc IS NULL
+        """
+    )
+    connection.execute("PRAGMA user_version = 10")
 
 
 class _CommitFailingConnection(sqlite3.Connection):

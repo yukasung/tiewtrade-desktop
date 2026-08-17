@@ -335,7 +335,7 @@ class MainWindow(QMainWindow):
         available = self._lifecycle_workflow.snapshot.available_actions
         if BotControlAction.START not in available:
             self.setup.show_field_error(
-                "available_capital",
+                "capital_per_entry",
                 "The existing Paper Session cannot be started again. "
                 "Close its positions to start a new one.",
             )
@@ -417,7 +417,7 @@ class MainWindow(QMainWindow):
             return
         if retire_session is None:
             self.setup.show_field_error(
-                "available_capital",
+                "capital_per_entry",
                 "Paper Session replacement is unavailable. Restart the application.",
             )
             return
@@ -473,7 +473,7 @@ class MainWindow(QMainWindow):
                 "Stop it, or restart the application."
             )
         self.setup.show_field_error(
-            "available_capital",
+            "capital_per_entry",
             f"{message} Try Start Paper Bot again.",
         )
 

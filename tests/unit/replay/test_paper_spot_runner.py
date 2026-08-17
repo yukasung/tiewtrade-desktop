@@ -10,7 +10,6 @@ from tiewtrade.replay.paper_spot import ReplayResult, run_paper_spot_replay
 from tiewtrade.strategies.rsi_step_grid.preset import RsiStepGridPreset
 from tiewtrade.trading.entry_policy import EntryPolicy
 from tiewtrade.trading.session_config import MarketType, SessionConfig, TradeMode
-from tiewtrade.trading.spot_policy import SpotTradingPolicy
 from tiewtrade.trading.symbol_rules import SymbolRules
 
 
@@ -61,9 +60,8 @@ def session_config() -> SessionConfig:
         preset_version="rsi-step-grid-v1",
         market_type=MarketType.SPOT,
         trade_mode=TradeMode.PAPER,
-        available_capital=Decimal("1000"),
+        capital_per_entry=Decimal("1000"),
         entry_policy=EntryPolicy(max_entries=4),
-        spot_policy=SpotTradingPolicy(trading_capital_ratio=Decimal("0.6")),
     )
 
 

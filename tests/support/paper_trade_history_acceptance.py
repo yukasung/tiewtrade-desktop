@@ -35,7 +35,6 @@ from tiewtrade.strategies.rsi_step_grid.preset import RsiStepGridPreset
 from tiewtrade.trading.entry_policy import EntryPolicy
 from tiewtrade.trading.futures_policy import FuturesTradingPolicy
 from tiewtrade.trading.session_config import MarketType, SessionConfig, TradeMode
-from tiewtrade.trading.spot_policy import SpotTradingPolicy
 from tiewtrade.trading.symbol_rules import SymbolRules
 from tiewtrade.trading.trade_history import BasketResult, BasketStatus, TradeFill
 
@@ -61,9 +60,8 @@ def build_spot_session(session_id: UUID) -> PaperSpotSession:
             preset_version=_PRESET.version,
             market_type=MarketType.SPOT,
             trade_mode=TradeMode.PAPER,
-            available_capital=Decimal("1000"),
+            capital_per_entry=Decimal("250"),
             entry_policy=EntryPolicy(max_entries=4),
-            spot_policy=SpotTradingPolicy(trading_capital_ratio=Decimal("0.6")),
         ),
         _MARKET_DATA,
         SymbolRules(
@@ -83,9 +81,8 @@ def build_futures_session(session_id: UUID) -> PaperFuturesSession:
             preset_version=_PRESET.version,
             market_type=MarketType.FUTURES,
             trade_mode=TradeMode.PAPER,
-            available_capital=Decimal("200000"),
+            capital_per_entry=Decimal("10000"),
             entry_policy=EntryPolicy(max_entries=10),
-            spot_policy=None,
             futures_policy=FuturesTradingPolicy.v1(leverage=3),
         ),
         _MARKET_DATA,

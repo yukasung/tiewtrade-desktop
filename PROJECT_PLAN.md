@@ -16,9 +16,8 @@ production code
   risk policy และ PnL ใช้ implementation ร่วมกันทุก Trade Mode
 - Paper, Live Spot และ Live Futures ใช้ execution adapters แยกกัน
 - ค่าใน form ต้องผ่าน validation และกลายเป็น immutable Session configuration/policy
-- `trading_capital_ratio`, `max_entries`, symbol และ timeframe ห้าม hard-code ใน
-  business logic
-- 80% และ 10 Entries เป็นค่าเริ่มต้นของ form เท่านั้น
+- `max_entries`, symbol และ timeframe ห้าม hard-code ใน business logic
+- 10 Entries เป็นค่าเริ่มต้นของ form เท่านั้น
 - หนึ่ง installation ใช้ Binance Account เดียวและมี Active Bot Session ได้สูงสุดหนึ่ง Session
 - สร้าง Module หรือ seam เมื่อมีพฤติกรรมและ consumer จริง ไม่สร้างโครงว่างล่วงหน้า
 - ระหว่างพัฒนาใช้ Paper และ fake adapters เท่านั้น ห้ามส่ง Live order
@@ -45,7 +44,7 @@ Foundation ที่พร้อมใช้งานแล้วประกอ
 
 - shared immutable `SessionConfig` สำหรับ Paper และ Live
 - `MarketDataConfig`, immutable Candle และ completed-candle continuity
-- `EntryPolicy` และ `SpotTradingPolicy` ที่รับค่าจาก Session setup
+- `EntryPolicy` ที่รับค่าจาก Session setup
 - Spot capital allocation, symbol quantization และ minimum-notional check
 - Basket weighted average, Take Profit, realized PnL และ atomic state transitions
 - Entry Pair และ Cooldown Month lifecycle แบบ UTC

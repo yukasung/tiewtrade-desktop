@@ -32,15 +32,19 @@ class SessionSetupWidget(QWidget):
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.setObjectName("sessionSetup")
+        # A field is only reachable by name once both halves are registered
+        # under it, so the control a validation error scrolls to and the label
+        # that error is written into cannot drift apart.
         self._field_errors: dict[str, QLabel] = {}
+        self._field_controls: dict[str, QWidget] = {}
 
         self.trade_mode_label = QLabel("Paper")
         self.trade_mode_label.setObjectName("readOnlyValue")
 
         self.market_type = QComboBox()
         self.market_type.setObjectName("marketType")
-        self.market_type.addItem("Spot", "spot")
-        self.market_type.addItem("Futures", "futures")
+        self.market_type.addItem("Spot", MarketType.SPOT.value)
+        self.market_type.addItem("Futures", MarketType.FUTURES.value)
 
         self.symbol = QComboBox()
         self.symbol.setObjectName("symbol")
@@ -53,25 +57,22 @@ class SessionSetupWidget(QWidget):
             self.timeframe.addItem(timeframe, timeframe)
         self.timeframe.setCurrentIndex(self.timeframe.findData("5m"))
 
-        self.available_capital = QLineEdit()
-        self.available_capital.setObjectName("availableCapital")
-        self.available_capital.setPlaceholderText("Enter available USDT")
-        self.available_capital_error = self._error_label("available_capital")
+        self.capital_per_entry = QLineEdit()
+        self.capital_per_entry.setObjectName("capitalPerEntry")
+        self.capital_per_entry.setPlaceholderText("Enter USDT amount")
+        self.capital_per_entry_error = self._error_label(
+            "capital_per_entry", self.capital_per_entry
+        )
 
         self.max_entries = QSpinBox()
         self.max_entries.setObjectName("maxEntries")
         self.max_entries.setRange(2, 20)
         self.max_entries.setSingleStep(2)
         self.max_entries.setValue(10)
-        self.max_entries_error = self._error_label("max_entries")
+        self.max_entries_error = self._error_label("max_entries", self.max_entries)
 
         self.strategy = QComboBox()
         self.strategy.setObjectName("strategy")
-
-        self.spot_ratio = QLineEdit("80")
-        self.spot_ratio.setObjectName("spotTradingCapitalPercent")
-        self.spot_ratio.setPlaceholderText("Percent")
-        self.spot_ratio_error = self._error_label("spot_trading_capital_percent")
 
         futures_policy = FuturesTradingPolicy.v1(
             leverage=FuturesTradingPolicy.V1_MINIMUM_LEVERAGE
@@ -84,10 +85,10 @@ class SessionSetupWidget(QWidget):
         )
         self.leverage.setValue(futures_policy.leverage)
 
-        self.symbol_error = self._error_label("symbol")
-        self.timeframe_error = self._error_label("timeframe")
-        self.market_type_error = self._error_label("market_type")
-        self.strategy_error = self._error_label("preset_version")
+        self.symbol_error = self._error_label("symbol", self.symbol)
+        self.timeframe_error = self._error_label("timeframe", self.timeframe)
+        self.market_type_error = self._error_label("market_type", self.market_type)
+        self.strategy_error = self._error_label("preset_version", self.strategy)
 
         self.create_button = QPushButton("Start Paper Bot")
         self.create_button.setObjectName("primaryButton")
@@ -97,9 +98,8 @@ class SessionSetupWidget(QWidget):
         self.symbol.setAccessibleName("Pair")
         self.timeframe.setAccessibleName("Timeframe")
         self.strategy.setAccessibleName("Strategy")
-        self.available_capital.setAccessibleName("Available Capital (USDT)")
+        self.capital_per_entry.setAccessibleName("Amount (USDT)")
         self.max_entries.setAccessibleName("Maximum Entries")
-        self.spot_ratio.setAccessibleName("Spot Trading Capital (%)")
         self.leverage.setAccessibleName("Futures Leverage")
         self.create_button.setAccessibleName("Start Paper Bot")
 
@@ -108,16 +108,13 @@ class SessionSetupWidget(QWidget):
         self._sync_market_fields()
 
     def values(self) -> PaperSessionSetupValues:
-        futures = self.market_type.currentData() == "futures"
+        futures = self._market_type() is MarketType.FUTURES
         return PaperSessionSetupValues(
             market_type=str(self.market_type.currentData()),
             symbol=str(self.symbol.currentData()),
             timeframe=str(self.timeframe.currentData()),
-            available_capital=self.available_capital.text().strip(),
+            capital_per_entry=self.capital_per_entry.text().strip(),
             max_entries=str(self.max_entries.value()),
-            spot_trading_capital_percent=(
-                None if futures else self.spot_ratio.text().strip()
-            ),
             futures_leverage=str(self.leverage.value()) if futures else None,
             preset_version=str(self.strategy.currentData()),
         )
@@ -132,10 +129,8 @@ class SessionSetupWidget(QWidget):
         self.market_type.setCurrentIndex(self.market_type.findData(values.market_type))
         self.symbol.setCurrentIndex(self.symbol.findData(values.symbol))
         self.timeframe.setCurrentIndex(self.timeframe.findData(values.timeframe))
-        self.available_capital.setText(values.available_capital)
+        self.capital_per_entry.setText(values.capital_per_entry)
         self.max_entries.setValue(int(values.max_entries))
-        if values.spot_trading_capital_percent is not None:
-            self.spot_ratio.setText(values.spot_trading_capital_percent)
         if values.futures_leverage is not None:
             self.leverage.setValue(int(values.futures_leverage))
         self._populate_strategy()
@@ -155,9 +150,8 @@ class SessionSetupWidget(QWidget):
             self.symbol,
             self.timeframe,
             self.strategy,
-            self.available_capital,
+            self.capital_per_entry,
             self.max_entries,
-            self.spot_ratio,
             self.leverage,
             self.create_button,
         ):
@@ -177,21 +171,17 @@ class SessionSetupWidget(QWidget):
         error_label.setVisible(True)
 
     def reveal_validation_field(self, field: str) -> tuple[QWidget, QLabel] | None:
-        if field == "available_capital":
-            return self.available_capital, self.available_capital_error
-        if field == "market_type":
-            return self.market_type, self.market_type_error
-        if field == "max_entries":
-            return self.max_entries, self.max_entries_error
-        if field == "spot_trading_capital_percent":
-            return self.spot_ratio, self.spot_ratio_error
-        if field == "symbol":
-            return self.symbol, self.symbol_error
-        if field == "timeframe":
-            return self.timeframe, self.timeframe_error
-        if field == "preset_version":
-            return self.strategy, self.strategy_error
-        return None
+        """The control at fault and the line its error is written on.
+
+        A field the form does not carry reads as None rather than raising: a
+        validation error names a field the application knows about, and one
+        this form has no row for is nothing it can scroll into view.
+        """
+        control = self._field_controls.get(field)
+        error_label = self._field_errors.get(field)
+        if control is None or error_label is None:
+            return None
+        return control, error_label
 
     def _build_layout(self) -> None:
         root = QVBoxLayout(self)
@@ -233,9 +223,9 @@ class SessionSetupWidget(QWidget):
         )
         self._add_row(
             self._form_layout,
-            "Available (USDT)",
-            self.available_capital,
-            (self.available_capital_error,),
+            "Amount (USDT)",
+            self.capital_per_entry,
+            (self.capital_per_entry_error,),
         )
         self._add_row(
             self._form_layout,
@@ -243,14 +233,8 @@ class SessionSetupWidget(QWidget):
             self.max_entries,
             (self.max_entries_error,),
         )
-        # The two markets ask for one number each, in the same place, so they
-        # are two rows of this form that take turns rather than two panels.
-        self.spot_row = self._add_row(
-            self._form_layout,
-            "Trading Ratio (%)",
-            self.spot_ratio,
-            (self.spot_ratio_error,),
-        )
+        # Futures asks for one number more than Spot does, so it is a row of
+        # this form that appears and goes rather than a panel of its own.
         self.futures_row = self._add_row(self._form_layout, "Leverage", self.leverage)
         card_layout.addLayout(self._form_layout)
 
@@ -263,13 +247,15 @@ class SessionSetupWidget(QWidget):
 
     @Slot()
     def _sync_market_fields(self) -> None:
-        futures = self.market_type.currentData() == "futures"
-        self.spot_row.setVisible(not futures)
+        futures = self._market_type() is MarketType.FUTURES
         self.futures_row.setVisible(futures)
         self._populate_strategy()
 
+    def _market_type(self) -> MarketType:
+        return MarketType(self.market_type.currentData())
+
     def _populate_strategy(self) -> None:
-        market_type = MarketType(self.market_type.currentData())
+        market_type = self._market_type()
         previous = self.strategy.currentData()
         self.strategy.blockSignals(True)
         self.strategy.clear()
@@ -313,10 +299,17 @@ class SessionSetupWidget(QWidget):
         form.addWidget(row)
         return row
 
-    def _error_label(self, field: str) -> QLabel:
+    def _error_label(self, field: str, control: QWidget) -> QLabel:
+        """The line a field's error is written on, registered with the field.
+
+        The control is taken here rather than in a second call so that a field
+        cannot be given somewhere to say what is wrong without also being
+        somewhere the form can scroll to.
+        """
         label = QLabel()
         label.setObjectName("fieldError")
         label.setVisible(False)
         label.setWordWrap(True)
         self._field_errors[field] = label
+        self._field_controls[field] = control
         return label

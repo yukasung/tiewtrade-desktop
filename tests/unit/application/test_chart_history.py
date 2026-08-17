@@ -15,7 +15,6 @@ from tiewtrade.market_data.candle import Candle
 from tiewtrade.market_data.config import MarketDataConfig
 from tiewtrade.trading.entry_policy import EntryPolicy
 from tiewtrade.trading.session_config import MarketType, SessionConfig, TradeMode
-from tiewtrade.trading.spot_policy import SpotTradingPolicy
 from tiewtrade.trading.trade_history import FillSide, FillSource, TradeFill
 
 
@@ -280,9 +279,8 @@ def session() -> ConfiguredPaperSession:
             preset_version="rsi-step-grid-v1",
             market_type=MarketType.SPOT,
             trade_mode=TradeMode.PAPER,
-            available_capital=Decimal("1000"),
+            capital_per_entry=Decimal("1000"),
             entry_policy=EntryPolicy(max_entries=10),
-            spot_policy=SpotTradingPolicy(trading_capital_ratio=Decimal("0.8")),
         ),
         market_data=MarketDataConfig(symbol="BTCUSDT", timeframe="5m"),
         created_at_utc=datetime(2026, 1, 1, tzinfo=UTC),

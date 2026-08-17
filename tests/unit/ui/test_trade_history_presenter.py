@@ -10,6 +10,7 @@ from tiewtrade.application.trade_history import (
 )
 from tiewtrade.trading.session_config import MarketType, TradeMode
 from tiewtrade.trading.trade_history import FillSide
+from tiewtrade.ui.money_text import money_text
 from tiewtrade.ui.table_column import Column
 from tiewtrade.ui.theme import NEGATIVE_COLOR, POSITIVE_COLOR
 from tiewtrade.ui.trade_history_presenter import (
@@ -19,7 +20,6 @@ from tiewtrade.ui.trade_history_presenter import (
     TradeHistoryFilterValues,
     quick_range_dates,
     trade_history_filter,
-    usdt_text,
 )
 
 
@@ -72,7 +72,7 @@ def test_a_recorded_figure_reads_to_the_cent_whatever_it_was_stored_as(
     value: Decimal, expected: str
 ) -> None:
     """The record keeps every place; the column shows the two that are read."""
-    assert usdt_text(value) == expected
+    assert money_text(value) == expected
 
 
 def test_basket_columns_format_utc_and_every_column() -> None:

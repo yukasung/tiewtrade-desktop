@@ -23,7 +23,6 @@ from tiewtrade.trading.entry_policy import EntryPolicy
 from tiewtrade.trading.futures_policy import FuturesTradingPolicy
 from tiewtrade.trading.position import PositionSide
 from tiewtrade.trading.session_config import MarketType, SessionConfig, TradeMode
-from tiewtrade.trading.spot_policy import SpotTradingPolicy
 from tiewtrade.trading.symbol_rules import SymbolRules
 
 
@@ -38,9 +37,8 @@ def test_session_requires_paper_futures_configuration_and_matching_preset() -> N
         preset_version=session.preset_version,
         market_type=MarketType.SPOT,
         trade_mode=TradeMode.PAPER,
-        available_capital=session.available_capital,
+        capital_per_entry=session.capital_per_entry,
         entry_policy=session.entry_policy,
-        spot_policy=SpotTradingPolicy(trading_capital_ratio=Decimal("0.8")),
     )
     with pytest.raises(ValueError, match="Paper Futures"):
         make_session(spot_session)
@@ -265,7 +263,7 @@ def test_unexpected_margin_error_fails_closed(
     assert session.snapshot.position_side is None
     assert session.snapshot.take_profit_price is None
     assert session.snapshot.liquidation_price is None
-    assert session.snapshot.account_equity == Decimal("1000")
+    assert session.snapshot.account_equity == futures_session().session_capital
     assert session._basket is None
     assert session._lifecycle.entry_count == 0
     assert cast(RsiStepGridStrategy, session._strategy)._pending_intent is None
@@ -439,7 +437,7 @@ def test_entry_updates_account_equity_and_liquidation_threshold() -> None:
     assert snapshot.entry_fill is None
     assert snapshot.position_side is PositionSide.LONG
     # Opening costs nothing now, so equity is untouched until the mark moves.
-    assert snapshot.account_equity == snapshot.capital_plan.available_capital
+    assert snapshot.account_equity == futures_session().session_capital
     assert snapshot.liquidation_price is not None
 
 
@@ -461,7 +459,8 @@ def test_account_equity_marks_open_long_to_latest_accepted_close() -> None:
     assert snapshot.accepted
     assert snapshot.exit_fill is None
     assert snapshot.state is PaperFuturesSessionState.ACTIVE
-    assert snapshot.account_equity == Decimal("896.0")
+    # Everything the Session may commit, less what the mark has taken.
+    assert snapshot.account_equity == Decimal("396.0")
 
 
 def test_warm_up_seeds_indicators_without_execution_side_effects() -> None:
@@ -504,9 +503,8 @@ def futures_session() -> SessionConfig:
         preset_version="rsi-step-grid-v1",
         market_type=MarketType.FUTURES,
         trade_mode=TradeMode.PAPER,
-        available_capital=Decimal("1000"),
+        capital_per_entry=Decimal("250"),
         entry_policy=EntryPolicy(max_entries=2),
-        spot_policy=None,
         futures_policy=FuturesTradingPolicy.v1(leverage=5),
     )
 
