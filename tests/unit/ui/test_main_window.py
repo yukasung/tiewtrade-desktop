@@ -30,6 +30,7 @@ from tests.support.trade_history_ui import (
 )
 from tests.support.workspace_snapshots import basket_entries
 from tiewtrade.application.bot_control import (
+    BotControlAction,
     BotControlSnapshot,
     BotLifecycleResult,
     workspace_with_runtime_state,
@@ -1758,7 +1759,7 @@ def test_an_open_position_shows_before_any_bot_is_started(qtbot: QtBot) -> None:
     )
     qtbot.addWidget(window)
     window.show()
-    qtbot.waitUntil(lambda: window._open_basket is not None)
+    qtbot.waitUntil(lambda: window._open_position.basket is not None)
 
     relay.new_generation().in_progress_candle(
         flat_candle(datetime(2026, 8, 1, 12, 5, tzinfo=UTC), 110)
@@ -1798,49 +1799,39 @@ def test_a_held_position_survives_a_snapshot_that_carries_no_basket(
     for _ in range(2):
         window._bot_control_changed(window._lifecycle_workflow.snapshot)
 
-    assert window._open_basket is not None
+    assert window._open_position.basket is not None
     assert table.table.rowCount() == 1
     assert table.empty_state.isHidden()
 
 
-def test_a_position_read_before_any_price_says_it_is_waiting(qtbot: QtBot) -> None:
-    """Held but unpriced is "Loading", not "No open Position"."""
-    session = configured_spot_session()
-    reopened = reopen_basket(
-        OpenBasketState(
-            basket_id=UUID("00000000-0000-0000-0000-0000000000d3"),
-            entries=(
-                OpenBasketEntry(
-                    entry_number=1,
-                    price=Decimal("100"),
-                    quantity=Decimal("2"),
-                    filled_at=datetime(2026, 8, 1, 12, tzinfo=UTC),
-                    atr=Decimal("2"),
-                ),
+def test_a_running_runtime_keeps_the_position_tab_to_itself(qtbot: QtBot) -> None:
+    """The Runtime holds the Basket while it runs, and publishes it each candle.
+
+    Putting the window's copy back over that would show a Position as it was
+    read from the database rather than as the Bot is trading it.
+    """
+    started: list[BotControlSnapshot] = []
+    asked: list[tuple[str, Callable[[], None]]] = []
+    window = _open_position_window(qtbot, started=started, asked=asked, price=105)
+    table = window.workspace.position_basket
+    qtbot.waitUntil(lambda: table.table.rowCount() == 1)
+
+    configured = window._lifecycle_workflow.snapshot
+    window._bot_control_changed(
+        replace(
+            configured,
+            state=BotRuntimeState.RUNNING,
+            available_actions=frozenset({BotControlAction.STOP}),
+            workspace=workspace_with_runtime_state(
+                configured.workspace,
+                BotRuntimeState.RUNNING,
+                data_freshness=DataFreshness.FRESH,
             ),
-            closed_basket_count=0,
-        ),
-        entry_policy=session.config.entry_policy,
-        take_profit_atr_multiplier=Decimal("3"),
-        stop_loss_atr_multiplier=None,
-        tick_size=Decimal("0.01"),
+        )
     )
 
-    window = MainWindow(
-        create_session=unused_create,
-        load_active=lambda: session,
-        list_basket_history=empty_basket_history,
-        list_trade_fills=empty_trade_fills,
-        bot=BotActions(read_open_basket=lambda _session: reopened),
-    )
-    qtbot.addWidget(window)
-    window.show()
-    qtbot.waitUntil(lambda: window._open_basket is not None)
-
-    # No chart facts are wired, so no price has ever arrived.
-    assert window._last_chart_candle is None
-    state_label = window.workspace.position_basket.state_label
-    qtbot.waitUntil(lambda: state_label.text() == "Loading Position…")
+    assert window._open_position.basket is None
+    assert table.table.rowCount() == 0
 
 
 def _open_position_window(
@@ -1923,11 +1914,11 @@ def _open_position_window(
     )
     qtbot.addWidget(window)
     window.show()
-    qtbot.waitUntil(lambda: window._open_basket is not None)
+    qtbot.waitUntil(lambda: window._open_position.basket is not None)
     relay.new_generation().in_progress_candle(
         flat_candle(datetime(2026, 8, 1, 12, 5, tzinfo=UTC), price)
     )
-    qtbot.waitUntil(lambda: window._last_chart_candle is not None)
+    qtbot.waitUntil(lambda: window.workspace.position_basket.table.rowCount() == 1)
     return window
 
 
@@ -1969,7 +1960,7 @@ def test_declining_the_sale_leaves_the_position_open_and_the_bot_stopped(
 
     assert len(asked) == 1
     assert started == []
-    assert window._open_basket is not None
+    assert window._open_position.basket is not None
     assert _runtime_state(window) is not BotRuntimeState.RUNNING
 
 
@@ -2077,7 +2068,7 @@ def test_cancelling_the_sale_leaves_the_position_and_the_bot_alone(
     assert len(seen) == 1
     assert started == []
     assert closed == []
-    assert window._open_basket is not None
+    assert window._open_position.basket is not None
     assert _runtime_state(window) is not BotRuntimeState.RUNNING
 
 
