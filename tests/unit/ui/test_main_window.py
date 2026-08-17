@@ -1712,9 +1712,13 @@ def test_stop_with_open_position_reopens_editable_setup_without_closing(
     def confirm_close() -> None:
         dialog = QApplication.activeModalWidget()
         assert isinstance(dialog, QMessageBox)
-        yes = dialog.button(QMessageBox.StandardButton.Yes)
-        assert yes is not None
-        click(yes)
+        click(
+            next(
+                button
+                for button in dialog.buttons()
+                if button.text() == "Close at Market"
+            )
+        )
 
     # A different Session is being asked for, which is what the question is
     # about: one cannot be made while a Position of the old one is open.
@@ -2254,23 +2258,78 @@ def test_an_edited_form_still_asks_before_it_closes_the_position(
     qtbot.waitUntil(window.setup.create_button.isEnabled)
     seen: list[str] = []
 
-    def answer_yes() -> None:
+    def close_at_market() -> None:
         dialog = QApplication.activeModalWidget()
         assert isinstance(dialog, QMessageBox)
-        seen.append(dialog.text())
-        yes = dialog.button(QMessageBox.StandardButton.Yes)
-        assert yes is not None
-        click(yes)
+        seen.append(dialog.informativeText())
+        click(
+            next(
+                button
+                for button in dialog.buttons()
+                if button.text() == "Close at Market"
+            )
+        )
 
     window.setup.available_capital.setText("2500")
-    QTimer.singleShot(0, answer_yes)
+    QTimer.singleShot(0, close_at_market)
     click(window.setup.create_button)
 
     qtbot.waitUntil(lambda: closed == ["closed"])
     assert len(seen) == 1
-    assert "closes all Paper positions at the latest market price" in seen[0]
-    # The sale is not what is being decided here, so it is not described.
+    assert "sells the whole Position at the price now" in seen[0]
+    # The sale at a target is not what is being decided here, so it is not
+    # described: this Position has not reached one.
     assert "Take Profit" not in seen[0]
+
+
+def test_the_answer_that_sells_at_market_is_not_the_default(qtbot: QtBot) -> None:
+    """This question, with Yes as its default, sold two Positions by accident.
+
+    Both answers are named after the trade they make, and the one a stray
+    Enter or Escape finds is the one that trades nothing.
+    """
+    started: list[BotControlSnapshot] = []
+    asked: list[tuple[str, Callable[[], None]]] = []
+    closed: list[str] = []
+    window = _open_position_window(
+        qtbot,
+        started=started,
+        asked=asked,
+        # Below the Entry's target of 106: the Take Profit question is not
+        # the one being put here.
+        price=105,
+        replaceable=True,
+        closed=closed,
+    )
+    qtbot.waitUntil(window.setup.isVisible)
+    qtbot.waitUntil(window.setup.create_button.isEnabled)
+    buttons: list[tuple[str, str, str]] = []
+
+    def read_and_keep() -> None:
+        dialog = QApplication.activeModalWidget()
+        assert isinstance(dialog, QMessageBox)
+        default = dialog.defaultButton()
+        escape = dialog.escapeButton()
+        assert default is not None and escape is not None
+        buttons.append(
+            (
+                " · ".join(sorted(button.text() for button in dialog.buttons())),
+                default.text(),
+                escape.text(),
+            )
+        )
+        click(default)
+
+    window.setup.available_capital.setText("2500")
+    QTimer.singleShot(0, read_and_keep)
+    click(window.setup.create_button)
+
+    assert buttons == [
+        ("Close at Market · Keep Position", "Keep Position", "Keep Position")
+    ]
+    # Keeping is what it says: nothing was sold, and the Session runs on.
+    assert closed == []
+    qtbot.waitUntil(lambda: len(started) == 1)
 
 
 def test_start_from_active_session_reports_missing_replacement_service(

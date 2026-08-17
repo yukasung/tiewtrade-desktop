@@ -65,16 +65,30 @@ def ask_about_a_position_at_its_target(
 
 
 def ask_about_replacing_the_session(parent: QWidget | None) -> ReplaceSession:
-    """Ask which Session is wanted, since only one can hold the Position."""
-    answer = QMessageBox.question(
-        parent,
-        "Close Paper Position?",
-        "Yes closes all Paper positions at the latest market price and "
-        "starts a new Paper Bot with the values on this form.\n\n"
-        "No leaves them open and starts the existing Paper Session again.",
-        QMessageBox.StandardButton.No | QMessageBox.StandardButton.Yes,
-        QMessageBox.StandardButton.Yes,
+    """Ask which Session is wanted, since only one can hold the Position.
+
+    Both answers are named after the trade they make. Labelled Yes and No,
+    with Yes the default, this question sold two Positions at the market
+    price for a trader who only meant to press Start twice.
+    """
+    dialog = QMessageBox(parent)
+    dialog.setWindowTitle("Close Paper Position?")
+    dialog.setIcon(QMessageBox.Icon.Warning)
+    dialog.setText("Close this Position and start a new Paper Bot?")
+    dialog.setInformativeText(
+        "Close at Market sells the whole Position at the price now, and starts "
+        "a new Paper Bot with the values on this form.\n\n"
+        "Keep Position leaves it open and starts the existing Paper Session "
+        "again."
     )
-    if answer == QMessageBox.StandardButton.Yes:
+    close_button = dialog.addButton(
+        "Close at Market", QMessageBox.ButtonRole.DestructiveRole
+    )
+    keep_button = dialog.addButton("Keep Position", QMessageBox.ButtonRole.RejectRole)
+    # The answer that trades nothing is the one a stray Enter or Escape finds.
+    dialog.setDefaultButton(keep_button)
+    dialog.setEscapeButton(keep_button)
+    dialog.exec()
+    if dialog.clickedButton() is close_button:
         return ReplaceSession.CLOSE_AT_MARKET
     return ReplaceSession.KEEP_AND_RESUME
