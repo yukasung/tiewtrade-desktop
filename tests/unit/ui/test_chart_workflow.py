@@ -991,3 +991,69 @@ def candle(timeframe: str, minute: int, *, close: str = "103") -> Candle:
         low=Decimal("99"),
         close=Decimal(close),
     )
+
+
+def test_a_chart_panned_off_the_latest_says_so_and_can_be_sent_back() -> None:
+    """A chart that stops taking live prices reads as a fault unless it says.
+
+    The Position tab goes on marking on prices this chart is no longer
+    showing, so the two disagree by design — which is only tolerable while
+    the screen admits it, and offers the way back.
+    """
+    session = configured_spot_session()
+    requests: list[ChartRange] = []
+    following: list[bool] = []
+    workflow = ChartWorkflow(
+        load_chart=lambda configured, requested: load_snapshot(
+            configured, requested, requests
+        ),
+        thread_pool=ImmediateThreadPool(),  # type: ignore[arg-type]
+        clock=lambda: datetime(2026, 1, 1, 10, 3, tzinfo=UTC),
+    )
+    workflow.following_latest_changed.connect(following.append)
+    workflow.start(session)
+    assert workflow.following_latest
+    assert following == []
+
+    workflow.load_range(
+        ChartRange(
+            datetime(2026, 1, 1, 0, 0, tzinfo=UTC),
+            datetime(2026, 1, 1, 5, 0, tzinfo=UTC),
+        )
+    )
+
+    assert not workflow.following_latest
+    assert following == [False]
+
+    workflow.follow_latest()
+
+    assert workflow.following_latest
+    assert following == [False, True]
+    # Back on the range the chart opens at, which is the one that follows.
+    assert requests[-1] == requests[0]
+
+
+def test_the_same_following_state_is_not_announced_twice() -> None:
+    """A signal for every load would flicker the way back on and off."""
+    session = configured_spot_session()
+    requests: list[ChartRange] = []
+    following: list[bool] = []
+    workflow = ChartWorkflow(
+        load_chart=lambda configured, requested: load_snapshot(
+            configured, requested, requests
+        ),
+        thread_pool=ImmediateThreadPool(),  # type: ignore[arg-type]
+        clock=lambda: datetime(2026, 1, 1, 10, 3, tzinfo=UTC),
+    )
+    workflow.start(session)
+    workflow.following_latest_changed.connect(following.append)
+
+    for _ in range(2):
+        workflow.load_range(
+            ChartRange(
+                datetime(2026, 1, 1, 0, 0, tzinfo=UTC),
+                datetime(2026, 1, 1, 5, 0, tzinfo=UTC),
+            )
+        )
+
+    assert following == [False]

@@ -76,6 +76,10 @@ class ChartWorkflow(QObject):
 
     snapshot_changed = Signal(object)
     loading_changed = Signal(bool)
+    # A chart panned off the latest candle takes no live price, while the
+    # Position tab goes on marking on them. Said out loud, the two readings
+    # stop looking like a fault.
+    following_latest_changed = Signal(bool)
 
     def __init__(
         self,
@@ -122,7 +126,7 @@ class ChartWorkflow(QObject):
         self._pending_completed_candle = None
         self._pending_in_progress_candle = None
         self._last_safe_range = None
-        self._following_latest = True
+        self._set_following_latest(True)
         self._basket_facts = None
         self._fills_refresh_pending = False
 
@@ -139,15 +143,32 @@ class ChartWorkflow(QObject):
         self._pending_completed_candle = None
         self._pending_in_progress_candle = None
         self._last_safe_range = None
-        self._following_latest = True
+        self._set_following_latest(True)
         self.load_range(default_chart_range(self._view_session(), self._clock()))
+
+    @property
+    def following_latest(self) -> bool:
+        """Whether prices as they arrive still reach the chart."""
+        return self._following_latest
+
+    def follow_latest(self) -> None:
+        """Put the chart back on the candle forming now."""
+        if self._closed or self._session is None or self._selection is None:
+            return
+        self.load_range(default_chart_range(self._view_session(), self._clock()))
+
+    def _set_following_latest(self, following: bool) -> None:
+        if following == self._following_latest:
+            return
+        self._following_latest = following
+        self.following_latest_changed.emit(following)
 
     def load_range(self, chart_range: ChartRange) -> None:
         if self._closed or self._session is None or self._selection is None:
             return
-        self._following_latest = chart_range.end == latest_completed_boundary(
-            self._selection.timeframe,
-            self._clock(),
+        self._set_following_latest(
+            chart_range.end
+            == latest_completed_boundary(self._selection.timeframe, self._clock())
         )
         self._pending_in_progress_candle = None
         self._clear_in_progress_candle()
@@ -424,7 +445,7 @@ class ChartWorkflow(QObject):
         self._pending_completed_candle = None
         self._pending_in_progress_candle = None
         self._session = None
-        self._following_latest = False
+        self._set_following_latest(False)
 
     def _start_load(self, generation: int, chart_range: ChartRange) -> None:
         if self._session is None or self._selection is None:

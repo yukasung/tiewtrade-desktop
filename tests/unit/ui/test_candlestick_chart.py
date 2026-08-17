@@ -12,6 +12,7 @@ from pytestqt.qtbot import QtBot
 import tiewtrade.ui.candlestick_chart as candlestick_chart_module
 import tiewtrade.ui.chart_painter_model as chart_module
 from tests.support.paper_session_setup import configured_spot_session
+from tests.support.qt_interactions import click
 from tiewtrade.application.chart_data import (
     ChartRange,
     ChartReadState,
@@ -822,3 +823,39 @@ def fill(
         quantity=Decimal("2"),
         notional=Decimal(price) * Decimal("2"),
     )
+
+
+def test_the_way_back_to_the_latest_is_offered_only_when_it_is_needed(
+    qtbot: QtBot,
+) -> None:
+    """A chart on the latest candle has nowhere to jump to."""
+    chart = CandlestickChartWidget()
+    qtbot.addWidget(chart)
+    chart.show()
+
+    assert chart.follow_latest_button.isHidden()
+
+    chart.set_following_latest(False)
+
+    assert chart.follow_latest_button.isVisible()
+    assert chart.follow_latest_button.accessibleName()
+
+    chart.set_following_latest(True)
+
+    assert chart.follow_latest_button.isHidden()
+
+
+def test_jumping_to_the_latest_is_asked_for_rather_than_done_here(
+    qtbot: QtBot,
+) -> None:
+    """The widget knows the reader wants back; the range is not its to pick."""
+    chart = CandlestickChartWidget()
+    qtbot.addWidget(chart)
+    chart.show()
+    chart.set_following_latest(False)
+    asked: list[None] = []
+    chart.latest_requested.connect(lambda: asked.append(None))
+
+    click(chart.follow_latest_button)
+
+    assert asked == [None]

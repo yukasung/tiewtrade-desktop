@@ -68,6 +68,7 @@ class CandlestickChartWidget(QWidget):
     range_requested = Signal(object)
     retry_requested = Signal()
     view_requested = Signal(object)
+    latest_requested = Signal()
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -119,11 +120,19 @@ class CandlestickChartWidget(QWidget):
         self.retry_button.setObjectName("chartRetryButton")
         self.retry_button.setAccessibleName("Retry chart")
         self.retry_button.hide()
+        # A chart panned away from the latest candle stops taking live prices,
+        # while the Position tab goes on marking on them. The way back is one
+        # click rather than a range the reader has to reconstruct.
+        self.follow_latest_button = QPushButton("Jump to latest")
+        self.follow_latest_button.setObjectName("followLatestButton")
+        self.follow_latest_button.setAccessibleName("Jump to latest candle")
+        self.follow_latest_button.hide()
         self.previous_range_button.clicked.connect(self._request_previous_range)
         self.next_range_button.clicked.connect(self._request_next_range)
         self.zoom_out_button.clicked.connect(self._request_zoom_out)
         self.zoom_in_button.clicked.connect(self._request_zoom_in)
         self.retry_button.clicked.connect(self.retry_requested)
+        self.follow_latest_button.clicked.connect(self.latest_requested)
         self.symbol.currentIndexChanged.connect(self._request_view)
         self.timeframe.currentIndexChanged.connect(self._request_view)
         navigation.addWidget(self.previous_range_button)
@@ -131,6 +140,7 @@ class CandlestickChartWidget(QWidget):
         navigation.addWidget(self.zoom_out_button)
         navigation.addWidget(self.zoom_in_button)
         controls.addLayout(navigation)
+        controls.addWidget(self.follow_latest_button)
         controls.addWidget(self.retry_button)
         self._header.addWidget(self.symbol)
         self._header.addSpacing(12)
@@ -182,6 +192,15 @@ class CandlestickChartWidget(QWidget):
         if snapshot is None or not snapshot.display_candles:
             return None
         return build_painter_model(snapshot, self._chart_surface())
+
+    def set_following_latest(self, following: bool) -> None:
+        """Say when the chart has stopped taking the prices as they arrive.
+
+        A frozen chart beside a Position tab that keeps moving reads as a
+        fault. It is not one — the reader panned away from the latest candle —
+        and this is what says so, and offers the way back.
+        """
+        self.follow_latest_button.setVisible(not following)
 
     def show_snapshot(self, snapshot: ChartSnapshot) -> None:
         # A live refresh repaints the same view under the cursor, so the
