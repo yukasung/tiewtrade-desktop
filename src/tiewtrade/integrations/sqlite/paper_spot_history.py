@@ -89,11 +89,15 @@ class PaperSpotSQLiteHistory:
             closes_entry_number=closed.entry_number,
         )
         if closed_basket is not None:
+            # The store's own totals, grown by this last sale, rather than the
+            # Basket's. A Basket taken back from the database counts only what
+            # it has sold since it was taken back: closing the last Entry after
+            # a restart wrote a total and a count that left out every Entry
+            # sold before it.
             basket = replace(
                 existing,
                 closed_at_utc=closed_basket.closed_at,
-                entry_count=closed_basket.entry_count,
-                realized_pnl=closed_basket.realized_pnl,
+                realized_pnl=existing.realized_pnl + closed.realized_pnl,
                 status=BasketStatus.CLOSED,
             )
             return self._store.record_closed_basket(basket, normalized_fill)
