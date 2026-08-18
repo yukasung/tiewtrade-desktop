@@ -673,6 +673,44 @@ def test_start_takes_back_the_basket_a_previous_runtime_left_open(
     controller.stop(session)
 
 
+def test_a_basket_taken_back_is_published_before_any_live_candle(
+    tmp_path: Path,
+) -> None:
+    """Holding a Position is true from the Start, not from the next candle.
+
+    A Basket is published when a candle completes, so a Session that took one
+    back used to say nothing about it for a whole timeframe — an hour on an
+    hourly Session, with the Position tab reading as though nothing were open
+    over a Position that plainly was. No live candle arrives here at all.
+    """
+    session = configured_spot_session()
+    database = _database_with_session(tmp_path, session)
+    _record_open_spot_entry(database, session, entry_atr=Decimal("2"))
+    source = ControllablePublicCandleSource(warm_up=_warm_up_candles(), live=())
+
+    controller = PaperRuntimeController(
+        lifecycle=SQLitePaperRuntimeLifecycle(database),
+        trade_history=SQLiteTradeHistory(database),
+        symbol_rules=_symbol_rules(),
+        source_factory=lambda _endpoints: source,
+        scheduler=ImmediateScheduler(),
+        snapshot_callback=lambda _snapshot: None,
+    )
+
+    result = controller.start(session)
+
+    assert result.blocked_reason is None
+    basket = controller.current_workspace.basket
+    assert basket is not None
+    assert basket.entry_count == 1
+    assert basket.average_entry_price == Decimal("100")
+    # 100 + 3 ATR, the target it was carrying when it was left.
+    assert basket.take_profit_price == Decimal("106")
+    # Marked on the last warm-up candle, the last completed price it has seen.
+    assert basket.current_price == _warm_up_candles()[-1].close
+    controller.stop(session)
+
+
 def test_a_basket_that_cannot_be_taken_back_blocks_the_start(
     tmp_path: Path,
 ) -> None:

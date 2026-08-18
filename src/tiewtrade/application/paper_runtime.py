@@ -295,6 +295,7 @@ class PaperRuntimeController:
             publish=self._publish_candle,
             entry_lock=self._entry_lock,
             entries_enabled=self._entries_enabled.is_set,
+            restored=self._publish_restored_basket,
         )
         endpoints = BinancePublicEndpoints.for_market_type(session.config.market_type)
         source = self._source_factory(endpoints)
@@ -378,6 +379,27 @@ class PaperRuntimeController:
                         workspace=stale_workspace_snapshot(self.current_workspace)
                     )
                 )
+
+    def _publish_restored_basket(
+        self,
+        basket: BasketSnapshot,
+        observed_at_utc: datetime,
+    ) -> None:
+        """Put the Basket that was taken back into the workspace at once.
+
+        Only the workspace: the candle it is marked on is a warm-up candle the
+        chart already has, and handing it round again as a completed candle
+        would be reporting it twice.
+        """
+        self._publish(
+            BotLifecycleResult(
+                workspace=paper_runtime_workspace_snapshot(
+                    self.current_workspace,
+                    basket=basket,
+                    observed_at_utc=observed_at_utc,
+                )
+            )
+        )
 
     def _publish_candle(
         self,

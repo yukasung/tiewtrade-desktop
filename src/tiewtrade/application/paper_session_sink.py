@@ -108,6 +108,8 @@ class PaperRuntimeSink[Snapshot: _CandleSnapshot]:
         publish: Callable[[BasketSnapshot | None, Candle, datetime], None],
         entry_lock: Lock,
         entries_enabled: Callable[[], bool],
+        current_snapshot: Callable[[], Snapshot],
+        restored: Callable[[BasketSnapshot, datetime], None] | None = None,
         position: OpenBasketPosition | None = None,
     ) -> None:
         self._warm_up = warm_up
@@ -116,6 +118,8 @@ class PaperRuntimeSink[Snapshot: _CandleSnapshot]:
         self._publish = publish
         self._entry_lock = entry_lock
         self._entries_enabled = entries_enabled
+        self._current_snapshot = current_snapshot
+        self._restored = restored
         # A Basket taken back arrives with its Entries already filled, so the
         # position starts where they left it rather than at nothing.
         self._position = position
@@ -127,6 +131,31 @@ class PaperRuntimeSink[Snapshot: _CandleSnapshot]:
         received_at: datetime,
     ) -> None:
         self._warm_up(candles, received_at)
+        self._publish_what_was_taken_back(candles, received_at)
+
+    def _publish_what_was_taken_back(
+        self,
+        candles: tuple[Candle, ...],
+        observed_at_utc: datetime,
+    ) -> None:
+        """Say what the Session is holding before the market says anything.
+
+        A Basket is only published when a candle completes, and the Session
+        that took one back is holding it from the moment it starts — a whole
+        timeframe before the next candle closes, which on an hourly Session is
+        an hour of the Position tab reading as though nothing were open.
+
+        It is marked on the last warm-up candle, which is the last completed
+        price the Session has seen and the one it would be marked on anyway.
+        """
+        if self._restored is None or self._position is None or not candles:
+            return
+        basket = self._basket(
+            self._current_snapshot(), self._position, candles[-1], observed_at_utc
+        )
+        if basket is None:
+            return
+        self._restored(basket, observed_at_utc)
 
     async def process_completed(
         self,
@@ -205,6 +234,7 @@ def paper_session_sink(
     publish: Callable[[BasketSnapshot | None, Candle, datetime], None],
     entry_lock: Lock,
     entries_enabled: Callable[[], bool],
+    restored: Callable[[BasketSnapshot, datetime], None] | None = None,
 ) -> (
     PaperRuntimeSink[PaperSpotSessionSnapshot]
     | PaperRuntimeSink[PaperFuturesSessionSnapshot]
@@ -243,6 +273,8 @@ def paper_session_sink(
             publish=publish,
             entry_lock=entry_lock,
             entries_enabled=entries_enabled,
+            current_snapshot=lambda: spot_application.snapshot,
+            restored=restored,
             position=open_basket_position(spot_application.open_entries),
         )
 
@@ -279,6 +311,9 @@ def paper_session_sink(
         publish=publish,
         entry_lock=entry_lock,
         entries_enabled=entries_enabled,
+        current_snapshot=lambda: futures_application.snapshot,
+        # Nothing is ever taken back here, so there is nothing to say early.
+        restored=None,
     )
 
 
