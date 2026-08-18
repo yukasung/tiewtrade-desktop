@@ -313,3 +313,38 @@ def test_a_start_that_would_take_the_whole_basket_leaves_nothing_holding(
 
     workflow.mark_price(flat_candle(OBSERVED_AT, 110))
     assert workflow.leaves_entries_holding() is False
+
+
+def test_a_read_that_comes_back_empty_clears_the_tab(qtbot: QtBot) -> None:
+    """The database has just been asked, and answered: nothing is held.
+
+    Reasserting cannot say that — it exists to keep a held Basket over a
+    snapshot claiming there is none — so the last Entry a trader sold sat on
+    the tab as though it were still theirs.
+    """
+    held: list[ReopenedBasket | None] = [_reopened()]
+    workflow, shown = _workflow(lambda _session: held[0])
+    workflow.read_for(configured_spot_session())
+    qtbot.waitUntil(lambda: workflow.basket is not None)
+    workflow.mark_price(flat_candle(OBSERVED_AT, 105))
+    qtbot.waitUntil(lambda: shown[-1].state is WorkspaceTabState.READY)
+
+    held[0] = None
+    workflow.read_for(configured_spot_session())
+
+    qtbot.waitUntil(lambda: shown[-1].state is WorkspaceTabState.EMPTY)
+    assert shown[-1].basket is None
+
+
+def test_a_basket_that_has_just_been_closed_leaves_the_tab(qtbot: QtBot) -> None:
+    """Dropping it quietly left it on screen after it was sold."""
+    workflow, shown = _workflow(lambda _session: _reopened())
+    workflow.read_for(configured_spot_session())
+    qtbot.waitUntil(lambda: workflow.basket is not None)
+    workflow.mark_price(flat_candle(OBSERVED_AT, 105))
+    qtbot.waitUntil(lambda: shown[-1].state is WorkspaceTabState.READY)
+
+    workflow.forget()
+
+    assert shown[-1].state is WorkspaceTabState.EMPTY
+    assert shown[-1].basket is None

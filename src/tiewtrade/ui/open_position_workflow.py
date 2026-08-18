@@ -117,13 +117,17 @@ class OpenPositionWorkflow(QObject):
         self._holding_is_unknown = False
 
     def forget(self) -> None:
-        """Drop a Basket that has just been closed.
+        """Drop a Basket that has just been closed, and say so.
 
         Reading a new one takes a trip to the database, and until it lands the
-        copy kept here describes something that is no longer there.
+        copy kept here describes something that is no longer there. Dropping it
+        quietly left the tab showing it: reasserting cannot clear a tab — it
+        exists to keep a held Basket over a snapshot that says there is none —
+        so what has just been sold has to be said outright.
         """
         self._basket = None
         self._holding_is_unknown = False
+        self.snapshot_changed.emit(empty_position_basket_tab())
 
     def sells_on_start_message(self) -> str | None:
         """What starting a Bot would sell at once, or nothing to say about it.
@@ -220,10 +224,22 @@ class OpenPositionWorkflow(QObject):
 
     @Slot(object)
     def _read_landed(self, result: object) -> None:
+        """Take what the database says, including that it holds nothing.
+
+        Reasserting says again what is held and leaves the tab alone where
+        nothing is — it has to, because a stopped Runtime's snapshot says
+        "no Position" over one that is open. A read that came back empty is
+        not that: the database has just been asked, and answered. Left to the
+        rule above, the last Entry a trader sold stayed on the tab as though
+        it were still theirs.
+        """
         if result is not None and not isinstance(result, ReopenedBasket):
             return
         self._basket = result
         self._holding_is_unknown = False
+        if result is None:
+            self.snapshot_changed.emit(empty_position_basket_tab())
+            return
         self.reassert()
 
     @Slot(object)
