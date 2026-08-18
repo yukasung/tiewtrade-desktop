@@ -50,10 +50,19 @@ class ClosePaperPosition:
         if basket.session_id != session.config.session_id:
             raise ValueError("open Basket belongs to a different Session")
 
+        fills = self._list_fills(basket.basket_id)
+        # An Entry that has already sold is not part of the position any
+        # more: counted again here, its quantity went into the exit Fill a
+        # second time and its result was written over rather than added to.
+        sold = {
+            fill.closes_entry_number
+            for fill in fills
+            if fill.closes_entry_number is not None
+        }
         entries = tuple(
             fill
-            for fill in self._list_fills(basket.basket_id)
-            if fill.entry_number is not None
+            for fill in fills
+            if fill.entry_number is not None and fill.entry_number not in sold
         )
         if not entries:
             raise ValueError("open Basket requires Entry Fills")
@@ -96,7 +105,10 @@ class ClosePaperPosition:
         closed = replace(
             basket,
             closed_at_utc=closed_at,
-            realized_pnl=realized_pnl,
+            # What the store has been counting, grown by this sale. The Basket
+            # keeps one result however many times it was sold out of, and the
+            # Entries that went before this are part of it.
+            realized_pnl=basket.realized_pnl + realized_pnl,
             status=BasketStatus.CLOSED,
         )
         recorded = self._record_closed(closed, fill)

@@ -60,6 +60,7 @@ from tiewtrade.integrations.sqlite.persistent_paper_spot_session import (
 from tiewtrade.integrations.sqlite.trade_history import SQLiteTradeHistory
 from tiewtrade.market_data.candle import Candle
 from tiewtrade.strategies.protocols import StrategyPreset
+from tiewtrade.trading.basket import SettledEntries
 from tiewtrade.trading.session_config import MarketType
 from tiewtrade.trading.symbol_rules import SymbolRules
 
@@ -446,6 +447,33 @@ def read_open_basket_state(
         if fill.closes_entry_number is not None
     }
     entries: list[OpenBasketEntry] = []
+    settled = SettledEntries(
+        count=len(sold),
+        realized_pnl=sum(
+            (
+                fill.realized_pnl
+                for fill in fills
+                if fill.closes_entry_number is not None
+            ),
+            Decimal("0"),
+        ),
+        quantity=sum(
+            (
+                fill.quantity
+                for fill in fills
+                if fill.entry_number is not None and fill.entry_number in sold
+            ),
+            Decimal("0"),
+        ),
+        notional=sum(
+            (
+                fill.price * fill.quantity
+                for fill in fills
+                if fill.entry_number is not None and fill.entry_number in sold
+            ),
+            Decimal("0"),
+        ),
+    )
     for fill in fills:
         if fill.entry_number is None or fill.entry_number in sold:
             continue
@@ -468,4 +496,5 @@ def read_open_basket_state(
         basket_id=basket.basket_id,
         entries=tuple(entries),
         closed_basket_count=trade_history.count_closed_baskets(session_id),
+        settled=settled,
     )

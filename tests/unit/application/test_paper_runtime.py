@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import AsyncIterator, Awaitable, Callable
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
@@ -16,6 +17,7 @@ from tests.support.paper_session_setup import (
     configured_futures_session,
     configured_spot_session,
 )
+from tiewtrade.application.open_basket import reopen_basket
 from tiewtrade.application.paper_runtime import (
     PaperRuntimeController,
     read_open_basket_state,
@@ -54,6 +56,7 @@ from tiewtrade.market_data.source_errors import (
     MarketDataFailureKind,
     MarketDataFatalError,
 )
+from tiewtrade.trading.basket import BasketCloseReason
 from tiewtrade.trading.session_config import MarketType, TradeMode
 from tiewtrade.trading.symbol_rules import SymbolRules
 from tiewtrade.trading.trade_history import (
@@ -1006,6 +1009,91 @@ def test_a_basket_taken_back_leaves_out_the_entry_that_already_sold(
     assert state is not None
     # Entry 2 sold, so only Entry 1 is still part of the position.
     assert [entry.entry_number for entry in state.entries] == [1]
+    # What it left is still part of the Basket's result, so it travels with
+    # the Entries rather than being lost with them.
+    assert state.settled.count == 1
+    assert state.settled.quantity == Decimal("1")
+    assert state.settled.notional == Decimal("90")
+    assert state.settled.realized_pnl == Decimal("5.8")
+
+
+def test_a_basket_taken_back_closes_on_the_entries_that_already_sold_too(
+    tmp_path: Path,
+) -> None:
+    """A restart must not lose what the Basket had already made.
+
+    The Runtime replays the Entries still open — the ones that sold are not
+    in the position to replay — so a stop loss on the rest wrote a result and
+    a count that left them out: 20 on a Basket that had made 25.8, over two
+    Entries reported as one.
+    """
+    session = configured_spot_session()
+    database = _database_with_session(tmp_path, session)
+    history = SQLiteTradeHistory(database)
+    _record_open_spot_entry(database, session, entry_atr=Decimal("2"))
+    basket_id = UUID("00000000-0000-0000-0000-0000000000b1")
+    basket = history.get_basket(basket_id)
+    assert basket is not None
+    history.record_entry_exit_fill(
+        replace(basket, realized_pnl=Decimal("5.8")),
+        TradeFill(
+            fill_id="paper:left-open:sale-1",
+            basket_id=basket_id,
+            session_id=session.config.session_id,
+            order_id="take-profit:1",
+            exchange_trade_id=None,
+            side=FillSide.SELL,
+            entry_number=None,
+            filled_at_utc=_NOW + timedelta(minutes=10),
+            price=Decimal("105.8"),
+            quantity=Decimal("1"),
+            notional=Decimal("105.8"),
+            realized_pnl=Decimal("5.8"),
+            source=FillSource.PAPER_EXECUTOR,
+            closes_entry_number=1,
+        ),
+    )
+    history.record_paper_spot_entry_fill(
+        TradeFill(
+            fill_id="paper:left-open:fill-2",
+            basket_id=basket_id,
+            session_id=session.config.session_id,
+            order_id="entry:left-open-2",
+            exchange_trade_id=None,
+            side=FillSide.BUY,
+            entry_number=2,
+            filled_at_utc=_NOW + timedelta(minutes=15),
+            price=Decimal("100"),
+            quantity=Decimal("1"),
+            notional=Decimal("100"),
+            realized_pnl=Decimal("0"),
+            source=FillSource.PAPER_EXECUTOR,
+            entry_atr=Decimal("2"),
+        ),
+        symbol=session.market_data.symbol,
+        timeframe=session.market_data.timeframe,
+        strategy_preset_version=session.config.preset_version,
+    )
+
+    state = read_open_basket_state(history, session.config.session_id)
+    assert state is not None
+    reopened = reopen_basket(
+        state,
+        entry_policy=session.config.entry_policy,
+        take_profit_atr_multiplier=Decimal("3"),
+        stop_loss_atr_multiplier=None,
+        tick_size=Decimal("0.01"),
+    )
+
+    closed = reopened.basket.close(
+        exit_price=Decimal("120"),
+        closed_at=_NOW + timedelta(minutes=20),
+        close_reason=BasketCloseReason.STOP_LOSS,
+    )
+
+    # 5.8 from the Entry that sold before, 20 from the one taken back.
+    assert closed.realized_pnl == Decimal("25.8")
+    assert closed.entry_count == 2
 
 
 def _record_open_spot_entry(

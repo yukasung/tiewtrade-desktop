@@ -7,12 +7,12 @@ numbers come back the same rather than close, and the reason both the Runtime
 that trades it and the tab that shows it ask here rather than each other.
 """
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from decimal import Decimal
 from uuid import UUID
 
-from tiewtrade.trading.basket import Basket
+from tiewtrade.trading.basket import Basket, SettledEntries
 from tiewtrade.trading.entry_pair import EntryPairLifecycle
 from tiewtrade.trading.entry_policy import EntryPolicy
 
@@ -33,6 +33,10 @@ class OpenBasketState:
     basket_id: UUID
     entries: tuple[OpenBasketEntry, ...]
     closed_basket_count: int
+    # What the Basket's own Entries left when they sold, which its result is
+    # owed however long ago they went. Nothing settled is the default: a
+    # Basket that has never been sold out of has none.
+    settled: SettledEntries = field(default_factory=SettledEntries)
 
     def __post_init__(self) -> None:
         if not self.entries:
@@ -67,6 +71,9 @@ def reopen_basket(
         entry_policy,
         take_profit_atr_multiplier,
         stop_loss_atr_multiplier=stop_loss_atr_multiplier,
+        # Replaying the open Entries states everything the Basket holds; what
+        # it already sold is not there to be replayed, and is told to it.
+        settled=state.settled,
     )
     lifecycle = EntryPairLifecycle(entry_policy)
     for entry in state.entries:

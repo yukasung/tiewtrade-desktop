@@ -9,7 +9,11 @@ from uuid import UUID
 import pytest
 
 from tests.support.paper_session_setup import configured_spot_session
-from tiewtrade.application.paper_session_sink import close_one_entry_at_rest
+from tiewtrade.application.paper_manual_close import ClosePaperPosition
+from tiewtrade.application.paper_session_sink import (
+    close_one_entry_at_rest,
+    read_open_basket_state,
+)
 from tiewtrade.execution.paper_spot import PaperSpotEntryFill
 from tiewtrade.integrations.sqlite.database import SQLiteDatabase
 from tiewtrade.integrations.sqlite.paper_spot_history import (
@@ -144,3 +148,65 @@ def test_a_session_holding_nothing_has_no_entry_to_sell(
     history: SQLiteTradeHistory,
 ) -> None:
     assert _sell(history, 1, "105") is False
+
+
+def test_closing_at_market_after_a_row_sale_sells_only_what_is_left(
+    history: SQLiteTradeHistory,
+    tmp_path: Path,
+) -> None:
+    """The two ways out of a Position, one after the other.
+
+    Selling one Entry by its row and then closing the rest at the market is
+    what the row button makes ordinary. Counting the sold Entry again put its
+    quantity into the exit Fill a second time, and wrote a Basket result that
+    replaced what it had realised instead of adding to it.
+    """
+    _record_two_entries(history)
+    _sell(history, 1, "105.678")
+
+    ClosePaperPosition(
+        find_open_basket=history.find_open_basket,
+        list_fills=history.list_fills,
+        record_closed=history.record_closed_basket,
+        clock=lambda: datetime(2026, 8, 4, tzinfo=UTC),
+    ).execute(
+        configured_spot_session(),
+        market_price=lambda: Decimal("120"),
+        tick_size=Decimal("0.01"),
+    )
+
+    fills = history.list_fills(BASKET_ID)
+    exit_fill = fills[-1]
+    # Entry 2 alone, at 2 units — not the 4 both Entries were bought at.
+    assert exit_fill.quantity == Decimal("2")
+    assert exit_fill.realized_pnl == Decimal("20")
+    connection = sqlite3.connect(tmp_path / "tiewtrade.sqlite3")
+    connection.row_factory = sqlite3.Row
+    row = connection.execute(
+        "SELECT entry_count, realized_pnl, status FROM basket_results "
+        "WHERE basket_id = ?",
+        (str(BASKET_ID),),
+    ).fetchone()
+    connection.close()
+    assert row["status"] == "closed"
+    assert row["entry_count"] == 2
+    # 11.34 from the row sale, and 20 from what was left.
+    assert Decimal(row["realized_pnl"]) == Decimal("31.34")
+
+
+def test_a_basket_read_back_knows_what_it_already_settled(
+    history: SQLiteTradeHistory,
+) -> None:
+    """What a restart hands the Runtime, which is what its result is owed."""
+    _record_two_entries(history)
+    _sell(history, 1, "105.678")
+
+    state = read_open_basket_state(history, configured_spot_session().config.session_id)
+
+    assert state is not None
+    # The Entry still open is the only one to replay.
+    assert [entry.entry_number for entry in state.entries] == [2]
+    assert state.settled.count == 1
+    assert state.settled.quantity == Decimal("2")
+    assert state.settled.notional == Decimal("200")
+    assert state.settled.realized_pnl == Decimal("11.34")
