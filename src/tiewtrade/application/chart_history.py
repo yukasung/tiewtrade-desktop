@@ -1,6 +1,5 @@
 from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
-from uuid import UUID
 
 from tiewtrade.application.chart_data import (
     ChartRange,
@@ -20,7 +19,12 @@ from tiewtrade.trading.trade_history import TradeFill
 LoadChartCandles = Callable[
     [ConfiguredPaperSession, ChartRange], Awaitable[tuple[Candle, ...]]
 ]
-ListChartFills = Callable[[UUID, ChartRange], tuple[TradeFill, ...]]
+ListChartFills = Callable[[ConfiguredPaperSession, ChartRange], tuple[TradeFill, ...]]
+"""The marks a chart draws: read by the Pair a Session trades, not by its id.
+
+The Session is handed over whole because the Pair is what is being asked for —
+its symbol, its mode, and its market — and a Session id alone would name only
+the run that happens to be current."""
 
 
 class ChartHistory:
@@ -46,7 +50,7 @@ class ChartHistory:
             chart_range=chart_range,
             observed_at_utc=self._clock(),
             candles=candles,
-            fills=self._list_fills(session.config.session_id, chart_range),
+            fills=self._list_fills(session, chart_range),
             state=ChartReadState.READY if candles else ChartReadState.EMPTY,
             rsi=rsi,
             atr=atr,
@@ -100,7 +104,7 @@ class ChartHistory:
             chart_range=chart_range,
             observed_at_utc=max(self._clock(), candle.close_time, chart_range.end),
             candles=candles,
-            fills=self._list_fills(session.config.session_id, chart_range),
+            fills=self._list_fills(session, chart_range),
             state=ChartReadState.READY if candles else ChartReadState.EMPTY,
             rsi=rsi.restricted_to(item.open_time for item in candles),
             atr=atr.restricted_to(item.open_time for item in candles),

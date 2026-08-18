@@ -6,7 +6,6 @@ from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
 from threading import Event, Lock
-from uuid import UUID
 
 from tiewtrade.application.bot_control import (
     BotControlSnapshot,
@@ -443,11 +442,14 @@ def _chart_sources(
             )
 
     def list_chart_fills(
-        session_id: UUID,
+        session: ConfiguredPaperSession,
         chart_range: ChartRange,
     ) -> tuple[TradeFill, ...]:
-        return history.list_session_fills(
-            session_id,
+        """The Pair's marks, which outlive the Session that made them."""
+        return history.list_pair_fills(
+            session.market_data.symbol,
+            session.config.trade_mode,
+            session.config.market_type,
             chart_range.start,
             chart_range.end,
         )
@@ -461,7 +463,7 @@ def _chart_sources(
         session: ConfiguredPaperSession,
         chart_range: ChartRange,
     ) -> tuple[TradeFill, ...]:
-        return list_chart_fills(session.config.session_id, chart_range)
+        return list_chart_fills(session, chart_range)
 
     def select_view(
         session: ConfiguredPaperSession,

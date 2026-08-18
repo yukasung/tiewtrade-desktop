@@ -272,20 +272,45 @@ class SQLiteTradeHistory:
 
         return self._run_read(operation)
 
-    def list_session_fills(
+    def list_pair_fills(
         self,
-        session_id: UUID,
+        symbol: str,
+        trade_mode: TradeMode,
+        market_type: MarketType,
         start_utc: datetime,
         end_utc: datetime,
     ) -> tuple[TradeFill, ...]:
+        """Every fill this Pair has taken in a span, whichever Session took it.
+
+        A trade did not stop being true about BTCUSDT because the Session that
+        made it was replaced. Read by Session, the chart lost its marks the
+        moment a Start retired one — so a Pair is what they are read by, and
+        the Basket each fill belongs to is what says which Pair that is.
+
+        The mode and the market are part of the Pair here: paper marks have no
+        business on a live chart, nor spot marks on futures.
+        """
+
         def operation(connection: sqlite3.Connection) -> tuple[TradeFill, ...]:
             rows = connection.execute(
                 """
-                SELECT * FROM trade_fills
-                WHERE session_id = ? AND filled_at_utc >= ? AND filled_at_utc < ?
-                ORDER BY filled_at_utc, fill_id
+                SELECT trade_fills.* FROM trade_fills
+                JOIN basket_results
+                  ON basket_results.basket_id = trade_fills.basket_id
+                WHERE basket_results.symbol = ?
+                  AND basket_results.trade_mode = ?
+                  AND basket_results.market_type = ?
+                  AND trade_fills.filled_at_utc >= ?
+                  AND trade_fills.filled_at_utc < ?
+                ORDER BY trade_fills.filled_at_utc, trade_fills.fill_id
                 """,
-                (str(session_id), _utc_text(start_utc), _utc_text(end_utc)),
+                (
+                    symbol,
+                    trade_mode.value,
+                    market_type.value,
+                    _utc_text(start_utc),
+                    _utc_text(end_utc),
+                ),
             ).fetchall()
             return tuple(_fill_from_row(row) for row in rows)
 

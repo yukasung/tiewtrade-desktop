@@ -362,15 +362,17 @@ def _require_completed_candles(snapshot: "ChartSnapshot") -> None:
 def _markers_of(snapshot: "ChartSnapshot") -> tuple[ChartMarker, ...]:
     """The marks the fills leave on the chart, and the reading that makes them.
 
-    Reading a fill and refusing it are the same pass: a fill of another
-    Session, one outside the span being drawn, or a duplicate is one there is
-    no mark to make for, so it is rejected where it would have been drawn.
+    Which Session took a fill decides nothing here: a trade of this Pair is a
+    trade of this Pair, and refusing the ones a previous Session made emptied
+    the chart every time a Start replaced one. The Pair is the query's to
+    guarantee — a TradeFill carries no symbol to check it by — and what is
+    still readable from a fill alone is checked: one outside the span being
+    drawn, or a duplicate, is one there is no mark to make for, so it is
+    rejected where it would have been drawn.
     """
     markers: list[ChartMarker] = []
     fill_ids: set[str] = set()
     for fill in snapshot.fills:
-        if fill.session_id != snapshot.session_id:
-            raise ValueError("fill session must match Session")
         if not snapshot.visible_range.contains(fill.filled_at_utc):
             raise ValueError("fill must be inside the visible range")
         if fill.fill_id in fill_ids:

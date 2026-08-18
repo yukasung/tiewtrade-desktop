@@ -70,31 +70,30 @@ def test_find_open_basket_returns_only_open_basket_for_session(
     assert history.find_open_basket(basket.session_id) is None
 
 
-def test_list_session_fills_orders_by_utc_then_fill_id_and_excludes_other_session(
+def test_list_pair_fills_orders_by_utc_then_fill_id_across_sessions(
     history: SQLiteTradeHistory,
 ) -> None:
-    session_id = UUID("00000000-0000-0000-0000-000000000138")
+    """The chart's marks belong to the Pair, so they outlive a Session.
+
+    Read by Session, every trade vanished from the chart the moment a Start
+    replaced the one that made it — while the trades themselves sat in this
+    table, still true of BTCUSDT.
+    """
     start = datetime(2026, 1, 1, tzinfo=UTC)
     end = datetime(2026, 1, 2, tzinfo=UTC)
     first = trade_fill(
         fill_id="fill-a",
         basket_id=uuid4(),
-        session_id=session_id,
+        session_id=UUID("00000000-0000-0000-0000-000000000138"),
         filled_at_utc=start + timedelta(hours=1),
     )
     second = trade_fill(
         fill_id="fill-b",
         basket_id=uuid4(),
-        session_id=session_id,
-        filled_at_utc=start + timedelta(hours=1),
-    )
-    other_session = trade_fill(
-        fill_id="fill-other",
-        basket_id=uuid4(),
         session_id=uuid4(),
         filled_at_utc=start + timedelta(hours=1),
     )
-    for fill in (second, other_session, first):
+    for fill in (second, first):
         history.record_open_basket(
             replace(
                 open_basket(),
@@ -105,7 +104,50 @@ def test_list_session_fills_orders_by_utc_then_fill_id_and_excludes_other_sessio
             fill,
         )
 
-    assert history.list_session_fills(session_id, start, end) == (first, second)
+    assert history.list_pair_fills(
+        "BTCUSDT", TradeMode.PAPER, MarketType.SPOT, start, end
+    ) == (first, second)
+
+
+def test_list_pair_fills_leaves_out_another_pair_mode_or_market(
+    history: SQLiteTradeHistory,
+) -> None:
+    """Paper marks have no business on a live chart, nor spot on futures."""
+    start = datetime(2026, 1, 1, tzinfo=UTC)
+    end = datetime(2026, 1, 2, tzinfo=UTC)
+
+    def record(hour: int, basket: BasketResult) -> None:
+        fill = trade_fill(
+            fill_id=f"fill-{hour}",
+            basket_id=uuid4(),
+            session_id=uuid4(),
+            filled_at_utc=start + timedelta(hours=hour),
+        )
+        history.record_open_basket(
+            replace(
+                basket,
+                basket_id=fill.basket_id,
+                session_id=fill.session_id,
+                opened_at_utc=fill.filled_at_utc,
+            ),
+            fill,
+        )
+
+    record(1, replace(open_basket(), symbol="ETHUSDT"))
+    record(2, replace(open_basket(), trade_mode=TradeMode.LIVE))
+    record(3, replace(open_basket(), market_type=MarketType.FUTURES, leverage=3))
+
+    assert (
+        history.list_pair_fills("BTCUSDT", TradeMode.PAPER, MarketType.SPOT, start, end)
+        == ()
+    )
+    # Recorded all the same, or the emptiness above would prove nothing.
+    for symbol, mode, market in (
+        ("ETHUSDT", TradeMode.PAPER, MarketType.SPOT),
+        ("BTCUSDT", TradeMode.LIVE, MarketType.SPOT),
+        ("BTCUSDT", TradeMode.PAPER, MarketType.FUTURES),
+    ):
+        assert len(history.list_pair_fills(symbol, mode, market, start, end)) == 1
 
 
 def test_open_basket_requires_open_status(history: SQLiteTradeHistory) -> None:

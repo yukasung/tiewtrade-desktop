@@ -379,14 +379,27 @@ def test_ready_snapshot_marks_a_fill_inside_the_forming_candle() -> None:
     assert [marker.fill_id for marker in snapshot.markers] == [fill.fill_id]
 
 
-def test_ready_snapshot_rejects_fill_from_another_session_or_outside_range() -> None:
-    other_session_fill = trade_fill(session_id=uuid4())
+def test_ready_snapshot_marks_a_fill_an_earlier_session_made() -> None:
+    """A trade of this Pair is a trade of this Pair, whoever ran at the time.
+
+    Refused here, every mark left the chart the moment a Start replaced the
+    Session that made it. Which Pair a fill belongs to is the query's to
+    answer — a TradeFill carries no symbol to check it by.
+    """
+    earlier_session_fill = trade_fill(session_id=uuid4())
+
+    snapshot = ready_chart_snapshot(fills=(earlier_session_fill,))
+
+    assert [marker.fill_id for marker in snapshot.markers] == [
+        earlier_session_fill.fill_id
+    ]
+
+
+def test_ready_snapshot_rejects_a_fill_outside_the_range_it_draws() -> None:
     out_of_range_fill = trade_fill(
         filled_at_utc=datetime(2026, 1, 1, 0, 30, tzinfo=UTC)
     )
 
-    with pytest.raises(ValueError, match="fill session must match Session"):
-        ready_chart_snapshot(fills=(other_session_fill,))
     with pytest.raises(ValueError, match="fill must be inside the visible range"):
         ready_chart_snapshot(fills=(out_of_range_fill,))
 
