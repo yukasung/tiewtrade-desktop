@@ -1,4 +1,5 @@
 from datetime import UTC, date, datetime
+from dataclasses import replace
 from decimal import Decimal
 
 import pytest
@@ -18,6 +19,7 @@ from tiewtrade.application.trading_workspace import (
     ready_position_basket_tab,
     stale_position_basket_tab,
 )
+from tiewtrade.ui.blank_text import BLANK
 from tiewtrade.ui.position_basket_table import PositionBasketTable
 from tiewtrade.ui.theme import NEGATIVE_COLOR, POSITIVE_COLOR
 
@@ -250,6 +252,42 @@ def test_columns_align_numbers_right_and_text_left(qtbot: QtBot) -> None:
         # edge. The heading is centred over the column whatever that is.
         assert cell.textAlignment() == alignment
         assert header.textAlignment() == centre
+
+
+def test_an_unmarked_entry_shows_a_dash_where_its_result_will_be(
+    qtbot: QtBot,
+) -> None:
+    """A Basket read out of the database has no price to mark on yet.
+
+    Everything the database answered is a row already; only the result waits.
+    A dash says the question has no answer yet, where 0.00 USDT would say the
+    Entry stands exactly where it was bought.
+    """
+    widget = PositionBasketTable()
+    qtbot.addWidget(widget)
+
+    widget.show_snapshot(
+        ready_position_basket_tab(
+            basket_snapshot(
+                entry_count=1,
+                entries=(replace(_entry(1, "64000", "0"), unrealized_pnl=None),),
+                current_price=None,
+                unrealized_pnl=None,
+            ),
+            observed_at_utc=OBSERVED_AT,
+        )
+    )
+
+    row = _row(widget)
+    assert row["Unrealized P/L"] == BLANK
+    # What needed no price is there in full.
+    assert row["Entry Price"] == "64,000"
+    assert row["Take Profit"] == "65,000"
+    assert row["Total"] == "192.00 USDT"
+    # Unmarked is not a sign, so the figure keeps the table's own colour.
+    assert _cell(widget, "Unrealized P/L").foreground() == (
+        _cell(widget, "Date").foreground()
+    )
 
 
 @pytest.mark.parametrize(

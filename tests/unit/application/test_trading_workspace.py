@@ -152,6 +152,71 @@ def test_basket_rejects_a_cooldown_month_that_contradicts_its_gate(
         replace(_basket(), entry_gate=entry_gate, cooldown_until=cooldown_until)
 
 
+def test_a_basket_keeps_the_numbers_of_the_entries_that_sold_out_of_it() -> None:
+    """An Entry sold at its target does not hand its number back.
+
+    A Basket down to Entry 2 alone counts one open Entry and calls it 2, which
+    demanding 1..entry_count read as impossible — and the whole Position tab
+    went with it.
+    """
+    remaining = replace(basket_entries("66000", "66000")[1], entry_number=2)
+
+    basket = replace(_basket(), entry_count=1, entries=(remaining,))
+
+    assert tuple(entry.entry_number for entry in basket.entries) == (2,)
+
+
+@pytest.mark.parametrize(
+    "numbers",
+    [(1, 1), (2, 1)],
+)
+def test_a_basket_rejects_entries_that_repeat_or_go_backwards(
+    numbers: tuple[int, int],
+) -> None:
+    """Two rows for one Entry, or rows out of the order they were taken."""
+    entries = tuple(
+        replace(entry, entry_number=number)
+        for entry, number in zip(basket_entries("66000", "66000"), numbers, strict=True)
+    )
+
+    with pytest.raises(ValueError, match="without repeats"):
+        replace(_basket(), entries=entries)
+
+
+def test_a_basket_rejects_more_entries_than_it_counts() -> None:
+    with pytest.raises(ValueError, match="one Entry per entry_count"):
+        replace(_basket(), entry_count=1)
+
+
+def test_a_basket_with_no_price_carries_no_reading_that_needs_one() -> None:
+    """A Basket read before its first candle is unmarked throughout."""
+    unmarked = replace(
+        _basket(),
+        entries=tuple(
+            replace(entry, unrealized_pnl=None) for entry in _basket().entries
+        ),
+        current_price=None,
+        unrealized_pnl=None,
+    )
+
+    assert unmarked.current_price is None
+    assert all(entry.unrealized_pnl is None for entry in unmarked.entries)
+
+
+def test_a_basket_is_marked_throughout_or_nowhere() -> None:
+    """Half a marking is a reading no price could have produced."""
+    with pytest.raises(ValueError, match="unrealized_pnl belongs to a marked Basket"):
+        replace(_basket(), current_price=None)
+
+    with pytest.raises(ValueError, match="every Entry is marked with the Basket"):
+        replace(
+            _basket(),
+            entries=tuple(
+                replace(entry, unrealized_pnl=None) for entry in _basket().entries
+            ),
+        )
+
+
 def _basket() -> BasketSnapshot:
     return BasketSnapshot(
         symbol="BTCUSDT",

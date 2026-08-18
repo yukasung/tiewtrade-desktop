@@ -25,7 +25,6 @@ from tiewtrade.application.trading_workspace import (
     POSITION_BASKET_UNREADABLE_MESSAGE,
     empty_position_basket_tab,
     failed_position_basket_tab,
-    loading_position_basket_tab,
     ready_position_basket_tab,
 )
 from tiewtrade.ui.background_task import BackgroundTask
@@ -57,6 +56,10 @@ class OpenPositionWorkflow(QObject):
         self._thread_pool = thread_pool or QThreadPool.globalInstance()
         self._clock = clock
         self._basket: ReopenedBasket | None = None
+        # The Pair the Basket was read for. A Basket is shown before any
+        # candle has arrived to name one, so the Session it came from says
+        # what it is in.
+        self._symbol: str | None = None
         self._task: BackgroundTask | None = None
         self._reread: ConfiguredPaperSession | None = None
         self._candle: ChartCandle | None = None
@@ -77,6 +80,7 @@ class OpenPositionWorkflow(QObject):
         the meantime: what was held may be what has just been sold.
         """
         self._basket = None
+        self._symbol = session.market_data.symbol
         read_open_basket = self._read_open_basket
         if read_open_basket is None:
             return
@@ -184,25 +188,25 @@ class OpenPositionWorkflow(QObject):
         A stopped Runtime holds no Basket, so its snapshot reads as an empty
         tab. Anything held is put back straight after, because "No open
         Position" over an open one is the single answer that is never true.
+
+        A price that has not arrived holds back one column, not the tab: what
+        was bought, when, how much and at what target are all answered by the
+        database alone. Waiting for the first candle to show any of it left a
+        trader looking at an empty table while a Position was open, and the
+        Start question that named it read as coming out of nowhere.
         """
         basket = self._basket
-        if basket is None:
-            return
         candle = self._candle
-        if candle is None:
-            # Held, but with no price to mark it on yet. Waiting is the true
-            # answer; an empty tab would be the untrue one.
-            self.snapshot_changed.emit(
-                loading_position_basket_tab(empty_position_basket_tab())
-            )
+        symbol = candle.symbol if candle is not None else self._symbol
+        if basket is None or symbol is None:
             return
         observed_at = self._clock()
         self.snapshot_changed.emit(
             ready_position_basket_tab(
                 reopened_basket_snapshot(
                     basket,
-                    symbol=candle.symbol,
-                    current_price=candle.close,
+                    symbol=symbol,
+                    current_price=None if candle is None else candle.close,
                     observed_at_utc=observed_at,
                 ),
                 observed_at_utc=observed_at,

@@ -71,6 +71,7 @@ from tiewtrade.integrations.sqlite.active_paper_sessions import (
 from tiewtrade.integrations.sqlite.database import SQLiteDatabase
 from tiewtrade.trading.futures_policy import FuturesTradingPolicy
 from tiewtrade.trading.session_config import MarketType, TradeMode
+from tiewtrade.ui.blank_text import BLANK
 from tiewtrade.ui.bot_lifecycle_workflow import RuntimeSnapshotRelay
 from tiewtrade.ui.chart_workflow import ChartFactRelay
 from tiewtrade.ui.display_time import display_today
@@ -1743,7 +1744,7 @@ def test_an_open_position_shows_before_any_bot_is_started(qtbot: QtBot) -> None:
     )
 
     table = window.workspace.position_basket
-    qtbot.waitUntil(lambda: table.table.rowCount() == 1)
+    qtbot.waitUntil(lambda: _marked_rows(window) == 1)
     assert table.state_label.text() == ""
     # Read by heading: a column added or dropped must not silently shift
     # which cell this asserts on.
@@ -1913,10 +1914,48 @@ def _open_position_window(
     relay.new_generation().in_progress_candle(
         flat_candle(datetime(2026, 8, 1, 12, 5, tzinfo=UTC), price)
     )
-    qtbot.waitUntil(
-        lambda: window.workspace.position_basket.table.rowCount() == len(entries)
-    )
+    # The rows are there as soon as the Basket is read, so their arrival says
+    # nothing about the candle. What the candle adds is the marking, which is
+    # what a test asking about a price has to wait for.
+    qtbot.waitUntil(lambda: _marked_rows(window) == len(entries))
     return window
+
+
+def _marked_rows(window: MainWindow) -> int:
+    """How many rows have been marked against a price."""
+    table = window.workspace.position_basket
+    column = table.headers.index("Unrealized P/L")
+    marked = 0
+    for row in range(table.table.rowCount()):
+        item = table.table.item(row, column)
+        if item is not None and item.text() != BLANK:
+            marked += 1
+    return marked
+
+
+def test_an_open_position_is_on_the_tab_before_any_price_arrives(
+    qtbot: QtBot,
+) -> None:
+    """The window opens on a Position, and the chart says a price seconds later.
+
+    In between, the tab used to read "Loading Position…" over an empty table —
+    so a trader who pressed Start met a question about an Entry the tab had
+    never shown, and read the question as the mistake.
+    """
+    started: list[BotControlSnapshot] = []
+    asked: list[tuple[str, Callable[[], None]]] = []
+    window = _open_position_window(qtbot, started=started, asked=asked, price=None)
+    table = window.workspace.position_basket
+
+    qtbot.waitUntil(lambda: table.table.rowCount() == 1)
+    headings = table.headers
+    entry_price = table.table.item(0, headings.index("Entry Price"))
+    pnl = table.table.item(0, headings.index("Unrealized P/L"))
+    assert entry_price is not None and pnl is not None
+    assert "100" in entry_price.text()
+    # The one column a price answers, and no price has arrived.
+    assert pnl.text() == BLANK
+    assert table.empty_state.isHidden()
 
 
 def test_a_position_no_price_has_reached_yet_is_still_asked_about(

@@ -16,6 +16,7 @@ from tiewtrade.application.trading_workspace import (
     PositionBasketTabSnapshot,
     WorkspaceTabState,
 )
+from tiewtrade.ui.blank_text import BLANK
 from tiewtrade.ui.display_time import display_timestamp
 from tiewtrade.ui.entry_gate_display import blocked_entry_reason
 from tiewtrade.ui.money_text import money_text, price_text
@@ -70,11 +71,19 @@ def _notional(row: _Row) -> str:
 
 
 def _pnl(row: _Row) -> str:
-    return money_text(row.entry.unrealized_pnl)
+    """What the Entry is worth against the price, once there is one.
+
+    A Basket read out of the database is shown before its first candle, and
+    an unmarked Entry has no result yet. A dash says the question was asked
+    and has no answer, where 0.00 would say it broke even.
+    """
+    pnl = row.entry.unrealized_pnl
+    return BLANK if pnl is None else money_text(pnl)
 
 
 def _pnl_colour(row: _Row) -> str | None:
-    return sign_colour(row.entry.unrealized_pnl)
+    pnl = row.entry.unrealized_pnl
+    return None if pnl is None else sign_colour(pnl)
 
 
 class PositionBasketTable(QWidget):

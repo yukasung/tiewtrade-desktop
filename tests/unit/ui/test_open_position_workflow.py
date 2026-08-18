@@ -84,14 +84,30 @@ def test_a_basket_read_back_is_marked_on_the_price_of_the_moment(
     assert ready.basket.unrealized_pnl == Decimal("20")
 
 
-def test_a_basket_held_before_any_price_reads_as_waiting(qtbot: QtBot) -> None:
-    """Held but unpriced is "Loading", not "No open Position"."""
+def test_a_basket_held_before_any_price_shows_everything_but_the_marking(
+    qtbot: QtBot,
+) -> None:
+    """What was bought is answered by the database, not by the next candle.
+
+    Only the marking waits on a price. Holding the rows back for it left an
+    empty table over an open Position, which reads as nothing being held.
+    """
     workflow, shown = _workflow(lambda _session: _reopened())
 
     workflow.read_for(configured_spot_session())
 
     qtbot.waitUntil(lambda: bool(shown))
-    assert shown[-1].state is WorkspaceTabState.LOADING
+    held = shown[-1]
+    assert held.state is WorkspaceTabState.READY
+    assert held.basket is not None
+    assert held.basket.symbol == configured_spot_session().market_data.symbol
+    assert held.basket.entry_count == 1
+    assert held.basket.entries[0].price == Decimal("100")
+    assert held.basket.entries[0].take_profit_price == Decimal("106")
+    # The one reading a price answers, and there is no price yet.
+    assert held.basket.current_price is None
+    assert held.basket.unrealized_pnl is None
+    assert held.basket.entries[0].unrealized_pnl is None
 
 
 def test_a_basket_out_of_reach_says_so_rather_than_nothing(qtbot: QtBot) -> None:

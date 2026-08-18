@@ -152,13 +152,18 @@ def reopened_basket_snapshot(
     reopened: ReopenedBasket,
     *,
     symbol: str,
-    current_price: Decimal,
+    current_price: Decimal | None,
     observed_at_utc: datetime,
 ) -> BasketSnapshot:
     """Show a Basket no Runtime holds yet, marked on the price of the moment.
 
     The Entry Pair gate is read against now rather than against a candle,
     because no candle has reached this Basket since it was left.
+
+    A price of None is a Basket read before one arrived. Everything the
+    database already answered — what was bought, when, how much, and the
+    target it is sold at — is shown at once; only what it is worth waits.
+    Holding the whole tab back for that one figure read as no Position at all.
     """
     return _updated_basket_snapshot(
         open_basket_position(reopened.basket.entries),
@@ -226,7 +231,7 @@ def _updated_basket_snapshot(
     symbol: str,
     market_type: MarketType,
     entry_count: int,
-    current_price: Decimal,
+    current_price: Decimal | None,
     take_profit_price: Decimal | None,
     position_side: PositionSide,
     liquidation_price: Decimal | None,
@@ -241,11 +246,15 @@ def _updated_basket_snapshot(
     average_entry_price = position.average_entry_price
     if take_profit_price is None:
         raise ValueError("open Basket requires take_profit_price")
-    marked_pnl = unrealized_pnl(
-        side=position_side,
-        average_entry_price=average_entry_price,
-        quantity=total_quantity,
-        current_price=current_price,
+    marked_pnl = (
+        None
+        if current_price is None
+        else unrealized_pnl(
+            side=position_side,
+            average_entry_price=average_entry_price,
+            quantity=total_quantity,
+            current_price=current_price,
+        )
     )
     return BasketSnapshot(
         symbol=symbol,
@@ -272,9 +281,13 @@ def _marked_entries(
     entries: tuple[FilledEntry, ...],
     *,
     position_side: PositionSide,
-    current_price: Decimal,
+    current_price: Decimal | None,
 ) -> tuple[BasketEntrySnapshot, ...]:
-    """Each Entry marked on its own entry price, by the same rule as the Basket."""
+    """Each Entry marked on its own entry price, by the same rule as the Basket.
+
+    With no price to mark on, every Entry says so the same way the Basket
+    does: what it paid stands, what it is worth is not answered yet.
+    """
     return tuple(
         BasketEntrySnapshot(
             entry_number=entry.entry_number,
@@ -283,11 +296,15 @@ def _marked_entries(
             quantity=entry.quantity,
             take_profit_price=entry.take_profit_price,
             notional=entry.price * entry.quantity,
-            unrealized_pnl=unrealized_pnl(
-                side=position_side,
-                average_entry_price=entry.price,
-                quantity=entry.quantity,
-                current_price=current_price,
+            unrealized_pnl=(
+                None
+                if current_price is None
+                else unrealized_pnl(
+                    side=position_side,
+                    average_entry_price=entry.price,
+                    quantity=entry.quantity,
+                    current_price=current_price,
+                )
             ),
         )
         for entry in entries

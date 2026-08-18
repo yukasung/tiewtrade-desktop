@@ -6,6 +6,7 @@ import pytest
 from tiewtrade.application.paper_basket_projection import (
     futures_basket_snapshot,
     position_after_snapshot,
+    position_without_entries,
     spot_basket_snapshot,
 )
 from tiewtrade.application.paper_futures_session import (
@@ -218,6 +219,40 @@ def test_spot_marks_every_entry_on_its_own_price() -> None:
         Decimal("100"),
         Decimal("120"),
     ]
+
+
+def test_a_basket_shows_the_entry_that_outlived_the_one_that_sold() -> None:
+    """Entry 1 sold at its target; Entry 2 is the whole open position now.
+
+    The Basket counts one Entry and calls it 2, because a number is not handed
+    back when an Entry leaves. A snapshot that could not say that took the
+    Position tab down every candle after a Take Profit.
+    """
+    position = position_without_entries(
+        position_after_snapshot(
+            position_after_snapshot(
+                None,
+                entry_fill=spot_fill("100", "1", minute=0),
+                basket_entry_count=1,
+                entry_number=1,
+                take_profit_price=Decimal("106"),
+            ),
+            entry_fill=spot_fill("120", "1", minute=5),
+            basket_entry_count=2,
+            entry_number=2,
+            take_profit_price=Decimal("126"),
+        ),
+        [1],
+    )
+
+    basket = spot_basket_snapshot(
+        spot_snapshot(basket_entry_count=1), position, candle("110"), OBSERVED_AT
+    )
+
+    assert basket is not None
+    assert basket.entry_count == 1
+    assert [entry.entry_number for entry in basket.entries] == [2]
+    assert basket.entries[0].unrealized_pnl == Decimal("-10")
 
 
 def test_a_short_basket_marks_its_entries_the_way_round_it_earns() -> None:
