@@ -21,7 +21,7 @@ from tiewtrade.application.trading_workspace import (
 )
 from tiewtrade.ui.blank_text import BLANK
 from tiewtrade.ui.position_basket_table import PositionBasketTable
-from tiewtrade.ui.theme import NEGATIVE_COLOR, POSITIVE_COLOR
+from tiewtrade.ui.theme import DARK_THEME, NEGATIVE_COLOR, POSITIVE_COLOR
 
 OBSERVED_AT = datetime(2026, 8, 2, 1, 2, 4, tzinfo=UTC)
 
@@ -431,7 +431,7 @@ def test_position_basket_ignores_wrong_snapshot_type(qtbot: QtBot) -> None:
 
 
 def _close_button(widget: PositionBasketTable, row: int) -> QPushButton:
-    button = widget.table.cellWidget(row, len(PositionBasketTable.COLUMNS))
+    button = widget.close_button(row)
     assert isinstance(button, QPushButton)
     return button
 
@@ -511,3 +511,33 @@ def test_a_sale_that_failed_is_said_over_the_position_that_is_still_there(
     qtbot.waitUntil(widget.state_label.isVisible)
     assert widget.state_label.text() == "Could not sell that Entry."
     assert widget.table.rowCount() == 1
+
+
+def test_the_order_button_fits_the_row_it_sits_in(qtbot: QtBot) -> None:
+    """A row's button is part of the row, not a button on a form.
+
+    Dressed as one it stood taller than the row that holds it and ran the
+    width of a column stretched across the table.
+    """
+    widget = PositionBasketTable()
+    qtbot.addWidget(widget)
+    widget.setStyleSheet(DARK_THEME)
+    widget.resize(1400, 300)
+    widget.show()
+    widget.show_snapshot(
+        ready_position_basket_tab(
+            basket_snapshot(entry_count=1, entries=(_entry(1, "100", "1"),)),
+            observed_at_utc=OBSERVED_AT,
+        )
+    )
+    qtbot.waitUntil(lambda: widget.close_button(0) is not None)
+    button = _close_button(widget, 0)
+    qtbot.waitUntil(lambda: button.width() > 0)
+
+    table = widget.table
+    assert button.height() <= table.rowHeight(0)
+    # The column holds a button, so the room left over goes to the last column
+    # of values instead of stretching this one across the table.
+    close_column = len(PositionBasketTable.COLUMNS)
+    assert table.columnWidth(close_column) < table.columnWidth(close_column - 1)
+    assert button.width() < table.viewport().width() // 4

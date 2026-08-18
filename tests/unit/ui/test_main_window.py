@@ -2157,8 +2157,7 @@ def test_cancelling_the_sale_of_an_entry_leaves_it_where_it_is(
 
 
 def _click_close_entry(window: MainWindow, row: int) -> None:
-    table = window.workspace.position_basket
-    button = table.table.cellWidget(row, len(table.COLUMNS))
+    button = window.workspace.position_basket.close_button(row)
     assert isinstance(button, QPushButton)
     click(button)
 

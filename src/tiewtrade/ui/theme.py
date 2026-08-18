@@ -188,6 +188,29 @@ QPushButton[rangeChip="true"]:disabled {
     border-color: #2B3441;
     color: #6F7D93;
 }
+/* The order a row can send sits inside the row, so it is sized to the row
+   rather than to a form's button, and it reads as the sale it is. */
+QPushButton#positionEntryCloseButton {
+    background: transparent;
+    border: 1px solid #3A4656;
+    border-radius: 4px;
+    color: #E2E8F0;
+    font-size: 11px;
+    font-weight: 600;
+    min-height: 0;
+    padding: 0 10px;
+}
+QPushButton#positionEntryCloseButton:hover {
+    border-color: #F6465D;
+    color: #F6465D;
+}
+QPushButton#positionEntryCloseButton:focus {
+    border: 2px solid #4C7DFF;
+}
+QPushButton#positionEntryCloseButton:disabled {
+    border-color: #2B3441;
+    color: #6F7D93;
+}
 QPushButton#destructiveButton {
     background: #F6465D;
     border: 0;

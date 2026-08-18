@@ -3,9 +3,11 @@ from dataclasses import dataclass
 from PySide6.QtCore import QSignalBlocker, Qt, Signal
 from PySide6.QtWidgets import (
     QAbstractItemView,
+    QHBoxLayout,
     QHeaderView,
     QLabel,
     QPushButton,
+    QSizePolicy,
     QTableWidget,
     QVBoxLayout,
     QWidget,
@@ -170,7 +172,7 @@ class PositionBasketTable(QWidget):
                 for position, column in enumerate(self.COLUMNS):
                     self.table.setItem(index, position, table_item(column, row))
                 self.table.setCellWidget(
-                    index, len(self.COLUMNS), self._close_button(row)
+                    index, len(self.COLUMNS), self._close_cell(row)
                 )
 
     def _show_state(self, snapshot: PositionBasketTabSnapshot) -> None:
@@ -199,6 +201,20 @@ class PositionBasketTable(QWidget):
             return f"Stale Position data as of {stamp}"
         return ""
 
+    def _close_cell(self, row: _Row) -> QWidget:
+        """The button, held in the middle of the room a cell leaves it.
+
+        A cell widget is stretched to the whole cell, so on its own the button
+        ran the width of the column and stood taller than the row. What the
+        cell leaves is the height of a line of text, which is the size the
+        button is drawn at.
+        """
+        cell = QWidget()
+        layout = QHBoxLayout(cell)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.addWidget(self._close_button(row), 0, Qt.AlignmentFlag.AlignCenter)
+        return cell
+
     def _close_button(self, row: _Row) -> QPushButton:
         """The order this row can send, which is the only one it can send.
 
@@ -211,6 +227,8 @@ class PositionBasketTable(QWidget):
         button.setObjectName("positionEntryCloseButton")
         button.setAccessibleName(f"Close Entry {entry_number} at Market")
         button.setEnabled(self._closing_enabled)
+        button.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
+        button.setCursor(Qt.CursorShape.PointingHandCursor)
         button.clicked.connect(
             lambda _checked=False: self.close_entry_requested.emit(entry_number)
         )
@@ -229,9 +247,16 @@ class PositionBasketTable(QWidget):
         """Take the buttons away while a sale of theirs is still in flight."""
         self._closing_enabled = enabled
         for index in range(self.table.rowCount()):
-            widget = self.table.cellWidget(index, len(self.COLUMNS))
-            if isinstance(widget, QPushButton):
-                widget.setEnabled(enabled)
+            button = self.close_button(index)
+            if button is not None:
+                button.setEnabled(enabled)
+
+    def close_button(self, row: int) -> QPushButton | None:
+        """The order button of a row, wherever the cell keeps it."""
+        cell = self.table.cellWidget(row, len(self.COLUMNS))
+        if cell is None:
+            return None
+        return cell.findChild(QPushButton)
 
     def _table(self) -> QTableWidget:
         table = QTableWidget(0, len(self.HEADERS))
@@ -256,5 +281,11 @@ class PositionBasketTable(QWidget):
         table.horizontalHeader().setSectionResizeMode(
             QHeaderView.ResizeMode.ResizeToContents
         )
-        table.horizontalHeader().setStretchLastSection(True)
+        # The slack goes to the last column of values, not to the one holding
+        # a button: stretched, that column ran the width of the table with a
+        # button stretched along with it.
+        table.horizontalHeader().setStretchLastSection(False)
+        table.horizontalHeader().setSectionResizeMode(
+            len(self.COLUMNS) - 1, QHeaderView.ResizeMode.Stretch
+        )
         return table
