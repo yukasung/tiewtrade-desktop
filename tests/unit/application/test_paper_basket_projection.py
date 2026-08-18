@@ -212,9 +212,13 @@ def test_spot_marks_every_entry_on_its_own_price() -> None:
         Decimal("-10"),
     ]
     assert basket.unrealized_pnl == Decimal("0")
-    assert sum(entry.unrealized_pnl for entry in basket.entries) == (
-        basket.unrealized_pnl
-    )
+    marked = [
+        entry.unrealized_pnl
+        for entry in basket.entries
+        if entry.unrealized_pnl is not None
+    ]
+    assert len(marked) == len(basket.entries)
+    assert sum(marked, Decimal("0")) == basket.unrealized_pnl
     assert [entry.notional for entry in basket.entries] == [
         Decimal("100"),
         Decimal("120"),
