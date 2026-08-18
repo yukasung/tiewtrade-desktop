@@ -97,6 +97,37 @@ class PaperSpotExecutor:
             )
         return tuple(fills)
 
+    def fill_entry_close(
+        self,
+        basket: Basket,
+        entry_number: int,
+        *,
+        price: Decimal,
+        filled_at: datetime,
+    ) -> PaperSpotExitFill:
+        """A Fill for one Entry sold on demand, at the price the market is at.
+
+        The same sale a target makes, at a price nobody promised: the trader
+        asked for it, so it books where the market is rather than where the
+        Entry was aiming. Rounded the way every sale here is rounded — down,
+        against the seller — so a Paper Fill cannot flatter itself.
+        """
+        entry = next(
+            (item for item in basket.entries if item.entry_number == entry_number),
+            None,
+        )
+        if entry is None:
+            raise ValueError("basket has no open Entry with that number")
+        order_id = f"close-entry:{basket.basket_id}:{entry_number}"
+        return PaperSpotExitFill(
+            order_id=order_id,
+            fill_id=paper_fill_id(self._session.session_id, order_id),
+            price=self._symbol_rules.floor_price(price),
+            quantity=entry.quantity,
+            filled_at=filled_at,
+            entry_number=entry_number,
+        )
+
     def fill_stop_loss(
         self, basket: Basket, candle: Candle, *, filled_at: datetime
     ) -> PaperSpotExitFill | None:

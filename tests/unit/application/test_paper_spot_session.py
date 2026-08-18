@@ -1025,6 +1025,111 @@ def paper_session(*, min_notional: Decimal = Decimal("5")) -> PaperSpotSession:
     )
 
 
+def _two_entry_basket() -> OpenBasketState:
+    """Entries at 100 and 110, a day apart so the Entry Pair lets both in.
+
+    With an ATR of 2 and a multiplier of 3 their targets are 106 and 116, so a
+    price between them reaches one and leaves the other holding.
+    """
+    return OpenBasketState(
+        basket_id=UUID("00000000-0000-0000-0000-0000000000c1"),
+        entries=(
+            OpenBasketEntry(
+                entry_number=1,
+                price=Decimal("100"),
+                quantity=Decimal("2"),
+                filled_at=datetime(2026, 8, 1, 12, tzinfo=UTC),
+                atr=Decimal("2"),
+            ),
+            OpenBasketEntry(
+                entry_number=2,
+                price=Decimal("110"),
+                quantity=Decimal("2"),
+                filled_at=datetime(2026, 8, 2, 12, tzinfo=UTC),
+                atr=Decimal("2"),
+            ),
+        ),
+        closed_basket_count=0,
+    )
+
+
+def test_one_entry_is_sold_on_demand_and_the_rest_left_holding() -> None:
+    """The sale a target makes, at a price nobody promised.
+
+    The Entry hands its place back the way a target sale does, so what is left
+    is a Basket that still holds the other Entry — not a Position closed
+    because one row of it was.
+    """
+    session = buy_only_paper_session(open_basket=_two_entry_basket())
+
+    snapshot = session.close_entry(
+        1,
+        price=Decimal("105.678"),
+        observed_at=datetime(2026, 8, 3, tzinfo=UTC),
+    )
+
+    assert snapshot.accepted is True
+    assert len(snapshot.entry_exits) == 1
+    sold = snapshot.entry_exits[0]
+    assert sold.fill.entry_number == 1
+    # Floored to the tick, against the seller, the way every sale here rounds.
+    assert sold.fill.price == Decimal("105.67")
+    assert sold.closed.realized_pnl == Decimal("11.34")
+    assert snapshot.closed_basket is None
+    assert snapshot.basket_entry_count == 1
+    assert [entry.entry_number for entry in session.open_entries] == [2]
+
+
+def test_selling_the_last_entry_closes_the_basket_as_a_manual_close() -> None:
+    session = buy_only_paper_session(open_basket=_two_entry_basket())
+    session.close_entry(
+        1, price=Decimal("105"), observed_at=datetime(2026, 8, 3, tzinfo=UTC)
+    )
+
+    snapshot = session.close_entry(
+        2, price=Decimal("120"), observed_at=datetime(2026, 8, 4, tzinfo=UTC)
+    )
+
+    assert snapshot.closed_basket is not None
+    assert snapshot.closed_basket.close_reason is BasketCloseReason.MANUAL
+    assert snapshot.basket_entry_count == 0
+    assert session.open_entries == ()
+
+
+def test_an_entry_already_gone_sells_nothing_twice() -> None:
+    """The row a hand reaches for redraws on every tick.
+
+    An unaccepted snapshot is what a stale row gets, rather than a second sale
+    of an Entry the Basket has already let go, or an error over a Position
+    that is doing nothing wrong.
+    """
+    session = buy_only_paper_session(open_basket=_two_entry_basket())
+    session.close_entry(
+        1, price=Decimal("105"), observed_at=datetime(2026, 8, 3, tzinfo=UTC)
+    )
+
+    again = session.close_entry(
+        1, price=Decimal("105"), observed_at=datetime(2026, 8, 3, tzinfo=UTC)
+    )
+    unknown = session.close_entry(
+        9, price=Decimal("105"), observed_at=datetime(2026, 8, 3, tzinfo=UTC)
+    )
+
+    assert again.accepted is False
+    assert unknown.accepted is False
+    assert [entry.entry_number for entry in session.open_entries] == [2]
+
+
+def test_a_session_holding_nothing_has_no_entry_to_sell() -> None:
+    session = buy_only_paper_session()
+
+    snapshot = session.close_entry(
+        1, price=Decimal("105"), observed_at=datetime(2026, 8, 3, tzinfo=UTC)
+    )
+
+    assert snapshot.accepted is False
+
+
 def buy_only_paper_session(
     *,
     min_notional: Decimal = Decimal("5"),

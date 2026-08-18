@@ -1,10 +1,11 @@
 from dataclasses import dataclass
 
-from PySide6.QtCore import QSignalBlocker, Qt
+from PySide6.QtCore import QSignalBlocker, Qt, Signal
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QHeaderView,
     QLabel,
+    QPushButton,
     QTableWidget,
     QVBoxLayout,
     QWidget,
@@ -114,8 +115,17 @@ class PositionBasketTable(QWidget):
         Column("Unrealized P/L", RIGHT, _pnl, _pnl_colour),
         Column("Status", LEFT, _entry_gate),
     )
-    HEADERS = headers(COLUMNS)
+    # Binance names the column after the position and the button after the
+    # order that closes it — [Market] under [Close Position] — because the
+    # button is the order type, not the verb. One kind of order can be sent
+    # from here, so there is one button.
+    CLOSE_HEADER = "Close Position"
+    CLOSE_LABEL = "Market"
+    HEADERS = (*headers(COLUMNS), CLOSE_HEADER)
     ALIGNMENTS = tuple(column.alignment for column in COLUMNS)
+
+    #: The Entry a row asked to be sold at the price the market is at.
+    close_entry_requested = Signal(int)
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -123,6 +133,7 @@ class PositionBasketTable(QWidget):
         self.setAccessibleName("Position")
 
         self.table = self._table()
+        self._closing_enabled = True
         self.empty_state = TableEmptyStateOverlay(self.table)
         self.state_label = QLabel("No open Position")
         self.state_label.setObjectName("positionBasketState")
@@ -158,6 +169,9 @@ class PositionBasketTable(QWidget):
             for index, row in enumerate(rows):
                 for position, column in enumerate(self.COLUMNS):
                     self.table.setItem(index, position, table_item(column, row))
+                self.table.setCellWidget(
+                    index, len(self.COLUMNS), self._close_button(row)
+                )
 
     def _show_state(self, snapshot: PositionBasketTabSnapshot) -> None:
         text = self._state_text(snapshot)
@@ -185,15 +199,49 @@ class PositionBasketTable(QWidget):
             return f"Stale Position data as of {stamp}"
         return ""
 
+    def _close_button(self, row: _Row) -> QPushButton:
+        """The order this row can send, which is the only one it can send.
+
+        The Entry number travels with the button rather than the row it sits
+        in: rows are rebuilt on every price, and a number cannot drift the way
+        a position in a table can.
+        """
+        entry_number = row.entry.entry_number
+        button = QPushButton(self.CLOSE_LABEL)
+        button.setObjectName("positionEntryCloseButton")
+        button.setAccessibleName(f"Close Entry {entry_number} at Market")
+        button.setEnabled(self._closing_enabled)
+        button.clicked.connect(
+            lambda _checked=False: self.close_entry_requested.emit(entry_number)
+        )
+        return button
+
+    def show_close_error(self, message: str) -> None:
+        """Say a sale did not happen, over the Position that is still there.
+
+        The rows are what they were, so the tab is not repainted: only the line
+        above them changes, and the next reading of the Basket clears it.
+        """
+        self.state_label.setText(message)
+        self.state_label.setVisible(True)
+
+    def set_closing_enabled(self, enabled: bool) -> None:
+        """Take the buttons away while a sale of theirs is still in flight."""
+        self._closing_enabled = enabled
+        for index in range(self.table.rowCount()):
+            widget = self.table.cellWidget(index, len(self.COLUMNS))
+            if isinstance(widget, QPushButton):
+                widget.setEnabled(enabled)
+
     def _table(self) -> QTableWidget:
-        table = QTableWidget(0, len(self.COLUMNS))
+        table = QTableWidget(0, len(self.HEADERS))
         table.setObjectName("positionBasketGrid")
         table.setAccessibleName("Position")
         table.setHorizontalHeaderLabels(list(self.HEADERS))
         # Headings sit centred over every column, whichever way the values
         # under them run. The cells keep their own alignment, so figures
         # still line up on one right edge to be read down.
-        for index in range(len(self.COLUMNS)):
+        for index in range(len(self.HEADERS)):
             header_item = table.horizontalHeaderItem(index)
             if header_item is not None:
                 header_item.setTextAlignment(CENTER)

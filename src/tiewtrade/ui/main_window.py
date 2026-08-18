@@ -38,6 +38,7 @@ from tiewtrade.ui.open_position_workflow import (
     OpenPositionWorkflow,
     ReadOpenBasket,
 )
+from tiewtrade.ui.position_dialogs import ask_about_selling_one_entry
 from tiewtrade.ui.session_workflow import (
     CreateSession,
     LoadActiveSession,
@@ -84,6 +85,9 @@ class BotActions:
     shutdown_runtime: Callable[[], None] | None = None
     stop_for_replacement: Callable[[ConfiguredPaperSession], None] | None = None
     close_position: Callable[[ConfiguredPaperSession], None] | None = None
+    # One Entry of the open Basket, sold at the price the market is at. True
+    # where it sold, False where there was no such Entry left to sell.
+    close_entry: Callable[[ConfiguredPaperSession, int], bool] | None = None
     has_open_position: Callable[[ConfiguredPaperSession], bool] | None = None
     retire_session: Callable[[ConfiguredPaperSession], None] | None = None
     read_open_basket: ReadOpenBasket | None = None
@@ -133,6 +137,9 @@ class MainWindow(QMainWindow):
         self._thread_pool = thread_pool or QThreadPool.globalInstance()
         self._load_chart = chart.load
         self._close_position = bot.close_position
+        self._close_entry = bot.close_entry
+        self._close_entry_task: BackgroundTask | None = None
+        self._waiting_on_a_reading: list[Callable[[], None]] = []
         self._has_open_position = bot.has_open_position
         self._clock = chart.clock
         self._retire_session = bot.retire_session
@@ -192,6 +199,10 @@ class MainWindow(QMainWindow):
         self._open_position.snapshot_changed.connect(
             self.workspace.position_basket.show_snapshot
         )
+        self.workspace.position_basket.close_entry_requested.connect(
+            self._close_entry_requested
+        )
+        self._open_position.reading_landed.connect(self._position_reading_landed)
 
         self._lifecycle_workflow = BotLifecycleWorkflow(
             start_bot=bot.start,
@@ -276,6 +287,15 @@ class MainWindow(QMainWindow):
             self._show_validation_error(error.field, str(error))
             return
         self._replacement_values = raw_values
+        # The copy on screen is only as new as the last time something asked
+        # the database — a Session left running elsewhere goes on trading past
+        # it. A question about a Position is put to the Position that is there
+        # now, not to the one the window happens to be holding.
+        self._once_the_position_is_read(self._take_the_start_course)
+
+    def _take_the_start_course(self) -> None:
+        if self._replacement_values is None or self._replacement_session is None:
+            return
         course = course_before_start(
             position_open=self._position_is_open(),
             sells_on_start=self._sells_on_start_message() is not None,
@@ -288,6 +308,28 @@ class MainWindow(QMainWindow):
             self._act_on_the_open_position()
             return
         self._replace_session()
+
+    def _once_the_position_is_read(self, then: Callable[[], None]) -> None:
+        """Read the Basket again, and do this with the answer that comes back.
+
+        A Start puts an irreversible question, and it once put one about an
+        Entry that had already sold: the window had read the Basket when it
+        opened and nothing had asked since.
+        """
+        session = self._replacement_session
+        self._waiting_on_a_reading.append(then)
+        if session is None:
+            self._position_reading_landed()
+            return
+        self._open_position.read_for(session)
+
+    @Slot()
+    def _position_reading_landed(self) -> None:
+        """Whatever was waiting for a current reading now has one."""
+        waiting = self._waiting_on_a_reading
+        self._waiting_on_a_reading = []
+        for then in waiting:
+            then()
 
     def _position_is_open(self) -> bool:
         """Whether anything is held — by the database, or by a running Bot."""
@@ -639,6 +681,57 @@ class MainWindow(QMainWindow):
             return
         self._mark_chart_candle(candle)
         self._chart_workflow.in_progress_candle(candle)
+
+    @Slot(int)
+    def _close_entry_requested(self, entry_number: int) -> None:
+        """Sell one Entry, once the trader has said so in as many words.
+
+        Which of the two is holding the Basket is not this window's to know:
+        the action is asked, and it goes to the Runtime that owns it or to the
+        database a stopped Bot left it in.
+        """
+        close_entry = self._close_entry
+        if close_entry is None or self._close_entry_task is not None:
+            return
+        try:
+            session = self._lifecycle_workflow.snapshot.session
+        except RuntimeError:
+            return
+        if not ask_about_selling_one_entry(self, entry_number):
+            return
+        self.workspace.position_basket.set_closing_enabled(False)
+        task = BackgroundTask(lambda: close_entry(session, entry_number))
+        task.signals.succeeded.connect(self._entry_closed)
+        task.signals.failed.connect(self._entry_close_failed)
+        task.signals.finished.connect(self._entry_close_finished)
+        self._close_entry_task = task
+        self._thread_pool.start(task)
+
+    @Slot(object)
+    def _entry_closed(self, _result: object) -> None:
+        """Read the Basket back, which is how a stopped Bot's tab hears of it.
+
+        A running Runtime publishes the sale itself; a stopped one leaves the
+        database as the only witness, and the tab is showing what it last read
+        from it — an Entry that has just gone.
+        """
+        try:
+            session = self._lifecycle_workflow.snapshot.session
+        except RuntimeError:
+            return
+        if self._lifecycle_workflow.snapshot.state is not BotRuntimeState.RUNNING:
+            self._open_position.read_for(session)
+
+    @Slot(object)
+    def _entry_close_failed(self, _error: object) -> None:
+        self.workspace.position_basket.show_close_error(
+            "Could not sell that Entry. Check your connection, then try again."
+        )
+
+    @Slot()
+    def _entry_close_finished(self) -> None:
+        self._close_entry_task = None
+        self.workspace.position_basket.set_closing_enabled(True)
 
     @Slot(object)
     def _chart_view_requested(self, value: object) -> None:

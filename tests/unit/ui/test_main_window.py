@@ -1,5 +1,6 @@
 import ast
 import inspect
+import itertools
 import threading
 from collections.abc import Callable
 from copy import copy
@@ -13,7 +14,12 @@ from uuid import UUID
 import pytest
 from PySide6.QtCore import QDeadlineTimer, QPoint, QRect, Qt, QThreadPool, QTimer
 from PySide6.QtTest import QTest
-from PySide6.QtWidgets import QApplication, QMessageBox, QWidget
+from PySide6.QtWidgets import (
+    QApplication,
+    QMessageBox,
+    QPushButton,
+    QWidget,
+)
 from pytestqt.qtbot import QtBot
 
 import tiewtrade.ui.main_window as main_window_module
@@ -1812,6 +1818,18 @@ def test_a_running_runtime_keeps_the_position_tab_to_itself(qtbot: QtBot) -> Non
     assert table.table.rowCount() == 0
 
 
+def _record_close_entry(
+    sold: list[tuple[str, int]],
+) -> Callable[[ConfiguredPaperSession, int], bool]:
+    """Take the ask the way the desktop takes it: the Pair, and which Entry."""
+
+    def close_entry(session: ConfiguredPaperSession, entry_number: int) -> bool:
+        sold.append((session.market_data.symbol, entry_number))
+        return True
+
+    return close_entry
+
+
 def _open_position_window(
     qtbot: QtBot,
     *,
@@ -1821,6 +1839,7 @@ def _open_position_window(
     replaceable: bool = False,
     closed: list[str] | None = None,
     second_entry_price: int | None = None,
+    closed_entries: list[tuple[str, int]] | None = None,
 ) -> MainWindow:
     """A stopped Session holding one Entry, with the chart at a given price.
 
@@ -1898,6 +1917,9 @@ def _open_position_window(
             has_open_position=(lambda _session: True) if replaceable else None,
             close_position=(
                 (lambda _session: closes.append("closed")) if replaceable else None
+            ),
+            close_entry=(
+                None if closed_entries is None else _record_close_entry(closed_entries)
             ),
             retire_session=(lambda _session: None) if replaceable else None,
         ),
@@ -2081,16 +2103,202 @@ def test_a_position_short_of_its_target_is_still_said_before_it_is_run_on(
     assert len(started) == 1
 
 
+def test_a_row_sells_its_own_entry_once_the_trader_says_so(qtbot: QtBot) -> None:
+    """A Fill has no way back, and the row redraws under the hand every tick.
+
+    So the Entry is named in the question, and the answer that trades nothing
+    is the one a stray key finds.
+    """
+    started: list[BotControlSnapshot] = []
+    asked: list[tuple[str, Callable[[], None]]] = []
+    sold: list[tuple[str, int]] = []
+    window = _open_position_window(
+        qtbot,
+        started=started,
+        asked=asked,
+        price=105,
+        closed_entries=sold,
+    )
+    qtbot.waitUntil(lambda: window.workspace.position_basket.table.rowCount() == 1)
+    seen: list[QMessageBox] = []
+
+    QTimer.singleShot(0, _answer_position_dialog("Market", seen))
+    _click_close_entry(window, 0)
+
+    qtbot.waitUntil(lambda: sold == [("BTCUSDT", 1)])
+    assert len(seen) == 1
+    assert "Entry 1" in seen[0].text()
+    assert seen[0].defaultButton() is not None
+    assert seen[0].defaultButton().text() == "Cancel"
+
+
+def test_cancelling_the_sale_of_an_entry_leaves_it_where_it_is(
+    qtbot: QtBot,
+) -> None:
+    started: list[BotControlSnapshot] = []
+    asked: list[tuple[str, Callable[[], None]]] = []
+    sold: list[tuple[str, int]] = []
+    window = _open_position_window(
+        qtbot,
+        started=started,
+        asked=asked,
+        price=105,
+        closed_entries=sold,
+    )
+    qtbot.waitUntil(lambda: window.workspace.position_basket.table.rowCount() == 1)
+    seen: list[QMessageBox] = []
+
+    QTimer.singleShot(0, _answer_position_dialog("Cancel", seen))
+    _click_close_entry(window, 0)
+
+    assert len(seen) == 1
+    assert sold == []
+    assert window._open_position.basket is not None
+
+
+def _click_close_entry(window: MainWindow, row: int) -> None:
+    table = window.workspace.position_basket
+    button = table.table.cellWidget(row, len(table.COLUMNS))
+    assert isinstance(button, QPushButton)
+    click(button)
+
+
+def test_the_question_is_put_to_the_position_that_is_there_now(
+    qtbot: QtBot,
+) -> None:
+    """The copy on screen is only as new as the last time something read it.
+
+    A Session left running elsewhere trades past it, and the window read the
+    Basket when it opened with nothing asking since — so Start put a question
+    about an Entry at its Take Profit while the Basket had moved on to one
+    that had reached nothing. The reading is taken again before the asking.
+    """
+    session = configured_spot_session()
+    relay = ChartFactRelay()
+
+    def basket_of(price: str) -> ReopenedBasket:
+        return reopen_basket(
+            OpenBasketState(
+                basket_id=UUID("00000000-0000-0000-0000-0000000000d3"),
+                entries=(
+                    OpenBasketEntry(
+                        entry_number=1,
+                        price=Decimal(price),
+                        quantity=Decimal("2"),
+                        filled_at=datetime(2026, 8, 1, 12, tzinfo=UTC),
+                        atr=Decimal("2"),
+                    ),
+                ),
+                closed_basket_count=0,
+            ),
+            entry_policy=session.config.entry_policy,
+            take_profit_atr_multiplier=Decimal("3"),
+            stop_loss_atr_multiplier=None,
+            tick_size=Decimal("0.01"),
+        )
+
+    reads: list[int] = []
+
+    def read_open_basket(_session: ConfiguredPaperSession) -> ReopenedBasket | None:
+        reads.append(len(reads))
+        # Taken at 100 its target of 106 is behind the price of 110; taken at
+        # 120 its target of 126 is still ahead of it.
+        return basket_of("100") if len(reads) == 1 else basket_of("120")
+
+    window = _position_window(
+        qtbot,
+        session=session,
+        relay=relay,
+        read_open_basket=read_open_basket,
+        price=110,
+    )
+    seen: list[QMessageBox] = []
+
+    QTimer.singleShot(0, _answer_position_dialog("Cancel", seen))
+    click(window.setup.create_button)
+
+    qtbot.waitUntil(lambda: len(seen) == 1)
+    # The Entry that was at its target has gone; what is held has reached
+    # nothing, so running the Session on is on offer again.
+    assert {button.text() for button in seen[0].buttons()} == {
+        "Start Bot",
+        "Close at Market",
+        "Cancel",
+    }
+    assert len(reads) >= 2
+
+
+def _position_window(
+    qtbot: QtBot,
+    *,
+    session: ConfiguredPaperSession,
+    relay: ChartFactRelay,
+    read_open_basket: Callable[[ConfiguredPaperSession], ReopenedBasket | None],
+    price: int,
+) -> MainWindow:
+    """A stopped Session whose Basket is read by the test, at a given price."""
+    window = MainWindow(
+        create_session=lambda _values: PaperSessionCreateOutcome(
+            session=session, created=True
+        ),
+        load_active=lambda: session,
+        list_basket_history=empty_basket_history,
+        list_trade_fills=empty_trade_fills,
+        bot=BotActions(
+            start=lambda snapshot: BotLifecycleResult(
+                workspace=workspace_with_runtime_state(
+                    snapshot.workspace,
+                    BotRuntimeState.RUNNING,
+                    data_freshness=DataFreshness.FRESH,
+                )
+            ),
+            read_open_basket=read_open_basket,
+            has_open_position=lambda _session: True,
+            close_position=lambda _session: None,
+            retire_session=lambda _session: None,
+        ),
+        chart=ChartSources(facts=relay),
+    )
+    qtbot.addWidget(window)
+    window.show()
+    qtbot.waitUntil(lambda: window._open_position.basket is not None)
+    relay.new_generation().in_progress_candle(
+        flat_candle(datetime(2026, 8, 1, 12, 5, tzinfo=UTC), price)
+    )
+    qtbot.waitUntil(window.setup.isVisible)
+    qtbot.waitUntil(window.setup.create_button.isEnabled)
+    return window
+
+
+def _when_asked(answer: Callable[[QMessageBox], None]) -> Callable[[], None]:
+    """Do this to the dialog once it is on screen, however long that takes.
+
+    The question waits on a reading of the Basket, so it is not up the instant
+    Start is pressed. Fired into the moment before it opens, an answer clicks
+    nothing and leaves the dialog waiting for one that never comes.
+    """
+    attempts = itertools.count()
+
+    def waiting() -> None:
+        dialog = QApplication.activeModalWidget()
+        if dialog is None:
+            if next(attempts) < 500:
+                QTimer.singleShot(5, waiting)
+            return
+        assert isinstance(dialog, QMessageBox)
+        answer(dialog)
+
+    return waiting
+
+
 def _answer_position_dialog(label: str, seen: list[QMessageBox]) -> Callable[[], None]:
     """Click a button of the dialog the setup form's Start puts up."""
 
-    def answer() -> None:
-        dialog = QApplication.activeModalWidget()
-        assert isinstance(dialog, QMessageBox)
+    def answer(dialog: QMessageBox) -> None:
         seen.append(dialog)
         click(next(button for button in dialog.buttons() if button.text() == label))
 
-    return answer
+    return _when_asked(answer)
 
 
 def test_a_position_at_its_target_is_asked_about_as_a_sale_not_a_replacement(
@@ -2166,7 +2374,7 @@ def test_selling_at_a_target_the_price_has_left_is_not_offered(
     QTimer.singleShot(0, _answer_position_dialog("Cancel", seen))
     click(window.setup.create_button)
 
-    assert len(seen) == 1
+    qtbot.waitUntil(lambda: len(seen) == 1)
     labels = {button.text() for button in seen[0].buttons()}
     assert "Sell at Take Profit" not in labels
     assert not any("Take Profit" in label for label in labels)
@@ -2249,7 +2457,7 @@ def test_a_position_wholly_at_its_target_is_still_offered_no_start(
     QTimer.singleShot(0, _answer_position_dialog("Cancel", seen))
     click(window.setup.create_button)
 
-    assert len(seen) == 1
+    qtbot.waitUntil(lambda: len(seen) == 1)
     assert {button.text() for button in seen[0].buttons()} == {
         "Close at Market",
         "Cancel",
@@ -2284,7 +2492,7 @@ def test_cancelling_the_sale_leaves_the_position_and_the_bot_alone(
     QTimer.singleShot(0, _answer_position_dialog("Cancel", seen))
     click(window.setup.create_button)
 
-    assert len(seen) == 1
+    qtbot.waitUntil(lambda: len(seen) == 1)
     assert started == []
     assert closed == []
     assert window._open_position.basket is not None
@@ -2475,9 +2683,7 @@ def test_an_edited_form_still_asks_before_it_closes_the_position(
     qtbot.waitUntil(window.setup.create_button.isEnabled)
     seen: list[str] = []
 
-    def close_at_market() -> None:
-        dialog = QApplication.activeModalWidget()
-        assert isinstance(dialog, QMessageBox)
+    def close_at_market(dialog: QMessageBox) -> None:
         seen.append(dialog.informativeText())
         click(
             next(
@@ -2488,7 +2694,7 @@ def test_an_edited_form_still_asks_before_it_closes_the_position(
         )
 
     window.setup.capital_per_entry.setText("2500")
-    QTimer.singleShot(0, close_at_market)
+    QTimer.singleShot(0, _when_asked(close_at_market))
     click(window.setup.create_button)
 
     qtbot.waitUntil(lambda: closed == ["closed"])
@@ -2525,9 +2731,7 @@ def test_the_answer_that_sells_at_market_is_not_the_default(qtbot: QtBot) -> Non
     qtbot.waitUntil(window.setup.create_button.isEnabled)
     buttons: list[tuple[str, str, str]] = []
 
-    def read_and_keep() -> None:
-        dialog = QApplication.activeModalWidget()
-        assert isinstance(dialog, QMessageBox)
+    def read_and_keep(dialog: QMessageBox) -> None:
         default = dialog.defaultButton()
         escape = dialog.escapeButton()
         assert default is not None and escape is not None
@@ -2541,9 +2745,10 @@ def test_the_answer_that_sells_at_market_is_not_the_default(qtbot: QtBot) -> Non
         click(default)
 
     window.setup.capital_per_entry.setText("2500")
-    QTimer.singleShot(0, read_and_keep)
+    QTimer.singleShot(0, _when_asked(read_and_keep))
     click(window.setup.create_button)
 
+    qtbot.waitUntil(lambda: len(buttons) == 1)
     assert buttons == [("Cancel · Close at Market · Start Bot", "Cancel", "Cancel")]
     # Cancel is what it says: nothing was sold, and no Bot was started.
     assert closed == []
@@ -2608,7 +2813,7 @@ def test_cancelling_the_position_question_leaves_it_and_the_bot_alone(
     QTimer.singleShot(0, _answer_position_dialog("Cancel", seen))
     click(window.setup.create_button)
 
-    assert len(seen) == 1
+    qtbot.waitUntil(lambda: len(seen) == 1)
     assert started == []
     assert closed == []
     assert window._open_position.basket is not None

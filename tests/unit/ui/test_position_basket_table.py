@@ -1,11 +1,11 @@
-from datetime import UTC, date, datetime
 from dataclasses import replace
+from datetime import UTC, date, datetime
 from decimal import Decimal
 
 import pytest
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QBrush, QColor
-from PySide6.QtWidgets import QTableWidgetItem
+from PySide6.QtWidgets import QPushButton, QTableWidgetItem
 from pytestqt.qtbot import QtBot
 
 from tests.support.workspace_snapshots import basket_entries, basket_snapshot
@@ -74,6 +74,10 @@ def _row(widget: PositionBasketTable, row: int = 0) -> dict[str, str]:
     values: dict[str, str] = {}
     for column, header in enumerate(widget.headers):
         item = widget.table.item(row, column)
+        if item is None:
+            # The last column holds the order this row can send, not a value.
+            assert header == PositionBasketTable.CLOSE_HEADER
+            continue
         assert item is not None
         values[header] = item.text()
     return values
@@ -102,6 +106,7 @@ def test_each_entry_of_the_basket_is_its_own_row(qtbot: QtBot) -> None:
         "Total",
         "Unrealized P/L",
         "Status",
+        "Close Position",
     )
     assert widget.table.rowCount() == 2
     assert _row(widget, 0) == {
@@ -423,3 +428,86 @@ def test_position_basket_ignores_wrong_snapshot_type(qtbot: QtBot) -> None:
 
     assert widget.table.rowCount() == 2
     assert widget.table.accessibleName() == "Position"
+
+
+def _close_button(widget: PositionBasketTable, row: int) -> QPushButton:
+    button = widget.table.cellWidget(row, len(PositionBasketTable.COLUMNS))
+    assert isinstance(button, QPushButton)
+    return button
+
+
+def test_every_entry_carries_the_order_that_closes_it(qtbot: QtBot) -> None:
+    """Binance puts the order on the row, not a tick box beside it.
+
+    A checkbox would have the trader select rows and then find the verb
+    elsewhere; the button is the order, and it says which one it sends.
+    """
+    widget = PositionBasketTable()
+    qtbot.addWidget(widget)
+    asked: list[int] = []
+    widget.close_entry_requested.connect(asked.append)
+
+    widget.show_snapshot(
+        ready_position_basket_tab(
+            basket_snapshot(entries=(_entry(1, "100", "1"), _entry(2, "110", "-2"))),
+            observed_at_utc=OBSERVED_AT,
+        )
+    )
+
+    assert _close_button(widget, 0).text() == "Market"
+    _close_button(widget, 1).click()
+
+    # The Entry's own number, not the row it happens to sit in: rows are
+    # rebuilt on every price, and one of them has already gone before now.
+    assert asked == [2]
+
+
+def test_the_order_is_taken_away_while_one_is_still_in_flight(
+    qtbot: QtBot,
+) -> None:
+    """A sale that has not landed must not be sent twice by an eager hand."""
+    widget = PositionBasketTable()
+    qtbot.addWidget(widget)
+    widget.show_snapshot(
+        ready_position_basket_tab(
+            basket_snapshot(entry_count=1, entries=(_entry(1, "100", "1"),)),
+            observed_at_utc=OBSERVED_AT,
+        )
+    )
+
+    widget.set_closing_enabled(False)
+
+    assert _close_button(widget, 0).isEnabled() is False
+    # A price arrives while the sale is still out, and the rows redraw.
+    widget.show_snapshot(
+        ready_position_basket_tab(
+            basket_snapshot(entry_count=1, entries=(_entry(1, "100", "2"),)),
+            observed_at_utc=OBSERVED_AT,
+        )
+    )
+    assert _close_button(widget, 0).isEnabled() is False
+
+    widget.set_closing_enabled(True)
+
+    assert _close_button(widget, 0).isEnabled() is True
+
+
+def test_a_sale_that_failed_is_said_over_the_position_that_is_still_there(
+    qtbot: QtBot,
+) -> None:
+    """The rows are what they were, so only the line above them changes."""
+    widget = PositionBasketTable()
+    qtbot.addWidget(widget)
+    widget.show()
+    widget.show_snapshot(
+        ready_position_basket_tab(
+            basket_snapshot(entry_count=1, entries=(_entry(1, "100", "1"),)),
+            observed_at_utc=OBSERVED_AT,
+        )
+    )
+
+    widget.show_close_error("Could not sell that Entry.")
+
+    qtbot.waitUntil(widget.state_label.isVisible)
+    assert widget.state_label.text() == "Could not sell that Entry."
+    assert widget.table.rowCount() == 1

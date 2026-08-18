@@ -325,6 +325,64 @@ class PaperSpotSession:
             require_warm_up_candle(self._candles, candle, received_at)
             self._indicators.update(candle)
 
+    def close_entry(
+        self,
+        entry_number: int,
+        *,
+        price: Decimal,
+        observed_at: datetime,
+    ) -> PaperSpotSessionSnapshot:
+        """Sell one Entry now, at the price the trader asked for it at.
+
+        The same sale a target makes, and made the same way: the Entry hands
+        its place in the Basket back, so the quota and the Entry Pair count it
+        was using are free again, and the Basket closes only when its last
+        Entry has gone. What differs is who asked and at what price.
+
+        An unaccepted snapshot is the answer where there is nothing to sell —
+        no Basket, or no Entry by that number — so a stale row on screen
+        cannot sell an Entry the Session has already let go.
+        """
+        if self._state is not PaperSpotSessionState.ACTIVE or self._basket is None:
+            return self._snapshot(accepted=False)
+        if all(entry.entry_number != entry_number for entry in self._basket.entries):
+            return self._snapshot(accepted=False)
+
+        try:
+            transition = self._new_transition()
+            basket = transition.basket
+            assert basket is not None
+            fill = self._executor.fill_entry_close(
+                basket, entry_number, price=price, filled_at=observed_at
+            )
+            closed_entry = basket.close_entry(
+                entry_number,
+                exit_price=fill.price,
+                closed_at=fill.filled_at,
+            )
+            transition.lifecycle.release_fill()
+            closed_basket: ClosedBasket | None = None
+            if basket.is_empty:
+                closed_basket = basket.settled_result(
+                    exit_price=fill.price,
+                    closed_at=observed_at,
+                    close_reason=BasketCloseReason.MANUAL,
+                )
+                transition.basket = None
+                transition.lifecycle.reset()
+                transition.closed_basket_count += 1
+            self._commit_transition(transition)
+            return self._snapshot(
+                accepted=True,
+                entry_exits=(PaperSpotEntryExit(fill=fill, closed=closed_entry),),
+                closed_basket=closed_basket,
+            )
+        except PaperSpotSessionError:
+            raise
+        except Exception as error:
+            self._fail_closed()
+            raise PaperSpotSessionError("Paper Spot execution failed") from error
+
     def _new_transition(self) -> _PaperSpotTransition:
         return _PaperSpotTransition(
             indicators=deepcopy(self._indicators),

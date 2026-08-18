@@ -42,6 +42,8 @@ class OpenPositionWorkflow(QObject):
     """Reads the Basket a Session is holding and says how it reads now."""
 
     snapshot_changed = Signal(object)
+    #: A read of the database has landed, so what is held is current again.
+    reading_landed = Signal()
 
     def __init__(
         self,
@@ -83,6 +85,9 @@ class OpenPositionWorkflow(QObject):
         self._symbol = session.market_data.symbol
         read_open_basket = self._read_open_basket
         if read_open_basket is None:
+            # Nothing to read with, so nothing is on its way: whoever is
+            # waiting for a current reading has one, such as it is.
+            self.reading_landed.emit()
             return
         # Between here and the answer, what is held is not known — which is
         # not the same as knowing nothing is held.
@@ -243,3 +248,7 @@ class OpenPositionWorkflow(QObject):
         session = self._reread
         if session is not None:
             self.read_for(session)
+            return
+        # Said last, and only where nothing further is on its way: a reading
+        # that is about to be replaced is not the one to decide on.
+        self.reading_landed.emit()

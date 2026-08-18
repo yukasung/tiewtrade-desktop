@@ -32,6 +32,7 @@ from tiewtrade.application.paper_session_setup import (
     CreatePaperSession,
     validate_paper_session,
 )
+from tiewtrade.application.paper_session_sink import close_one_entry_at_rest
 from tiewtrade.application.paper_symbols import paper_symbol_rules
 from tiewtrade.application.trading_workspace import BotRuntimeState
 from tiewtrade.decimal_context import configure_decimal_context
@@ -134,6 +135,20 @@ class _PaperRuntimeActions:
                 session=snapshot.session,
             )
         return _lifecycle_result_for_ui(snapshot, result)
+
+    def close_entry(
+        self,
+        session: ConfiguredPaperSession,
+        entry_number: int,
+        *,
+        price: Decimal,
+    ) -> bool:
+        """Ask the running Runtime to let one Entry go, if it is holding this one."""
+        with self._lock:
+            controller = self._controller if self._session == session else None
+        if controller is None:
+            return False
+        return controller.close_entry(session, entry_number, price=price)
 
     def stop_for_replacement(self, session: ConfiguredPaperSession) -> None:
         with self._lock:
@@ -392,6 +407,30 @@ def _bot_actions(
             tick_size=_symbol_rules_for(session).tick_size,
         )
 
+    def close_entry(session: ConfiguredPaperSession, entry_number: int) -> bool:
+        """Sell one Entry, asking whichever of the two is holding the Basket.
+
+        A running Runtime owns it, and a sale written past it would be a
+        Basket sold twice — once here and once by the next candle to reach a
+        target it still thinks it holds. So the Runtime is asked first, and
+        only a Runtime that is not holding this Session declines, which leaves
+        the Basket where a stopped Bot leaves it: in the database.
+        """
+        price = manual_close_price.get(session)
+        if runtime_actions.close_entry(session, entry_number, price=price):
+            return True
+        return close_one_entry_at_rest(
+            session,
+            entry_number,
+            trade_history=history,
+            symbol_rules=_symbol_rules_for(session),
+            preset=strategy_definition_for(
+                session.config.preset_version
+            ).build_preset(),
+            price=price,
+            observed_at=datetime.now(UTC),
+        )
+
     def read_open_basket(session: ConfiguredPaperSession) -> ReopenedBasket | None:
         state = read_open_basket_state(history, session.config.session_id)
         if state is None or session.config.market_type is not MarketType.SPOT:
@@ -413,6 +452,7 @@ def _bot_actions(
         shutdown_runtime=shutdown_runtime,
         stop_for_replacement=runtime_actions.stop_for_replacement,
         close_position=_migrate_first(stores.prepare, close_position),
+        close_entry=_migrate_first(stores.prepare, close_entry),
         has_open_position=lambda session: (
             history.find_open_basket(session.config.session_id) is not None
         ),

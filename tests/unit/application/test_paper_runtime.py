@@ -711,6 +711,165 @@ def test_a_basket_taken_back_is_published_before_any_live_candle(
     controller.stop(session)
 
 
+def test_a_basket_down_to_its_second_entry_is_still_published(
+    tmp_path: Path,
+) -> None:
+    """Entry 1 sold at its target, so what is left is Entry 2 on its own.
+
+    A number is not handed back when an Entry leaves, so this Basket counts
+    one Entry and calls it 2. The workspace once demanded 1..entry_count and
+    refused to describe it at all, taking the Position tab down with it.
+    """
+    session = configured_spot_session()
+    database = _database_with_session(tmp_path, session)
+    history = SQLiteTradeHistory(database)
+    _record_open_spot_entry(database, session, entry_atr=Decimal("2"))
+    basket_id = UUID("00000000-0000-0000-0000-0000000000b1")
+    history.record_paper_spot_entry_fill(
+        TradeFill(
+            fill_id="paper:left-open:fill-2",
+            basket_id=basket_id,
+            session_id=session.config.session_id,
+            order_id="entry:left-open-2",
+            exchange_trade_id=None,
+            side=FillSide.BUY,
+            entry_number=2,
+            filled_at_utc=_NOW + timedelta(minutes=5),
+            price=Decimal("90"),
+            quantity=Decimal("1"),
+            notional=Decimal("90"),
+            realized_pnl=Decimal("0"),
+            source=FillSource.PAPER_EXECUTOR,
+            entry_atr=Decimal("2"),
+        ),
+        symbol=session.market_data.symbol,
+        timeframe=session.market_data.timeframe,
+        strategy_preset_version=session.config.preset_version,
+    )
+    basket = history.get_basket(basket_id)
+    assert basket is not None
+    history.record_entry_exit_fill(
+        basket,
+        TradeFill(
+            fill_id="paper:left-open:sale-1",
+            basket_id=basket_id,
+            session_id=session.config.session_id,
+            order_id="take-profit:1",
+            exchange_trade_id=None,
+            side=FillSide.SELL,
+            entry_number=None,
+            filled_at_utc=_NOW + timedelta(minutes=10),
+            price=Decimal("106"),
+            quantity=Decimal("1"),
+            realized_pnl=Decimal("5.8"),
+            notional=Decimal("106"),
+            source=FillSource.PAPER_EXECUTOR,
+            closes_entry_number=1,
+        ),
+    )
+    source = ControllablePublicCandleSource(warm_up=_warm_up_candles(), live=())
+
+    controller = PaperRuntimeController(
+        lifecycle=SQLitePaperRuntimeLifecycle(database),
+        trade_history=history,
+        symbol_rules=_symbol_rules(),
+        source_factory=lambda _endpoints: source,
+        scheduler=ImmediateScheduler(),
+        snapshot_callback=lambda _snapshot: None,
+    )
+
+    result = controller.start(session)
+
+    assert result.blocked_reason is None
+    published = controller.current_workspace.basket
+    assert published is not None
+    assert published.entry_count == 1
+    assert [entry.entry_number for entry in published.entries] == [2]
+    assert published.average_entry_price == Decimal("90")
+    controller.stop(session)
+
+
+def test_a_running_runtime_sells_the_entry_it_is_asked_for(
+    tmp_path: Path,
+) -> None:
+    """The Runtime holds the Basket, so the Runtime is what sells out of it.
+
+    Written past it instead, the sale would be a Basket sold twice: once in
+    the database and once by the next candle to reach a target the Runtime
+    still thinks it holds.
+    """
+    session = configured_spot_session()
+    database = _database_with_session(tmp_path, session)
+    _record_open_spot_entry(database, session, entry_atr=Decimal("2"))
+    history = SQLiteTradeHistory(database)
+    source = ControllablePublicCandleSource(warm_up=_warm_up_candles(), live=())
+    controller = PaperRuntimeController(
+        lifecycle=SQLitePaperRuntimeLifecycle(database),
+        trade_history=history,
+        symbol_rules=_symbol_rules(),
+        source_factory=lambda _endpoints: source,
+        scheduler=ImmediateScheduler(),
+        snapshot_callback=lambda _snapshot: None,
+    )
+    controller.start(session)
+
+    sold = controller.close_entry(session, 1, price=Decimal("103.456"))
+
+    assert sold is True
+    # The Basket it was holding is gone from the database, and the workspace
+    # it publishes no longer shows a Position it does not have.
+    assert history.find_open_basket(session.config.session_id) is None
+    assert controller.current_workspace.basket is None
+    fills = history.list_fills(UUID("00000000-0000-0000-0000-0000000000b1"))
+    assert [(fill.side.value, str(fill.price)) for fill in fills] == [
+        ("buy", "100"),
+        # Floored to the tick this Session trades in.
+        ("sell", "103.4"),
+    ]
+    controller.stop(session)
+
+
+def test_an_entry_the_running_basket_does_not_hold_is_not_sold(
+    tmp_path: Path,
+) -> None:
+    """A row on screen redraws under the hand; a number in it can be stale."""
+    session = configured_spot_session()
+    database = _database_with_session(tmp_path, session)
+    _record_open_spot_entry(database, session, entry_atr=Decimal("2"))
+    history = SQLiteTradeHistory(database)
+    source = ControllablePublicCandleSource(warm_up=_warm_up_candles(), live=())
+    controller = PaperRuntimeController(
+        lifecycle=SQLitePaperRuntimeLifecycle(database),
+        trade_history=history,
+        symbol_rules=_symbol_rules(),
+        source_factory=lambda _endpoints: source,
+        scheduler=ImmediateScheduler(),
+        snapshot_callback=lambda _snapshot: None,
+    )
+    controller.start(session)
+
+    assert controller.close_entry(session, 7, price=Decimal("103")) is False
+    assert history.find_open_basket(session.config.session_id) is not None
+    controller.stop(session)
+
+
+def test_a_runtime_that_is_not_running_sells_nothing(tmp_path: Path) -> None:
+    """Nothing is holding the Basket here, so this is not the one to ask."""
+    session = configured_spot_session()
+    database = _database_with_session(tmp_path, session)
+    _record_open_spot_entry(database, session, entry_atr=Decimal("2"))
+    controller = PaperRuntimeController(
+        lifecycle=SQLitePaperRuntimeLifecycle(database),
+        trade_history=SQLiteTradeHistory(database),
+        symbol_rules=_symbol_rules(),
+        source_factory=lambda _endpoints: _source(),
+        scheduler=ImmediateScheduler(),
+        snapshot_callback=lambda _snapshot: None,
+    )
+
+    assert controller.close_entry(session, 1, price=Decimal("103")) is False
+
+
 def test_a_basket_that_cannot_be_taken_back_blocks_the_start(
     tmp_path: Path,
 ) -> None:

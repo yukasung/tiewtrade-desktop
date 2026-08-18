@@ -12,6 +12,8 @@ class BasketCloseReason(StrEnum):
     TAKE_PROFIT = "take_profit"
     STOP_LOSS = "stop_loss"
     LIQUIDATION = "liquidation"
+    # The trader sold it, at the price the market was at when they asked.
+    MANUAL = "manual"
 
 
 def _require_utc(value: datetime, field: str) -> None:
