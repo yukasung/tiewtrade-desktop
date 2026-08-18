@@ -13,41 +13,38 @@ from PySide6.QtWidgets import QMessageBox, QWidget
 class PositionAtTarget(StrEnum):
     """What to do with a Position the price has already carried to its target."""
 
-    SELL_AT_TARGET = "sell_at_target"
     CLOSE_AT_MARKET = "close_at_market"
     CANCEL = "cancel"
 
 
-class ReplaceSession(StrEnum):
-    """What to do with the Position of a Session being replaced."""
+class PositionOnStart(StrEnum):
+    """What to do with a Position a Start has met, at its target or not."""
 
+    START_ON_IT = "start_on_it"
     CLOSE_AT_MARKET = "close_at_market"
-    KEEP_AND_RESUME = "keep_and_resume"
+    CANCEL = "cancel"
 
 
 def ask_about_a_position_at_its_target(
-    parent: QWidget | None, sells: str
+    parent: QWidget | None, reached: str
 ) -> PositionAtTarget:
     """Ask about the sale that is waiting, not about replacing a Session.
 
     A Position whose target the price has already reached is what the trader
-    is deciding about, so that is what the question is about. The two ways out
-    of it are named: selling at the targets the Entries were given, or selling
-    the lot at the price now — which is a different trade, and no longer
-    something a stray Enter can pick.
+    is deciding about, so that is what the question is about. Only one trade
+    is on offer — selling the lot at the price now — because selling at a
+    target the price has already left is not a sale worth keeping a button
+    for. The one that trades nothing is what a stray Enter still picks.
     """
     dialog = QMessageBox(parent)
     dialog.setWindowTitle("Take Profit reached")
     dialog.setIcon(QMessageBox.Icon.Warning)
-    dialog.setText("Sell this Position at its Take Profit?")
+    dialog.setText("Close this Position at the market price?")
     dialog.setInformativeText(
-        f"{sells}\n\n"
-        "Close at Market sells the whole Position at the price now instead, "
+        f"{reached}\n\n"
+        "Close at Market sells the whole Position at the price now, "
         "and starts a new Paper Bot with the values on this form.\n\n"
         "Cancel leaves the Position open and the Bot stopped."
-    )
-    sell_button = dialog.addButton(
-        "Sell at Take Profit", QMessageBox.ButtonRole.AcceptRole
     )
     close_button = dialog.addButton(
         "Close at Market", QMessageBox.ButtonRole.DestructiveRole
@@ -56,39 +53,64 @@ def ask_about_a_position_at_its_target(
     dialog.setDefaultButton(cancel_button)
     dialog.setEscapeButton(cancel_button)
     dialog.exec()
-    clicked = dialog.clickedButton()
-    if clicked is sell_button:
-        return PositionAtTarget.SELL_AT_TARGET
-    if clicked is close_button:
+    if dialog.clickedButton() is close_button:
         return PositionAtTarget.CLOSE_AT_MARKET
     return PositionAtTarget.CANCEL
 
 
-def ask_about_replacing_the_session(parent: QWidget | None) -> ReplaceSession:
-    """Ask which Session is wanted, since only one can hold the Position.
+def ask_about_the_open_position(
+    parent: QWidget | None, holding: str, at_target: str | None = None
+) -> PositionOnStart:
+    """Ask what the Start is to do with the Position that is already there.
 
-    Both answers are named after the trade they make. Labelled Yes and No,
-    with Yes the default, this question sold two Positions at the market
-    price for a trader who only meant to press Start twice.
+    Running the Session on trades nothing where nothing has reached a target,
+    which is why this press used to go through without a question. It is still
+    the one that puts an open Position back under a Bot, and each answer is
+    named after what it does to that Position rather than after Yes and No.
+    Labelled Yes and No, with Yes the default, this question sold two Positions
+    at the market price for a trader who only meant to press Start twice.
+
+    Where part of the Position has reached a target, running on is no longer
+    free — that part sells at once, at the price it was promised rather than
+    the one on screen — so Start Bot says so. Withholding the answer instead
+    left closing the lot at the market price as the only way forward, which
+    sold the Entries that were still holding too.
     """
     dialog = QMessageBox(parent)
-    dialog.setWindowTitle("Close Paper Position?")
+    dialog.setWindowTitle("Open Position")
     dialog.setIcon(QMessageBox.Icon.Warning)
-    dialog.setText("Close this Position and start a new Paper Bot?")
+    dialog.setText("Start the Bot on the Position it holds?")
+    if at_target is None:
+        start_line = (
+            "Start Bot runs the Paper Session that is already there, position "
+            "and all. The values on this form are not used."
+        )
+    else:
+        start_line = (
+            "Start Bot runs the Paper Session that is already there. What has "
+            "reached its Take Profit is sold at once at the target it was "
+            "given, not at the price now, and the rest is run on. The values "
+            "on this form are not used."
+        )
     dialog.setInformativeText(
+        f"{holding}{'' if at_target is None else f' {at_target}'}\n\n"
+        f"{start_line}\n\n"
         "Close at Market sells the whole Position at the price now, and starts "
         "a new Paper Bot with the values on this form.\n\n"
-        "Keep Position leaves it open and starts the existing Paper Session "
-        "again."
+        "Cancel leaves the Position open and the Bot stopped."
     )
+    start_button = dialog.addButton("Start Bot", QMessageBox.ButtonRole.AcceptRole)
     close_button = dialog.addButton(
         "Close at Market", QMessageBox.ButtonRole.DestructiveRole
     )
-    keep_button = dialog.addButton("Keep Position", QMessageBox.ButtonRole.RejectRole)
+    cancel_button = dialog.addButton("Cancel", QMessageBox.ButtonRole.RejectRole)
     # The answer that trades nothing is the one a stray Enter or Escape finds.
-    dialog.setDefaultButton(keep_button)
-    dialog.setEscapeButton(keep_button)
+    dialog.setDefaultButton(cancel_button)
+    dialog.setEscapeButton(cancel_button)
     dialog.exec()
-    if dialog.clickedButton() is close_button:
-        return ReplaceSession.CLOSE_AT_MARKET
-    return ReplaceSession.KEEP_AND_RESUME
+    clicked = dialog.clickedButton()
+    if clicked is start_button:
+        return PositionOnStart.START_ON_IT
+    if clicked is close_button:
+        return PositionOnStart.CLOSE_AT_MARKET
+    return PositionOnStart.CANCEL

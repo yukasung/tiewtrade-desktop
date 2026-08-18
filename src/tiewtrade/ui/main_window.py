@@ -18,7 +18,6 @@ from tiewtrade.application.paper_session_setup import (
     ConfiguredPaperSession,
     PaperSessionSetupValues,
     PaperSessionValidationError,
-    setup_values_of,
     validate_paper_session,
 )
 from tiewtrade.application.trading_workspace import BotRuntimeState
@@ -47,10 +46,11 @@ from tiewtrade.ui.session_workflow import (
 from tiewtrade.ui.start_decision import StartCourse, course_before_start
 from tiewtrade.ui.start_dialogs import (
     PositionAtTarget,
-    ReplaceSession,
+    PositionOnStart,
     ask_about_a_position_at_its_target,
-    ask_about_replacing_the_session,
+    ask_about_the_open_position,
 )
+from tiewtrade.ui.take_profit_confirmation import UNREADABLE_POSITION_MESSAGE
 from tiewtrade.ui.trade_history_workflow import (
     ListBasketHistory,
     ListTradeFills,
@@ -279,20 +279,14 @@ class MainWindow(QMainWindow):
         course = course_before_start(
             position_open=self._position_is_open(),
             sells_on_start=self._sells_on_start_message() is not None,
-            form_matches_session=(
-                raw_values == setup_values_of(self._replacement_session)
-            ),
+            leaves_entries_holding=self._open_position.leaves_entries_holding(),
         )
         if course is StartCourse.ASK_ABOUT_THE_SALE:
             self._act_on_a_position_at_its_target()
             return
-        if course is StartCourse.RESUME_SESSION:
-            self._resume_replacement_session()
+        if course is StartCourse.ASK_ABOUT_THE_POSITION:
+            self._act_on_the_open_position()
             return
-        if course is StartCourse.ASK_ABOUT_REPLACING:
-            if ask_about_replacing_the_session(self) is ReplaceSession.KEEP_AND_RESUME:
-                self._resume_replacement_session()
-                return
         self._replace_session()
 
     def _position_is_open(self) -> bool:
@@ -308,18 +302,34 @@ class MainWindow(QMainWindow):
         return persisted or running
 
     def _act_on_a_position_at_its_target(self) -> None:
-        sells = self._sells_on_start_message()
-        if sells is None:
+        reached = self._position_at_target_message()
+        if reached is None:
             return
-        answer = ask_about_a_position_at_its_target(self, sells)
-        if answer is PositionAtTarget.SELL_AT_TARGET:
-            self._resume_replacement_session()
-        elif answer is PositionAtTarget.CLOSE_AT_MARKET:
+        answer = ask_about_a_position_at_its_target(self, reached)
+        if answer is PositionAtTarget.CLOSE_AT_MARKET:
             self._replace_session()
-        else:
-            # Nothing was decided, so the form's edits describe a Session that
-            # is not being made.
-            self._replacement_values = None
+            return
+        # Nothing was decided, so the form's edits describe a Session that is
+        # not being made.
+        self._replacement_values = None
+
+    def _act_on_the_open_position(self) -> None:
+        answer = ask_about_the_open_position(
+            self,
+            self._position_held_message() or UNREADABLE_POSITION_MESSAGE,
+            # Said only where part of the Position has reached a target, which
+            # is what makes running the Session on a sale of its own.
+            self._position_at_target_message(),
+        )
+        if answer is PositionOnStart.START_ON_IT:
+            self._resume_replacement_session()
+            return
+        if answer is PositionOnStart.CLOSE_AT_MARKET:
+            self._replace_session()
+            return
+        # Nothing was decided, so the form's edits describe a Session that is
+        # not being made.
+        self._replacement_values = None
 
     def _resume_replacement_session(self) -> None:
         """Run the Session that is already there on, position and all.
@@ -341,23 +351,25 @@ class MainWindow(QMainWindow):
             )
             return
         self.setup.set_values_from_session(session)
-        # Started without asking again: getting here means the trader was
-        # asked what to do with this Position and answered "leave it open",
-        # in a question that already said what leaving it open would sell.
+        # Started without asking again: a Position at its target never reaches
+        # here — that course closes at the market price or does nothing — so
+        # there is no sale left for a question to be about.
         self._start_now()
 
     @Slot()
     def _start_requested(self) -> None:
-        """Start the Bot, asking first when starting is itself a sale.
+        """Start the Bot, asking first about any Position it would run on.
 
         A Position left open goes on being marked while nothing runs, so the
         price can reach an Entry's target with no Bot to act on it. The first
         live tick after a Start sells every such Entry at once, at the target
         it was given rather than at the price on screen — and there is no way
-        back from a Fill. The routes that put no question of their own come
-        through here, which is where this one is put.
+        back from a Fill. Short of a target it sells nothing, but it is still
+        this press that hands an open Position back to a Bot, so it is said
+        here too. The routes that put no question of their own come through
+        here, which is where this one is put.
         """
-        message = self._sells_on_start_message()
+        message = self._sells_on_start_message() or self._position_held_message()
         if message is None:
             self._start_now()
             return
@@ -376,7 +388,39 @@ class MainWindow(QMainWindow):
         A Futures Session never takes a Basket back, so it answers the same
         way as having none: there is nothing to put a question about.
         """
-        return self._open_position.sells_on_start_message()
+        return self._said_or_asked_anyway(self._open_position.sells_on_start_message())
+
+    def _position_at_target_message(self) -> str | None:
+        """What the held Position has reached, in the words the dialog puts it.
+
+        Read from the same Basket and price as _sells_on_start_message, which
+        is what decided a question was worth putting at all.
+        """
+        return self._said_or_asked_anyway(
+            self._open_position.position_at_target_message()
+        )
+
+    def _position_held_message(self) -> str | None:
+        """What the Position stands at, in the words the dialog puts it in.
+
+        Read from the same Basket and price as the other two, which is what
+        decided a question was worth putting at all.
+        """
+        return self._said_or_asked_anyway(self._open_position.position_held_message())
+
+    def _said_or_asked_anyway(self, message: str | None) -> str | None:
+        """The reading itself, or the reason there is none to be had.
+
+        Silence has two meanings — nothing is at its target, and nothing can
+        be told yet — and only one of them makes it safe to start without
+        asking. A Basket still being read, or one with no price yet, took the
+        question away and sold a Position at a target the price had left.
+        """
+        if message is not None:
+            return message
+        if self._open_position.what_a_start_sells_is_unknown():
+            return UNREADABLE_POSITION_MESSAGE
+        return None
 
     def _confirm_start(self) -> None:
         self._take_profit_confirmation_pending = False
@@ -386,9 +430,9 @@ class MainWindow(QMainWindow):
         self, message: str, confirm: Callable[[], None]
     ) -> None:
         dialog = QMessageBox(self)
-        dialog.setWindowTitle("Sell at Take Profit?")
+        dialog.setWindowTitle("Open Position")
         dialog.setIcon(QMessageBox.Icon.Warning)
-        dialog.setText("Start the Bot and sell at once?")
+        dialog.setText("Start the Bot on the Position it holds?")
         dialog.setInformativeText(message)
         start_button = dialog.addButton("Start Bot", QMessageBox.ButtonRole.AcceptRole)
         cancel_button = dialog.addButton("Cancel", QMessageBox.ButtonRole.RejectRole)

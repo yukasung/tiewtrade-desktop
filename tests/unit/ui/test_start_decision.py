@@ -4,69 +4,80 @@ from tiewtrade.ui.start_decision import StartCourse, course_before_start
 
 
 def test_nothing_open_makes_the_session_the_form_describes() -> None:
-    """There is no Position to lose, so Start is only "make this Session"."""
+    """With nothing held, Start is the plain thing it looks like."""
     assert (
         course_before_start(
             position_open=False,
             sells_on_start=True,
-            form_matches_session=False,
+            leaves_entries_holding=False,
         )
         is StartCourse.REPLACE_SESSION
     )
 
 
-def test_a_position_at_its_target_is_asked_about_before_anything_else() -> None:
-    """Starting sells it at once, which outranks what the form happens to say."""
-    for form_matches in (True, False):
-        assert (
-            course_before_start(
-                position_open=True,
-                sells_on_start=True,
-                form_matches_session=form_matches,
-            )
-            is StartCourse.ASK_ABOUT_THE_SALE
+def test_a_position_wholly_at_its_target_is_asked_about_as_a_sale() -> None:
+    """Running on would book every Entry at a price the market has left."""
+    assert (
+        course_before_start(
+            position_open=True,
+            sells_on_start=True,
+            leaves_entries_holding=False,
         )
+        is StartCourse.ASK_ABOUT_THE_SALE
+    )
 
 
-def test_an_untouched_form_runs_the_session_on_without_a_question() -> None:
-    """Nothing was asked for and nothing is at its target: nothing to ask.
+def test_a_position_short_of_its_target_is_still_asked_about() -> None:
+    """Resuming trades nothing, and is still done to an open Position.
 
-    A dialog here would be about nothing, which is what teaches a hand to
-    dismiss the dialogs that are about something.
+    Passing without a question here read as the window having missed the
+    Position altogether — the one press that hands it back to a Bot said
+    nothing about it.
     """
     assert (
         course_before_start(
             position_open=True,
             sells_on_start=False,
-            form_matches_session=True,
+            leaves_entries_holding=True,
         )
-        is StartCourse.RESUME_SESSION
+        is StartCourse.ASK_ABOUT_THE_POSITION
     )
 
 
-def test_an_edited_form_is_asked_about_because_it_closes_the_position() -> None:
-    """A different Session cannot be made while this one holds a Position."""
+def test_a_start_that_sells_only_part_of_it_still_offers_to_start() -> None:
+    """One Entry at its target must not decide for the ones still holding.
+
+    On the sale course the only answer that goes forward closes at the market
+    price, which sells the Entries that had reached nothing along with the one
+    that had. Leaving something behind is what keeps Start Bot on offer.
+    """
     assert (
         course_before_start(
             position_open=True,
-            sells_on_start=False,
-            form_matches_session=False,
+            sells_on_start=True,
+            leaves_entries_holding=True,
         )
-        is StartCourse.ASK_ABOUT_REPLACING
+        is StartCourse.ASK_ABOUT_THE_POSITION
     )
 
 
 @pytest.mark.parametrize("sells_on_start", [True, False])
-@pytest.mark.parametrize("form_matches_session", [True, False])
-def test_a_question_is_put_only_where_the_answer_changes_something(
-    sells_on_start: bool, form_matches_session: bool
+@pytest.mark.parametrize("leaves_entries_holding", [True, False])
+def test_a_question_is_put_for_every_position_and_no_other_start(
+    sells_on_start: bool,
+    leaves_entries_holding: bool,
 ) -> None:
-    """Every course that asks has a real fork behind it, and no other does."""
-    course = course_before_start(
-        position_open=True,
-        sells_on_start=sells_on_start,
-        form_matches_session=form_matches_session,
-    )
-    asks = course in (StartCourse.ASK_ABOUT_THE_SALE, StartCourse.ASK_ABOUT_REPLACING)
+    """Every Start that meets a Position asks, and no other Start does.
 
-    assert asks == (sells_on_start or not form_matches_session)
+    A dialog about nothing is not free: it is what teaches a hand to dismiss
+    the dialogs that are about something, and the ones dismissed here close a
+    Position at the market price.
+    """
+    asking = (StartCourse.ASK_ABOUT_THE_SALE, StartCourse.ASK_ABOUT_THE_POSITION)
+    for position_open in (True, False):
+        course = course_before_start(
+            position_open=position_open,
+            sells_on_start=sells_on_start,
+            leaves_entries_holding=leaves_entries_holding,
+        )
+        assert (course in asking) is position_open

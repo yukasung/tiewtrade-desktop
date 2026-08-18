@@ -29,7 +29,12 @@ from tiewtrade.application.trading_workspace import (
     ready_position_basket_tab,
 )
 from tiewtrade.ui.background_task import BackgroundTask
-from tiewtrade.ui.take_profit_confirmation import sells_on_start_message
+from tiewtrade.ui.take_profit_confirmation import (
+    leaves_entries_holding,
+    position_at_target_message,
+    position_held_message,
+    sells_on_start_message,
+)
 
 ReadOpenBasket = Callable[[ConfiguredPaperSession], ReopenedBasket | None]
 
@@ -55,6 +60,9 @@ class OpenPositionWorkflow(QObject):
         self._task: BackgroundTask | None = None
         self._reread: ConfiguredPaperSession | None = None
         self._candle: ChartCandle | None = None
+        # Nothing has been asked for yet, so nothing is held and nothing is
+        # unknown. Only a read that is out or that failed makes it unknown.
+        self._holding_is_unknown = False
 
     @property
     def basket(self) -> ReopenedBasket | None:
@@ -72,6 +80,9 @@ class OpenPositionWorkflow(QObject):
         read_open_basket = self._read_open_basket
         if read_open_basket is None:
             return
+        # Between here and the answer, what is held is not known — which is
+        # not the same as knowing nothing is held.
+        self._holding_is_unknown = True
         if self._task is not None:
             # A read is already on its way, and the Basket it saw may be older
             # than the one being asked about now. It is asked again when that
@@ -94,6 +105,7 @@ class OpenPositionWorkflow(QObject):
     def held_by_runtime(self) -> None:
         """The Runtime owns the Basket now and publishes it every candle."""
         self._basket = None
+        self._holding_is_unknown = False
 
     def forget(self) -> None:
         """Drop a Basket that has just been closed.
@@ -102,6 +114,7 @@ class OpenPositionWorkflow(QObject):
         copy kept here describes something that is no longer there.
         """
         self._basket = None
+        self._holding_is_unknown = False
 
     def sells_on_start_message(self) -> str | None:
         """What starting a Bot would sell at once, or nothing to say about it.
@@ -114,6 +127,56 @@ class OpenPositionWorkflow(QObject):
         if basket is None or candle is None:
             return None
         return sells_on_start_message(basket, candle.close)
+
+    def position_at_target_message(self) -> str | None:
+        """What the held Position has reached, or nothing to say about it.
+
+        Answers as one with sells_on_start_message: the same Basket and the
+        same price decide both, so a question is never put about a Position
+        the other reads as holding.
+        """
+        basket = self._basket
+        candle = self._candle
+        if basket is None or candle is None:
+            return None
+        return position_at_target_message(basket, candle.close)
+
+    def position_held_message(self) -> str | None:
+        """How much is open, or nothing to say about it.
+
+        A count needs no price, so this one answers from the Basket alone. The
+        two beside it still need one: what a Start would sell is a question
+        about where the price stands, not about what is held.
+        """
+        basket = self._basket
+        if basket is None:
+            return None
+        return position_held_message(basket)
+
+    def leaves_entries_holding(self) -> bool:
+        """Whether a Start would leave part of the Position unsold.
+
+        Nothing to read it from answers the same way as a Basket a Start would
+        take whole: the question that follows is then the one that offers no
+        Start at all, which is the answer to be wrong towards.
+        """
+        basket = self._basket
+        candle = self._candle
+        if basket is None or candle is None:
+            return False
+        return leaves_entries_holding(basket, candle.close)
+
+    def what_a_start_sells_is_unknown(self) -> bool:
+        """Whether a Start could sell at a target without this saying so.
+
+        A Basket read that has not landed, one that failed, and a Basket with
+        no price to judge it by all answer the same way: nothing here can rule
+        the sale out. Reading that silence as "nothing to ask about" is what
+        let a Position go at its target with no question put.
+        """
+        if self._holding_is_unknown:
+            return True
+        return self._basket is not None and self._candle is None
 
     def reassert(self) -> None:
         """Say again what is held, over whatever has just painted the tab.
@@ -151,6 +214,7 @@ class OpenPositionWorkflow(QObject):
         if result is not None and not isinstance(result, ReopenedBasket):
             return
         self._basket = result
+        self._holding_is_unknown = False
         self.reassert()
 
     @Slot(object)
@@ -161,6 +225,7 @@ class OpenPositionWorkflow(QObject):
         is not true: it is open, and only closing it clears the way.
         """
         self._basket = None
+        self._holding_is_unknown = True
         self.snapshot_changed.emit(
             failed_position_basket_tab(
                 empty_position_basket_tab(),
