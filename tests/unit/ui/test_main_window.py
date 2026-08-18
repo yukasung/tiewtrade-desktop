@@ -1998,7 +1998,7 @@ def test_a_position_no_price_has_reached_yet_is_still_asked_about(
 
     click(control.start_button)
 
-    assert len(asked) == 1
+    qtbot.waitUntil(lambda: len(asked) == 1)
     message, confirm = asked[0]
     assert "cannot be read yet" in message
     assert started == []
@@ -2025,7 +2025,7 @@ def test_a_position_still_being_read_is_asked_about_before_it_is_started_onto(
 
     click(control.start_button)
 
-    assert len(asked) == 1
+    qtbot.waitUntil(lambda: len(asked) == 1)
     assert started == []
 
 
@@ -2041,7 +2041,7 @@ def test_starting_into_a_reached_take_profit_asks_before_it_sells(
 
     click(control.start_button)
 
-    assert len(asked) == 1
+    qtbot.waitUntil(lambda: len(asked) == 1)
     message, confirm = asked[0]
     # That the sale books at a target rather than at the price on screen —
     # counted, not priced: the figures are columns in the tab behind it.
@@ -2068,7 +2068,7 @@ def test_declining_the_sale_leaves_the_position_open_and_the_bot_stopped(
 
     click(control.start_button)
 
-    assert len(asked) == 1
+    qtbot.waitUntil(lambda: len(asked) == 1)
     assert started == []
     assert window._open_position.basket is not None
     assert _runtime_state(window) is not BotRuntimeState.RUNNING
@@ -2091,7 +2091,7 @@ def test_a_position_short_of_its_target_is_still_said_before_it_is_run_on(
 
     click(control.start_button)
 
-    assert len(asked) == 1
+    qtbot.waitUntil(lambda: len(asked) == 1)
     message, confirm = asked[0]
     # What is held, not what a sale would book: this one has reached nothing.
     assert message == "1 Entry is open."
@@ -2175,35 +2175,13 @@ def test_the_question_is_put_to_the_position_that_is_there_now(
     """
     session = configured_spot_session()
     relay = ChartFactRelay()
-
-    def basket_of(price: str) -> ReopenedBasket:
-        return reopen_basket(
-            OpenBasketState(
-                basket_id=UUID("00000000-0000-0000-0000-0000000000d3"),
-                entries=(
-                    OpenBasketEntry(
-                        entry_number=1,
-                        price=Decimal(price),
-                        quantity=Decimal("2"),
-                        filled_at=datetime(2026, 8, 1, 12, tzinfo=UTC),
-                        atr=Decimal("2"),
-                    ),
-                ),
-                closed_basket_count=0,
-            ),
-            entry_policy=session.config.entry_policy,
-            take_profit_atr_multiplier=Decimal("3"),
-            stop_loss_atr_multiplier=None,
-            tick_size=Decimal("0.01"),
-        )
-
     reads: list[int] = []
 
     def read_open_basket(_session: ConfiguredPaperSession) -> ReopenedBasket | None:
         reads.append(len(reads))
         # Taken at 100 its target of 106 is behind the price of 110; taken at
         # 120 its target of 126 is still ahead of it.
-        return basket_of("100") if len(reads) == 1 else basket_of("120")
+        return _basket_of(session, "100" if len(reads) == 1 else "120")
 
     window = _position_window(
         qtbot,
@@ -2228,6 +2206,72 @@ def test_the_question_is_put_to_the_position_that_is_there_now(
     assert len(reads) >= 2
 
 
+def test_the_workspace_start_asks_about_the_position_that_is_there_now(
+    qtbot: QtBot,
+) -> None:
+    """The other Start means the same thing to a Position, and reads it too.
+
+    Its copy refreshes when a Session loads, when the Bot reports stopped, and
+    when something forgets it — never because a question is about to be put on
+    it. Asked from that copy, it warned about selling at a target belonging to
+    an Entry that had gone.
+    """
+    session = configured_spot_session()
+    relay = ChartFactRelay()
+    reads: list[int] = []
+    asked: list[tuple[str, Callable[[], None]]] = []
+
+    def read_open_basket(_session: ConfiguredPaperSession) -> ReopenedBasket | None:
+        reads.append(len(reads))
+        # Taken at 100 its target of 106 is behind the price of 110; taken at
+        # 120 its target of 126 is still ahead of it.
+        return _basket_of(session, "100" if len(reads) == 1 else "120")
+
+    window = _position_window(
+        qtbot,
+        session=session,
+        relay=relay,
+        read_open_basket=read_open_basket,
+        price=110,
+        take_profit_confirmation=lambda message, confirm: asked.append(
+            (message, confirm)
+        ),
+    )
+    control = window.workspace.bot_control_widget
+    qtbot.waitUntil(control.start_button.isEnabled)
+
+    click(control.start_button)
+
+    qtbot.waitUntil(lambda: len(asked) == 1)
+    # What is held now, which has reached nothing — not the sale at a target
+    # the first reading would have warned about.
+    assert asked[0][0] == "1 Entry is open."
+    assert len(reads) >= 2
+
+
+def _basket_of(session: ConfiguredPaperSession, price: str) -> ReopenedBasket:
+    """One Entry taken at a price, with an ATR of 2 and a multiplier of 3."""
+    return reopen_basket(
+        OpenBasketState(
+            basket_id=UUID("00000000-0000-0000-0000-0000000000d3"),
+            entries=(
+                OpenBasketEntry(
+                    entry_number=1,
+                    price=Decimal(price),
+                    quantity=Decimal("2"),
+                    filled_at=datetime(2026, 8, 1, 12, tzinfo=UTC),
+                    atr=Decimal("2"),
+                ),
+            ),
+            closed_basket_count=0,
+        ),
+        entry_policy=session.config.entry_policy,
+        take_profit_atr_multiplier=Decimal("3"),
+        stop_loss_atr_multiplier=None,
+        tick_size=Decimal("0.01"),
+    )
+
+
 def _position_window(
     qtbot: QtBot,
     *,
@@ -2235,6 +2279,7 @@ def _position_window(
     relay: ChartFactRelay,
     read_open_basket: Callable[[ConfiguredPaperSession], ReopenedBasket | None],
     price: int,
+    take_profit_confirmation: Callable[[str, Callable[[], None]], None] | None = None,
 ) -> MainWindow:
     """A stopped Session whose Basket is read by the test, at a given price."""
     window = MainWindow(
@@ -2258,6 +2303,7 @@ def _position_window(
             retire_session=lambda _session: None,
         ),
         chart=ChartSources(facts=relay),
+        take_profit_confirmation=take_profit_confirmation,
     )
     qtbot.addWidget(window)
     window.show()
@@ -2550,6 +2596,8 @@ def test_the_default_take_profit_confirmation_defaults_to_cancel(
 
     click(control.start_button)
 
+    # The question waits on a reading of the Basket before it is put.
+    qtbot.waitUntil(lambda: window.findChild(QMessageBox) is not None)
     dialog = window.findChild(QMessageBox)
     assert dialog is not None
     cancel = next(button for button in dialog.buttons() if button.text() == "Cancel")

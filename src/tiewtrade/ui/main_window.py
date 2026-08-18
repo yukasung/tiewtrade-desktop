@@ -291,7 +291,9 @@ class MainWindow(QMainWindow):
         # the database — a Session left running elsewhere goes on trading past
         # it. A question about a Position is put to the Position that is there
         # now, not to the one the window happens to be holding.
-        self._once_the_position_is_read(self._take_the_start_course)
+        self._once_the_position_is_read(
+            self._replacement_session, self._take_the_start_course
+        )
 
     def _take_the_start_course(self) -> None:
         if self._replacement_values is None or self._replacement_session is None:
@@ -309,14 +311,18 @@ class MainWindow(QMainWindow):
             return
         self._replace_session()
 
-    def _once_the_position_is_read(self, then: Callable[[], None]) -> None:
+    def _once_the_position_is_read(
+        self,
+        session: ConfiguredPaperSession | None,
+        then: Callable[[], None],
+    ) -> None:
         """Read the Basket again, and do this with the answer that comes back.
 
         A Start puts an irreversible question, and it once put one about an
         Entry that had already sold: the window had read the Basket when it
-        opened and nothing had asked since.
+        opened and nothing had asked since. No Session to read for is nothing
+        to wait on.
         """
-        session = self._replacement_session
         self._waiting_on_a_reading.append(then)
         if session is None:
             self._position_reading_landed()
@@ -409,8 +415,19 @@ class MainWindow(QMainWindow):
         back from a Fill. Short of a target it sells nothing, but it is still
         this press that hands an open Position back to a Bot, so it is said
         here too. The routes that put no question of their own come through
-        here, which is where this one is put.
+        here, which is where this one is put — to the Position that is there
+        now, which is why the Basket is read again before it is asked about.
         """
+        if self._take_profit_confirmation_pending:
+            return
+        try:
+            session = self._lifecycle_workflow.snapshot.session
+        except RuntimeError:
+            session = None
+        self._once_the_position_is_read(session, self._ask_before_starting)
+
+    def _ask_before_starting(self) -> None:
+        """Put the question the reading turned out to be worth, or none."""
         message = self._sells_on_start_message() or self._position_held_message()
         if message is None:
             self._start_now()
