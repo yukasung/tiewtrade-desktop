@@ -39,8 +39,11 @@ _HTTP_REQUEST_TIMEOUT_SECONDS = 30.0
 # 4h one. A ping is the thing that asks, and a pong that never comes closes
 # the stream, which the runtime already knows how to reconnect.
 #
-# Well inside Binance's own limits: it pings every twenty seconds and allows
-# ten minutes to answer, so a probe a minute costs nothing and risks nothing.
+# Well inside what Binance allows. What it caps is the rate, not the count:
+# five incoming messages a second on Spot, and a ping frame is one of them.
+# Two a minute spends about half a percent of that, and the pongs owed to
+# Binance's own pings — every twenty seconds on Spot, every three minutes on
+# Futures — leave it under two percent together.
 WEBSOCKET_HEARTBEAT_SECONDS = 30.0
 
 

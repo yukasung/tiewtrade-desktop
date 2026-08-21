@@ -940,4 +940,8 @@ def test_stream_klines_pings_so_a_silent_connection_is_noticed() -> None:
     asyncio.run(collect_updates(source))
 
     assert session.websocket_heartbeats == [WEBSOCKET_HEARTBEAT_SECONDS]
+    # Under a minute, or the silence outlasts the point of asking about it.
     assert WEBSOCKET_HEARTBEAT_SECONDS <= 60.0
+    # Binance counts a ping against five incoming messages a second, so the
+    # probe has to stay rare enough to be free.
+    assert 1.0 / WEBSOCKET_HEARTBEAT_SECONDS < 5.0
