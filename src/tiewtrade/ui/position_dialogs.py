@@ -31,3 +31,30 @@ def ask_about_selling_one_entry(parent: QWidget | None, entry_number: int) -> bo
     dialog.setEscapeButton(cancel_button)
     dialog.exec()
     return dialog.clickedButton() is sell_button
+
+
+def ask_about_cancelling_cooldown(parent: QWidget | None) -> bool:
+    """Ask before a Cooldown the strategy itself set is lifted.
+
+    A Cooldown does not lapse, so lifting it is the trader stepping around a
+    risk policy rather than hurrying one along — the question says so in as
+    many words.
+    """
+    dialog = QMessageBox(parent)
+    dialog.setWindowTitle("Cancel Cooldown")
+    dialog.setIcon(QMessageBox.Icon.Warning)
+    dialog.setText("Lift this Cooldown and open a new Entry now?")
+    dialog.setInformativeText(
+        "This Basket completed an Entry Pair, so the strategy is holding it "
+        "back from taking another Entry. Lifting the Cooldown lets one open "
+        "immediately. The next Pair it completes is held back again.\n\n"
+        "Cancel leaves the Cooldown as it is."
+    )
+    waive_button = dialog.addButton(
+        "Cancel Cooldown", QMessageBox.ButtonRole.DestructiveRole
+    )
+    cancel_button = dialog.addButton("Cancel", QMessageBox.ButtonRole.RejectRole)
+    dialog.setDefaultButton(cancel_button)
+    dialog.setEscapeButton(cancel_button)
+    dialog.exec()
+    return dialog.clickedButton() is waive_button

@@ -739,7 +739,6 @@ def _basket_facts(snapshot: BotControlSnapshot) -> tuple[object, ...]:
         basket.entry_count,
         basket.total_quantity,
         basket.entry_gate,
-        basket.cooldown_until,
     )
 
 

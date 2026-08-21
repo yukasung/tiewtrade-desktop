@@ -229,6 +229,25 @@ class PaperFuturesSession:
             require_warm_up_candle(self._candles, candle, received_at)
             self._indicators.update(candle)
 
+    def waive_cooldown(self, observed_at: datetime) -> PaperFuturesSessionSnapshot:
+        """Let the trader open past the Cooldown blocking this Basket now.
+
+        Futures never takes a Basket back from the database, so a Cooldown it
+        is holding is lifted here or not at all.
+
+        An unaccepted snapshot is the answer where there is nothing to waive —
+        no Basket, or a gate that is not a Cooldown right now.
+        """
+        if self._state is not PaperFuturesSessionState.ACTIVE or self._basket is None:
+            return self._snapshot(accepted=False)
+        candidate_lifecycle = deepcopy(self._lifecycle)
+        try:
+            candidate_lifecycle.waive_cooldown()
+        except ValueError:
+            return self._snapshot(accepted=False)
+        self._lifecycle = candidate_lifecycle
+        return self._snapshot(accepted=True)
+
     def _fill_pending_intent(self, candle: Candle) -> PaperFuturesEntryFill | None:
         if self._pending_intent is None:
             return None
@@ -271,7 +290,7 @@ class PaperFuturesSession:
             available_capital=self._wallet_balance,
             current_price=candle.close,
         )
-        candidate_lifecycle.record_fill(fill.filled_at)
+        candidate_lifecycle.record_fill()
         candidate_strategy.on_entry_filled(intent.intent_id)
 
         self._basket = candidate_basket
@@ -330,7 +349,7 @@ class PaperFuturesSession:
         # earliest a new entry can be signalled is the candle after the sell.
         can_enter = (
             not exited_on_this_candle
-            and self._lifecycle.can_enter(candle.close_time)
+            and self._lifecycle.can_enter()
             and (
                 self._basket is None
                 or self._basket.entry_count < self._session.entry_policy.max_entries
@@ -369,9 +388,14 @@ class PaperFuturesSession:
         )
 
     def _entry_gate(self) -> EntryGate | None:
-        """Read the gate against the last candle, the clock entries are judged on."""
-        closed_at = self._candles.last_close_time
-        return None if closed_at is None else self._lifecycle.entry_gate(closed_at)
+        """The gate, once the Session has seen a candle to state one against.
+
+        The gate itself no longer turns on the clock, but a Session that has
+        watched no market yet is not holding a Basket to answer for either.
+        """
+        if self._candles.last_close_time is None:
+            return None
+        return self._lifecycle.entry_gate()
 
     def _snapshot(
         self,

@@ -1,5 +1,5 @@
 from dataclasses import replace
-from datetime import UTC, date, datetime
+from datetime import UTC, datetime
 from decimal import Decimal
 
 import pytest
@@ -64,7 +64,6 @@ def _futures_basket() -> BasketSnapshot:
         unrealized_pnl=Decimal("1.92600000"),
         liquidation_price=Decimal("44000.5000"),
         entry_gate=BasketEntryGate.OPEN,
-        cooldown_until=None,
         updated_at_utc=OBSERVED_AT,
     )
 
@@ -338,10 +337,8 @@ def test_entry_pnl_reads_as_a_two_decimal_figure_coloured_by_its_sign(
     ("basket", "expected"),
     [
         pytest.param(
-            basket_snapshot(
-                entry_gate=BasketEntryGate.COOLDOWN, cooldown_until=date(2026, 3, 1)
-            ),
-            "Cooldown until Mar 2026",
+            basket_snapshot(entry_gate=BasketEntryGate.COOLDOWN),
+            "Cooldown — cancel to take another Entry",
             id="cooldown",
         ),
         pytest.param(
@@ -364,6 +361,87 @@ def test_blocked_entries_read_as_their_reason(
     # A blocked Basket says so on every Entry, not only on the row last taken.
     for row in range(widget.table.rowCount()):
         assert _cell(widget, "Status", row).text() == expected
+
+
+def test_cancel_cooldown_button_shows_only_during_a_cooldown(qtbot: QtBot) -> None:
+    widget = PositionBasketTable()
+    qtbot.addWidget(widget)
+    widget.show()
+
+    widget.show_snapshot(
+        ready_position_basket_tab(
+            basket_snapshot(entry_gate=BasketEntryGate.COOLDOWN),
+            observed_at_utc=OBSERVED_AT,
+        )
+    )
+    assert widget.cancel_cooldown_button.isVisible() is True
+
+    widget.show_snapshot(
+        ready_position_basket_tab(
+            basket_snapshot(entry_gate=BasketEntryGate.OPEN),
+            observed_at_utc=OBSERVED_AT,
+        )
+    )
+    assert widget.cancel_cooldown_button.isVisible() is False
+
+
+def test_cancel_cooldown_button_emits_a_signal_on_click(qtbot: QtBot) -> None:
+    widget = PositionBasketTable()
+    qtbot.addWidget(widget)
+    asked = 0
+
+    def on_clicked() -> None:
+        nonlocal asked
+        asked += 1
+
+    widget.cancel_cooldown_requested.connect(on_clicked)
+    widget.show_snapshot(
+        ready_position_basket_tab(
+            basket_snapshot(entry_gate=BasketEntryGate.COOLDOWN),
+            observed_at_utc=OBSERVED_AT,
+        )
+    )
+
+    widget.cancel_cooldown_button.click()
+
+    assert asked == 1
+
+
+def test_cancel_cooldown_button_is_taken_away_while_in_flight(qtbot: QtBot) -> None:
+    widget = PositionBasketTable()
+    qtbot.addWidget(widget)
+    widget.show()
+    widget.show_snapshot(
+        ready_position_basket_tab(
+            basket_snapshot(entry_gate=BasketEntryGate.COOLDOWN),
+            observed_at_utc=OBSERVED_AT,
+        )
+    )
+
+    widget.set_cancelling_enabled(False)
+    assert widget.cancel_cooldown_button.isEnabled() is False
+
+    widget.set_cancelling_enabled(True)
+    assert widget.cancel_cooldown_button.isEnabled() is True
+
+
+def test_a_cancel_that_failed_is_said_over_the_position_that_is_still_there(
+    qtbot: QtBot,
+) -> None:
+    widget = PositionBasketTable()
+    qtbot.addWidget(widget)
+    widget.show()
+    widget.show_snapshot(
+        ready_position_basket_tab(
+            basket_snapshot(entry_gate=BasketEntryGate.COOLDOWN),
+            observed_at_utc=OBSERVED_AT,
+        )
+    )
+
+    widget.show_cancel_error("Could not waive the Cooldown.")
+
+    assert widget.state_label.text() == "Could not waive the Cooldown."
+    assert not widget.state_label.isHidden()
 
 
 def test_position_basket_states_preserve_or_clear_application_facts(

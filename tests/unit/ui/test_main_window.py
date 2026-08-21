@@ -1617,7 +1617,6 @@ def test_stop_with_open_position_reopens_editable_setup_without_closing(
         unrealized_pnl=Decimal("10"),
         liquidation_price=None,
         entry_gate=BasketEntryGate.OPEN,
-        cooldown_until=None,
         updated_at_utc=observed_at,
     )
 

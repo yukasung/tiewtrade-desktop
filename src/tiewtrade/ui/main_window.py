@@ -1,3 +1,4 @@
+import logging
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -20,7 +21,7 @@ from tiewtrade.application.paper_session_setup import (
     PaperSessionValidationError,
     validate_paper_session,
 )
-from tiewtrade.application.trading_workspace import BotRuntimeState
+from tiewtrade.application.trading_workspace import BasketEntryGate, BotRuntimeState
 from tiewtrade.ui.background_task import BackgroundTask
 from tiewtrade.ui.bot_lifecycle_workflow import (
     BotLifecycleWorkflow,
@@ -38,7 +39,10 @@ from tiewtrade.ui.open_position_workflow import (
     OpenPositionWorkflow,
     ReadOpenBasket,
 )
-from tiewtrade.ui.position_dialogs import ask_about_selling_one_entry
+from tiewtrade.ui.position_dialogs import (
+    ask_about_cancelling_cooldown,
+    ask_about_selling_one_entry,
+)
 from tiewtrade.ui.session_workflow import (
     CreateSession,
     LoadActiveSession,
@@ -58,6 +62,8 @@ from tiewtrade.ui.trade_history_workflow import (
     TradeHistoryWorkflow,
 )
 from tiewtrade.ui.trading_workspace import TradingWorkspace
+
+_LOGGER = logging.getLogger("tiewtrade.ui.main_window")
 
 WORKER_SHUTDOWN_TIMEOUT_MS = 5_000
 
@@ -88,6 +94,9 @@ class BotActions:
     # One Entry of the open Basket, sold at the price the market is at. True
     # where it sold, False where there was no such Entry left to sell.
     close_entry: Callable[[ConfiguredPaperSession, int], bool] | None = None
+    # Lifts the Cooldown blocking the open Basket's next Entry. True where
+    # one was blocking it and got lifted, False otherwise.
+    cancel_cooldown: Callable[[ConfiguredPaperSession], bool] | None = None
     has_open_position: Callable[[ConfiguredPaperSession], bool] | None = None
     retire_session: Callable[[ConfiguredPaperSession], None] | None = None
     read_open_basket: ReadOpenBasket | None = None
@@ -139,6 +148,8 @@ class MainWindow(QMainWindow):
         self._close_position = bot.close_position
         self._close_entry = bot.close_entry
         self._close_entry_task: BackgroundTask | None = None
+        self._cancel_cooldown = bot.cancel_cooldown
+        self._cancel_cooldown_task: BackgroundTask | None = None
         self._waiting_on_a_reading: list[Callable[[], None]] = []
         self._has_open_position = bot.has_open_position
         self._clock = chart.clock
@@ -201,6 +212,9 @@ class MainWindow(QMainWindow):
         )
         self.workspace.position_basket.close_entry_requested.connect(
             self._close_entry_requested
+        )
+        self.workspace.position_basket.cancel_cooldown_requested.connect(
+            self._cancel_cooldown_requested
         )
         self._open_position.reading_landed.connect(self._position_reading_landed)
 
@@ -740,7 +754,9 @@ class MainWindow(QMainWindow):
             self._open_position.read_for(session)
 
     @Slot(object)
-    def _entry_close_failed(self, _error: object) -> None:
+    def _entry_close_failed(self, error: object) -> None:
+        if isinstance(error, BaseException):
+            _LOGGER.exception("Could not sell that Entry", exc_info=error)
         self.workspace.position_basket.show_close_error(
             "Could not sell that Entry. Check your connection, then try again."
         )
@@ -749,6 +765,62 @@ class MainWindow(QMainWindow):
     def _entry_close_finished(self) -> None:
         self._close_entry_task = None
         self.workspace.position_basket.set_closing_enabled(True)
+
+    @Slot()
+    def _cancel_cooldown_requested(self) -> None:
+        """Lift a Cooldown, once the trader has said so in as many words.
+
+        Which of the two is holding the Basket is not this window's to know:
+        the action is asked, and it goes to the Runtime that owns it or to the
+        database a stopped Bot left it in.
+        """
+        cancel_cooldown = self._cancel_cooldown
+        if cancel_cooldown is None or self._cancel_cooldown_task is not None:
+            return
+        basket = self.workspace.position_basket.basket
+        if basket is None or basket.entry_gate is not BasketEntryGate.COOLDOWN:
+            return
+        try:
+            session = self._lifecycle_workflow.snapshot.session
+        except RuntimeError:
+            return
+        if not ask_about_cancelling_cooldown(self):
+            return
+        self.workspace.position_basket.set_cancelling_enabled(False)
+        task = BackgroundTask(lambda: cancel_cooldown(session))
+        task.signals.succeeded.connect(self._cooldown_cancelled)
+        task.signals.failed.connect(self._cancel_cooldown_failed)
+        task.signals.finished.connect(self._cancel_cooldown_finished)
+        self._cancel_cooldown_task = task
+        self._thread_pool.start(task)
+
+    @Slot(object)
+    def _cooldown_cancelled(self, _result: object) -> None:
+        """Read the Basket back, which is how a stopped Bot's tab hears of it.
+
+        A running Runtime publishes the waiver itself; a stopped one leaves
+        the database as the only witness, and the tab is showing what it last
+        read from it — a gate that has just opened.
+        """
+        try:
+            session = self._lifecycle_workflow.snapshot.session
+        except RuntimeError:
+            return
+        if self._lifecycle_workflow.snapshot.state is not BotRuntimeState.RUNNING:
+            self._open_position.read_for(session)
+
+    @Slot(object)
+    def _cancel_cooldown_failed(self, error: object) -> None:
+        if isinstance(error, BaseException):
+            _LOGGER.exception("Could not waive the Cooldown", exc_info=error)
+        self.workspace.position_basket.show_cancel_error(
+            "Could not waive the Cooldown. Check your connection, then try again."
+        )
+
+    @Slot()
+    def _cancel_cooldown_finished(self) -> None:
+        self._cancel_cooldown_task = None
+        self.workspace.position_basket.set_cancelling_enabled(True)
 
     @Slot(object)
     def _chart_view_requested(self, value: object) -> None:

@@ -1074,7 +1074,6 @@ def _fake_running_workspace(
                     else Decimal("44000.5000")
                 ),
                 entry_gate=BasketEntryGate.OPEN,
-                cooldown_until=None,
                 updated_at_utc=observed_at,
             ),
             observed_at_utc=observed_at,

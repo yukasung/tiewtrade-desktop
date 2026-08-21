@@ -19,6 +19,7 @@ from tiewtrade.strategies.entry_intent import EntryIntent
 from tiewtrade.strategies.rsi_step_grid.preset import RsiStepGridPreset
 from tiewtrade.strategies.rsi_step_grid.strategy import RsiStepGridStrategy
 from tiewtrade.trading.basket import BasketCloseReason
+from tiewtrade.trading.entry_pair import EntryGate, EntryGateState
 from tiewtrade.trading.entry_policy import EntryPolicy
 from tiewtrade.trading.futures_policy import FuturesTradingPolicy
 from tiewtrade.trading.position import PositionSide
@@ -477,6 +478,57 @@ def test_warm_up_seeds_indicators_without_execution_side_effects() -> None:
     assert session.snapshot.entry_fill is None
     assert session.snapshot.basket_id is None
     assert session.snapshot.state is PaperFuturesSessionState.ACTIVE
+
+
+def make_session_in_cooldown() -> PaperFuturesSession:
+    """A Basket holding a completed Entry Pair, which is a Basket in Cooldown.
+
+    Four Entries of quota rather than two, so the Pair closes the gate with a
+    Cooldown rather than with the Session running out of Entries.
+    """
+    session = make_session(
+        replace(futures_session(), entry_policy=EntryPolicy(max_entries=4))
+    )
+    pending = arm_entry_intent(session)
+    first_candle = next_candle(
+        pending.signal_candle, open="120", high="121", low="100", close="120"
+    )
+    session.process_completed_candle(first_candle, received_at=first_candle.close_time)
+    second_pending = arm_next_entry_intent(session, first_candle)
+    second_candle = next_candle(
+        second_pending.signal_candle, open="120", high="121", low="100", close="120"
+    )
+    snapshot = session.process_completed_candle(
+        second_candle, received_at=second_candle.close_time
+    )
+    assert snapshot.basket_entry_count == 2
+    assert snapshot.entry_gate == EntryGate(EntryGateState.COOLDOWN)
+    return session
+
+
+def test_waive_cooldown_opens_the_futures_gate() -> None:
+    session = make_session_in_cooldown()
+
+    snapshot = session.waive_cooldown(datetime(2026, 1, 25, tzinfo=UTC))
+
+    assert snapshot.accepted is True
+    assert snapshot.entry_gate == EntryGate(EntryGateState.OPEN)
+
+
+def test_waive_cooldown_rejects_a_futures_session_not_in_cooldown() -> None:
+    session, _entry_candle = make_session_with_open_long_basket()
+
+    snapshot = session.waive_cooldown(datetime(2026, 1, 25, tzinfo=UTC))
+
+    assert snapshot.accepted is False
+
+
+def test_waive_cooldown_rejects_a_futures_session_with_no_basket() -> None:
+    session = make_session()
+
+    snapshot = session.waive_cooldown(datetime(2026, 1, 25, tzinfo=UTC))
+
+    assert snapshot.accepted is False
 
 
 def make_session(

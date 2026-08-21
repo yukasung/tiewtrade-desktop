@@ -82,6 +82,10 @@ class PaperSpotSessionSnapshot:
     # Read against the last candle the Session accepted, so it answers for the
     # same moment the Session used to decide entries. None until one arrives.
     entry_gate: EntryGate | None
+    # The Pair a Cooldown waiver just accepted, numbered the way the lifecycle
+    # numbers it. Present exactly when a waiver was accepted.
+    waived_pair: int | None
+    waived_at: datetime | None
 
     @property
     def sold_entry_numbers(self) -> tuple[int, ...]:
@@ -383,6 +387,32 @@ class PaperSpotSession:
             self._fail_closed()
             raise PaperSpotSessionError("Paper Spot execution failed") from error
 
+    def waive_cooldown(self, observed_at: datetime) -> PaperSpotSessionSnapshot:
+        """Let the trader open past the Cooldown blocking this Basket now.
+
+        An unaccepted snapshot is the answer where there is nothing to waive —
+        no Basket, or a gate that is not a Cooldown right now.
+        """
+        if self._state is not PaperSpotSessionState.ACTIVE or self._basket is None:
+            return self._snapshot(accepted=False)
+        try:
+            transition = self._new_transition()
+            transition.lifecycle.waive_cooldown()
+            waived_pair = transition.lifecycle.completed_pairs
+            self._commit_transition(transition)
+            return self._snapshot(
+                accepted=True,
+                waived_pair=waived_pair,
+                waived_at=observed_at,
+            )
+        except ValueError:
+            return self._snapshot(accepted=False)
+        except PaperSpotSessionError:
+            raise
+        except Exception as error:
+            self._fail_closed()
+            raise PaperSpotSessionError("Paper Spot execution failed") from error
+
     def _new_transition(self) -> _PaperSpotTransition:
         return _PaperSpotTransition(
             indicators=deepcopy(self._indicators),
@@ -447,7 +477,7 @@ class PaperSpotSession:
             atr=intent.atr,
             tick_size=self._symbol_rules.tick_size,
         )
-        transition.lifecycle.record_fill(fill.filled_at)
+        transition.lifecycle.record_fill()
         filled_entry = transition.basket.entries[-1]
         transition.entry_number_filled = filled_entry.entry_number
         transition.entry_take_profit_filled = filled_entry.take_profit_price
@@ -551,7 +581,7 @@ class PaperSpotSession:
         # earliest a new entry can be signalled is the candle after the sell.
         can_enter = (
             not exited_on_this_candle
-            and transition.lifecycle.can_enter(candle.close_time)
+            and transition.lifecycle.can_enter()
             and (
                 transition.basket is None
                 or transition.basket.entry_count
@@ -573,9 +603,14 @@ class PaperSpotSession:
             transition.pending_intent = intent
 
     def _entry_gate(self) -> EntryGate | None:
-        """Read the gate against the last candle, the clock entries are judged on."""
-        closed_at = self._candles.last_close_time
-        return None if closed_at is None else self._lifecycle.entry_gate(closed_at)
+        """The gate, once the Session has seen a candle to state one against.
+
+        The gate itself no longer turns on the clock, but a Session that has
+        watched no market yet is not holding a Basket to answer for either.
+        """
+        if self._candles.last_close_time is None:
+            return None
+        return self._lifecycle.entry_gate()
 
     def _snapshot(
         self,
@@ -588,6 +623,8 @@ class PaperSpotSession:
         entry_exits: tuple[PaperSpotEntryExit, ...] = (),
         exit_fill: PaperSpotExitFill | None = None,
         closed_basket: ClosedBasket | None = None,
+        waived_pair: int | None = None,
+        waived_at: datetime | None = None,
     ) -> PaperSpotSessionSnapshot:
         if self._basket is not None:
             basket_id = self._basket.basket_id
@@ -614,4 +651,6 @@ class PaperSpotSession:
                 None if self._basket is None else self._basket.take_profit_price
             ),
             entry_gate=self._entry_gate(),
+            waived_pair=waived_pair,
+            waived_at=waived_at,
         )

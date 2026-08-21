@@ -184,6 +184,38 @@ class SQLiteTradeHistory:
     def get_basket(self, basket_id: UUID) -> BasketResult | None:
         return self._run_read(lambda connection: _find_basket(connection, basket_id))
 
+    def record_cooldown_waiver(
+        self, basket_id: UUID, waived_pair: int, waived_at: datetime
+    ) -> None:
+        def operation(connection: sqlite3.Connection) -> bool:
+            connection.execute(
+                """
+                INSERT INTO paper_cooldown_waivers
+                    (basket_id, waived_pair, waived_at_utc)
+                VALUES (?, ?, ?)
+                ON CONFLICT(basket_id) DO UPDATE SET
+                    waived_pair = excluded.waived_pair,
+                    waived_at_utc = excluded.waived_at_utc
+                """,
+                (str(basket_id), waived_pair, _utc_text(waived_at)),
+            )
+            return True
+
+        self._run_write(operation)
+
+    def find_cooldown_waiver(self, basket_id: UUID) -> int | None:
+        def operation(connection: sqlite3.Connection) -> int | None:
+            row = connection.execute(
+                """
+                SELECT waived_pair FROM paper_cooldown_waivers
+                WHERE basket_id = ?
+                """,
+                (str(basket_id),),
+            ).fetchone()
+            return None if row is None else int(row["waived_pair"])
+
+        return self._run_read(operation)
+
     def find_open_basket(self, session_id: UUID) -> BasketResult | None:
         def operation(connection: sqlite3.Connection) -> BasketResult | None:
             rows = connection.execute(

@@ -174,7 +174,7 @@ def reopened_basket_snapshot(
         take_profit_price=reopened.basket.take_profit_price,
         position_side=reopened.basket.position_side,
         liquidation_price=None,
-        entry_gate=reopened.lifecycle.entry_gate(observed_at_utc),
+        entry_gate=reopened.lifecycle.entry_gate(),
         observed_at_utc=observed_at_utc,
     )
 
@@ -272,7 +272,6 @@ def _updated_basket_snapshot(
         unrealized_pnl=marked_pnl,
         liquidation_price=liquidation_price,
         entry_gate=BasketEntryGate(entry_gate.state),
-        cooldown_until=entry_gate.reopens_at,
         updated_at_utc=observed_at_utc,
     )
 

@@ -13,6 +13,7 @@ from tiewtrade.application.paper_manual_close import ClosePaperPosition
 from tiewtrade.application.paper_session_sink import (
     close_one_entry_at_rest,
     read_open_basket_state,
+    waive_cooldown_at_rest,
 )
 from tiewtrade.execution.paper_spot import PaperSpotEntryFill
 from tiewtrade.integrations.sqlite.database import SQLiteDatabase
@@ -210,3 +211,74 @@ def test_a_basket_read_back_knows_what_it_already_settled(
     assert state.settled.quantity == Decimal("2")
     assert state.settled.notional == Decimal("200")
     assert state.settled.realized_pnl == Decimal("11.34")
+
+
+def _waive(history: SQLiteTradeHistory, observed_at: datetime) -> bool:
+    session = configured_spot_session()
+    return waive_cooldown_at_rest(
+        session,
+        trade_history=history,
+        symbol_rules=_rules(),
+        preset=strategy_definition_for(session.config.preset_version).build_preset(),
+        observed_at=observed_at,
+    )
+
+
+def test_a_cooldown_at_rest_can_be_waived(history: SQLiteTradeHistory) -> None:
+    _record_two_entries(history)
+
+    assert _waive(history, datetime(2026, 8, 5, tzinfo=UTC)) is True
+    assert history.find_cooldown_waiver(BASKET_ID) is not None
+
+    state = read_open_basket_state(history, configured_spot_session().config.session_id)
+    assert state is not None
+    assert state.waived_pair is not None
+
+
+def test_waiving_a_basket_with_no_cooldown_does_nothing(
+    history: SQLiteTradeHistory,
+) -> None:
+    session = configured_spot_session()
+    spot = PaperSpotSQLiteHistory(
+        PaperSpotHistoryContext(
+            session_id=session.config.session_id,
+            symbol=session.market_data.symbol,
+            timeframe=session.market_data.timeframe,
+            preset_version=session.config.preset_version,
+        ),
+        history,
+    )
+    spot.record_entry(
+        basket_id=BASKET_ID,
+        entry_number=1,
+        fill=PaperSpotEntryFill(
+            order_id="entry:1",
+            fill_id="paper:entry:1:fill",
+            intent_id="intent-1",
+            price=Decimal("100"),
+            quantity=Decimal("2"),
+            filled_at=OPENED_AT,
+        ),
+        entry_atr=Decimal("2"),
+    )
+
+    assert _waive(history, datetime(2026, 8, 5, tzinfo=UTC)) is False
+    assert history.find_cooldown_waiver(BASKET_ID) is None
+
+
+def test_waiving_with_no_open_basket_does_nothing(
+    history: SQLiteTradeHistory,
+) -> None:
+    assert _waive(history, datetime(2026, 8, 5, tzinfo=UTC)) is False
+
+
+def test_a_basket_read_back_carries_its_cooldown_waiver(
+    history: SQLiteTradeHistory,
+) -> None:
+    _record_two_entries(history)
+    history.record_cooldown_waiver(BASKET_ID, 24313, datetime(2026, 1, 25, tzinfo=UTC))
+
+    state = read_open_basket_state(history, configured_spot_session().config.session_id)
+
+    assert state is not None
+    assert state.waived_pair == 24313

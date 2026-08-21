@@ -96,6 +96,9 @@ type CloseOneEntry[Snapshot] = Callable[
 ]
 """Sell one Entry at a price, recorded before it is published."""
 
+type WaiveCooldown[Snapshot] = Callable[[datetime], PersistentSessionSnapshot[Snapshot]]
+"""Lift the Cooldown holding this Basket now, recorded before it is published."""
+
 
 class PaperRuntimeSink[Snapshot: _CandleSnapshot]:
     """Feeds candles to one Paper Session and publishes what it decided.
@@ -121,6 +124,7 @@ class PaperRuntimeSink[Snapshot: _CandleSnapshot]:
         current_snapshot: Callable[[], Snapshot],
         restored: Callable[[BasketSnapshot, datetime], None] | None = None,
         close_entry: CloseOneEntry[Snapshot] | None = None,
+        waive_cooldown: WaiveCooldown[Snapshot] | None = None,
         position: OpenBasketPosition | None = None,
     ) -> None:
         self._warm_up = warm_up
@@ -132,6 +136,7 @@ class PaperRuntimeSink[Snapshot: _CandleSnapshot]:
         self._current_snapshot = current_snapshot
         self._restored = restored
         self._close_entry = close_entry
+        self._waive_cooldown = waive_cooldown
         # The last completed price this sink has seen. A sale the trader asks
         # for arrives between candles, and what is left of the Basket is still
         # marked on the price the tab is already showing.
@@ -245,6 +250,31 @@ class PaperRuntimeSink[Snapshot: _CandleSnapshot]:
             self._publish_snapshot(snapshot, candle, observed_at)
             return True
 
+    def waive_cooldown(self, observed_at: datetime) -> bool:
+        """Lift the Cooldown holding this Basket, because the trader asked.
+
+        Locked and recorded the same way a demand sale is, so the gate a
+        candle reads next is never half of what the trader just accepted.
+
+        False is the answer where there was nothing to waive — a market that
+        cannot be asked, a Bot that is stopping, or a gate that was not a
+        Cooldown to begin with.
+        """
+        waive = self._waive_cooldown
+        if waive is None:
+            return False
+        with self._entry_lock:
+            if not self._entries_enabled():
+                return False
+            candle = self._candle
+            if candle is None:
+                return False
+            snapshot = waive(observed_at).session
+            if not snapshot.accepted:
+                return False
+            self._publish_snapshot(snapshot, candle, observed_at)
+            return True
+
     def _publish_snapshot(
         self,
         snapshot: Snapshot,
@@ -333,6 +363,9 @@ def paper_session_sink(
                     entry_number, price=price, observed_at=observed_at
                 )
             ),
+            waive_cooldown=lambda observed_at: spot_persistent.waive_cooldown(
+                observed_at
+            ),
             position=open_basket_position(spot_application.open_entries),
         )
 
@@ -360,11 +393,12 @@ def paper_session_sink(
         ),
         trade_history,
     )
+    futures_persistent = create_persistent_paper_futures_session(
+        futures_application, futures_history
+    )
     return PaperRuntimeSink(
         warm_up=_warm_up_of(futures_application),
-        persistent=create_persistent_paper_futures_session(
-            futures_application, futures_history
-        ),
+        persistent=futures_persistent,
         basket=futures_basket_snapshot,
         publish=publish,
         entry_lock=entry_lock,
@@ -374,6 +408,12 @@ def paper_session_sink(
         # and no way to take one Entry out of a position on its own.
         restored=None,
         close_entry=None,
+        # A Cooldown is the Entry Pair rule, which this market shares. Nothing
+        # is taken back here, so a Runtime holding the Basket is the only
+        # place the Cooldown exists to be lifted.
+        waive_cooldown=lambda observed_at: futures_persistent.waive_cooldown(
+            observed_at
+        ),
     )
 
 
@@ -423,6 +463,48 @@ def close_one_entry_at_rest(
     return persistent.close_entry(
         entry_number, price=price, observed_at=observed_at
     ).session.accepted
+
+
+def waive_cooldown_at_rest(
+    session: ConfiguredPaperSession,
+    *,
+    trade_history: SQLiteTradeHistory,
+    symbol_rules: SymbolRules,
+    preset: StrategyPreset,
+    observed_at: datetime,
+) -> bool:
+    """Lift a Cooldown holding a Basket no Runtime is holding.
+
+    Composed exactly as the Runtime composes it and asked the same question,
+    so a waiver granted with the Bot stopped cannot book differently from the
+    same waiver granted while it runs.
+
+    False is the answer where there was nothing to waive: no open Basket, or a
+    gate that is not a Cooldown right now.
+    """
+    if session.config.market_type is not MarketType.SPOT:
+        raise ValueError("only a Paper Spot Basket can have its Cooldown waived")
+    open_basket = read_open_basket_state(trade_history, session.config.session_id)
+    if open_basket is None:
+        return False
+    application = PaperSpotSession(
+        session.config,
+        session.market_data,
+        symbol_rules,
+        preset,
+        open_basket=open_basket,
+    )
+    history = PaperSpotSQLiteHistory(
+        PaperSpotHistoryContext(
+            session_id=session.config.session_id,
+            symbol=session.market_data.symbol,
+            timeframe=session.market_data.timeframe,
+            preset_version=session.config.preset_version,
+        ),
+        trade_history,
+    )
+    persistent = create_persistent_paper_spot_session(application, history)
+    return persistent.waive_cooldown(observed_at).session.accepted
 
 
 def read_open_basket_state(
@@ -497,4 +579,5 @@ def read_open_basket_state(
         entries=tuple(entries),
         closed_basket_count=trade_history.count_closed_baskets(session_id),
         settled=settled,
+        waived_pair=trade_history.find_cooldown_waiver(basket.basket_id),
     )

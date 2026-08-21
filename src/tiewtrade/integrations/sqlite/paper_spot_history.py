@@ -1,4 +1,5 @@
 from dataclasses import dataclass, replace
+from datetime import datetime
 from decimal import Decimal
 from uuid import UUID
 
@@ -134,3 +135,12 @@ class PaperSpotSQLiteHistory:
             status=BasketStatus.CLOSED,
         )
         return self._store.record_closed_basket(basket, normalized_fill)
+
+    def record_cooldown_waiver(
+        self,
+        *,
+        basket_id: UUID,
+        waived_pair: int,
+        waived_at: datetime,
+    ) -> None:
+        self._store.record_cooldown_waiver(basket_id, waived_pair, waived_at)

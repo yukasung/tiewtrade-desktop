@@ -14,6 +14,7 @@ from PySide6.QtWidgets import (
 )
 
 from tiewtrade.application.trading_workspace import (
+    BasketEntryGate,
     BasketEntrySnapshot,
     BasketSnapshot,
     PositionBasketTabSnapshot,
@@ -128,6 +129,8 @@ class PositionBasketTable(QWidget):
 
     #: The Entry a row asked to be sold at the price the market is at.
     close_entry_requested = Signal(int)
+    #: The Basket asked to lift the Cooldown blocking its next Entry.
+    cancel_cooldown_requested = Signal()
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -136,12 +139,30 @@ class PositionBasketTable(QWidget):
 
         self.table = self._table()
         self._closing_enabled = True
+        self._cancelling_enabled = True
+        #: The Basket the Cancel Cooldown button asks about, if it is shown.
+        self.basket: BasketSnapshot | None = None
         self.empty_state = TableEmptyStateOverlay(self.table)
         self.state_label = QLabel("No open Position")
         self.state_label.setObjectName("positionBasketState")
         self.state_label.setAccessibleName("Position status")
         self.state_label.setProperty("stateMessage", True)
         self.state_label.setWordWrap(True)
+        # Owned here, where the Cooldown it acts on is read — shown wherever
+        # the workspace around this table chooses to put it, on the same row
+        # as the tabs it sits beside. A caller that never places it still
+        # gets a button that shows and hides correctly, sized to its own text.
+        self.cancel_cooldown_button = QPushButton("Cancel Cooldown", self)
+        self.cancel_cooldown_button.setObjectName("cancelCooldownButton")
+        self.cancel_cooldown_button.setAccessibleName("Cancel Cooldown")
+        self.cancel_cooldown_button.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.cancel_cooldown_button.setSizePolicy(
+            QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed
+        )
+        self.cancel_cooldown_button.setVisible(False)
+        self.cancel_cooldown_button.clicked.connect(
+            lambda _checked=False: self.cancel_cooldown_requested.emit()
+        )
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -157,6 +178,7 @@ class PositionBasketTable(QWidget):
             return
         self._show_basket(value.basket)
         self._show_state(value)
+        self._show_cooldown(value.basket)
 
     def _show_basket(self, basket: BasketSnapshot | None) -> None:
         rows = (
@@ -184,6 +206,14 @@ class PositionBasketTable(QWidget):
             return
         self.empty_state.clear_message()
         self.state_label.setVisible(bool(text))
+
+    def _show_cooldown(self, basket: BasketSnapshot | None) -> None:
+        self.basket = basket
+        in_cooldown = (
+            basket is not None and basket.entry_gate is BasketEntryGate.COOLDOWN
+        )
+        self.cancel_cooldown_button.setVisible(in_cooldown)
+        self.cancel_cooldown_button.setEnabled(in_cooldown and self._cancelling_enabled)
 
     @staticmethod
     def _state_text(snapshot: PositionBasketTabSnapshot) -> str:
@@ -250,6 +280,18 @@ class PositionBasketTable(QWidget):
             button = self.close_button(index)
             if button is not None:
                 button.setEnabled(enabled)
+
+    def show_cancel_error(self, message: str) -> None:
+        """Say a waiver did not happen, over the Position that is still there."""
+        self.state_label.setText(message)
+        self.state_label.setVisible(True)
+
+    def set_cancelling_enabled(self, enabled: bool) -> None:
+        """Take the button away while a waiver of its own is still in flight."""
+        self._cancelling_enabled = enabled
+        self.cancel_cooldown_button.setEnabled(
+            enabled and self.cancel_cooldown_button.isVisible()
+        )
 
     def close_button(self, row: int) -> QPushButton | None:
         """The order button of a row, wherever the cell keeps it."""

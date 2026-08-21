@@ -32,7 +32,10 @@ from tiewtrade.application.paper_session_setup import (
     CreatePaperSession,
     validate_paper_session,
 )
-from tiewtrade.application.paper_session_sink import close_one_entry_at_rest
+from tiewtrade.application.paper_session_sink import (
+    close_one_entry_at_rest,
+    waive_cooldown_at_rest,
+)
 from tiewtrade.application.paper_symbols import paper_symbol_rules
 from tiewtrade.application.trading_workspace import BotRuntimeState
 from tiewtrade.decimal_context import configure_decimal_context
@@ -149,6 +152,14 @@ class _PaperRuntimeActions:
         if controller is None:
             return False
         return controller.close_entry(session, entry_number, price=price)
+
+    def waive_cooldown(self, session: ConfiguredPaperSession) -> bool:
+        """Ask the running Runtime to lift a Cooldown it is holding."""
+        with self._lock:
+            controller = self._controller if self._session == session else None
+        if controller is None:
+            return False
+        return controller.waive_cooldown(session)
 
     def stop_for_replacement(self, session: ConfiguredPaperSession) -> None:
         with self._lock:
@@ -431,6 +442,30 @@ def _bot_actions(
             observed_at=datetime.now(UTC),
         )
 
+    def cancel_cooldown(session: ConfiguredPaperSession) -> bool:
+        """Lift the Cooldown holding this Basket, wherever the Basket is held.
+
+        A running Runtime holds the live gate a candle reads; asking it
+        directly is what makes a waiver open the gate this instant rather
+        than on the next candle it re-reads the database on. Only a Runtime
+        not holding this Session falls to the database directly, and only
+        Spot has a database to fall to: Futures never takes a Basket back,
+        so a Futures Cooldown exists only while its Runtime is holding it.
+        """
+        if runtime_actions.waive_cooldown(session):
+            return True
+        if session.config.market_type is not MarketType.SPOT:
+            return False
+        return waive_cooldown_at_rest(
+            session,
+            trade_history=history,
+            symbol_rules=_symbol_rules_for(session),
+            preset=strategy_definition_for(
+                session.config.preset_version
+            ).build_preset(),
+            observed_at=datetime.now(UTC),
+        )
+
     def read_open_basket(session: ConfiguredPaperSession) -> ReopenedBasket | None:
         state = read_open_basket_state(history, session.config.session_id)
         if state is None or session.config.market_type is not MarketType.SPOT:
@@ -453,6 +488,7 @@ def _bot_actions(
         stop_for_replacement=runtime_actions.stop_for_replacement,
         close_position=_migrate_first(stores.prepare, close_position),
         close_entry=_migrate_first(stores.prepare, close_entry),
+        cancel_cooldown=_migrate_first(stores.prepare, cancel_cooldown),
         has_open_position=lambda session: (
             history.find_open_basket(session.config.session_id) is not None
         ),

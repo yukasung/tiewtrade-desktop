@@ -1,4 +1,4 @@
-from datetime import UTC, date, datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from typing import cast
 from unittest.mock import Mock, create_autospec
@@ -113,7 +113,7 @@ def test_snapshot_has_no_basket_id_before_first_entry() -> None:
     assert snapshot.basket_id is None
 
 
-def test_entry_gate_waits_for_a_candle_to_date_it() -> None:
+def test_entry_gate_waits_for_a_candle_to_answer_against() -> None:
     application = paper_session()
 
     assert application.snapshot.entry_gate is None
@@ -127,7 +127,7 @@ def test_entry_gate_waits_for_a_candle_to_date_it() -> None:
     assert snapshot.entry_gate == EntryGate(EntryGateState.OPEN)
 
 
-def test_completed_pair_reports_its_cooldown_month_in_the_snapshot() -> None:
+def test_completed_pair_reports_its_cooldown_in_the_snapshot() -> None:
     application = paper_session()
     first_intent = arm_entry_intent(application)
     first_fill_candle = candle(
@@ -149,9 +149,61 @@ def test_completed_pair_reports_its_cooldown_month_in_the_snapshot() -> None:
         second_fill_candle, received_at=second_fill_candle.close_time
     )
 
-    # Both Entries filled in January, so the pair reopens in March.
+    # A completed Pair holds the gate until the trader lifts it.
     assert snapshot.basket_entry_count == 2
-    assert snapshot.entry_gate == EntryGate(EntryGateState.COOLDOWN, date(2026, 3, 1))
+    assert snapshot.entry_gate == EntryGate(EntryGateState.COOLDOWN)
+
+
+def test_waive_cooldown_opens_the_gate_and_reports_the_waived_pair() -> None:
+    application = paper_session()
+    first_intent = arm_entry_intent(application)
+    first_fill_candle = candle(
+        minute_after(first_intent), open_price="120", close_price="121"
+    )
+    application.process_completed_candle(
+        first_fill_candle, received_at=first_fill_candle.close_time
+    )
+    second_intent = arm_entry_intent(
+        application,
+        start_minute=minute_after(first_intent) + 5,
+        downtrend_candles=60,
+    )
+    second_fill_candle = candle(
+        minute_after(second_intent), open_price="100", close_price="101"
+    )
+    application.process_completed_candle(
+        second_fill_candle, received_at=second_fill_candle.close_time
+    )
+
+    snapshot = application.waive_cooldown(datetime(2026, 1, 25, tzinfo=UTC))
+
+    assert snapshot.accepted is True
+    assert snapshot.waived_pair is not None
+    assert snapshot.entry_gate == EntryGate(EntryGateState.OPEN)
+
+
+def test_waive_cooldown_rejects_a_session_that_is_not_in_cooldown() -> None:
+    application = paper_session()
+    first_intent = arm_entry_intent(application)
+    first_fill_candle = candle(
+        minute_after(first_intent), open_price="120", close_price="121"
+    )
+    application.process_completed_candle(
+        first_fill_candle, received_at=first_fill_candle.close_time
+    )
+
+    snapshot = application.waive_cooldown(datetime(2026, 1, 25, tzinfo=UTC))
+
+    assert snapshot.accepted is False
+    assert snapshot.waived_pair is None
+
+
+def test_waive_cooldown_rejects_a_session_with_no_open_basket() -> None:
+    application = paper_session()
+
+    snapshot = application.waive_cooldown(datetime(2026, 1, 25, tzinfo=UTC))
+
+    assert snapshot.accepted is False
 
 
 def test_incomplete_candle_is_not_processed() -> None:
@@ -588,11 +640,10 @@ def test_a_reopened_basket_counts_its_entries_against_the_pair_gate() -> None:
         )
     )
 
-    gate = resumed._lifecycle.entry_gate(filled_at + timedelta(minutes=10))
+    gate = resumed._lifecycle.entry_gate()
 
     assert resumed.snapshot.basket_entry_count == 2
     assert gate.state is EntryGateState.COOLDOWN
-    assert gate.reopens_at == date(2026, 3, 1)
 
 
 def fill_second_fast_test_entry(
@@ -755,7 +806,7 @@ def test_entry_transition_is_atomic_when_lifecycle_rejects_fill(
         close_price="101",
     )
 
-    def reject_fill(self: EntryPairLifecycle, filled_at: datetime) -> None:
+    def reject_fill(self: EntryPairLifecycle) -> None:
         raise ValueError("entry is blocked by pair lifecycle")
 
     monkeypatch.setattr(EntryPairLifecycle, "record_fill", reject_fill)

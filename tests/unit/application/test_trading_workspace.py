@@ -1,5 +1,5 @@
 from dataclasses import fields, replace
-from datetime import UTC, date, datetime
+from datetime import UTC, datetime
 from decimal import Decimal
 
 import pytest
@@ -136,22 +136,6 @@ def test_workspace_gate_mirrors_every_domain_gate_state() -> None:
     }
 
 
-@pytest.mark.parametrize(
-    ("entry_gate", "cooldown_until"),
-    [
-        (BasketEntryGate.COOLDOWN, None),
-        (BasketEntryGate.OPEN, date(2026, 3, 1)),
-        (BasketEntryGate.MAX_ENTRIES_REACHED, date(2026, 3, 1)),
-    ],
-)
-def test_basket_rejects_a_cooldown_month_that_contradicts_its_gate(
-    entry_gate: BasketEntryGate,
-    cooldown_until: date | None,
-) -> None:
-    with pytest.raises(ValueError, match="Cooldown Month"):
-        replace(_basket(), entry_gate=entry_gate, cooldown_until=cooldown_until)
-
-
 def test_a_basket_keeps_the_numbers_of_the_entries_that_sold_out_of_it() -> None:
     """An Entry sold at its target does not hand its number back.
 
@@ -232,6 +216,5 @@ def _basket() -> BasketSnapshot:
         unrealized_pnl=Decimal("1.926"),
         liquidation_price=None,
         entry_gate=BasketEntryGate.OPEN,
-        cooldown_until=None,
         updated_at_utc=OBSERVED_AT,
     )

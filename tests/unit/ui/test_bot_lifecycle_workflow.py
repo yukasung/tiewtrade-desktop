@@ -779,6 +779,5 @@ def _basket() -> BasketSnapshot:
         unrealized_pnl=Decimal("1000"),
         liquidation_price=None,
         entry_gate=BasketEntryGate.OPEN,
-        cooldown_until=None,
         updated_at_utc=OBSERVED_AT,
     )

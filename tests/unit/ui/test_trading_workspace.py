@@ -100,7 +100,6 @@ def test_workspace_tabs_render_independent_scoped_states(qtbot: QtBot) -> None:
         unrealized_pnl=Decimal("0.96336000"),
         liquidation_price=None,
         entry_gate=BasketEntryGate.OPEN,
-        cooldown_until=None,
         updated_at_utc=observed_at,
     )
     snapshot = replace(

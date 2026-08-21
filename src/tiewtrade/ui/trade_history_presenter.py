@@ -88,7 +88,7 @@ BASKET_COLUMNS: tuple[Column[BasketResult], ...] = (
     Column("Pair", LEFT, lambda basket: pair_text(basket.symbol)),
     Column("Timeframe", CENTER, lambda basket: basket.timeframe),
     # How many Entries the round took, which is also part of why it ended: a
-    # completed Entry Pair is what starts a Cooldown Month, and a Session out
+    # completed Entry Pair is what starts a Cooldown, and a Session out
     # of Entries never opens again. The Total alone cannot tell one large
     # Entry from four that scaled in.
     Column("Entries", CENTER, lambda basket: str(basket.entry_count)),

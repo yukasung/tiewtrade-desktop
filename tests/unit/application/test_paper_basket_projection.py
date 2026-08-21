@@ -1,4 +1,4 @@
-from datetime import UTC, date, datetime
+from datetime import UTC, datetime
 from decimal import Decimal
 
 import pytest
@@ -89,6 +89,8 @@ def spot_snapshot(
         basket_entry_count=basket_entry_count,
         take_profit_price=take_profit_price,
         entry_gate=entry_gate,
+        waived_pair=None,
+        waived_at=None,
     )
 
 
@@ -316,12 +318,10 @@ def test_a_cooling_basket_carries_the_month_it_reopens() -> None:
         entry_number=1,
         take_profit_price=Decimal("999"),
     )
-    reopens_at = date(2026, 3, 1)
-
     basket = spot_basket_snapshot(
         spot_snapshot(
             basket_entry_count=1,
-            entry_gate=EntryGate(EntryGateState.COOLDOWN, reopens_at),
+            entry_gate=EntryGate(EntryGateState.COOLDOWN),
         ),
         position,
         candle("110"),
@@ -330,7 +330,6 @@ def test_a_cooling_basket_carries_the_month_it_reopens() -> None:
 
     assert basket is not None
     assert basket.entry_gate is BasketEntryGate.COOLDOWN
-    assert basket.cooldown_until == reopens_at
 
 
 @pytest.mark.parametrize(

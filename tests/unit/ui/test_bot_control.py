@@ -89,7 +89,6 @@ def test_running_shows_runtime_and_basket_facts_without_manual_order_controls(
                 unrealized_pnl=Decimal("1000"),
                 liquidation_price=None,
                 entry_gate=BasketEntryGate.OPEN,
-                cooldown_until=None,
                 updated_at_utc=datetime(2026, 8, 1, 12, tzinfo=UTC),
             ),
             observed_at_utc=datetime(2026, 8, 1, 12, tzinfo=UTC),

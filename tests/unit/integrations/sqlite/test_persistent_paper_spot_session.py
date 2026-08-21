@@ -97,6 +97,8 @@ def entry_snapshot() -> PaperSpotSessionSnapshot:
         basket_entry_count=1,
         take_profit_price=Decimal("105"),
         entry_gate=EntryGate(EntryGateState.OPEN),
+        waived_pair=None,
+        waived_at=None,
     )
 
 
@@ -118,6 +120,8 @@ def close_snapshot() -> PaperSpotSessionSnapshot:
         basket_entry_count=0,
         take_profit_price=None,
         entry_gate=EntryGate(EntryGateState.OPEN),
+        waived_pair=None,
+        waived_at=None,
     )
 
 

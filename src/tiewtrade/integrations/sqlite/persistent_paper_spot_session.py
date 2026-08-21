@@ -14,6 +14,17 @@ class _PaperSpotSnapshotRecorder:
         self._history = history
 
     def record(self, snapshot: PaperSpotSessionSnapshot) -> None:
+        if snapshot.waived_pair is not None:
+            if snapshot.basket_id is None:
+                raise ValueError("cooldown waiver requires a Basket ID")
+            if snapshot.waived_at is None:
+                raise ValueError("cooldown waiver requires the moment it was granted")
+            self._history.record_cooldown_waiver(
+                basket_id=snapshot.basket_id,
+                waived_pair=snapshot.waived_pair,
+                waived_at=snapshot.waived_at,
+            )
+            return
         if snapshot.entry_fill is not None:
             if snapshot.basket_id is None:
                 raise ValueError("entry Fill requires a Basket ID")

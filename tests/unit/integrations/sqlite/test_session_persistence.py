@@ -46,6 +46,12 @@ class FakeSession:
             raise self.error
         return FakeSnapshot(self.calls)
 
+    def waive_cooldown(self, observed_at: datetime) -> FakeSnapshot:
+        self.calls += 1
+        if self.error is not None:
+            raise self.error
+        return FakeSnapshot(self.calls)
+
 
 def candle() -> Candle:
     return Candle(

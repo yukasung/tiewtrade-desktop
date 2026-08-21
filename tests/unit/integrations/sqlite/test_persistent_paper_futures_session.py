@@ -172,6 +172,28 @@ def test_entry_is_durable_before_ready_snapshot_returns() -> None:
     assert result.persistence_state is PersistenceState.READY
 
 
+def test_waived_cooldown_goes_through_the_coordinator_writing_no_fill() -> None:
+    """Lifting a Cooldown moves no money, so there is no Fill to record.
+
+    It still goes through the coordinator, so a Session already blocked on a
+    failed write cannot quietly reopen its own gate.
+    """
+    session = create_autospec(PaperFuturesSession, instance=True)
+    history = create_autospec(PaperFuturesSQLiteHistory, instance=True)
+    core_snapshot = snapshot()
+    session.waive_cooldown.return_value = core_snapshot
+    persistent = persistent_session(session, history)
+    observed_at = datetime(2026, 1, 25, tzinfo=UTC)
+
+    result = persistent.waive_cooldown(observed_at)
+
+    session.waive_cooldown.assert_called_once_with(observed_at)
+    history.record_entry.assert_not_called()
+    history.record_close.assert_not_called()
+    assert result.session == core_snapshot
+    assert result.persistence_state is PersistenceState.READY
+
+
 @pytest.mark.parametrize(
     ("reason", "state"),
     [

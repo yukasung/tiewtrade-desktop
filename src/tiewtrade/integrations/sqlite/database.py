@@ -24,7 +24,7 @@ class UnsupportedDatabaseSchemaError(ValueError):
 
 
 class SQLiteDatabase:
-    _SCHEMA_VERSION = 12
+    _SCHEMA_VERSION = 14
     _BUSY_TIMEOUT_MS = 5_000
 
     def __init__(self, path: Path) -> None:
@@ -110,6 +110,16 @@ class SQLiteDatabase:
                     _migrate_drop_spot_ratio_v11(connection)
                 if 1 <= version <= 11:
                     _migrate_capital_per_entry_v12(connection)
+                if version == 13:
+                    # v13 keyed a waiver by the calendar month a Pair
+                    # completed, because a Cooldown lapsed two months on.
+                    # A Cooldown now stands until it is waived, so the month
+                    # names nothing and the Pair is what a waiver holds. No
+                    # waiver written under the old meaning can be read under
+                    # the new one, so none is carried over.
+                    connection.execute("DROP TABLE IF EXISTS paper_cooldown_waivers")
+                if 0 <= version <= 13:
+                    _create_paper_cooldown_waiver_schema(connection)
                 connection.execute(f"PRAGMA user_version = {self._SCHEMA_VERSION}")
         finally:
             connection.close()
@@ -467,6 +477,18 @@ def _create_paper_runtime_lifecycle_schema(connection: sqlite3.Connection) -> No
             session_id TEXT PRIMARY KEY REFERENCES bot_sessions(session_id),
             state TEXT NOT NULL CHECK (state IN ('running', 'stopped', 'blocked')),
             observed_at_utc TEXT NOT NULL
+        )
+        """
+    )
+
+
+def _create_paper_cooldown_waiver_schema(connection: sqlite3.Connection) -> None:
+    connection.execute(
+        """
+        CREATE TABLE IF NOT EXISTS paper_cooldown_waivers (
+            basket_id TEXT PRIMARY KEY REFERENCES basket_results(basket_id),
+            waived_pair INTEGER NOT NULL,
+            waived_at_utc TEXT NOT NULL
         )
         """
     )

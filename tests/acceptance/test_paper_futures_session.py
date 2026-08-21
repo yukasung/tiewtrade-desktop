@@ -282,7 +282,12 @@ def replay(candles: list[Candle]) -> list[PaperFuturesSessionSnapshot]:
             market_type=MarketType.FUTURES,
             trade_mode=TradeMode.PAPER,
             capital_per_entry=Decimal("10000"),
-            entry_policy=EntryPolicy(max_entries=10),
+            # A Cooldown holds until it is lifted, so a Basket puts one Entry
+            # Pair at risk and no more. The quota is what decides how much
+            # collateral stands behind that Pair, and four Entries' worth is
+            # what leaves a Pair close enough to its Liquidation Price for an
+            # adverse walk to reach it.
+            entry_policy=EntryPolicy(max_entries=4),
             futures_policy=FuturesTradingPolicy.v1(leverage=3),
         ),
         market_data,

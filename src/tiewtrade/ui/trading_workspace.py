@@ -170,7 +170,19 @@ class TradingWorkspace(QWidget):
         tabbed_layout = QVBoxLayout(tabbed)
         tabbed_layout.setContentsMargins(16, 8, 16, 0)
         tabbed_layout.setSpacing(8)
-        tabbed_layout.addWidget(self.tabs)
+        # The Cancel Cooldown action reads at the far right of this row, at
+        # the same height as the tabs beside it — not inside the Position
+        # tab's own table, which redraws under it on every price. A stretch
+        # on both sides of the tabs keeps them centred the way they read
+        # before the action joined their row, instead of pinned to the left
+        # by the stretch the action alone would need on its own side.
+        tabs_row = QHBoxLayout()
+        tabs_row.setContentsMargins(0, 0, 0, 0)
+        tabs_row.addStretch(1)
+        tabs_row.addWidget(self.tabs)
+        tabs_row.addStretch(1)
+        tabs_row.addWidget(self.position_basket.cancel_cooldown_button)
+        tabbed_layout.addLayout(tabs_row)
         tabbed_layout.addWidget(self.tab_pages, 1)
         primary_layout.addWidget(tabbed, 2)
 

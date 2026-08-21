@@ -55,7 +55,9 @@ Paper และ Live ใช้ business rules ชุดเดียวกัน�
 
 ค่าจาก form ต้องผ่าน validation แล้วสร้างเป็น immutable Session policy ห้ามเปลี่ยนระหว่าง Session โดย `max_entries` ต้องเป็นเลขคู่ตั้งแต่ 2–20
 
-RSI parameters, take-profit rule, Entry Pair และ Cooldown Month ยังคงอยู่ใน Strategy Preset หรือ product policy และไม่ใช่ค่าที่ผู้ใช้เปลี่ยนระหว่าง Session
+RSI parameters, take-profit rule และ Entry Pair ยังคงอยู่ใน Strategy Preset หรือ product policy และไม่ใช่ค่าที่ผู้ใช้เปลี่ยนระหว่าง Session
+
+Cooldown เกิดขึ้นเมื่อ Basket ทำ Entry Pair ครบสอง Entries และไม่หมดอายุเองตามเวลา — ไม่มีการนับเดือนอีกต่อไป Basket จะถูกบล็อกจนกว่าผู้ใช้กดปุ่ม "Cancel Cooldown" พร้อม confirmation dialog เพราะเป็นการข้าม risk policy ที่ตั้งใจไว้ การกดหนึ่งครั้งยกเลิกได้เฉพาะ Cooldown รอบที่กำลังบล็อกอยู่ Pair ถัดไปที่ Basket เดียวกันทำครบยังเข้า Cooldown ตามปกติ waiver ผูกกับ Basket และ persist คู่กับ Fills ของมัน จึงอยู่รอดแม้ restart หรือ replay กลับ ปุ่มนี้ใช้ได้ทั้ง Paper Spot และ Paper Futures โดย Paper Spot เก็บ waiver ลงฐานข้อมูลจึงอยู่รอดข้าม restart ส่วน Paper Futures ไม่เก็บ เพราะไม่รับ Basket ที่เปิดค้างกลับมาอยู่แล้ว waiver จึงมีอายุเท่ากับ Runtime ที่ถืออยู่
 
 กฎเฉพาะตลาดต้องถูกตรวจสอบที่ boundary ก่อนเริ่ม session:
 

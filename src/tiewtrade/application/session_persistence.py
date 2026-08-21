@@ -39,6 +39,16 @@ class SessionPersistenceCoordinator[SessionSnapshotT](Protocol):
     ) -> PersistentSessionSnapshot[SessionSnapshotT]:
         pass
 
+    def waive_cooldown(
+        self,
+        observed_at: datetime,
+    ) -> PersistentSessionSnapshot[SessionSnapshotT]:
+        """Lift the Cooldown holding this Session's Basket, on the trader's say.
+
+        Every market can be asked: a Cooldown is the Entry Pair rule, which
+        Spot and Futures share, and it is lifted the same way in both.
+        """
+
 
 class EntryClosingPersistence[SessionSnapshotT](
     SessionPersistenceCoordinator[SessionSnapshotT], Protocol

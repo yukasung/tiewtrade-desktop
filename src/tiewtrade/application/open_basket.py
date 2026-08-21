@@ -37,6 +37,9 @@ class OpenBasketState:
     # owed however long ago they went. Nothing settled is the default: a
     # Basket that has never been sold out of has none.
     settled: SettledEntries = field(default_factory=SettledEntries)
+    # A persisted Cooldown waiver, restored into the replayed lifecycle when
+    # it still names the Pair replay counts. No Fill carries this.
+    waived_pair: int | None = None
 
     def __post_init__(self) -> None:
         if not self.entries:
@@ -85,5 +88,7 @@ def reopen_basket(
             tick_size=tick_size,
             entry_number=entry.entry_number,
         )
-        lifecycle.record_fill(entry.filled_at)
+        lifecycle.record_fill()
+    if state.waived_pair is not None:
+        lifecycle.restore_waiver(state.waived_pair)
     return ReopenedBasket(state=state, basket=basket, lifecycle=lifecycle)

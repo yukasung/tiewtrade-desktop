@@ -409,6 +409,20 @@ class PaperRuntimeController:
             return False
         return sink.close_entry(entry_number, price=price, observed_at=self._clock())
 
+    def waive_cooldown(self, session: ConfiguredPaperSession) -> bool:
+        """Lift the Cooldown holding the running Session's Basket now.
+
+        The Runtime holds the Basket's lifecycle while it runs, so the ask
+        goes to the Session that owns it, under the same lock a candle takes.
+        """
+        self._validate_session(session)
+        with self._lock:
+            sink = self._sink
+            active = self._active_session
+        if sink is None or active != session:
+            return False
+        return sink.waive_cooldown(self._clock())
+
     def _publish_restored_basket(
         self,
         basket: BasketSnapshot,

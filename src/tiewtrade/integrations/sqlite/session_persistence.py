@@ -28,6 +28,9 @@ class _CandleProcessor[ProcessorSnapshotT](Protocol):
     ) -> ProcessorSnapshotT:
         pass
 
+    def waive_cooldown(self, observed_at: datetime) -> ProcessorSnapshotT:
+        pass
+
 
 class _EntryClosingProcessor[ProcessorSnapshotT](
     _CandleProcessor[ProcessorSnapshotT], Protocol
@@ -77,6 +80,11 @@ class SQLiteSessionPersistenceCoordinator[CoordinatorSnapshotT]:
                 observed_at=observed_at,
             )
         )
+
+    def waive_cooldown(
+        self, observed_at: datetime
+    ) -> PersistentSessionSnapshot[CoordinatorSnapshotT]:
+        return self._recorded(lambda: self._session.waive_cooldown(observed_at))
 
     def _recorded(
         self,

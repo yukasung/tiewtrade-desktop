@@ -25,7 +25,7 @@ TiewTrade V2 คือ Desktop Binance Trading Bot สำหรับใช้�
   `BTCUSDT` จนกว่าจะผ่าน Live safety gate
 - completed candle รองรับช่วงเวลา `1m`, `3m`, `5m`, `15m`, `30m`, `1h`, `4h`
 - ผู้ใช้เลือก Timeframe ก่อนเริ่ม Session และค่า Timeframe ถูกตรึงตลอด Session
-- ใช้ UTC สำหรับเวลา candle, Entry Pair และ Cooldown Month
+- ใช้ UTC สำหรับเวลา candle และ Entry Pair
 - RSI Step Grid พร้อม Versioned Preset เพียงกลยุทธ์เดียว
 - Paper Spot และ Paper Futures
 - Live Spot หลัง Paper acceptance ผ่าน
@@ -102,19 +102,24 @@ Short = weighted_average_entry_price - (ATR(14) * 3)
   Take Profit ทันทีขณะที่ Liquidation ยังรอ candle ปิด จะทำให้ผลการเทรดดูดีเกินจริง
 - เมื่อ Basket ปิดสมบูรณ์ สามารถเริ่ม Basket ใหม่ในเดือน UTC เดียวกันได้ทันที
 
-## 6. Entry Pair และ Cooldown Month
+## 6. Entry Pair และ Cooldown
 
 Entries ถูกจัดเป็นคู่ตามลำดับ โดย Pair ลำดับที่ `n` ประกอบด้วย Entries
 `(2n - 1)` และ `2n` จนครบ `max_entries` ของ Session
 
 Lifecycle:
 
-1. ถ้ามีเพียง Entry แรกของ Pair ค้างข้ามสิ้นเดือน UTC ระบบยังเปิด Entry ที่สองในเดือนถัดไปได้เมื่อมีสัญญาณ
-2. เมื่อ Pair มีครบสอง Entries และ Basket ยังไม่ปิดจนผ่านสิ้นเดือน UTC เดือนถัดไปเป็น Cooldown Month
-3. ระหว่าง Cooldown Month ห้ามเพิ่ม Entry แต่ Basket Take Profit ยังคงทำงาน
-4. เมื่อพ้น Cooldown Month จึงเริ่ม Pair ถัดไปได้
+1. ระหว่างที่ Pair มีเพียง Entry แรก ระบบยังเปิด Entry ที่สองได้เมื่อมีสัญญาณ
+2. เมื่อ Pair มีครบสอง Entries Basket เข้าสู่ Cooldown ทันที
+3. ระหว่าง Cooldown ห้ามเพิ่ม Entry แต่ Basket Take Profit ยังคงทำงาน
+4. Cooldown ไม่หมดอายุเองตามเวลา ผู้ใช้ต้องกด "Cancel Cooldown" เพื่อยกเลิกจึงจะเริ่ม Pair ถัดไปได้
 5. วน lifecycle นี้จน Basket ปิดหรือครบ `max_entries` ของ Session
 6. การปิด Basket จะ reset Entry Pair และ Cooldown state สำหรับ Basket ใหม่
+
+การกด Cancel Cooldown ยกเลิกได้เฉพาะ Cooldown รอบที่กำลังบล็อกอยู่ครั้งเดียว เมื่อ Pair
+ถัดไปครบสอง Entries Basket จะเข้า Cooldown อีกครั้งตามปกติ ใช้ได้ทั้ง Paper Spot และ
+Paper Futures โดย Paper Spot เก็บผลการยกเลิกไว้ในฐานข้อมูลจึงอยู่รอดข้าม restart ส่วน
+Paper Futures ยกเลิกได้เฉพาะขณะ Bot กำลังรัน เพราะ Futures ไม่รับ Basket ที่เปิดค้างกลับมา
 
 ## 7. Capital Allocation
 
@@ -311,7 +316,7 @@ SQLite เก็บข้อมูลที่ไม่ใช่ secret ได�
 
 - completed candle ของ Timeframe ที่ Session เลือกต่อเนื่อง ไม่ขาดและไม่ซ้ำหลัง backfill
 - RSI Step Grid ทำงานตรงตาม Versioned Preset
-- Basket Take Profit, Entry Pair และ Cooldown Month ผ่าน automated tests
+- Basket Take Profit, Entry Pair และ Cooldown ผ่าน automated tests
 - Paper Fill ไม่มี look-ahead bias และ replay ได้ผลเดิม
 - Paper Futures ใช้ Trading Capital และ Collateral Buffer อย่างละ 50%, One-way Mode, Cross Margin, leverage จำนวนเต็ม 1x–5x ที่ตรึงตลอด Session และ Liquidation แบบ deterministic
 - Restart แล้วกู้ Session และ Basket ได้โดยไม่สร้าง Entry หรือ Order ซ้ำ

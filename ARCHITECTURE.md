@@ -11,7 +11,7 @@ Paper และ Live ใช้ implementation เดียวกันของ 
 - Session identity และ immutable Preset
 - Strategy และ Entry Intent
 - Capital allocation
-- Basket และ Entry Pair/Cooldown Month
+- Basket และ Entry Pair/Cooldown
 - Risk limits, PnL calculation และ post-Liquidation lifecycle rules
 
 `trading` เป็นเจ้าของ Futures side-aware PnL และ margin policy รวมถึง One-way Mode,
@@ -119,3 +119,19 @@ candle ถัดไปเมื่อยืนยัน durability ไม่ไ�
 ช่วงที่มี persistence adapter เพียงแบบเดียวให้ใช้ concrete coordinator ได้โดยไม่สร้าง
 generic interface ล่วงหน้า เมื่อมี consumer ของ persistence adapter อย่างน้อยสองแบบ
 จึงค่อยย้าย contract ไปไว้ที่ Module ผู้ใช้งาน
+
+## Cooldown Waiver
+
+`trading` เป็นเจ้าของกลไก waive Cooldown แบบ pure ใน `EntryPairLifecycle`
+(`waive_cooldown`/`restore_waiver`) โดยไม่รู้จัก persistence ผู้ใช้ waive ได้ครั้งเดียวต่อ
+Cooldown หนึ่งรอบ ผ่าน use case ที่ `application` เป็นเจ้าของ ซึ่งเดินตาม pattern
+เดียวกับ manual Close Entry คือถามที่ Runtime ก่อนถ้ากำลังถือ Session นั้นอยู่ ไม่งั้น fallback
+ไปที่ database ตรงๆ waiver ถูก persist คู่กับ Fills ของ Basket ใน `integrations/sqlite`
+และถูก apply กลับเข้า `EntryPairLifecycle` ทุกครั้งที่ Basket replay ผ่าน `reopen_basket`
+เพื่อให้อยู่รอด restart
+
+Paper Spot และ Paper Futures ต่าง waive Cooldown ได้ทั้งคู่ผ่าน coordinator เดียวกัน แต่
+ต่างกันที่ persistence: Paper Spot persist waiver ลง SQLite เพราะ replay Basket ที่เปิดอยู่
+กลับมาได้ ส่วน Paper Futures ไม่ persist เพราะไม่เคยรับ Basket ที่เปิดค้างกลับมาเลย waiver
+ของ Futures จึงมีอายุเท่ากับ Runtime ที่ถืออยู่ และมีเฉพาะเส้นทาง runtime เท่านั้น ไม่มี
+at-rest path
