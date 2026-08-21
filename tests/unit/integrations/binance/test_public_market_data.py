@@ -20,7 +20,6 @@ from tiewtrade.market_data.candle_source import MarketDataKlineUpdate
 from tiewtrade.market_data.config import MarketDataConfig
 from tiewtrade.market_data.runtime import MarketDataRuntime
 from tiewtrade.market_data.runtime_state import (
-    MarketDataRuntimeReason,
     MarketDataRuntimeState,
 )
 from tiewtrade.market_data.source_errors import (
@@ -484,9 +483,36 @@ class ImmediateRuntimeScheduler:
 
     async def sleep(self, seconds: float) -> None:
         self.sleeps.append(seconds)
+        # Retrying has no end of its own any more, so a wait that never gives
+        # the loop back would starve the test watching it.
+        await asyncio.sleep(0)
 
     async def wait_for(self, awaitable: Awaitable[_T], timeout: float) -> _T:
         return await awaitable
+
+
+class AcceptingWarmUpSink:
+    """Counts the warm-up that finally lands, and refuses anything after it."""
+
+    def __init__(self) -> None:
+        self.warmed_up = 0
+
+    async def warm_up(
+        self,
+        candles: tuple[Candle, ...],
+        *,
+        received_at: datetime,
+    ) -> None:
+        del candles, received_at
+        self.warmed_up += 1
+
+    async def process_completed(self, candle: Candle, *, received_at: datetime) -> None:
+        del candle, received_at
+
+    async def process_in_progress(
+        self, candle: Candle, *, received_at: datetime
+    ) -> None:
+        del candle, received_at
 
 
 class RejectingWarmUpSink:
@@ -507,25 +533,43 @@ class RejectingWarmUpSink:
         del candle, received_at
 
 
-def test_binance_timeout_exhaustion_remains_warm_up_timeout_in_runtime() -> None:
+def test_binance_timeouts_are_waited_out_until_the_rest_api_answers() -> None:
+    """A Binance timeout reads as one the runtime waits on, not one it quits on.
+
+    Five in a row is more than the runtime used to sit through, and the sink
+    hears nothing until the answer that finally arrives is a real one.
+    """
     source, session = source_with(
-        rest_pages=[FakeResponse(payload=TimeoutError("timed out")) for _ in range(4)]
+        rest_pages=[
+            *(FakeResponse(payload=TimeoutError("timed out")) for _ in range(5)),
+            FakeResponse(payload=[rest_kline(0)]),
+        ]
     )
     scheduler = ImmediateRuntimeScheduler()
+    sink = AcceptingWarmUpSink()
     runtime = MarketDataRuntime(
         config=config(),
         warm_up_count=1,
         source=source,
-        sink=RejectingWarmUpSink(),
+        sink=sink,
         scheduler=scheduler,
     )
 
-    asyncio.run(runtime.run())
+    async def exercise() -> None:
+        run_task = asyncio.create_task(runtime.run())
+        for _ in range(1000):
+            if sink.warmed_up or run_task.done():
+                break
+            await asyncio.sleep(0)
+        await runtime.stop()
+        await run_task
 
-    assert len(session.requests) == 4
-    assert scheduler.sleeps == [1.0, 2.0, 4.0]
-    assert runtime.snapshot.state is MarketDataRuntimeState.FAILED_CLOSED
-    assert runtime.snapshot.reason is MarketDataRuntimeReason.WARM_UP_TIMEOUT
+    asyncio.run(exercise())
+
+    assert len(session.requests) >= 6
+    assert scheduler.sleeps[:5] == [1.0, 2.0, 4.0, 8.0, 16.0]
+    assert MarketDataRuntimeState.FAILED_CLOSED is not runtime.snapshot.state
+    assert sink.warmed_up == 1
 
 
 @pytest.mark.parametrize(

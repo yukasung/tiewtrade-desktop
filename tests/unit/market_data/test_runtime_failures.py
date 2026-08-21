@@ -7,6 +7,7 @@ from tiewtrade.market_data.candle_pipeline import (
     CandlePipelineSinkError,
 )
 from tiewtrade.market_data.runtime import (
+    _reconnect_backoff_seconds,
     _retry_after_seconds,
     _source_failure,
     _WarmUpSinkError,
@@ -33,12 +34,6 @@ NOW = datetime(2026, 8, 2, 12, tzinfo=UTC)
             MarketDataRuntimeReason.SOURCE_FATAL,
             MarketDataFailureKind.PAYLOAD,
             id="fatal",
-        ),
-        pytest.param(
-            MarketDataRateLimitError("slow down", retry_after=None),
-            MarketDataRuntimeReason.RATE_LIMIT_EXHAUSTED,
-            MarketDataFailureKind.PROTOCOL,
-            id="rate-limited",
         ),
         pytest.param(
             MarketDataRetryableError("flaky", kind=MarketDataFailureKind.TRANSPORT),
@@ -132,3 +127,27 @@ def test_a_rate_limit_is_waited_out_for_as_long_as_it_asked(
     error = MarketDataRateLimitError("slow down", retry_after=retry_after)
 
     assert _retry_after_seconds(error, now=NOW) == expected
+
+
+@pytest.mark.parametrize(
+    ("attempt", "expected"),
+    [
+        pytest.param(1, 1.0, id="first"),
+        pytest.param(2, 2.0, id="second"),
+        pytest.param(3, 4.0, id="third"),
+        pytest.param(4, 8.0, id="fourth"),
+        pytest.param(5, 16.0, id="fifth"),
+        pytest.param(6, 30.0, id="capped"),
+        pytest.param(20, 30.0, id="capped-long-after"),
+    ],
+)
+def test_a_reconnect_waits_longer_each_try_up_to_a_ceiling(
+    attempt: int, expected: float
+) -> None:
+    """A blip is waited out in a second; an outage is not hammered forever."""
+    assert _reconnect_backoff_seconds(attempt) == expected
+
+
+def test_a_reconnect_has_no_try_before_the_first() -> None:
+    with pytest.raises(ValueError, match="attempt must be at least 1"):
+        _reconnect_backoff_seconds(0)
