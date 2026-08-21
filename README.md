@@ -46,7 +46,7 @@ PYTHONPATH=src .venv/bin/python -m tiewtrade.paper_replay_main \
 ผลลัพธ์ JSON ที่คงที่คือ:
 
 ```json
-{"accepted_candles":40,"closed_baskets":1,"current_entries":0,"realized_pnl":"13.84062222"}
+{"accepted_candles":40,"closed_baskets":1,"current_entries":0,"realized_pnl":"23.679"}
 ```
 
 ## การตรวจสอบ
