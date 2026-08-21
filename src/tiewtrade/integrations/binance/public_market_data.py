@@ -29,6 +29,19 @@ from tiewtrade.market_data.source_errors import (
 _INVALID_RESPONSE_MESSAGE = "invalid Binance market-data response"
 _PAGE_LIMIT = 1_000
 _HTTP_REQUEST_TIMEOUT_SECONDS = 30.0
+# How often to ask a quiet stream whether it is still there.
+#
+# A connection that dies without saying so — a dropped WiFi, a sleeping
+# laptop, a router that forgets the NAT entry — leaves a socket that looks
+# open and delivers nothing. Nothing arriving reads exactly like a quiet
+# market, so the runtime only notices when a Candle fails to turn up, which
+# is two intervals later: ten minutes on a 5m Session and eight hours on a
+# 4h one. A ping is the thing that asks, and a pong that never comes closes
+# the stream, which the runtime already knows how to reconnect.
+#
+# Well inside Binance's own limits: it pings every twenty seconds and allows
+# ten minutes to answer, so a probe a minute costs nothing and risks nothing.
+WEBSOCKET_HEARTBEAT_SECONDS = 30.0
 
 
 def _parse_retry_after(value: str | None) -> RetryAfter | None:
@@ -241,7 +254,10 @@ class BinancePublicMarketData:
             f"{config.symbol.lower()}@kline_{config.timeframe}"
         )
         try:
-            async with session.ws_connect(stream_url) as websocket:
+            async with session.ws_connect(
+                stream_url,
+                heartbeat=WEBSOCKET_HEARTBEAT_SECONDS,
+            ) as websocket:
                 async for message in websocket:
                     if message.type is aiohttp.WSMsgType.TEXT:
                         payload = json.loads(message.data)

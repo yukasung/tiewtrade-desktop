@@ -14,7 +14,10 @@ from multidict import CIMultiDict, CIMultiDictProxy
 from yarl import URL
 
 from tiewtrade.integrations.binance.public_endpoints import BinancePublicEndpoints
-from tiewtrade.integrations.binance.public_market_data import BinancePublicMarketData
+from tiewtrade.integrations.binance.public_market_data import (
+    WEBSOCKET_HEARTBEAT_SECONDS,
+    BinancePublicMarketData,
+)
 from tiewtrade.market_data.candle import Candle
 from tiewtrade.market_data.candle_source import MarketDataKlineUpdate
 from tiewtrade.market_data.config import MarketDataConfig
@@ -117,14 +120,16 @@ class FakeSession:
         self._websocket_failure = websocket_failure
         self.requests: list[tuple[str, dict[str, str | int]]] = []
         self.websocket_urls: list[str] = []
+        self.websocket_heartbeats: list[float | None] = []
         self.close_count = 0
 
     def get(self, url: str, *, params: dict[str, str | int]) -> FakeResponse:
         self.requests.append((url, params))
         return next(self._rest_pages)
 
-    def ws_connect(self, url: str) -> FakeWebSocket:
+    def ws_connect(self, url: str, *, heartbeat: float | None = None) -> FakeWebSocket:
         self.websocket_urls.append(url)
+        self.websocket_heartbeats.append(heartbeat)
         return FakeWebSocket(
             self._websocket_payloads,
             failure=self._websocket_failure,
@@ -677,6 +682,29 @@ def test_websocket_timeout_message_preserves_timeout_action() -> None:
     assert captured.value.kind is MarketDataFailureKind.TRANSPORT
 
 
+def test_a_pong_that_never_arrives_reads_as_a_stream_to_reconnect() -> None:
+    """What aiohttp reports when the heartbeat goes unanswered.
+
+    A ping without a pong is how a silently dead connection gives itself
+    away, so it has to read as a stream worth reopening — never as a fatal
+    error, which would stop the Bot instead of reconnecting it.
+    """
+    source, _ = source_with(
+        websocket_payloads=[
+            FakeMessage(
+                aiohttp.ServerTimeoutError("pong not received"),
+                message_type=WSMsgType.ERROR,
+            )
+        ]
+    )
+
+    with pytest.raises(MarketDataTimeoutError) as captured:
+        asyncio.run(collect_updates(source))
+
+    assert isinstance(captured.value, MarketDataRetryableError)
+    assert captured.value.kind is MarketDataFailureKind.TRANSPORT
+
+
 @pytest.mark.parametrize(
     ("header", "expected_retry_after"),
     [
@@ -897,3 +925,19 @@ def test_owned_session_cancelled_close_can_be_retried(
     asyncio.run(exercise())
 
     assert session.close_count == 2
+
+
+def test_stream_klines_pings_so_a_silent_connection_is_noticed() -> None:
+    """A dropped WiFi leaves a socket that looks open and never speaks again.
+
+    Nothing arriving is indistinguishable from a quiet market until something
+    asks, and the only thing that asks is a ping. Without one the silence is
+    only noticed when a Candle fails to arrive, which on a 4h timeframe is
+    hours after the connection actually died.
+    """
+    source, session = source_with(websocket_payloads=[websocket_kline(closed=True)])
+
+    asyncio.run(collect_updates(source))
+
+    assert session.websocket_heartbeats == [WEBSOCKET_HEARTBEAT_SECONDS]
+    assert WEBSOCKET_HEARTBEAT_SECONDS <= 60.0
