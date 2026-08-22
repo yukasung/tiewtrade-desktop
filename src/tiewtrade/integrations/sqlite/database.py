@@ -239,6 +239,22 @@ def _migrate_drop_slippage_v10(connection: sqlite3.Connection) -> None:
         connection.execute("ALTER TABLE bot_sessions DROP COLUMN slippage_bps")
 
 
+def _raise_scratch_bot_sessions(connection: sqlite3.Connection, table_sql: str) -> None:
+    """Put up an empty table to rebuild bot_sessions into.
+
+    A rebuild that was interrupted leaves its half-built table behind, and
+    CREATE IF NOT EXISTS would take that one for its own — renaming a stale
+    shape over the real Sessions without saying a word. The name is cleared
+    first so the table raised here is always the one the caller described.
+
+    Safe only after the caller's own guard has found bot_sessions still in
+    its old shape: that is what says the copy has not started, and so that
+    anything under the scratch name is left over rather than in use.
+    """
+    connection.execute("DROP TABLE IF EXISTS new_bot_sessions")
+    connection.execute(table_sql.format(table="new_bot_sessions"))
+
+
 def _migrate_drop_spot_ratio_v11(connection: sqlite3.Connection) -> None:
     """Take the Spot trading ratio out of a Session's configuration.
 
@@ -257,7 +273,7 @@ def _migrate_drop_spot_ratio_v11(connection: sqlite3.Connection) -> None:
     # the old one is gone. Renaming the old one out of the way instead would
     # move paper_runtime_lifecycle's reference along with it, leaving the
     # lifecycle pointing at a table this migration then drops.
-    connection.execute(_V11_BOT_SESSIONS_TABLE_SQL.format(table="new_bot_sessions"))
+    _raise_scratch_bot_sessions(connection, _V11_BOT_SESSIONS_TABLE_SQL)
     connection.execute(
         f"""
         INSERT INTO new_bot_sessions ({_V11_BOT_SESSIONS_COLUMNS})
@@ -284,12 +300,7 @@ def _migrate_drop_maintenance_margin_rate_v15(connection: sqlite3.Connection) ->
     """
     if not _has_column(connection, "bot_sessions", "futures_maintenance_margin_rate"):
         return
-    # A rebuild that was interrupted leaves its half-built table behind, and
-    # CREATE IF NOT EXISTS would take that one for its own — renaming a stale
-    # shape over the real Sessions. The scratch name is cleared first so the
-    # table raised here is always the one this migration wrote.
-    connection.execute("DROP TABLE IF EXISTS new_bot_sessions")
-    connection.execute(_BOT_SESSIONS_TABLE_SQL.format(table="new_bot_sessions"))
+    _raise_scratch_bot_sessions(connection, _BOT_SESSIONS_TABLE_SQL)
     connection.execute(
         f"""
         INSERT INTO new_bot_sessions ({_BOT_SESSIONS_COLUMNS})
@@ -326,7 +337,7 @@ def _migrate_capital_per_entry_v12(connection: sqlite3.Connection) -> None:
         )
         for row in rows
     ]
-    connection.execute(_BOT_SESSIONS_TABLE_SQL.format(table="new_bot_sessions"))
+    _raise_scratch_bot_sessions(connection, _BOT_SESSIONS_TABLE_SQL)
     placeholders = ", ".join("?" for _ in _BOT_SESSIONS_COLUMN_NAMES)
     connection.executemany(
         f"""

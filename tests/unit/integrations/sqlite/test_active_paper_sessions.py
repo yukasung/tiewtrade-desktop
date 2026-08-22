@@ -25,6 +25,7 @@ from tiewtrade.integrations.sqlite.database import (
     _V11_BOT_SESSIONS_COLUMNS,
     _V11_BOT_SESSIONS_TABLE_SQL,
     SQLiteDatabase,
+    _migrate_drop_spot_ratio_v11,
 )
 from tiewtrade.integrations.sqlite.paper_runtime_lifecycle import (
     SQLitePaperRuntimeLifecycle,
@@ -331,6 +332,63 @@ def test_migration_to_v15_drops_the_rate_and_keeps_the_session(
     assert active.config.futures_policy == session.config.futures_policy
 
 
+def test_v11_rebuild_ignores_a_half_built_table_left_behind(
+    tmp_path: Path,
+) -> None:
+    """The rebuild is asked directly, because migrate() cannot show this.
+
+    v12 always runs straight after v11 and rebuilds the table again, so it
+    repairs the stale shape v11 would otherwise leave and the damage never
+    reaches a caller. The guard is here for the day that ordering changes.
+    """
+    path = tmp_path / "tiewtrade.sqlite3"
+    database = SQLiteDatabase(path)
+    database.migrate()
+    store = SQLiteActivePaperSessions(database)
+    session = configured_spot_session()
+    store.create(session)
+
+    with database.connect() as connection:
+        _restore_v10_bot_sessions(connection)
+        _leave_a_half_built_rebuild(connection)
+        _migrate_drop_spot_ratio_v11(connection)
+
+        assert not _has_column(connection, "spot_trading_capital_ratio")
+        kept = connection.execute("SELECT session_id FROM bot_sessions").fetchall()
+    assert [row["session_id"] for row in kept] == [str(session.config.session_id)]
+
+
+def test_migration_to_v12_ignores_a_half_built_table_left_behind(
+    tmp_path: Path,
+) -> None:
+    """A rebuild that was interrupted once must not be adopted the next time."""
+    path = tmp_path / "tiewtrade.sqlite3"
+    database = SQLiteDatabase(path)
+    database.migrate()
+    store = SQLiteActivePaperSessions(database)
+    session = configured_spot_session()
+    store.create(session)
+    with database.connect() as connection:
+        _restore_v11_bot_sessions(connection, "200000")
+        _leave_a_half_built_rebuild(connection)
+
+    database.migrate()
+
+    with database.connect() as connection:
+        assert not _has_column(connection, "available_capital")
+    active = store.get_active()
+    assert active is not None
+    assert active.config.session_id == session.config.session_id
+    assert active.config.capital_per_entry == Decimal("20000")
+
+
+def _leave_a_half_built_rebuild(connection: sqlite3.Connection) -> None:
+    """Exactly what an interrupted rebuild leaves: the old shape, empty."""
+    connection.execute("DROP TABLE IF EXISTS new_bot_sessions")
+    connection.execute("CREATE TABLE new_bot_sessions AS SELECT * FROM bot_sessions")
+    connection.execute("DELETE FROM new_bot_sessions")
+
+
 def test_migration_to_v15_ignores_a_half_built_table_left_behind(
     tmp_path: Path,
 ) -> None:
@@ -348,11 +406,7 @@ def test_migration_to_v15_ignores_a_half_built_table_left_behind(
     store.create(session)
     with database.connect() as connection:
         _restore_v14_bot_sessions(connection)
-        # Exactly what an interrupted rebuild leaves: the old shape, empty.
-        connection.execute(
-            "CREATE TABLE new_bot_sessions AS SELECT * FROM bot_sessions"
-        )
-        connection.execute("DELETE FROM new_bot_sessions")
+        _leave_a_half_built_rebuild(connection)
 
     database.migrate()
 
