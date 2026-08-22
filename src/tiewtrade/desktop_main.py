@@ -39,6 +39,7 @@ from tiewtrade.application.paper_session_sink import (
 from tiewtrade.application.paper_symbols import paper_symbol_rules
 from tiewtrade.application.trading_workspace import BotRuntimeState
 from tiewtrade.decimal_context import configure_decimal_context
+from tiewtrade.desktop_logging import configure_desktop_logging
 from tiewtrade.integrations.binance.public_endpoints import BinancePublicEndpoints
 from tiewtrade.integrations.binance.public_market_data import BinancePublicMarketData
 from tiewtrade.integrations.sqlite.active_paper_sessions import (
@@ -575,6 +576,9 @@ def _chart_sources(
 def run_desktop(database_path: Path | None = None) -> int:
     configure_decimal_context()
     resolved_database_path = database_path or default_database_path()
+    # Beside the database, because the two answer the same question together:
+    # what the Bot did, and why it stopped doing it.
+    configure_desktop_logging(resolved_database_path.parent)
     database = SQLiteDatabase(resolved_database_path)
     store = SQLiteActivePaperSessions(database)
     history = SQLiteTradeHistory(database)

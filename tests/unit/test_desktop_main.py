@@ -38,6 +38,7 @@ from tiewtrade.application.trade_history import (
     TradeHistoryFilter,
 )
 from tiewtrade.application.trading_workspace import BotRuntimeState, DataFreshness
+from tiewtrade.desktop_logging import LOG_FILE_NAME
 from tiewtrade.integrations.binance.public_endpoints import BinancePublicEndpoints
 from tiewtrade.integrations.binance.public_market_data import BinancePublicMarketData
 from tiewtrade.integrations.sqlite.database import (
@@ -135,7 +136,22 @@ def _create_v1_database(database: SQLiteDatabase) -> None:
         connection.execute("PRAGMA user_version = 1")
 
 
-def test_desktop_configures_decimal_context_before_composition(
+@pytest.fixture(autouse=True)
+def desktop_logging_stays_off(monkeypatch: MonkeyPatch) -> None:
+    """No test here may leave a live file handler on the package logger.
+
+    Composing the desktop configures logging for the whole process, which
+    outlives the test that did it and would write every later test's events
+    into a temporary directory that is already gone.
+    """
+    monkeypatch.setattr(
+        desktop_main,
+        "configure_desktop_logging",
+        lambda directory: directory / LOG_FILE_NAME,
+    )
+
+
+def test_desktop_configures_decimal_context_and_logging_before_composition(
     tmp_path: Path,
     monkeypatch: MonkeyPatch,
 ) -> None:
@@ -152,11 +168,21 @@ def test_desktop_configures_decimal_context_before_composition(
         lambda: events.append("decimal"),
         raising=False,
     )
+
+    def capture_logging(directory: Path) -> Path:
+        events.append("logging")
+        return directory / "tiewtrade.log"
+
+    monkeypatch.setattr(
+        desktop_main,
+        "configure_desktop_logging",
+        capture_logging,
+    )
     monkeypatch.setattr(desktop_main, "SQLiteDatabase", capture_database)
     monkeypatch.setattr(desktop_main, "run_desktop_ui", lambda **kwargs: 0)
 
     assert desktop_main.run_desktop(tmp_path / "tiewtrade.sqlite3") == 0
-    assert events == ["decimal", "database"]
+    assert events == ["decimal", "logging", "database"]
 
 
 def test_desktop_composition_supplies_migrated_create_and_load_operations(
