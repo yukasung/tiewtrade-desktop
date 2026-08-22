@@ -78,7 +78,6 @@ def reopen_basket(
         # it already sold is not there to be replayed, and is told to it.
         settled=state.settled,
     )
-    lifecycle = EntryPairLifecycle(entry_policy)
     for entry in state.entries:
         basket.add_entry(
             price=entry.price,
@@ -88,7 +87,11 @@ def reopen_basket(
             tick_size=tick_size,
             entry_number=entry.entry_number,
         )
-        lifecycle.replay_fill()
-    if state.waived_pair is not None:
-        lifecycle.restore_waiver(state.waived_pair)
+    # Counted off the Basket rather than off the Entries handed in, so the
+    # Pair count can only ever describe Entries the Basket actually took.
+    lifecycle = EntryPairLifecycle.replayed(
+        entry_policy,
+        fill_count=basket.entry_count,
+        waived_pair=state.waived_pair,
+    )
     return ReopenedBasket(state=state, basket=basket, lifecycle=lifecycle)

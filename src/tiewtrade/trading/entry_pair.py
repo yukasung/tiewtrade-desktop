@@ -37,6 +37,32 @@ class EntryPairLifecycle:
         self._completed_pairs = 0
         self._waived_pair: int | None = None
 
+    @classmethod
+    def replayed(
+        cls,
+        policy: EntryPolicy,
+        *,
+        fill_count: int,
+        waived_pair: int | None,
+    ) -> "EntryPairLifecycle":
+        """A lifecycle standing where Fills already recorded left it.
+
+        Replay never asks the gate. The gate decides whether a *new* Entry may
+        open, and an Entry the market has already taken is not up for decision
+        — asking it re-argued Cooldowns the trader had lifted long ago. Only
+        the latest waiver is kept, so the ones before it can never be answered
+        for, and a Basket carried past two Cooldowns could not be put back.
+
+        The waiver takes effect only when it still names the Pair these Fills
+        have just counted, never a Pair that has since replaced it.
+        """
+        lifecycle = cls(policy)
+        for _ in range(fill_count):
+            lifecycle._count_fill()
+        if waived_pair is not None:
+            lifecycle._restore_waiver(waived_pair)
+        return lifecycle
+
     @property
     def entry_count(self) -> int:
         return self._entry_count
@@ -66,16 +92,14 @@ class EntryPairLifecycle:
     def record_fill(self) -> None:
         if not self.can_enter():
             raise ValueError("entry is blocked by pair lifecycle")
-        self.replay_fill()
+        self._count_fill()
 
-    def replay_fill(self) -> None:
-        """Count a Fill that has already happened, without asking the gate.
+    def _count_fill(self) -> None:
+        """Take a Fill into the count, whoever decided it should happen.
 
-        The gate decides whether a *new* Entry may open; an Entry the market
-        has already taken is not up for decision. Replay went through the gate
-        and so re-argued Cooldowns the trader had lifted long ago — and only
-        the latest waiver is kept, so the ones before it can never be answered
-        for. A Basket carried past two Cooldowns could not be put back at all.
+        Every second Fill completes a Pair, which is the rule the gate is read
+        against. It is stated once here so the two ways in — a live Entry that
+        passed the gate, and replay that never asks it — cannot drift apart.
         """
         self._entry_count += 1
         if self._entry_count % 2 == 0:
@@ -103,7 +127,7 @@ class EntryPairLifecycle:
             raise ValueError("no Cooldown is blocking this Pair")
         self._waived_pair = self._completed_pairs
 
-    def restore_waiver(self, completed_pairs: int) -> None:
+    def _restore_waiver(self, completed_pairs: int) -> None:
         """Put back a waiver replay read from storage, exactly as it stood.
 
         Replay rebuilds a Pair from its Fills alone; a waiver is the one fact

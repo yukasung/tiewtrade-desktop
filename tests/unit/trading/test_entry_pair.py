@@ -134,22 +134,21 @@ def test_a_pair_rebuilt_after_a_sale_cools_down_on_its_own_account() -> None:
     assert lifecycle.entry_gate() == EntryGate(EntryGateState.COOLDOWN)
 
 
-def test_restore_waiver_ignores_a_stale_pair() -> None:
-    lifecycle = completed_pair()
-
-    lifecycle.restore_waiver(0)
+def test_a_replayed_waiver_naming_a_stale_pair_is_ignored() -> None:
+    lifecycle = EntryPairLifecycle.replayed(policy(), fill_count=2, waived_pair=0)
 
     assert not lifecycle.can_enter()
 
 
-def test_restore_waiver_reapplies_a_matching_pair() -> None:
+def test_a_replayed_waiver_naming_the_pair_it_lifted_opens_the_gate() -> None:
     waived = completed_pair()
     waived.waive_cooldown()
 
-    replayed = completed_pair()
-    replayed.restore_waiver(waived.completed_pairs)
+    lifecycle = EntryPairLifecycle.replayed(
+        policy(), fill_count=2, waived_pair=waived.completed_pairs
+    )
 
-    assert replayed.can_enter()
+    assert lifecycle.can_enter()
 
 
 def test_reset_clears_the_waiver() -> None:
@@ -163,20 +162,21 @@ def test_reset_clears_the_waiver() -> None:
     assert not lifecycle.can_enter()
 
 
-def test_replay_puts_back_a_fill_a_cooldown_would_have_blocked() -> None:
-    """A Fill that already happened is counted, not re-decided."""
-    lifecycle = completed_pair()
+def test_replay_puts_back_fills_a_cooldown_would_have_blocked() -> None:
+    """Fills that already happened are counted, not re-decided.
 
-    lifecycle.replay_fill()
+    The third of these could never have passed the gate: the Pair before it
+    closed one. The trader lifted that Cooldown at the time, and storage no
+    longer holds the waiver they lifted it with.
+    """
+    lifecycle = EntryPairLifecycle.replayed(policy(), fill_count=3, waived_pair=None)
 
     assert lifecycle.entry_count == 3
     assert lifecycle.completed_pairs == 1
 
 
-def test_a_replayed_fill_still_completes_its_pair() -> None:
-    lifecycle = completed_pair()
-    lifecycle.replay_fill()
-    lifecycle.replay_fill()
+def test_replayed_fills_still_complete_their_pairs() -> None:
+    lifecycle = EntryPairLifecycle.replayed(policy(), fill_count=4, waived_pair=None)
 
     assert lifecycle.completed_pairs == 2
     assert lifecycle.entry_gate() == EntryGate(EntryGateState.COOLDOWN)

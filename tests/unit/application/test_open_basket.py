@@ -1,3 +1,4 @@
+from dataclasses import replace
 from datetime import UTC, datetime
 from decimal import Decimal
 from uuid import uuid4
@@ -13,34 +14,29 @@ from tiewtrade.application.open_basket import (
 from tiewtrade.trading.entry_policy import EntryPolicy
 
 
+def _entry(number: int, price: str, *, day: int) -> OpenBasketEntry:
+    return OpenBasketEntry(
+        entry_number=number,
+        price=Decimal(price),
+        quantity=Decimal("1"),
+        filled_at=datetime(2026, 1, day, tzinfo=UTC),
+        atr=Decimal("1"),
+    )
+
+
 def _state(*, waived_pair: int | None) -> OpenBasketState:
     return OpenBasketState(
         basket_id=uuid4(),
-        entries=(
-            OpenBasketEntry(
-                entry_number=1,
-                price=Decimal("100"),
-                quantity=Decimal("1"),
-                filled_at=datetime(2026, 1, 10, tzinfo=UTC),
-                atr=Decimal("1"),
-            ),
-            OpenBasketEntry(
-                entry_number=2,
-                price=Decimal("99"),
-                quantity=Decimal("1"),
-                filled_at=datetime(2026, 1, 20, tzinfo=UTC),
-                atr=Decimal("1"),
-            ),
-        ),
+        entries=(_entry(1, "100", day=10), _entry(2, "99", day=20)),
         closed_basket_count=0,
         waived_pair=waived_pair,
     )
 
 
-def _reopen(state: OpenBasketState) -> ReopenedBasket:
+def _reopen(state: OpenBasketState, *, max_entries: int = 10) -> ReopenedBasket:
     return reopen_basket(
         state,
-        entry_policy=EntryPolicy(max_entries=10),
+        entry_policy=EntryPolicy(max_entries=max_entries),
         take_profit_atr_multiplier=Decimal("1"),
         stop_loss_atr_multiplier=None,
         tick_size=Decimal("0.01"),
@@ -69,27 +65,9 @@ def test_reopen_basket_without_a_waiver_stays_in_cooldown() -> None:
 def _four_entry_state(*, waived_pair: int | None) -> OpenBasketState:
     """A Basket the trader carried past its first Cooldown into a second Pair."""
     state = _state(waived_pair=waived_pair)
-    return OpenBasketState(
-        basket_id=state.basket_id,
-        entries=state.entries
-        + (
-            OpenBasketEntry(
-                entry_number=3,
-                price=Decimal("98"),
-                quantity=Decimal("1"),
-                filled_at=datetime(2026, 1, 30, tzinfo=UTC),
-                atr=Decimal("1"),
-            ),
-            OpenBasketEntry(
-                entry_number=4,
-                price=Decimal("97"),
-                quantity=Decimal("1"),
-                filled_at=datetime(2026, 2, 10, tzinfo=UTC),
-                atr=Decimal("1"),
-            ),
-        ),
-        closed_basket_count=state.closed_basket_count,
-        waived_pair=state.waived_pair,
+    return replace(
+        state,
+        entries=state.entries + (_entry(3, "98", day=25), _entry(4, "97", day=30)),
     )
 
 
@@ -123,28 +101,10 @@ def test_reopen_basket_refuses_more_open_entries_than_the_quota_allows() -> None
     beside. The Basket itself is what refuses, so replay counts nothing the
     Basket has not already accepted.
     """
-    state = _state(waived_pair=None)
-    over_quota = OpenBasketState(
-        basket_id=state.basket_id,
-        entries=tuple(
-            OpenBasketEntry(
-                entry_number=number,
-                price=Decimal("100"),
-                quantity=Decimal("1"),
-                filled_at=datetime(2026, 1, 1, number, tzinfo=UTC),
-                atr=Decimal("1"),
-            )
-            for number in range(1, 7)
-        ),
-        closed_basket_count=0,
-        waived_pair=None,
+    over_quota = replace(
+        _state(waived_pair=None),
+        entries=tuple(_entry(number, "100", day=number) for number in range(1, 7)),
     )
 
     with pytest.raises(ValueError, match="maximum entries"):
-        reopen_basket(
-            over_quota,
-            entry_policy=EntryPolicy(max_entries=4),
-            take_profit_atr_multiplier=Decimal("1"),
-            stop_loss_atr_multiplier=None,
-            tick_size=Decimal("0.01"),
-        )
+        _reopen(over_quota, max_entries=4)
