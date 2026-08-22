@@ -13,12 +13,14 @@ from PySide6.QtGui import (
 from PySide6.QtWidgets import (
     QComboBox,
     QHBoxLayout,
+    QLabel,
     QPushButton,
     QVBoxLayout,
     QWidget,
 )
 
 from tiewtrade.application.chart_data import (
+    ChartFeedState,
     ChartRange,
     ChartReadState,
     ChartSnapshot,
@@ -77,6 +79,7 @@ class CandlestickChartWidget(QWidget):
         self.setMinimumHeight(360)
         self.setMouseTracking(True)
         self._snapshot: ChartSnapshot | None = None
+        self._feed_state: ChartFeedState | None = None
         self._crosshair_position: QPointF | None = None
 
         self._header = QHBoxLayout()
@@ -117,6 +120,13 @@ class CandlestickChartWidget(QWidget):
         self.next_range_button.setObjectName("nextRangeButton")
         self.next_range_button.setFixedWidth(44)
         self.next_range_button.setAccessibleName("Next chart range")
+        # The one place the system speaks: a feed that is not delivering, a
+        # Bot that has stopped. Empty rather than hidden, so the row it sits
+        # in does not jump every time there is something to say.
+        self.system_notice = QLabel()
+        self.system_notice.setObjectName("systemNotice")
+        self.system_notice.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.system_notice.setAccessibleName("System notice")
         self.retry_button = QPushButton("Retry")
         self.retry_button.setObjectName("chartRetryButton")
         self.retry_button.setAccessibleName("Retry chart")
@@ -146,7 +156,10 @@ class CandlestickChartWidget(QWidget):
         self._header.addWidget(self.symbol)
         self._header.addSpacing(12)
         self._header.addWidget(self.timeframe)
-        self._header.addStretch()
+        self._header.addSpacing(12)
+        # Takes the space a stretch used to, so the notice reads centred
+        # between the view being chosen and the actions on this chart.
+        self._header.addWidget(self.system_notice, 1)
         self._header.addLayout(controls)
 
         layout = QVBoxLayout(self)
@@ -239,8 +252,24 @@ class CandlestickChartWidget(QWidget):
                 snapshot.observed_at_utc,
             )
         )
-        self.retry_button.setVisible(snapshot.state is ChartReadState.UNAVAILABLE)
+        self.retry_button.setVisible(
+            snapshot.state is ChartReadState.UNAVAILABLE
+            or self._feed_state is ChartFeedState.STOPPED
+        )
         self.update()
+
+    def show_system_notice(self, text: str) -> None:
+        """Say the one thing the reader needs to know, or nothing at all."""
+        self.system_notice.setText(text)
+
+    def show_feed_state(self, state: ChartFeedState) -> None:
+        """A feed that has stopped needs the way back offered, not just said."""
+        self._feed_state = state
+        snapshot = self._snapshot
+        self.retry_button.setVisible(
+            state is ChartFeedState.STOPPED
+            or (snapshot is not None and snapshot.state is ChartReadState.UNAVAILABLE)
+        )
 
     def set_view_loading(self, loading: bool) -> None:
         self.symbol.setDisabled(loading)

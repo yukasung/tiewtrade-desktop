@@ -3,7 +3,6 @@ from collections.abc import Callable
 from PySide6.QtCore import Qt, QTimer, Signal, Slot
 from PySide6.QtWidgets import (
     QHBoxLayout,
-    QLabel,
     QMessageBox,
     QPushButton,
     QVBoxLayout,
@@ -11,7 +10,7 @@ from PySide6.QtWidgets import (
 )
 
 from tiewtrade.application.bot_control import BotControlAction, BotControlSnapshot
-from tiewtrade.application.trading_workspace import BotRuntimeState, DataFreshness
+from tiewtrade.application.trading_workspace import BotRuntimeState
 from tiewtrade.ui.session_overview import SessionOverviewWidget
 
 StopConfirmation = Callable[[Callable[[], None], Callable[[], None]], None]
@@ -26,9 +25,6 @@ _STARTING_STATES = frozenset(
     }
 )
 _STOPPING_STATES = frozenset({BotRuntimeState.RUNNING, BotRuntimeState.STOPPING})
-# What the Runtime is doing while it holds a Session open with no data
-# coming in: reconnecting, and refusing to trade on prices it cannot see.
-CONNECTION_NOTICE = "Reconnecting — waiting for market data"
 
 
 class BotControlWidget(QWidget):
@@ -49,10 +45,6 @@ class BotControlWidget(QWidget):
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         self.setAccessibleName("Bot Control")
         self.overview = SessionOverviewWidget()
-        self.connection_notice = QLabel(CONNECTION_NOTICE)
-        self.connection_notice.setObjectName("connectionNotice")
-        self.connection_notice.setWordWrap(True)
-        self.connection_notice.hide()
         self.start_button = QPushButton("Start Bot")
         self.start_button.setObjectName("startBotButton")
         self.stop_button = QPushButton("Stop Bot")
@@ -76,7 +68,6 @@ class BotControlWidget(QWidget):
         root.setSpacing(12)
 
         root.addWidget(self.overview)
-        root.addWidget(self.connection_notice)
 
         actions = QHBoxLayout()
         actions.addWidget(self.start_button)
@@ -89,7 +80,6 @@ class BotControlWidget(QWidget):
         A state in flight carries no actions — BotControlSnapshot rejects any
         it is handed — so the button it owns shows disabled while it settles.
         """
-        self._show_connection_notice(snapshot)
         self._hide_actions()
         if snapshot.state in _STARTING_STATES:
             button, action = self.start_button, BotControlAction.START
@@ -98,15 +88,6 @@ class BotControlWidget(QWidget):
         else:
             return
         self._show_action(button, action in snapshot.available_actions)
-
-    def _show_connection_notice(self, snapshot: BotControlSnapshot) -> None:
-        header = snapshot.workspace.header
-        reconnecting = (
-            snapshot.state is BotRuntimeState.RUNNING
-            and header is not None
-            and header.data_freshness is DataFreshness.STALE
-        )
-        self.connection_notice.setVisible(reconnecting)
 
     def _hide_actions(self) -> None:
         for button in (self.start_button, self.stop_button):

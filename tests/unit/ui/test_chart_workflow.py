@@ -1,5 +1,5 @@
 from dataclasses import replace
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
 from tests.support.paper_session_setup import configured_spot_session
@@ -11,6 +11,7 @@ from tiewtrade.application.bot_control import (
     workspace_with_runtime_state,
 )
 from tiewtrade.application.chart_data import (
+    ChartFeedState,
     ChartRange,
     ChartReadState,
     ChartSnapshot,
@@ -30,7 +31,7 @@ from tiewtrade.market_data.candle import Candle
 from tiewtrade.market_data.config import timeframe_to_interval
 from tiewtrade.trading.trade_history import FillSide, TradeFill
 from tiewtrade.ui.background_task import BackgroundTask
-from tiewtrade.ui.chart_workflow import ChartWorkflow
+from tiewtrade.ui.chart_workflow import ChartFactRelay, ChartWorkflow
 
 
 class ImmediateThreadPool:
@@ -59,6 +60,282 @@ class PartialCompletedCandle:
     timeframe = "5m"
     open_time = datetime(2026, 1, 1, 0, 15, tzinfo=UTC)
     close_time = datetime(2026, 1, 1, 0, 20, tzinfo=UTC)
+
+
+def test_a_feed_that_comes_back_reloads_the_chart_it_left_behind() -> None:
+    """A chart cannot catch up on the candles it was not there for.
+
+    The prices that arrive after a reconnect are the ones the feed happens to
+    be handed next; whatever the outage swallowed is only in the history. So
+    the way back to a current chart is to read the visible range again, and
+    nothing but the feed knows when there is a connection to read it with.
+    """
+    session = configured_spot_session()
+    requests: list[ChartRange] = []
+    clock = MutableClock(datetime(2026, 1, 1, 10, 3, tzinfo=UTC))
+    workflow = ChartWorkflow(
+        load_chart=lambda configured, requested: load_snapshot(
+            configured, requested, requests
+        ),
+        thread_pool=ImmediateThreadPool(),  # type: ignore[arg-type]
+        clock=clock,
+    )
+    workflow.start(session)
+    assert len(requests) == 1
+
+    clock.value = datetime(2026, 1, 1, 10, 33, tzinfo=UTC)
+    workflow.feed_state(ChartFeedState.RECONNECTING)
+    workflow.feed_state(ChartFeedState.LIVE)
+
+    assert len(requests) == 2
+    # The window the reader is watching is the one ending now, not the one
+    # that ended when the connection went: reloading the old window would
+    # read the same candles back and leave the chart just as far behind.
+    assert requests[1].end == datetime(2026, 1, 1, 10, 30, tzinfo=UTC)
+
+
+def test_a_price_from_a_reconnected_feed_is_drawn_without_waiting_for_a_close() -> None:
+    """The first price back is proof the connection is, and it is drawable.
+
+    A forming candle can only sit at the end of the range the chart holds,
+    and an outage leaves that range boundaries behind. So the price that
+    arrives the moment the socket is back has nowhere to go, and the chart
+    stays frozen until the next candle closes — a minute, or an hour of it
+    on the timeframes that trade slowly. Re-anchoring the range on the first
+    price back is what puts the current candle on the screen at once.
+    """
+    session = configured_spot_session()
+    snapshots: list[ChartSnapshot] = []
+    clock = MutableClock(datetime(2026, 1, 1, 0, 43, tzinfo=UTC))
+    workflow = latest_workflow(session=session, snapshots=snapshots, clock=clock)
+    workflow.feed_state(ChartFeedState.RECONNECTING)
+    clock.value = datetime(2026, 1, 1, 0, 57, tzinfo=UTC)
+
+    workflow.in_progress_candle(candle("5m", 55))
+
+    assert snapshots[-1].chart_range.end == datetime(2026, 1, 1, 0, 55, tzinfo=UTC)
+    assert snapshots[-1].in_progress_candle == candle("5m", 55)
+
+
+def test_a_reconnected_feed_re_anchors_the_chart_only_once_per_candle() -> None:
+    """Prices arrive several times a second; the history behind them does not."""
+    session = configured_spot_session()
+    snapshots: list[ChartSnapshot] = []
+    loads: list[ChartRange] = []
+    clock = MutableClock(datetime(2026, 1, 1, 0, 43, tzinfo=UTC))
+    workflow = latest_workflow(
+        session=session,
+        snapshots=snapshots,
+        clock=clock,
+        load_calls=loads,
+    )
+    workflow.feed_state(ChartFeedState.RECONNECTING)
+    clock.value = datetime(2026, 1, 1, 0, 57, tzinfo=UTC)
+
+    workflow.in_progress_candle(candle("5m", 55, close="101"))
+    workflow.in_progress_candle(candle("5m", 55, close="102"))
+    workflow.in_progress_candle(candle("5m", 55, close="103"))
+
+    assert len(loads) == 1
+    assert snapshots[-1].in_progress_candle == candle("5m", 55, close="103")
+
+
+def test_a_live_feed_does_not_reload_history_for_every_forming_candle() -> None:
+    """In the ordinary case nothing here should reach for the network at all."""
+    session = configured_spot_session()
+    snapshots: list[ChartSnapshot] = []
+    loads: list[ChartRange] = []
+    clock = MutableClock(datetime(2026, 1, 1, 0, 43, tzinfo=UTC))
+    workflow = latest_workflow(
+        session=session,
+        snapshots=snapshots,
+        clock=clock,
+        load_calls=loads,
+    )
+    workflow.feed_state(ChartFeedState.LIVE)
+    clock.value = datetime(2026, 1, 1, 0, 57, tzinfo=UTC)
+
+    workflow.in_progress_candle(candle("5m", 55))
+
+    assert loads == []
+
+
+def test_prices_that_stop_arriving_are_reported_without_waiting_for_the_socket() -> (
+    None
+):
+    """The screen should answer for what it can see, not for what it is told.
+
+    A dead socket is only noticed when a ping goes unanswered, and a chart
+    that has stopped being true in the meantime says nothing. Prices not
+    arriving is the fault itself, whatever is behind it — a dropped network,
+    a machine that slept, a stream that quietly stopped sending.
+    """
+    session = configured_spot_session()
+    clock = MutableClock(datetime(2026, 1, 1, 0, 43, tzinfo=UTC))
+    workflow = latest_workflow(session=session, snapshots=[], clock=clock)
+    states: list[object] = []
+    workflow.feed_state_changed.connect(states.append)
+
+    clock.value += timedelta(seconds=14)
+    workflow.check_price_silence()
+
+    assert states == []
+
+    clock.value += timedelta(seconds=2)
+    workflow.check_price_silence()
+
+    assert states == [ChartFeedState.RECONNECTING]
+
+
+def test_prices_arriving_keep_the_chart_quiet() -> None:
+    session = configured_spot_session()
+    clock = MutableClock(datetime(2026, 1, 1, 0, 43, tzinfo=UTC))
+    workflow = latest_workflow(session=session, snapshots=[], clock=clock)
+    states: list[object] = []
+    workflow.feed_state_changed.connect(states.append)
+
+    for _ in range(6):
+        clock.value += timedelta(seconds=5)
+        workflow.in_progress_candle(candle("5m", 40))
+        workflow.check_price_silence()
+
+    assert states == []
+
+
+def test_a_price_after_a_silence_puts_the_chart_back_on_its_feet() -> None:
+    session = configured_spot_session()
+    snapshots: list[ChartSnapshot] = []
+    loads: list[ChartRange] = []
+    clock = MutableClock(datetime(2026, 1, 1, 0, 43, tzinfo=UTC))
+    workflow = latest_workflow(
+        session=session,
+        snapshots=snapshots,
+        clock=clock,
+        load_calls=loads,
+    )
+    states: list[object] = []
+    workflow.feed_state_changed.connect(states.append)
+    clock.value = datetime(2026, 1, 1, 0, 57, tzinfo=UTC)
+    workflow.check_price_silence()
+
+    workflow.in_progress_candle(candle("5m", 55))
+
+    assert states == [ChartFeedState.RECONNECTING, ChartFeedState.LIVE]
+    # The same recovery a reconnect gets: the range re-anchored on now, and
+    # the price that proved the feed is back drawn on it.
+    assert len(loads) == 1
+    assert snapshots[-1].in_progress_candle == candle("5m", 55)
+
+
+def test_a_stopped_feed_outranks_a_silence() -> None:
+    session = configured_spot_session()
+    clock = MutableClock(datetime(2026, 1, 1, 0, 43, tzinfo=UTC))
+    workflow = latest_workflow(session=session, snapshots=[], clock=clock)
+    states: list[object] = []
+    workflow.feed_state_changed.connect(states.append)
+
+    workflow.feed_state(ChartFeedState.STOPPED)
+    clock.value += timedelta(seconds=20)
+    workflow.check_price_silence()
+
+    assert states == [ChartFeedState.STOPPED]
+
+
+def test_a_closed_workflow_stops_watching_for_silence() -> None:
+    session = configured_spot_session()
+    clock = MutableClock(datetime(2026, 1, 1, 0, 43, tzinfo=UTC))
+    workflow = latest_workflow(session=session, snapshots=[], clock=clock)
+    states: list[object] = []
+    workflow.feed_state_changed.connect(states.append)
+    workflow.close()
+
+    clock.value += timedelta(seconds=20)
+    workflow.check_price_silence()
+
+    assert states == []
+
+
+def test_a_feed_that_was_never_away_does_not_reload_the_chart() -> None:
+    """Going live is what a feed does on every start; only coming back counts."""
+    session = configured_spot_session()
+    requests: list[ChartRange] = []
+    workflow = ChartWorkflow(
+        load_chart=lambda configured, requested: load_snapshot(
+            configured, requested, requests
+        ),
+        thread_pool=ImmediateThreadPool(),  # type: ignore[arg-type]
+        clock=lambda: datetime(2026, 1, 1, 10, 3, tzinfo=UTC),
+    )
+    workflow.start(session)
+
+    workflow.feed_state(ChartFeedState.LIVE)
+    workflow.feed_state(ChartFeedState.LIVE)
+
+    assert len(requests) == 1
+
+
+def test_the_feed_state_the_chart_shows_is_the_one_the_feed_reported() -> None:
+    session = configured_spot_session()
+    observed: list[object] = []
+    workflow = ChartWorkflow(
+        load_chart=lambda configured, requested: load_snapshot(
+            configured, requested, []
+        ),
+        thread_pool=ImmediateThreadPool(),  # type: ignore[arg-type]
+        clock=lambda: datetime(2026, 1, 1, 10, 3, tzinfo=UTC),
+    )
+    workflow.feed_state_changed.connect(observed.append)
+    workflow.start(session)
+
+    workflow.feed_state(ChartFeedState.RECONNECTING)
+    workflow.feed_state(ChartFeedState.RECONNECTING)
+    workflow.feed_state(ChartFeedState.LIVE)
+    workflow.feed_state(ChartFeedState.STOPPED)
+
+    # Repeats say nothing new, and the screen should not flicker on them.
+    assert observed == [
+        ChartFeedState.RECONNECTING,
+        ChartFeedState.LIVE,
+        ChartFeedState.STOPPED,
+    ]
+
+
+def test_a_closed_workflow_ignores_a_feed_that_comes_back() -> None:
+    session = configured_spot_session()
+    requests: list[ChartRange] = []
+    workflow = ChartWorkflow(
+        load_chart=lambda configured, requested: load_snapshot(
+            configured, requested, requests
+        ),
+        thread_pool=ImmediateThreadPool(),  # type: ignore[arg-type]
+        clock=lambda: datetime(2026, 1, 1, 10, 3, tzinfo=UTC),
+    )
+    workflow.start(session)
+    workflow.feed_state(ChartFeedState.RECONNECTING)
+    workflow.close()
+
+    workflow.feed_state(ChartFeedState.LIVE)
+
+    assert len(requests) == 1
+
+
+def test_a_state_from_a_replaced_feed_is_not_shown() -> None:
+    """The relay's generation is what tells a stale feed from the live one."""
+    relay = ChartFactRelay()
+    first = relay.new_generation()
+    observed: list[tuple[object, int]] = []
+    relay.feed_state_ready.connect(
+        lambda state, generation: observed.append((state, generation))
+    )
+    second = relay.new_generation()
+
+    first.feed_state(ChartFeedState.STOPPED)
+    second.feed_state(ChartFeedState.LIVE)
+
+    assert [relay.is_current(generation) for _state, generation in observed] == [
+        False,
+        True,
+    ]
 
 
 def test_start_loads_application_owned_default_visible_range() -> None:
@@ -789,6 +1066,7 @@ def latest_workflow(
     run_load: bool = True,
     fills: tuple[TradeFill, ...] = (),
     fill_ranges: list[ChartRange] | None = None,
+    load_calls: list[ChartRange] | None = None,
 ) -> ChartWorkflow:
     selected_pool = pool or ImmediateThreadPool()
 
@@ -826,7 +1104,7 @@ def latest_workflow(
         load_chart=lambda configured, requested: load_snapshot(
             configured,
             requested,
-            [],
+            [] if load_calls is None else load_calls,
         ),
         refresh_chart=refresh_chart,
         load_fills=load_fills,
@@ -842,6 +1120,8 @@ def latest_workflow(
     workflow.load_range(chart_range(20, 40))
     if run_load and isinstance(selected_pool, DeferredThreadPool):
         selected_pool.tasks[0].run()
+    if load_calls is not None:
+        load_calls.clear()
     return workflow
 
 
@@ -917,8 +1197,10 @@ async def load_snapshot(
     return ChartSnapshot(
         session=session,
         chart_range=chart_range,
-        observed_at_utc=datetime(2026, 1, 1, 1, 0, tzinfo=UTC),
-        candles=(candle("5m", chart_range.start.minute),),
+        observed_at_utc=max(datetime(2026, 1, 1, 1, 0, tzinfo=UTC), chart_range.end),
+        # Built from the range it was asked for, so a loader answering a
+        # window anywhere in time answers with a candle inside it.
+        candles=(candle_opening_at(chart_range.start),),
         fills=(),
         state=ChartReadState.READY,
     )
@@ -984,6 +1266,18 @@ def candle(timeframe: str, minute: int, *, close: str = "103") -> Candle:
         symbol="BTCUSDT",
         timeframe=timeframe,
         open_time=datetime(2026, 1, 1, 0, minute, tzinfo=UTC),
+        open=Decimal("100"),
+        high=Decimal("106"),
+        low=Decimal("99"),
+        close=Decimal(close),
+    )
+
+
+def candle_opening_at(open_time: datetime, *, close: str = "103") -> Candle:
+    return Candle(
+        symbol="BTCUSDT",
+        timeframe="5m",
+        open_time=open_time,
         open=Decimal("100"),
         high=Decimal("106"),
         low=Decimal("99"),

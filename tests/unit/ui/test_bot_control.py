@@ -130,32 +130,6 @@ def running_snapshot(freshness: DataFreshness) -> BotControlSnapshot:
     )
 
 
-def test_running_on_stale_data_says_the_connection_is_being_retried(
-    qtbot: QtBot,
-) -> None:
-    """A Bot waiting on a dropped connection looks identical to a live one.
-
-    The Runtime reconnects on its own and says so through data freshness;
-    without this the screen holds the last price it saw and reads as a Bot
-    that is trading, which is the one thing it is not doing.
-    """
-    widget = BotControlWidget()
-    qtbot.addWidget(widget)
-    widget.show()
-    widget.show_snapshot(running_snapshot(DataFreshness.FRESH))
-
-    assert widget.connection_notice.isHidden()
-
-    widget.show_snapshot(running_snapshot(DataFreshness.STALE))
-
-    assert widget.connection_notice.isVisible()
-    assert "Reconnecting" in widget.connection_notice.text()
-
-    widget.show_snapshot(running_snapshot(DataFreshness.FRESH))
-
-    assert widget.connection_notice.isHidden()
-
-
 def test_configured_and_blocked_show_readable_data_freshness(qtbot: QtBot) -> None:
     widget = BotControlWidget()
     qtbot.addWidget(widget)

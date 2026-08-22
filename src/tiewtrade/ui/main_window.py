@@ -3,13 +3,14 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 
-from PySide6.QtCore import Qt, QThreadPool, Slot
+from PySide6.QtCore import Qt, QThreadPool, QTimer, Slot
 from PySide6.QtGui import QCloseEvent
 from PySide6.QtWidgets import QMainWindow, QMessageBox
 
 from tiewtrade.application.bot_control import BotControlAction, BotControlSnapshot
 from tiewtrade.application.chart_data import (
     ChartCandle,
+    ChartFeedState,
     ChartRange,
     ChartReadState,
     ChartSnapshot,
@@ -21,7 +22,11 @@ from tiewtrade.application.paper_session_setup import (
     PaperSessionValidationError,
     validate_paper_session,
 )
-from tiewtrade.application.trading_workspace import BasketEntryGate, BotRuntimeState
+from tiewtrade.application.trading_workspace import (
+    BasketEntryGate,
+    BotRuntimeState,
+    DataFreshness,
+)
 from tiewtrade.ui.background_task import BackgroundTask
 from tiewtrade.ui.bot_lifecycle_workflow import (
     BotLifecycleWorkflow,
@@ -29,6 +34,7 @@ from tiewtrade.ui.bot_lifecycle_workflow import (
     RuntimeSnapshotRelay,
 )
 from tiewtrade.ui.chart_workflow import (
+    PRICE_SILENCE_CHECK_MILLISECONDS,
     ChartFactRelay,
     ChartWorkflow,
     LoadChart,
@@ -75,6 +81,13 @@ TakeProfitConfirmation = Callable[[str, Callable[[], None]], None]
 # Told to the trader, not asked of them: the Bot has already stopped by the
 # time this is called. A plain callable, so a test can read what was said.
 BlockedNotice = Callable[[str], None]
+
+# What the one system notice says, worst first. The reader acts on a Bot that
+# has stopped and only waits on a connection coming back, so the two must not
+# read alike and must not take turns on the same line.
+CHART_FEED_STOPPED_NOTICE = "Chart feed stopped — prices are not current"
+BOT_RECONNECTING_NOTICE = "Paper Bot is reconnecting — waiting for market data"
+CHART_RECONNECTING_NOTICE = "Reconnecting — prices are not current"
 
 
 @dataclass(frozen=True, slots=True)
@@ -168,6 +181,9 @@ class MainWindow(QMainWindow):
         self._start_chart_feed = chart.start_feed
         self._select_chart_view = chart.select_view
         self._stop_chart_feed = chart.stop_feed
+        self._chart_feed_state: ChartFeedState | None = None
+        self._bot_stopped_reason = ""
+        self._bot_reconnecting = False
         self._close_sequence_started = False
         self._close_sequence_completed = False
         self._shutdown_task: BackgroundTask | None = None
@@ -254,11 +270,20 @@ class MainWindow(QMainWindow):
         self._chart_workflow.following_latest_changed.connect(
             self.workspace.chart.set_following_latest
         )
+        self._chart_workflow.feed_state_changed.connect(self._show_chart_feed_state)
+        # Prices stopping is not an event anything can send; it is the
+        # absence of one, so somebody has to keep asking.
+        self._price_silence_timer = QTimer(self)
+        self._price_silence_timer.setInterval(PRICE_SILENCE_CHECK_MILLISECONDS)
+        self._price_silence_timer.timeout.connect(
+            self._chart_workflow.check_price_silence
+        )
+        self._price_silence_timer.start()
         self.workspace.chart.range_requested.connect(self._chart_workflow.load_range)
         self.workspace.chart.latest_requested.connect(
             self._chart_workflow.follow_latest
         )
-        self.workspace.chart.retry_requested.connect(self._chart_workflow.retry)
+        self.workspace.chart.retry_requested.connect(self._chart_retry_requested)
         self.workspace.chart.view_requested.connect(self._chart_view_requested)
         if chart.facts is not None:
             chart.facts.completed_candle_ready.connect(
@@ -267,6 +292,10 @@ class MainWindow(QMainWindow):
             )
             chart.facts.in_progress_candle_ready.connect(
                 self._chart_in_progress_candle,
+                Qt.ConnectionType.QueuedConnection,
+            )
+            chart.facts.feed_state_ready.connect(
+                self._chart_feed_state_received,
                 Qt.ConnectionType.QueuedConnection,
             )
         self._runtime_snapshots = bot.runtime_snapshots
@@ -661,6 +690,7 @@ class MainWindow(QMainWindow):
             return
         previous_state = self._last_bot_state
         self._last_bot_state = value.state
+        self._read_bot_notice(value, previous_state)
         self.workspace.show_bot_control_snapshot(value)
         self._chart_workflow.runtime_snapshot(value)
         if value.state is BotRuntimeState.RUNNING:
@@ -695,6 +725,34 @@ class MainWindow(QMainWindow):
     def _stop_requested(self) -> None:
         self._return_to_setup_after_stop = True
         self._lifecycle_workflow.stop_bot()
+
+    def _read_bot_notice(
+        self,
+        snapshot: BotControlSnapshot,
+        previous_state: BotRuntimeState | None,
+    ) -> None:
+        """What the Bot has to say on the one line the system speaks on.
+
+        A Bot waiting on data it cannot reach reads as a Bot that is trading,
+        and a Bot that stopped while the reader was elsewhere leaves nothing
+        behind once its dialog is closed.
+        """
+        header = snapshot.workspace.header
+        if snapshot.state is BotRuntimeState.RUNNING:
+            self._bot_stopped_reason = ""
+            self._bot_reconnecting = (
+                header is not None and header.data_freshness is DataFreshness.STALE
+            )
+        elif (
+            snapshot.state is BotRuntimeState.BLOCKED
+            and previous_state is BotRuntimeState.RUNNING
+        ):
+            self._bot_stopped_reason = snapshot.blocked_reason or ""
+            self._bot_reconnecting = False
+        else:
+            self._bot_stopped_reason = ""
+            self._bot_reconnecting = False
+        self._show_system_notice()
 
     def _announce_blocked_runtime(
         self,
@@ -744,6 +802,55 @@ class MainWindow(QMainWindow):
             return
         self._mark_chart_candle(candle)
         self._chart_workflow.completed_candle(candle)
+
+    @Slot(object, int)
+    def _chart_feed_state_received(self, state: object, generation: int) -> None:
+        relay = self._chart_fact_relay
+        if relay is None or not relay.is_current(generation):
+            return
+        self._chart_workflow.feed_state(state)
+
+    @Slot(object)
+    def _show_chart_feed_state(self, state: object) -> None:
+        if not isinstance(state, ChartFeedState):
+            return
+        self._chart_feed_state = state
+        self.workspace.chart.show_feed_state(state)
+        self._show_system_notice()
+
+    def _show_system_notice(self) -> None:
+        self.workspace.chart.show_system_notice(self._system_notice_text())
+
+    def _system_notice_text(self) -> str:
+        if self._bot_stopped_reason:
+            return self._bot_stopped_reason
+        if self._chart_feed_state is ChartFeedState.STOPPED:
+            return CHART_FEED_STOPPED_NOTICE
+        if self._bot_reconnecting:
+            return BOT_RECONNECTING_NOTICE
+        if self._chart_feed_state is ChartFeedState.RECONNECTING:
+            return CHART_RECONNECTING_NOTICE
+        return ""
+
+    @Slot()
+    def _chart_retry_requested(self) -> None:
+        """Read the history again, and put a feed back under it if it is gone.
+
+        A chart whose feed has stopped is two faults at once, and reloading
+        the history alone answers only the half the reader can see: the
+        candles come back and then stop arriving again immediately.
+        """
+        self._chart_workflow.retry()
+        if (
+            self._chart_feed_state is not ChartFeedState.STOPPED
+            or self._start_chart_feed is None
+        ):
+            return
+        try:
+            session = self._lifecycle_workflow.snapshot.session
+        except RuntimeError:
+            return
+        self._start_chart_feed(session)
 
     @Slot(object, int)
     def _chart_in_progress_candle(self, candle: object, generation: int) -> None:

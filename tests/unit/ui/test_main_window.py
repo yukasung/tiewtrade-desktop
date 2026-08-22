@@ -41,7 +41,12 @@ from tiewtrade.application.bot_control import (
     BotLifecycleResult,
     workspace_with_runtime_state,
 )
-from tiewtrade.application.chart_data import ChartRange, ChartReadState, ChartSnapshot
+from tiewtrade.application.chart_data import (
+    ChartFeedState,
+    ChartRange,
+    ChartReadState,
+    ChartSnapshot,
+)
 from tiewtrade.application.chart_view_selection import ChartViewSelection
 from tiewtrade.application.open_basket import (
     OpenBasketEntry,
@@ -71,6 +76,7 @@ from tiewtrade.application.trading_workspace import (
     DataFreshness,
     paper_runtime_blocked_workspace_snapshot,
     paper_runtime_workspace_snapshot,
+    stale_workspace_snapshot,
 )
 from tiewtrade.integrations.sqlite.active_paper_sessions import (
     SQLiteActivePaperSessions,
@@ -80,9 +86,16 @@ from tiewtrade.trading.futures_policy import FuturesTradingPolicy
 from tiewtrade.trading.session_config import MarketType, TradeMode
 from tiewtrade.ui.blank_text import BLANK
 from tiewtrade.ui.bot_lifecycle_workflow import RuntimeSnapshotRelay
-from tiewtrade.ui.chart_workflow import ChartFactRelay
+from tiewtrade.ui.chart_workflow import PRICE_SILENCE_CHECK_MILLISECONDS, ChartFactRelay
 from tiewtrade.ui.display_time import display_today
-from tiewtrade.ui.main_window import BotActions, ChartSources, MainWindow
+from tiewtrade.ui.main_window import (
+    BOT_RECONNECTING_NOTICE,
+    CHART_FEED_STOPPED_NOTICE,
+    CHART_RECONNECTING_NOTICE,
+    BotActions,
+    ChartSources,
+    MainWindow,
+)
 from tiewtrade.ui.pair_text import pair_text
 from tiewtrade.ui.session_overview import SessionOverviewWidget
 from tiewtrade.ui.trade_history_presenter import (
@@ -1786,6 +1799,268 @@ def test_stop_with_open_position_reopens_editable_setup_without_closing(
     click(window.setup.create_button)
     qtbot.waitUntil(lambda: events == ["close", "retire"])
     qtbot.waitUntil(lambda: len(created) == 1)
+
+
+def empty_chart_snapshot(
+    session: ConfiguredPaperSession,
+    chart_range: ChartRange,
+) -> ChartSnapshot:
+    return ChartSnapshot(
+        session=session,
+        chart_range=chart_range,
+        observed_at_utc=chart_range.end,
+        candles=(),
+        fills=(),
+        state=ChartReadState.EMPTY,
+    )
+
+
+def test_the_chart_says_the_feed_dropped_and_reloads_when_it_returns(
+    qtbot: QtBot,
+) -> None:
+    """The connection the chart lives on before any Bot is started.
+
+    Nothing on this screen has ever reported it: the chart feed drops, the
+    candles stop arriving, and the chart goes on showing the last prices it
+    was handed as though the market had gone quiet.
+    """
+    session = configured_spot_session()
+    relay = ChartFactRelay()
+    started_feeds: list[ConfiguredPaperSession] = []
+    loads: list[ChartRange] = []
+
+    async def load_chart(
+        loaded: ConfiguredPaperSession,
+        chart_range: ChartRange,
+    ) -> ChartSnapshot:
+        loads.append(chart_range)
+        return empty_chart_snapshot(loaded, chart_range)
+
+    window = MainWindow(
+        create_session=unused_create,
+        load_active=lambda: session,
+        list_basket_history=empty_basket_history,
+        list_trade_fills=empty_trade_fills,
+        chart=ChartSources(
+            facts=relay,
+            load=load_chart,
+            start_feed=started_feeds.append,
+        ),
+    )
+    qtbot.addWidget(window)
+    window.show()
+    chart = window.workspace.chart
+    qtbot.waitUntil(lambda: len(loads) == 1)
+    assert started_feeds == [session]
+
+    publisher = relay.new_generation()
+    publisher.feed_state(ChartFeedState.RECONNECTING)
+
+    qtbot.waitUntil(lambda: chart.system_notice.text() == CHART_RECONNECTING_NOTICE)
+
+    publisher.feed_state(ChartFeedState.LIVE)
+
+    qtbot.waitUntil(lambda: chart.system_notice.text() == "")
+    # The candles the outage swallowed are only in the history now.
+    qtbot.waitUntil(lambda: len(loads) == 2)
+
+
+def test_the_system_notice_says_the_worst_of_what_is_wrong(qtbot: QtBot) -> None:
+    """One line, and the reader should meet the fault that matters most.
+
+    A Bot that stopped outranks a chart feed that stopped, which outranks
+    either of them merely reconnecting — the reader acts on the first and
+    only waits on the last.
+    """
+    session = configured_spot_session()
+    relay = ChartFactRelay()
+    runtime_snapshots = RuntimeSnapshotRelay()
+
+    def start(snapshot: BotControlSnapshot) -> BotLifecycleResult:
+        return BotLifecycleResult(
+            workspace=workspace_with_runtime_state(
+                snapshot.workspace,
+                BotRuntimeState.RUNNING,
+                data_freshness=DataFreshness.FRESH,
+            )
+        )
+
+    async def load_chart(
+        loaded: ConfiguredPaperSession,
+        chart_range: ChartRange,
+    ) -> ChartSnapshot:
+        return empty_chart_snapshot(loaded, chart_range)
+
+    window = MainWindow(
+        create_session=unused_create,
+        load_active=lambda: session,
+        list_basket_history=empty_basket_history,
+        list_trade_fills=empty_trade_fills,
+        bot=BotActions(start=start, runtime_snapshots=runtime_snapshots),
+        chart=ChartSources(facts=relay, load=load_chart, start_feed=lambda _s: None),
+        blocked_notice=lambda _reason: None,
+    )
+    qtbot.addWidget(window)
+    window.show()
+    notice = window.workspace.chart.system_notice
+    control = window.workspace.bot_control_widget
+    qtbot.waitUntil(control.start_button.isEnabled)
+    click(control.start_button)
+    qtbot.waitUntil(lambda: _runtime_state(window) is BotRuntimeState.RUNNING)
+    assert notice.text() == ""
+
+    chart_feed = relay.new_generation()
+    chart_feed.feed_state(ChartFeedState.RECONNECTING)
+    qtbot.waitUntil(lambda: notice.text() == CHART_RECONNECTING_NOTICE)
+
+    runtime_facts = runtime_snapshots.new_generation()
+    runtime_facts(
+        BotLifecycleResult(
+            workspace=stale_workspace_snapshot(
+                window._lifecycle_workflow.snapshot.workspace
+            )
+        )
+    )
+    qtbot.waitUntil(lambda: notice.text() == BOT_RECONNECTING_NOTICE)
+
+    chart_feed.feed_state(ChartFeedState.STOPPED)
+    qtbot.waitUntil(lambda: notice.text() == CHART_FEED_STOPPED_NOTICE)
+
+    runtime_facts(
+        BotLifecycleResult(
+            workspace=paper_runtime_blocked_workspace_snapshot(
+                window._lifecycle_workflow.snapshot.workspace
+            ),
+            blocked_reason="Paper Bot stopped: the Session could not continue",
+        )
+    )
+    qtbot.waitUntil(
+        lambda: notice.text() == "Paper Bot stopped: the Session could not continue"
+    )
+
+
+def test_the_system_notice_clears_when_the_prices_are_current_again(
+    qtbot: QtBot,
+) -> None:
+    session = configured_spot_session()
+    relay = ChartFactRelay()
+
+    async def load_chart(
+        loaded: ConfiguredPaperSession,
+        chart_range: ChartRange,
+    ) -> ChartSnapshot:
+        return empty_chart_snapshot(loaded, chart_range)
+
+    window = MainWindow(
+        create_session=unused_create,
+        load_active=lambda: session,
+        list_basket_history=empty_basket_history,
+        list_trade_fills=empty_trade_fills,
+        chart=ChartSources(facts=relay, load=load_chart, start_feed=lambda _s: None),
+    )
+    qtbot.addWidget(window)
+    window.show()
+    notice = window.workspace.chart.system_notice
+    publisher = relay.new_generation()
+    publisher.feed_state(ChartFeedState.RECONNECTING)
+    qtbot.waitUntil(lambda: notice.text() == CHART_RECONNECTING_NOTICE)
+
+    publisher.feed_state(ChartFeedState.LIVE)
+
+    qtbot.waitUntil(lambda: notice.text() == "")
+
+
+def test_the_window_keeps_asking_whether_prices_are_still_arriving(
+    qtbot: QtBot,
+) -> None:
+    """The silence watchdog needs something to tick it, or it never fires."""
+    session = configured_spot_session()
+
+    async def load_chart(
+        loaded: ConfiguredPaperSession,
+        chart_range: ChartRange,
+    ) -> ChartSnapshot:
+        return empty_chart_snapshot(loaded, chart_range)
+
+    window = MainWindow(
+        create_session=unused_create,
+        load_active=lambda: session,
+        list_basket_history=empty_basket_history,
+        list_trade_fills=empty_trade_fills,
+        chart=ChartSources(load=load_chart),
+    )
+    qtbot.addWidget(window)
+    window.show()
+
+    assert window._price_silence_timer.isActive()
+    assert window._price_silence_timer.interval() == PRICE_SILENCE_CHECK_MILLISECONDS
+
+
+def test_retrying_a_stopped_chart_feed_starts_a_new_one(qtbot: QtBot) -> None:
+    """Reloading history off a feed that is gone leaves the chart just as dead."""
+    session = configured_spot_session()
+    relay = ChartFactRelay()
+    started_feeds: list[ConfiguredPaperSession] = []
+    loads: list[ChartRange] = []
+
+    async def load_chart(
+        loaded: ConfiguredPaperSession,
+        chart_range: ChartRange,
+    ) -> ChartSnapshot:
+        loads.append(chart_range)
+        return empty_chart_snapshot(loaded, chart_range)
+
+    window = MainWindow(
+        create_session=unused_create,
+        load_active=lambda: session,
+        list_basket_history=empty_basket_history,
+        list_trade_fills=empty_trade_fills,
+        chart=ChartSources(
+            facts=relay,
+            load=load_chart,
+            start_feed=started_feeds.append,
+        ),
+    )
+    qtbot.addWidget(window)
+    window.show()
+    chart = window.workspace.chart
+    qtbot.waitUntil(lambda: len(loads) == 1)
+
+    relay.new_generation().feed_state(ChartFeedState.STOPPED)
+
+    qtbot.waitUntil(chart.retry_button.isVisible)
+    click(chart.retry_button)
+
+    qtbot.waitUntil(lambda: started_feeds == [session, session])
+    qtbot.waitUntil(lambda: len(loads) == 2)
+
+
+def test_a_feed_state_from_a_replaced_chart_feed_is_ignored(qtbot: QtBot) -> None:
+    session = configured_spot_session()
+    relay = ChartFactRelay()
+
+    async def load_chart(
+        loaded: ConfiguredPaperSession,
+        chart_range: ChartRange,
+    ) -> ChartSnapshot:
+        return empty_chart_snapshot(loaded, chart_range)
+
+    window = MainWindow(
+        create_session=unused_create,
+        load_active=lambda: session,
+        list_basket_history=empty_basket_history,
+        list_trade_fills=empty_trade_fills,
+        chart=ChartSources(facts=relay, load=load_chart, start_feed=lambda _s: None),
+    )
+    qtbot.addWidget(window)
+    window.show()
+    replaced = relay.new_generation()
+    relay.new_generation()
+
+    replaced.feed_state(ChartFeedState.RECONNECTING)
+
+    qtbot.wait(10)
+    assert window.workspace.chart.system_notice.text() == ""
 
 
 def test_an_open_position_shows_before_any_bot_is_started(qtbot: QtBot) -> None:

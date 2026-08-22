@@ -17,6 +17,19 @@ MAXIMUM_VISIBLE_CANDLE_COUNT = 500
 ChartCandle = Candle
 
 
+class ChartFeedState(StrEnum):
+    """Whether the prices reaching the chart are current, in a chart's words.
+
+    The runtime states behind these belong to trading — stale, backfilling,
+    rate limited — and a chart has no use for the difference. What it has to
+    say is whether what it is drawing is still arriving.
+    """
+
+    LIVE = "live"
+    RECONNECTING = "reconnecting"
+    STOPPED = "stopped"
+
+
 def _require_utc(value: datetime, field: str) -> None:
     if value.tzinfo is None or value.utcoffset() != timedelta(0):
         raise ValueError(f"{field} must use UTC")

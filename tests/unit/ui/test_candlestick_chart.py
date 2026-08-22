@@ -14,6 +14,7 @@ import tiewtrade.ui.chart_painter_model as chart_module
 from tests.support.paper_session_setup import configured_spot_session
 from tests.support.qt_interactions import click, hover
 from tiewtrade.application.chart_data import (
+    ChartFeedState,
     ChartRange,
     ChartReadState,
     ChartSnapshot,
@@ -50,6 +51,74 @@ def test_chart_renders_durable_buy_and_sell_markers_without_action_buttons(
     assert chart.marker_labels == ("B", "S")
     assert chart.findChildren(QPushButton, "manualOrderButton") == []
     assert not chart.grab().isNull()
+
+
+def test_the_system_notice_reads_between_the_view_and_the_chart_actions(
+    qtbot: QtBot,
+) -> None:
+    """One place on the screen for what the system has to say.
+
+    A chart on a dropped connection draws the same as a quiet market, and a
+    Bot that has stopped says nothing where the reader is looking. Both are
+    told here, centred where the eye already goes for the view it is reading.
+    """
+    chart = CandlestickChartWidget()
+    qtbot.addWidget(chart)
+    chart.show_snapshot(ready_snapshot())
+    chart.show()
+
+    header = chart._header
+    assert header.indexOf(chart.system_notice) == header.indexOf(chart.timeframe) + 2
+    assert header.stretch(header.indexOf(chart.system_notice)) == 1
+    assert chart.system_notice.alignment() == Qt.AlignmentFlag.AlignCenter
+    assert chart.system_notice.text() == ""
+
+    chart.show_system_notice("Reconnecting — prices are not current")
+
+    assert chart.system_notice.text() == "Reconnecting — prices are not current"
+
+    chart.show_system_notice("")
+
+    assert chart.system_notice.text() == ""
+
+
+def test_a_stopped_chart_feed_offers_the_way_back(qtbot: QtBot) -> None:
+    chart = CandlestickChartWidget()
+    qtbot.addWidget(chart)
+    chart.show_snapshot(ready_snapshot())
+    chart.show()
+
+    assert chart.retry_button.isHidden()
+
+    chart.show_feed_state(ChartFeedState.STOPPED)
+
+    # The Retry the reader already knows, rather than a second button for
+    # the same ask.
+    assert chart.retry_button.isVisible()
+
+    chart.show_feed_state(ChartFeedState.LIVE)
+
+    assert chart.retry_button.isHidden()
+
+
+def test_a_repainted_snapshot_does_not_take_the_retry_offer_away(
+    qtbot: QtBot,
+) -> None:
+    """A stopped feed still delivers snapshots: a reload, a pan, a zoom.
+
+    Those all repaint through show_snapshot, which hides the Retry button
+    for anything but an unreadable chart — and the feed is a separate fault
+    from the chart being unreadable.
+    """
+    chart = CandlestickChartWidget()
+    qtbot.addWidget(chart)
+    chart.show_snapshot(ready_snapshot())
+    chart.show()
+    chart.show_feed_state(ChartFeedState.STOPPED)
+
+    chart.show_snapshot(ready_snapshot())
+
+    assert chart.retry_button.isVisible()
 
 
 def test_chart_header_emits_selected_read_only_view(qtbot: QtBot) -> None:

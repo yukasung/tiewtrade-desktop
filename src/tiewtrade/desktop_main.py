@@ -552,6 +552,7 @@ def _chart_sources(
             publisher.completed_candle,
             publisher.in_progress_candle,
             selection,
+            publish_state=publisher.feed_state,
         )
 
     def start_feed(session: ConfiguredPaperSession) -> None:

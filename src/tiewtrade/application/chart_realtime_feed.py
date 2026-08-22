@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from collections.abc import Callable
 from concurrent.futures import CancelledError
 from datetime import datetime
@@ -8,6 +9,7 @@ from threading import Lock, Thread, current_thread
 from typing import Protocol
 from uuid import UUID
 
+from tiewtrade.application.chart_data import ChartFeedState
 from tiewtrade.application.chart_view_selection import ChartViewSelection
 from tiewtrade.application.latest_market_price import LatestMarketPrice
 from tiewtrade.application.paper_session_setup import ConfiguredPaperSession
@@ -16,6 +18,22 @@ from tiewtrade.market_data.candle import Candle
 from tiewtrade.market_data.candle_pipeline import MarketDataCandleSink
 from tiewtrade.market_data.candle_source import MarketDataCandleSource
 from tiewtrade.market_data.runtime import MarketDataRuntime
+from tiewtrade.market_data.runtime_state import (
+    MarketDataRuntimeSnapshot,
+    MarketDataRuntimeState,
+)
+
+_LOGGER = logging.getLogger("tiewtrade.application.chart_realtime_feed")
+
+_FEED_STATES = {
+    MarketDataRuntimeState.LIVE: ChartFeedState.LIVE,
+    MarketDataRuntimeState.STALE: ChartFeedState.RECONNECTING,
+    MarketDataRuntimeState.RECONNECTING: ChartFeedState.RECONNECTING,
+    MarketDataRuntimeState.BACKFILLING: ChartFeedState.RECONNECTING,
+    MarketDataRuntimeState.RATE_LIMITED: ChartFeedState.RECONNECTING,
+    MarketDataRuntimeState.FAILED_CLOSED: ChartFeedState.STOPPED,
+    MarketDataRuntimeState.STOPPED: ChartFeedState.STOPPED,
+}
 
 
 class _Runtime(Protocol):
@@ -88,6 +106,8 @@ class ChartOnlyFeedController:
         publish_completed: Callable[[Candle], None],
         publish_in_progress: Callable[[Candle], None],
         selection: ChartViewSelection | None = None,
+        *,
+        publish_state: Callable[[ChartFeedState], None],
     ) -> None:
         self.stop()
         if self._latest_market_price is not None:
@@ -112,6 +132,7 @@ class ChartOnlyFeedController:
                 selection,
                 publish_completed_with_price,
                 publish_in_progress_with_price,
+                publish_state,
             ),
             daemon=True,
             name=f"chart-feed-{session.config.session_id}",
@@ -163,15 +184,33 @@ class ChartOnlyFeedController:
         selection: ChartViewSelection | None,
         publish_completed: Callable[[Candle], None],
         publish_in_progress: Callable[[Candle], None],
+        publish_state: Callable[[ChartFeedState], None],
     ) -> None:
-        asyncio.run(
-            self._run_async(
-                session,
-                selection,
-                publish_completed,
-                publish_in_progress,
+        try:
+            asyncio.run(
+                self._run_async(
+                    session,
+                    selection,
+                    publish_completed,
+                    publish_in_progress,
+                    publish_state,
+                )
             )
-        )
+        except Exception as error:
+            # The thread ends here either way; what it must not do is end
+            # without saying so. The type alone names the fault — a message
+            # from a transport can carry a URL, and this is written to a file.
+            _LOGGER.error(
+                "chart.feed.crashed",
+                extra={
+                    "event_name": "chart.feed.crashed",
+                    "failure": type(error).__name__,
+                },
+            )
+        finally:
+            # Stopped on purpose or given up on, a chart left without a feed
+            # can say so. Unsaid, it goes on showing the last prices it has.
+            _publish_safely(publish_state, ChartFeedState.STOPPED)
 
     async def _run_async(
         self,
@@ -179,24 +218,33 @@ class ChartOnlyFeedController:
         selection: ChartViewSelection | None,
         publish_completed: Callable[[Candle], None],
         publish_in_progress: Callable[[Candle], None],
+        publish_state: Callable[[ChartFeedState], None],
     ) -> None:
+        config = (
+            session.market_data if selection is None else selection.market_data_config()
+        )
         source = self._source_factory(
             BinancePublicEndpoints.for_market_type(session.config.market_type)
         )
         runtime = self._runtime_factory(
-            config=(
-                session.market_data
-                if selection is None
-                else selection.market_data_config()
-            ),
+            config=config,
             warm_up_count=1,
             source=source,
             sink=_ChartOnlySink(publish_completed),
             on_open_candle=publish_in_progress,
+            on_transition=_state_reporter(publish_state),
         )
         with self._lock:
             self._runtime = runtime
             self._loop = asyncio.get_running_loop()
+        _LOGGER.info(
+            "chart.feed.started",
+            extra={
+                "event_name": "chart.feed.started",
+                "symbol": config.symbol,
+                "timeframe": config.timeframe,
+            },
+        )
         try:
             await runtime.run()
         finally:
@@ -204,3 +252,41 @@ class ChartOnlyFeedController:
                 if self._runtime is runtime:
                     self._runtime = None
                     self._loop = None
+            _LOGGER.info(
+                "chart.feed.stopped",
+                extra={
+                    "event_name": "chart.feed.stopped",
+                    "symbol": config.symbol,
+                    "timeframe": config.timeframe,
+                },
+            )
+
+
+def _state_reporter(
+    publish_state: Callable[[ChartFeedState], None],
+) -> Callable[[MarketDataRuntimeSnapshot], None]:
+    """Report only the states a chart has something to say about.
+
+    STARTING and WARMING_UP are the feed connecting for the first time, which
+    the chart is already showing as a load in progress; calling that a lost
+    connection would announce a fault on every start.
+    """
+
+    def report(snapshot: MarketDataRuntimeSnapshot) -> None:
+        state = _FEED_STATES.get(snapshot.state)
+        if state is None:
+            return
+        _publish_safely(publish_state, state)
+
+    return report
+
+
+def _publish_safely(
+    publish_state: Callable[[ChartFeedState], None],
+    state: ChartFeedState,
+) -> None:
+    """A chart that cannot be told is never a reason to stop the feed."""
+    try:
+        publish_state(state)
+    except Exception:
+        return

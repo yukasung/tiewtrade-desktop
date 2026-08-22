@@ -354,12 +354,10 @@ QLabel#unavailableMessage {
     color: #FF9CAA;
     padding: 10px 12px;
 }
-QLabel#connectionNotice {
-    background: #2A2418;
-    border: 1px solid #6B5A2A;
-    border-radius: 6px;
+/* The one line the system speaks on, in the middle of the chart header. */
+QLabel#systemNotice {
     color: #F2C86B;
-    padding: 10px 12px;
+    padding: 4px 10px;
 }
 QMessageBox {
     background: #141A22;
