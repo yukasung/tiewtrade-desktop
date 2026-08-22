@@ -19,7 +19,11 @@ from tiewtrade.market_data.candle_pipeline import (
 from tiewtrade.market_data.candle_source import MarketDataKlineUpdate
 from tiewtrade.market_data.completed_candle_stream import CandleAcceptance
 from tiewtrade.market_data.config import MarketDataConfig
-from tiewtrade.market_data.runtime import MarketDataCandleSink, MarketDataRuntime
+from tiewtrade.market_data.runtime import (
+    MarketDataCandleSink,
+    MarketDataRuntime,
+    _BackfillOutcome,
+)
 from tiewtrade.market_data.runtime_logging import MarketDataEventName
 from tiewtrade.market_data.runtime_state import (
     MarketDataRuntimeReason,
@@ -582,6 +586,73 @@ class DisconnectThenRecoverSource(FakeSource):
             return
         yield MarketDataKlineUpdate(candle=candle_at(20), is_closed=True)
         await self._closed.wait()
+
+
+class DisconnectThenShortBackfillSource(DisconnectThenRecoverSource):
+    """Reconnects, then answers the missing range short before answering it.
+
+    This is what a connection that has just come back looks like from the
+    outside: the socket is up, but the history behind it is a moment late.
+    """
+
+    def __init__(self, first_answer: tuple[Candle, ...]) -> None:
+        super().__init__()
+        self._first_answer = first_answer
+
+    async def _stream_klines(self) -> AsyncIterator[MarketDataKlineUpdate]:
+        self.stream_count += 1
+        if self.stream_count == 1:
+            return
+        yield MarketDataKlineUpdate(candle=candle_at(20), is_closed=True)
+        await self._closed.wait()
+
+    async def load_range(
+        self,
+        config: MarketDataConfig,
+        *,
+        start: datetime,
+        end: datetime,
+    ) -> tuple[Candle, ...]:
+        self.range_requests.append((config, start, end))
+        if len(self.range_requests) == 1:
+            return self._first_answer
+        return self._ranges.get((start, end), ())
+
+
+class GapThenShortBackfillSource(FakeSource):
+    """A live Candle past the gap, answered short the first time it is asked."""
+
+    def __init__(self, first_answer: tuple[Candle, ...]) -> None:
+        super().__init__(
+            recent=warm_up_candles(),
+            live=[candle_at(20)],
+            ranges={
+                (candle_at(15).open_time, candle_at(25).open_time): (
+                    candle_at(15),
+                    candle_at(20),
+                )
+            },
+        )
+        self._first_answer = first_answer
+        self.stream_count = 0
+
+    async def _stream_klines(self) -> AsyncIterator[MarketDataKlineUpdate]:
+        self.stream_count += 1
+        self.live_started = True
+        yield MarketDataKlineUpdate(candle=candle_at(20), is_closed=True)
+        await self._closed.wait()
+
+    async def load_range(
+        self,
+        config: MarketDataConfig,
+        *,
+        start: datetime,
+        end: datetime,
+    ) -> tuple[Candle, ...]:
+        self.range_requests.append((config, start, end))
+        if len(self.range_requests) == 1:
+            return self._first_answer
+        return self._ranges.get((start, end), ())
 
 
 class DisconnectThenOpenAndClosedSource(DisconnectThenRecoverSource):
@@ -2094,7 +2165,7 @@ def test_backfill_without_delivery_watermark_logs_requested_boundary_before_term
         )
     )
 
-    assert result is False
+    assert result is _BackfillOutcome.FAILED
     assert runtime.snapshot.state is MarketDataRuntimeState.FAILED_CLOSED
     records = market_data_records(caplog.records)
     assert [record.event_name for record in records] == [
@@ -2125,7 +2196,7 @@ def test_backfill_without_delivery_watermark_logs_requested_boundary_before_term
 
 
 @pytest.mark.parametrize(
-    "backfill",
+    "first_answer",
     [
         (),
         (candle_at(20),),
@@ -2133,31 +2204,29 @@ def test_backfill_without_delivery_watermark_logs_requested_boundary_before_term
     ],
     ids=["empty", "still-gapped", "missing-observed"],
 )
-def test_incomplete_gap_backfill_fails_closed(
-    backfill: tuple[Candle, ...],
+def test_incomplete_gap_backfill_is_asked_again_instead_of_failing_closed(
+    first_answer: tuple[Candle, ...],
 ) -> None:
-    source = FakeSource(
-        recent=warm_up_candles(),
-        live=[candle_at(20)],
-        ranges={
-            (candle_at(15).open_time, candle_at(25).open_time): backfill,
-        },
-    )
+    """A range that comes back short is a source mid-catch-up, not a dead run.
+
+    Failing closed here ends the Session for good — the Runtime thread is
+    gone and only a restart brings one back. The gap is still a gap, so no
+    Candle reaches the Session until the range is whole; the difference is
+    that the Runtime asks again.
+    """
+    source = GapThenShortBackfillSource(first_answer)
+    scheduler = FakeScheduler(now=datetime(2026, 1, 1, 0, 25, tzinfo=UTC))
     sink = RecordingSink()
-    runtime = runtime_for(source, sink)
+    runtime = runtime_for(source, sink, scheduler=scheduler)
 
-    asyncio.run(runtime.run())
+    asyncio.run(run_until_sink_receives_or_runtime_stops(runtime, sink, count=2))
 
-    assert runtime.snapshot.state is MarketDataRuntimeState.FAILED_CLOSED
-    assert runtime.snapshot.reason is MarketDataRuntimeReason.SOURCE_ERROR
-    assert sink.live_candles == []
-    assert source.range_requests == [
-        (
-            MarketDataConfig(symbol="BTCUSDT", timeframe="5m"),
-            candle_at(15).open_time,
-            candle_at(25).open_time,
-        )
-    ]
+    assert MarketDataRuntimeState.FAILED_CLOSED not in runtime.observed_states
+    assert sink.live_candles == [candle_at(15), candle_at(20)]
+    assert sink.backfilled_flags == [True, True]
+    assert len(source.range_requests) == 2
+    assert source.stream_count == 2
+    assert scheduler.sleeps == [1.0]
 
 
 def test_non_candle_backfill_output_fails_closed_and_closes_source() -> None:
@@ -2323,6 +2392,57 @@ def test_reconnect_backfills_buffered_first_candle_before_returning_live() -> No
     )
     assert scheduler.sleeps == [1.0]
     assert source.stream_count == 2
+
+
+@pytest.mark.parametrize(
+    "first_answer",
+    [
+        (),
+        (candle_at(15),),
+    ],
+    ids=["empty", "short-of-the-boundary"],
+)
+def test_short_backfill_after_reconnect_keeps_the_run_alive(
+    first_answer: tuple[Candle, ...],
+) -> None:
+    """The connection is back before the history behind it is.
+
+    This is the Wi-Fi that goes off and comes back: the socket reconnects,
+    and the range covering the outage is answered short once before it is
+    answered whole. The reconnect delay is what the second attempt costs.
+    """
+    source = DisconnectThenShortBackfillSource(first_answer)
+    scheduler = FakeScheduler(now=datetime(2026, 1, 1, 0, 25, tzinfo=UTC))
+    sink = RecordingSink()
+    runtime = runtime_for(source, sink, scheduler=scheduler)
+
+    asyncio.run(run_until_sink_receives_or_runtime_stops(runtime, sink, count=2))
+
+    assert MarketDataRuntimeState.FAILED_CLOSED not in runtime.observed_states
+    assert sink.live_candles == [candle_at(15), candle_at(20)]
+    assert sink.backfilled_flags == [True, True]
+    assert scheduler.sleeps == [1.0, 2.0]
+    assert source.stream_count == 3
+    assert len(source.range_requests) == 2
+    assert runtime.snapshot.last_accepted_open_time == candle_at(20).open_time
+
+
+def test_short_backfill_after_reconnect_is_logged_as_a_failed_backfill(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    logger = logging.getLogger("tests.market_data.short_backfill_retry")
+    caplog.set_level(logging.INFO, logger=logger.name)
+    source = DisconnectThenShortBackfillSource(())
+    scheduler = FakeScheduler(now=datetime(2026, 1, 1, 0, 25, tzinfo=UTC))
+    sink = RecordingSink()
+    runtime = runtime_for(source, sink, scheduler=scheduler, logger=logger)
+
+    asyncio.run(run_until_sink_receives_or_runtime_stops(runtime, sink, count=2))
+
+    events = [record.event_name for record in market_data_records(caplog.records)]
+    assert MarketDataEventName.BACKFILL_FAILED.value in events
+    assert MarketDataEventName.RUNTIME_FAILED_CLOSED.value not in events
+    assert MarketDataEventName.BACKFILL_COMPLETED.value in events
 
 
 def test_reconnect_publishes_open_kline_before_closed_backfill() -> None:

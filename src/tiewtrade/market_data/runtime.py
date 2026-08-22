@@ -5,10 +5,12 @@ import logging
 from collections.abc import AsyncIterator, Awaitable, Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
+from enum import Enum, auto
 from typing import Protocol, TypeVar
 
 from tiewtrade.market_data.candle import Candle
 from tiewtrade.market_data.candle_pipeline import (
+    CandlePipelineIncompleteBackfillError,
     CandlePipelineInputError,
     CandlePipelineSinkError,
     CompletedCandlePipeline,
@@ -54,6 +56,22 @@ _RATE_LIMIT_FALLBACK_SECONDS = 60.0
 # doesn't get misread as clock skew and discarded.
 _LIVE_CANDLE_CLOSE_TOLERANCE = timedelta(seconds=2)
 _LOGGER = logging.getLogger("tiewtrade.market_data.runtime")
+
+
+class _BackfillOutcome(Enum):
+    """What a backfill left behind: candles, another attempt, or a dead run."""
+
+    DELIVERED = auto()
+    RECOVERABLE = auto()
+    FAILED = auto()
+
+
+class _LiveOutcome(Enum):
+    """What the live loop does next with the stream it is reading."""
+
+    CONTINUE = auto()
+    RECOVER = auto()
+    STOP = auto()
 
 
 class _WarmUpSourceError(Exception):
@@ -316,9 +334,15 @@ class MarketDataRuntime:
                     if not await self._deliver_open_candle(update.candle):
                         return
                     continue
-                if not await self._accept_live_candle(update.candle):
+                outcome = await self._accept_live_candle(update.candle)
+                if outcome is _LiveOutcome.STOP:
                     return
-                continue
+                if outcome is _LiveOutcome.CONTINUE:
+                    continue
+                # A source that answered the gap short is one to ask again
+                # from a fresh stream, at the boundary that holds by then.
+                await _close_stream(stream)
+                disconnect_reason = MarketDataRuntimeReason.SOURCE_DISCONNECTED
 
             recovered_stream = await self._recover_stream(disconnect_reason)
             if recovered_stream is None:
@@ -389,7 +413,7 @@ class MarketDataRuntime:
         expected_close_boundary = expected_open_time + self._config.interval
         return expected_close_boundary + _STALE_GRACE
 
-    async def _accept_live_candle(self, candle: Candle) -> bool:
+    async def _accept_live_candle(self, candle: Candle) -> _LiveOutcome:
         received_at = self._scheduler.now()
         try:
             decision = await self._pipeline.process_live(
@@ -397,13 +421,14 @@ class MarketDataRuntime:
                 received_at=received_at,
             )
         except CandleGapError:
-            return await self._backfill_through(candle, received_at=received_at)
+            outcome = await self._backfill_through(candle, received_at=received_at)
+            return _LIVE_OUTCOMES[outcome]
         except CandlePipelineInputError:
             self._fail_closed(MarketDataRuntimeReason.SOURCE_ERROR)
-            return False
+            return _LiveOutcome.STOP
         except CandlePipelineSinkError:
             self._fail_closed(MarketDataRuntimeReason.SINK_ERROR)
-            return False
+            return _LiveOutcome.STOP
         if decision is not CandleAcceptance.ACCEPTED:
             self._runtime_log.candle_discarded(
                 open_time=candle.open_time,
@@ -416,20 +441,20 @@ class MarketDataRuntime:
                     close_time=candle.close_time,
                     received_at=received_at,
                 )
-            return True
+            return _LiveOutcome.CONTINUE
 
         self._transition(
             MarketDataRuntimeState.LIVE,
             MarketDataRuntimeReason.LIVE_CANDLE_ACCEPTED,
         )
-        return True
+        return _LiveOutcome.CONTINUE
 
     async def _backfill_through(
         self,
         observed: Candle,
         *,
         received_at: datetime,
-    ) -> bool:
+    ) -> _BackfillOutcome:
         return await self._backfill_to_boundary(
             observed.open_time + self._config.interval,
             received_at=received_at,
@@ -442,7 +467,7 @@ class MarketDataRuntime:
         *,
         received_at: datetime,
         observed: Candle,
-    ) -> bool:
+    ) -> _BackfillOutcome:
         last_accepted_open_time = self._status.snapshot.last_accepted_open_time
         if last_accepted_open_time is None:
             return self._fail_backfill(
@@ -496,6 +521,17 @@ class MarketDataRuntime:
                 received_at=received_at,
                 on_ready_for_delivery=publish_backfill_ready,
             )
+        except CandlePipelineIncompleteBackfillError:
+            # The range came back short, so there is nothing yet to hand the
+            # Session. The source has not caught up rather than broken; the
+            # caller asks again from a fresh stream and a fresh boundary.
+            self._runtime_log.backfill_failed(
+                start=start,
+                end=end,
+                reason=MarketDataRuntimeReason.SOURCE_ERROR,
+                failure_kind=None,
+            )
+            return _BackfillOutcome.RECOVERABLE
         except (CandlePipelineInputError, CandlePipelineSinkError) as error:
             return self._fail_backfill(
                 start=start,
@@ -510,7 +546,7 @@ class MarketDataRuntime:
             end=end,
             candle_count=len(candles),
         )
-        return True
+        return _BackfillOutcome.DELIVERED
 
     def _fail_backfill(
         self,
@@ -518,7 +554,7 @@ class MarketDataRuntime:
         start: datetime,
         end: datetime,
         failure: _SourceFailure,
-    ) -> bool:
+    ) -> _BackfillOutcome:
         self._runtime_log.backfill_failed(
             start=start,
             end=end,
@@ -526,7 +562,7 @@ class MarketDataRuntime:
             failure_kind=failure.kind,
         )
         self._fail_closed(failure.reason, failure_kind=failure.kind)
-        return False
+        return _BackfillOutcome.FAILED
 
     async def _recover_stream(
         self,
@@ -571,6 +607,7 @@ class MarketDataRuntime:
                 delay_seconds=attempt_delay,
                 reason=reason,
             )
+            stream: AsyncIterator[MarketDataKlineUpdate] | None = None
             try:
                 stream = self._source.stream_klines(self._config)
                 deadline = self._reconnect_deadline()
@@ -584,12 +621,14 @@ class MarketDataRuntime:
                         break
                     self._publish_open_candle(update.candle)
             except MarketDataFatalError as error:
+                await _close_stream(stream)
                 self._fail_closed(
                     MarketDataRuntimeReason.SOURCE_FATAL,
                     failure_kind=_failure_kind(error),
                 )
                 return None
             except MarketDataRateLimitError as error:
+                await _close_stream(stream)
                 pending_rate_limit = error
                 self._transition(
                     MarketDataRuntimeState.RATE_LIMITED,
@@ -597,9 +636,11 @@ class MarketDataRuntime:
                 )
                 continue
             except MarketDataSourceError:
+                await _close_stream(stream)
                 pending_rate_limit = None
                 continue
             except Exception:
+                await _close_stream(stream)
                 pending_rate_limit = None
                 continue
 
@@ -612,11 +653,19 @@ class MarketDataRuntime:
                 observed.open_time + self._config.interval,
                 latest_boundary,
             )
-            if not await self._backfill_to_boundary(
+            outcome = await self._backfill_to_boundary(
                 end,
                 received_at=received_at,
                 observed=observed,
-            ):
+            )
+            if outcome is _BackfillOutcome.RECOVERABLE:
+                # The connection is back but the history behind it is not all
+                # there yet. Another attempt costs a backoff delay; giving up
+                # costs the Session, which nothing but a restart brings back.
+                await _close_stream(stream)
+                pending_rate_limit = None
+                continue
+            if outcome is _BackfillOutcome.FAILED:
                 return None
             return stream
 
@@ -698,6 +747,29 @@ def _latest_completed_boundary(value: datetime, *, interval: timedelta) -> datet
     interval_seconds = int(interval.total_seconds())
     boundary_timestamp = int(value.timestamp()) // interval_seconds * interval_seconds
     return datetime.fromtimestamp(boundary_timestamp, UTC)
+
+
+_LIVE_OUTCOMES = {
+    _BackfillOutcome.DELIVERED: _LiveOutcome.CONTINUE,
+    _BackfillOutcome.RECOVERABLE: _LiveOutcome.RECOVER,
+    _BackfillOutcome.FAILED: _LiveOutcome.STOP,
+}
+
+
+async def _close_stream(stream: AsyncIterator[MarketDataKlineUpdate] | None) -> None:
+    """Let go of a stream this run is done with, without dying over it.
+
+    An abandoned kline stream holds a half-open connection until it is
+    closed, and an outage abandons one per attempt. Closing is housekeeping,
+    so a source that raises on the way out changes nothing here.
+    """
+    close = getattr(stream, "aclose", None)
+    if close is None:
+        return
+    try:
+        await close()
+    except Exception:
+        pass
 
 
 def _reconnect_backoff_seconds(attempt: int) -> float:

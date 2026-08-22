@@ -139,6 +139,153 @@ class FakeFailingPublicCandleSource(FakePublicCandleSource):
         return FailedKlineStream(self._failure)
 
 
+class DroppedConnectionScheduler:
+    """A clock that moves when the Runtime waits, as a real one would."""
+
+    def __init__(self, *, now: datetime) -> None:
+        self._now = now
+        self.sleeps: list[float] = []
+
+    def now(self) -> datetime:
+        return self._now
+
+    def advance(self, seconds: float) -> None:
+        self._now += timedelta(seconds=seconds)
+
+    async def sleep(self, seconds: float) -> None:
+        self.sleeps.append(seconds)
+        self.advance(seconds)
+
+    async def wait_for(self, awaitable: Awaitable[_T], timeout: float) -> _T:
+        return await awaitable
+
+
+class DroppedConnectionCandleSource(FakePublicCandleSource):
+    """The connection goes, comes back, and answers the outage short once.
+
+    Off Wi-Fi, on Wi-Fi: the socket drops, several boundaries pass unseen,
+    the socket comes back, and the range covering them is answered short
+    before it is answered whole — the network is up a moment before the
+    history behind it is.
+    """
+
+    def __init__(
+        self,
+        *,
+        warm_up: Iterable[Candle],
+        missed: tuple[Candle, ...],
+        resumed: Candle,
+        scheduler: DroppedConnectionScheduler,
+    ) -> None:
+        super().__init__(warm_up=warm_up, live=())
+        self._missed = missed
+        self._resumed = resumed
+        self._scheduler = scheduler
+        self.stream_count = 0
+        self.range_requests: list[tuple[datetime, datetime]] = []
+
+    async def load_range(
+        self,
+        config: MarketDataConfig,
+        *,
+        start: datetime,
+        end: datetime,
+    ) -> tuple[Candle, ...]:
+        self.range_requests.append((start, end))
+        if len(self.range_requests) == 1:
+            return self._missed[:-1]
+        return self._missed
+
+    async def _stream_klines(self) -> AsyncIterator[MarketDataKlineUpdate]:
+        self.stream_count += 1
+        if self.stream_count == 1:
+            raise RuntimeError("connection lost")
+        yield MarketDataKlineUpdate(candle=self._missed[-1], is_closed=True)
+        # The next boundary only closes once time has passed for it to.
+        self._scheduler.advance(600.0)
+        yield MarketDataKlineUpdate(candle=self._resumed, is_closed=True)
+        await self._closed.wait()
+
+
+class RecordingPaperSpotSink(PaperSpotMarketDataSink):
+    def __init__(self, session: PaperSpotSession) -> None:
+        super().__init__(session)
+        self.backfilled_flags: list[bool] = []
+
+    async def process_completed(
+        self,
+        candle: Candle,
+        *,
+        received_at: datetime,
+        backfilled: bool,
+    ) -> None:
+        self.backfilled_flags.append(backfilled)
+        await super().process_completed(
+            candle,
+            received_at=received_at,
+            backfilled=backfilled,
+        )
+
+
+def test_paper_spot_keeps_trading_after_the_connection_drops_and_returns() -> None:
+    """The Bot the user left running is still running when the network is back.
+
+    The whole outage is here: the drop, the boundaries missed while it was
+    down, the reconnect, a first answer that is short of the boundary, and
+    the live Candle after. What the Session must not do is end — a Runtime
+    that fails closed here is gone until someone restarts the application.
+    """
+    market_data = MarketDataConfig(symbol="BTCUSDT", timeframe="5m")
+    warm_up = candles(start=0, count=15, config=market_data)
+    missed = candles(start=75, count=4, config=market_data)
+    resumed = candles(start=95, count=1, config=market_data)[0]
+    # A minute past the boundary the last missed Candle closed on: the
+    # reconnected socket can only hand back a Candle the market has finished.
+    scheduler = DroppedConnectionScheduler(now=datetime(2026, 1, 1, 1, 36, tzinfo=UTC))
+    source = DroppedConnectionCandleSource(
+        warm_up=warm_up,
+        missed=missed,
+        resumed=resumed,
+        scheduler=scheduler,
+    )
+    sink = RecordingPaperSpotSink(configured_paper_spot_session(market_data))
+    observed_states: list[MarketDataRuntimeState] = []
+    runtime = MarketDataRuntime(
+        config=market_data,
+        warm_up_count=len(warm_up),
+        source=source,
+        sink=sink,
+        scheduler=scheduler,
+        on_transition=lambda snapshot: observed_states.append(snapshot.state),
+    )
+
+    async def exercise() -> None:
+        run_task = asyncio.create_task(runtime.run())
+        try:
+            for _ in range(1000):
+                if sink.live_candle_count >= len(missed) + 1 or run_task.done():
+                    break
+                await asyncio.sleep(0)
+            else:
+                raise AssertionError("runtime never resumed after the outage")
+        finally:
+            await runtime.stop()
+            await run_task
+
+    asyncio.run(exercise())
+
+    assert MarketDataRuntimeState.FAILED_CLOSED not in observed_states
+    assert MarketDataRuntimeState.RECONNECTING in observed_states
+    assert sink.live_candle_count == len(missed) + 1
+    # Recovered Candles may not open an Entry; the live one after them may.
+    assert sink.backfilled_flags == [True] * len(missed) + [False]
+    assert len(source.range_requests) == 2
+    assert source.stream_count == 3
+    assert scheduler.sleeps == [1.0, 2.0]
+    assert sink.last_snapshot is not None
+    assert sink.last_snapshot.accepted is True
+
+
 def test_fake_public_runtime_warms_then_processes_paper_spot_live_candle() -> None:
     market_data = MarketDataConfig(symbol="BTCUSDT", timeframe="5m")
     warm_up = candles(start=0, count=15, config=market_data)

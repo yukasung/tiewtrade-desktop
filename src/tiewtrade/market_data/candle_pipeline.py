@@ -17,8 +17,23 @@ class CandlePipelineInputError(ValueError):
     pass
 
 
+class CandlePipelineIncompleteBackfillError(CandlePipelineInputError):
+    """The answer did not cover the range that was missing.
+
+    An empty, short, or still-gapped answer is a source that has not caught
+    up yet — a kline published a moment after its boundary, or a connection
+    just restored that is still being let through — rather than a source that
+    is broken. Asking again is the answer to that. Malformed candles stay a
+    plain CandlePipelineInputError, because asking again cannot fix them.
+    """
+
+
 class CandlePipelineSinkError(RuntimeError):
     pass
+
+
+class _IncompleteBackfill(Exception):
+    """Raised by the coverage checks below, reported as the error above."""
 
 
 class MarketDataCandleSink(Protocol):
@@ -131,27 +146,34 @@ class CompletedCandlePipeline:
     ) -> None:
         try:
             if start < end and not candles:
-                raise ValueError("backfill must not be empty")
+                raise _IncompleteBackfill("backfill must not be empty")
             if start >= end and candles:
                 raise ValueError("backfill must be empty when no range is missing")
             validation_candles = deepcopy(self._candles)
             accepted: list[Candle] = []
             for candle in candles:
-                if (
-                    validation_candles.accept(candle, received_at)
-                    is not CandleAcceptance.ACCEPTED
-                ):
-                    raise ValueError("backfill requires new completed candles")
+                try:
+                    decision = validation_candles.accept(candle, received_at)
+                except CandleGapError as error:
+                    raise _IncompleteBackfill("backfill left a gap behind") from error
+                if decision is not CandleAcceptance.ACCEPTED:
+                    raise _IncompleteBackfill("backfill requires new completed candles")
                 accepted.append(candle)
             if accepted:
                 reached = accepted[-1].open_time + self._config.interval
                 if reached != end:
-                    raise ValueError("backfill did not reach requested boundary")
+                    raise _IncompleteBackfill(
+                        "backfill did not reach requested boundary"
+                    )
             if (
                 validation_candles.accept(observed, received_at)
                 is CandleAcceptance.ACCEPTED
             ):
-                raise ValueError("buffered observation was not covered by backfill")
+                raise _IncompleteBackfill(
+                    "buffered observation was not covered by backfill"
+                )
+        except _IncompleteBackfill as error:
+            raise CandlePipelineIncompleteBackfillError(str(error)) from error
         except Exception as error:
             raise CandlePipelineInputError from error
 

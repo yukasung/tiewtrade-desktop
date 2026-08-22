@@ -588,15 +588,21 @@ def test_binance_timeouts_are_waited_out_until_the_rest_api_answers() -> None:
         aiohttp.ClientPayloadError("invalid response body"),
     ],
 )
-def test_rest_payload_client_error_raises_fatal_error(
+def test_rest_payload_client_error_is_retryable_transport(
     payload_error: aiohttp.ClientError,
 ) -> None:
+    """A body that is not Binance JSON is the network, not the contract.
+
+    A page of HTML with a 200 on it is what a captive portal answers while a
+    reconnected machine is still being let onto the network, and it clears
+    itself. Reading it as fatal ends the trading Session over a login page.
+    """
     source, _ = source_with(rest_pages=[FakeResponse(payload=payload_error)])
 
-    with pytest.raises(MarketDataFatalError) as captured:
+    with pytest.raises(MarketDataRetryableError) as captured:
         load_one(source)
 
-    assert captured.value.kind is MarketDataFailureKind.PAYLOAD
+    assert captured.value.kind is MarketDataFailureKind.TRANSPORT
 
 
 @pytest.mark.parametrize(

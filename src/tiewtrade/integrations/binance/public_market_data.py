@@ -226,9 +226,17 @@ class BinancePublicMarketData:
             MarketDataFatalError,
         ):
             raise
+        except (aiohttp.ContentTypeError, aiohttp.ClientPayloadError) as error:
+            # Not JSON at all, or JSON cut off mid-body: something between
+            # here and Binance answered, or stopped answering. A network
+            # just rejoined is the ordinary case — a captive portal returns
+            # its own login page with a 200 — and it clears itself. Binance
+            # breaking its own kline contract is the fatal case below.
+            raise MarketDataRetryableError(
+                "Binance market-data response did not come from Binance",
+                kind=MarketDataFailureKind.TRANSPORT,
+            ) from error
         except (
-            aiohttp.ContentTypeError,
-            aiohttp.ClientPayloadError,
             BinanceMarketDataPayloadError,
             json.JSONDecodeError,
             TypeError,
