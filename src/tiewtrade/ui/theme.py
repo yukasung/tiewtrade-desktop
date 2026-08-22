@@ -367,4 +367,23 @@ QMessageBox QLabel {
     background: transparent;
     color: #F1F5F9;
 }
+/* These boxes carry paragraphs, not a line, and every irreversible answer in
+   the app is asked for in one of them. Padding on the box itself is ignored,
+   so the room is taken here: off the icon on the left, off the frame on the
+   right, and under each block so it does not run into the next. */
+QMessageBox QLabel#qt_msgbox_label {
+    padding: 2px 4px 10px 8px;
+}
+QMessageBox QLabel#qt_msgbox_informativelabel {
+    padding: 0 4px 14px 8px;
+}
+QMessageBox QDialogButtonBox {
+    padding-left: 8px;
+}
+/* Room around the words rather than a width for them: min-width here makes
+   Qt size every button from that number and forget the text, which clipped
+   the longest answer in the box down to "Close at Marke". */
+QMessageBox QPushButton {
+    padding: 0 20px;
+}
 """

@@ -1,5 +1,11 @@
 from PySide6.QtGui import QColor, QPalette
-from PySide6.QtWidgets import QAbstractItemView, QLabel, QPushButton, QWidget
+from PySide6.QtWidgets import (
+    QAbstractItemView,
+    QLabel,
+    QMessageBox,
+    QPushButton,
+    QWidget,
+)
 from pytestqt.qtbot import QtBot
 
 from tiewtrade.ui.theme import DARK_THEME
@@ -235,3 +241,61 @@ def _rendered_colors(widget: QWidget) -> set[str]:
         for y in range(image.height())
         if image.pixelColor(x, y).alpha() > 0
     }
+
+
+def test_a_confirmation_dialog_holds_its_words_off_its_own_edges(
+    qtbot: QtBot,
+) -> None:
+    """These boxes carry paragraphs, and prose against a frame reads as a wall.
+
+    Every irreversible answer in this app is asked for in one of them — sell
+    this Entry, lift this Cooldown, close this Position — so they are read
+    rather than dismissed, and the reading is what the spacing is for.
+    """
+    dialog = QMessageBox()
+    qtbot.addWidget(dialog)
+    dialog.setStyleSheet(DARK_THEME)
+    dialog.setIcon(QMessageBox.Icon.Warning)
+    dialog.setText("Close this Position at the market price?")
+    # Long enough to wrap, which is the shape these boxes are really in.
+    dialog.setInformativeText("Market sells it at the price now. " * 6)
+    dialog.addButton("Close at Market", QMessageBox.ButtonRole.DestructiveRole)
+    dialog.addButton("Cancel", QMessageBox.ButtonRole.RejectRole)
+    dialog.show()
+
+    for name in ("qt_msgbox_label", "qt_msgbox_informativelabel"):
+        label = dialog.findChild(QLabel, name)
+        assert label is not None, name
+        frame, text = label.rect(), label.contentsRect()
+        # Off the icon on one side and off the frame on the other.
+        assert text.left() - frame.left() >= 8, name
+        assert frame.right() - text.right() >= 4, name
+        # And clear of whatever the box says next.
+        assert frame.bottom() - text.bottom() >= 10, name
+
+
+def test_a_confirmation_dialog_gives_its_answers_room_without_clipping_them(
+    qtbot: QtBot,
+) -> None:
+    """The answers are named after what they do, so the names have to fit.
+
+    Widening them with min-width does not: Qt then sizes every button from
+    that number and forgets the text, and the longest answer in the box came
+    out reading "Close at Marke".
+    """
+    dialog = QMessageBox()
+    qtbot.addWidget(dialog)
+    dialog.setStyleSheet(DARK_THEME)
+    dialog.setText("Close this Position at the market price?")
+    dialog.addButton("Start Bot", QMessageBox.ButtonRole.AcceptRole)
+    dialog.addButton("Close at Market", QMessageBox.ButtonRole.DestructiveRole)
+    dialog.addButton("Cancel", QMessageBox.ButtonRole.RejectRole)
+    dialog.show()
+
+    buttons = [button for button in dialog.findChildren(QPushButton) if button.text()]
+
+    assert len(buttons) == 3
+    for button in buttons:
+        text_width = button.fontMetrics().horizontalAdvance(button.text())
+        assert button.width() >= button.sizeHint().width(), button.text()
+        assert button.width() - text_width >= 36, button.text()
