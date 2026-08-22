@@ -49,6 +49,7 @@ def basket_snapshot(**overrides: Any) -> BasketSnapshot:
         take_profit_price=Decimal("66000"),
         unrealized_pnl=Decimal("1000"),
         entry_gate=BasketEntryGate.OPEN,
+        completed_pairs=1,
         updated_at_utc=OBSERVED_AT,
     )
     return replace(basket, **overrides) if overrides else basket

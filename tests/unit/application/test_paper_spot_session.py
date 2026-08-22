@@ -154,6 +154,7 @@ def test_completed_pair_reports_its_cooldown_in_the_snapshot() -> None:
     # A completed Pair holds the gate until the trader lifts it.
     assert snapshot.basket_entry_count == 2
     assert snapshot.entry_gate == EntryGate(EntryGateState.COOLDOWN)
+    assert snapshot.entry_completed_pairs == 1
 
 
 def test_waive_cooldown_opens_the_gate_and_reports_the_waived_pair() -> None:
@@ -822,8 +823,9 @@ def test_one_entry_takes_profit_while_the_other_stays_open() -> None:
     assert sold.take_profit_price == first_target
 
 
-def test_an_entry_that_sold_hands_back_its_place_in_the_pair() -> None:
-    """A quota counts open Entries, so a sale reopens the Entry Pair gate."""
+def test_an_entry_that_sold_at_target_does_not_lift_the_cooldown_it_left() -> None:
+    """A Cooldown does not lapse on its own — not even when the market itself
+    takes profit on one of the two Entries that closed it."""
     application = fast_test_paper_session()
     first, next_minute = arm_and_fill_fast_test_entry(application)
     second, next_minute = fill_second_fast_test_entry(application, first, next_minute)
@@ -841,9 +843,10 @@ def test_an_entry_that_sold_hands_back_its_place_in_the_pair() -> None:
     )
     sold = application.process_completed_candle(reached, received_at=reached.close_time)
 
-    # One Entry left, so the Pair is half open again and so is the gate.
+    # One Entry left, but the Pair it was part of is still what is cooling
+    # down — only Cancel Cooldown, never a sale, lifts it.
     assert sold.entry_gate is not None
-    assert sold.entry_gate.state is EntryGateState.OPEN
+    assert sold.entry_gate.state is EntryGateState.COOLDOWN
 
 
 def test_a_reopened_basket_leaves_out_the_entries_that_already_sold() -> None:
@@ -1200,11 +1203,14 @@ def paper_session(*, min_notional: Decimal = Decimal("5")) -> PaperSpotSession:
     )
 
 
-def _two_entry_basket() -> OpenBasketState:
+def _two_entry_basket(*, waived_pair: int | None = 1) -> OpenBasketState:
     """Entries at 100 and 110, a day apart so the Entry Pair lets both in.
 
     With an ATR of 2 and a multiplier of 3 their targets are 106 and 116, so a
-    price between them reaches one and leaves the other holding.
+    price between them reaches one and leaves the other holding. The pair
+    these two fills complete is waived by default, so a manual sale is not
+    blocked by the Cooldown they leave behind — pass `waived_pair=None` to
+    get the basket exactly as its Cooldown stands.
     """
     return OpenBasketState(
         basket_id=UUID("00000000-0000-0000-0000-0000000000c1"),
@@ -1225,6 +1231,31 @@ def _two_entry_basket() -> OpenBasketState:
             ),
         ),
         closed_basket_count=0,
+        waived_pair=waived_pair,
+    )
+
+
+def _four_entry_basket() -> OpenBasketState:
+    """Two Pairs: the first already resolved, the second is what is cooling down.
+
+    A Basket holding four Entries could only have gotten here by the first
+    Pair's Cooldown having been lifted before the second Pair could form — so
+    Entries 1 and 2 read Open even though the Basket's own gate is Cooldown.
+    """
+    return OpenBasketState(
+        basket_id=UUID("00000000-0000-0000-0000-0000000000c2"),
+        entries=tuple(
+            OpenBasketEntry(
+                entry_number=number,
+                price=Decimal("100") + Decimal(number) * Decimal("10"),
+                quantity=Decimal("1"),
+                filled_at=datetime(2026, 8, number, 12, tzinfo=UTC),
+                atr=Decimal("2"),
+            )
+            for number in range(1, 5)
+        ),
+        closed_basket_count=0,
+        waived_pair=None,
     )
 
 
@@ -1293,6 +1324,60 @@ def test_an_entry_already_gone_sells_nothing_twice() -> None:
     assert again.accepted is False
     assert unknown.accepted is False
     assert [entry.entry_number for entry in session.open_entries] == [2]
+
+
+def test_manual_close_is_rejected_while_the_basket_is_in_cooldown() -> None:
+    """A trader cannot sell an Entry out from under a standing Cooldown.
+
+    Cooldown never lapses on its own — only "Cancel Cooldown" lifts it — so a
+    manual sale must not be the back door that quietly frees the gate the
+    completed Pair just closed.
+    """
+    session = buy_only_paper_session(open_basket=_two_entry_basket(waived_pair=None))
+
+    snapshot = session.close_entry(
+        1, price=Decimal("105"), observed_at=datetime(2026, 8, 3, tzinfo=UTC)
+    )
+    second_attempt = session.close_entry(
+        2, price=Decimal("120"), observed_at=datetime(2026, 8, 4, tzinfo=UTC)
+    )
+
+    assert snapshot.accepted is False
+    assert second_attempt.accepted is False
+    assert [entry.entry_number for entry in session.open_entries] == [1, 2]
+
+
+def test_manual_close_succeeds_once_a_cooldown_is_waived() -> None:
+    session = buy_only_paper_session(open_basket=_two_entry_basket(waived_pair=None))
+    session.waive_cooldown(datetime(2026, 8, 3, tzinfo=UTC))
+
+    snapshot = session.close_entry(
+        1, price=Decimal("105"), observed_at=datetime(2026, 8, 3, tzinfo=UTC)
+    )
+
+    assert snapshot.accepted is True
+    assert [entry.entry_number for entry in session.open_entries] == [2]
+
+
+def test_manual_close_reads_the_pair_its_own_entry_belongs_to() -> None:
+    """A standing Cooldown from the second Pair must not swallow the first.
+
+    The Market button on an Entry from an already-resolved Pair has to work
+    even while the Basket's own gate reads Cooldown from the Pair after it —
+    matching the same Pair-aware reading the Position tab shows on screen.
+    """
+    session = buy_only_paper_session(open_basket=_four_entry_basket())
+
+    resolved_pair = session.close_entry(
+        1, price=Decimal("105"), observed_at=datetime(2026, 8, 5, tzinfo=UTC)
+    )
+    cooling_pair = session.close_entry(
+        3, price=Decimal("135"), observed_at=datetime(2026, 8, 5, tzinfo=UTC)
+    )
+
+    assert resolved_pair.accepted is True
+    assert cooling_pair.accepted is False
+    assert [entry.entry_number for entry in session.open_entries] == [2, 3, 4]
 
 
 def test_a_session_holding_nothing_has_no_entry_to_sell() -> None:

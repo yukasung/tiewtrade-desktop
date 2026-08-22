@@ -41,6 +41,34 @@ def test_completed_pair_holds_its_cooldown_with_no_time_limit() -> None:
     assert not lifecycle.can_enter()
 
 
+def test_entry_gate_for_reads_the_same_as_entry_gate_when_open() -> None:
+    lifecycle = EntryPairLifecycle(policy())
+    lifecycle.record_fill()
+
+    assert lifecycle.entry_gate_for(1) == EntryGate(EntryGateState.OPEN)
+
+
+def test_entry_gate_for_blocks_the_pair_that_just_completed() -> None:
+    lifecycle = completed_pair()
+
+    assert lifecycle.entry_gate_for(1) == EntryGate(EntryGateState.COOLDOWN)
+    assert lifecycle.entry_gate_for(2) == EntryGate(EntryGateState.COOLDOWN)
+
+
+def test_entry_gate_for_opens_an_earlier_pair_the_basket_has_moved_past() -> None:
+    """Entries 1 and 2 are Pair 1, already waived; 3 and 4 just formed Pair 2."""
+    lifecycle = completed_pair()
+    lifecycle.waive_cooldown()
+    lifecycle.record_fill()
+    lifecycle.record_fill()
+
+    assert lifecycle.entry_gate() == EntryGate(EntryGateState.COOLDOWN)
+    assert lifecycle.entry_gate_for(1) == EntryGate(EntryGateState.OPEN)
+    assert lifecycle.entry_gate_for(2) == EntryGate(EntryGateState.OPEN)
+    assert lifecycle.entry_gate_for(3) == EntryGate(EntryGateState.COOLDOWN)
+    assert lifecycle.entry_gate_for(4) == EntryGate(EntryGateState.COOLDOWN)
+
+
 def test_entry_pair_stops_at_configured_maximum() -> None:
     lifecycle = completed_pair(4)
     lifecycle.waive_cooldown()
@@ -71,13 +99,15 @@ def test_entry_pair_resets_after_basket_closes() -> None:
     assert lifecycle.can_enter()
 
 
-def test_an_entry_that_sold_hands_its_place_back_to_the_pair() -> None:
+def test_an_entry_that_sold_does_not_lift_a_standing_cooldown() -> None:
+    """A Cooldown does not lapse on its own — not even when one of its own
+    Entries sells. Only Cancel Cooldown lifts it."""
     lifecycle = completed_pair()
 
     lifecycle.release_fill()
 
     assert lifecycle.entry_count == 1
-    assert lifecycle.can_enter()
+    assert not lifecycle.can_enter()
 
 
 def test_release_requires_an_entry_to_release() -> None:
@@ -123,11 +153,29 @@ def test_a_waived_cooldown_survives_an_entry_of_its_pair_selling() -> None:
     assert lifecycle.can_enter()
 
 
-def test_a_pair_rebuilt_after_a_sale_cools_down_on_its_own_account() -> None:
-    """Selling out of a waived Pair and refilling it is a Cooldown of its own."""
+def test_a_fresh_fill_after_a_waived_sale_opens_a_pair_of_its_own() -> None:
+    """A refill does not rejoin the Pair it replaces — it starts the next one.
+
+    Selling one Entry of a waived Pair and taking a fresh Fill does not
+    instantly recomplete a Pair: the Fill is counted by when it happened, not
+    by how many Entries merely happen to be open, so it is the first half of
+    a new Pair and still needs its own partner.
+    """
     lifecycle = completed_pair()
     lifecycle.waive_cooldown()
     lifecycle.release_fill()
+
+    lifecycle.record_fill()
+
+    assert lifecycle.entry_gate() == EntryGate(EntryGateState.OPEN)
+
+
+def test_a_rebuilt_pair_cools_down_once_its_own_partner_fills() -> None:
+    """The refill's own partner is what actually completes its Pair."""
+    lifecycle = completed_pair()
+    lifecycle.waive_cooldown()
+    lifecycle.release_fill()
+    lifecycle.record_fill()
 
     lifecycle.record_fill()
 
@@ -135,7 +183,7 @@ def test_a_pair_rebuilt_after_a_sale_cools_down_on_its_own_account() -> None:
 
 
 def test_a_replayed_waiver_naming_a_stale_pair_is_ignored() -> None:
-    lifecycle = EntryPairLifecycle.replayed(policy(), fill_count=2, waived_pair=0)
+    lifecycle = EntryPairLifecycle.replayed(policy(), open_entry_count=2, waived_pair=0)
 
     assert not lifecycle.can_enter()
 
@@ -145,7 +193,7 @@ def test_a_replayed_waiver_naming_the_pair_it_lifted_opens_the_gate() -> None:
     waived.waive_cooldown()
 
     lifecycle = EntryPairLifecycle.replayed(
-        policy(), fill_count=2, waived_pair=waived.completed_pairs
+        policy(), open_entry_count=2, waived_pair=waived.completed_pairs
     )
 
     assert lifecycle.can_enter()
@@ -169,14 +217,18 @@ def test_replay_puts_back_fills_a_cooldown_would_have_blocked() -> None:
     closed one. The trader lifted that Cooldown at the time, and storage no
     longer holds the waiver they lifted it with.
     """
-    lifecycle = EntryPairLifecycle.replayed(policy(), fill_count=3, waived_pair=None)
+    lifecycle = EntryPairLifecycle.replayed(
+        policy(), open_entry_count=3, waived_pair=None
+    )
 
     assert lifecycle.entry_count == 3
     assert lifecycle.completed_pairs == 1
 
 
 def test_replayed_fills_still_complete_their_pairs() -> None:
-    lifecycle = EntryPairLifecycle.replayed(policy(), fill_count=4, waived_pair=None)
+    lifecycle = EntryPairLifecycle.replayed(
+        policy(), open_entry_count=4, waived_pair=None
+    )
 
     assert lifecycle.completed_pairs == 2
     assert lifecycle.entry_gate() == EntryGate(EntryGateState.COOLDOWN)

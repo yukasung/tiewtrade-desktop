@@ -71,6 +71,7 @@ def spot_snapshot(
     basket_entry_count: int,
     take_profit_price: Decimal | None = Decimal("110"),
     entry_gate: EntryGate | None = OPEN_GATE,
+    entry_completed_pairs: int = 0,
 ) -> PaperSpotSessionSnapshot:
     return PaperSpotSessionSnapshot(
         accepted=True,
@@ -91,6 +92,7 @@ def spot_snapshot(
         entry_gate=entry_gate,
         waived_pair=None,
         waived_at=None,
+        entry_completed_pairs=entry_completed_pairs,
     )
 
 
@@ -326,6 +328,26 @@ def test_a_cooling_basket_carries_the_month_it_reopens() -> None:
 
     assert basket is not None
     assert basket.entry_gate is BasketEntryGate.COOLDOWN
+
+
+def test_a_basket_snapshot_carries_the_pairs_it_has_completed() -> None:
+    """The count a row reads its own gate against travels with the Basket."""
+    position = position_after_snapshot(
+        None,
+        entry_fill=spot_fill("100", "1"),
+        basket_entry_count=1,
+        entry_number=1,
+        take_profit_price=Decimal("999"),
+    )
+    basket = spot_basket_snapshot(
+        spot_snapshot(basket_entry_count=1, entry_completed_pairs=2),
+        position,
+        candle("110"),
+        OBSERVED_AT,
+    )
+
+    assert basket is not None
+    assert basket.completed_pairs == 2
 
 
 @pytest.mark.parametrize(

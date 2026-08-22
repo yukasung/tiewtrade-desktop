@@ -174,6 +174,7 @@ def reopened_basket_snapshot(
         take_profit_price=reopened.basket.take_profit_price,
         position_side=reopened.basket.position_side,
         entry_gate=reopened.lifecycle.entry_gate(),
+        completed_pairs=reopened.lifecycle.completed_pairs,
         observed_at_utc=observed_at_utc,
     )
 
@@ -195,6 +196,7 @@ def spot_basket_snapshot(
         take_profit_price=snapshot.take_profit_price,
         position_side=PositionSide.LONG,
         entry_gate=snapshot.entry_gate,
+        completed_pairs=snapshot.entry_completed_pairs,
         observed_at_utc=observed_at_utc,
     )
 
@@ -218,6 +220,7 @@ def futures_basket_snapshot(
         take_profit_price=snapshot.take_profit_price,
         position_side=snapshot.position_side,
         entry_gate=snapshot.entry_gate,
+        completed_pairs=snapshot.entry_completed_pairs,
         observed_at_utc=observed_at_utc,
     )
 
@@ -232,6 +235,7 @@ def _updated_basket_snapshot(
     take_profit_price: Decimal | None,
     position_side: PositionSide,
     entry_gate: EntryGate | None,
+    completed_pairs: int,
     observed_at_utc: datetime,
 ) -> BasketSnapshot:
     if position is None:
@@ -267,6 +271,7 @@ def _updated_basket_snapshot(
         take_profit_price=take_profit_price,
         unrealized_pnl=marked_pnl,
         entry_gate=BasketEntryGate(entry_gate.state),
+        completed_pairs=completed_pairs,
         updated_at_utc=observed_at_utc,
     )
 

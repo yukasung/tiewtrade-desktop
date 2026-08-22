@@ -142,6 +142,12 @@ class BasketSnapshot:
     unrealized_pnl: Decimal | None
     entry_gate: BasketEntryGate
     updated_at_utc: datetime
+    # Entry Pairs this Basket has completed across its whole life, counted
+    # forward and never back — the same count `EntryPairLifecycle` keeps. A
+    # row reads its own gate against this: an Entry from a Pair before the
+    # one just completed is not what a standing Cooldown is blocking. Left at
+    # its default, every row falls back to reading the Basket's own gate.
+    completed_pairs: int = 0
 
     def __post_init__(self) -> None:
         _require_text(self.symbol, "symbol")
@@ -157,6 +163,8 @@ class BasketSnapshot:
         _require_one_marking(self.current_price, self.unrealized_pnl, self.entries)
         if not isinstance(self.entry_gate, BasketEntryGate):
             raise ValueError("entry_gate must be a BasketEntryGate")
+        if type(self.completed_pairs) is not int or self.completed_pairs < 0:
+            raise ValueError("completed_pairs must be a non-negative integer")
         _require_utc(self.updated_at_utc, "updated_at_utc")
 
 

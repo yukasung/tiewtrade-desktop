@@ -30,7 +30,7 @@ from tiewtrade.trading.basket import (
     ClosedBasket,
     ClosedEntry,
 )
-from tiewtrade.trading.entry_pair import EntryGate, EntryPairLifecycle
+from tiewtrade.trading.entry_pair import EntryGate, EntryGateState, EntryPairLifecycle
 from tiewtrade.trading.session_config import MarketType, SessionConfig, TradeMode
 from tiewtrade.trading.symbol_rules import SymbolRules
 
@@ -86,6 +86,9 @@ class PaperSpotSessionSnapshot:
     # numbers it. Present exactly when a waiver was accepted.
     waived_pair: int | None
     waived_at: datetime | None
+    # Entry Pairs the Basket has completed across its whole life, never back —
+    # the same count that decides which Entry a standing Cooldown blocks.
+    entry_completed_pairs: int = 0
 
     @property
     def sold_entry_numbers(self) -> tuple[int, ...]:
@@ -363,6 +366,9 @@ class PaperSpotSession:
         if self._state is not PaperSpotSessionState.ACTIVE or self._basket is None:
             return self._snapshot(accepted=False)
         if all(entry.entry_number != entry_number for entry in self._basket.entries):
+            return self._snapshot(accepted=False)
+        entry_gate = self._lifecycle.entry_gate_for(entry_number)
+        if entry_gate.state is EntryGateState.COOLDOWN:
             return self._snapshot(accepted=False)
 
         try:
@@ -666,4 +672,5 @@ class PaperSpotSession:
             entry_gate=self._entry_gate(),
             waived_pair=waived_pair,
             waived_at=waived_at,
+            entry_completed_pairs=self._lifecycle.completed_pairs,
         )

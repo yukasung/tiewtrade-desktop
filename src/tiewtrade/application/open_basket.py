@@ -88,10 +88,13 @@ def reopen_basket(
             entry_number=entry.entry_number,
         )
     # Counted off the Basket rather than off the Entries handed in, so the
-    # Pair count can only ever describe Entries the Basket actually took.
+    # Pair count can only ever describe Entries the Basket actually took. What
+    # it already settled counts too — a Fill this Basket sold before now
+    # completed its Pair whether or not the Entry it opened is still here.
     lifecycle = EntryPairLifecycle.replayed(
         entry_policy,
-        fill_count=basket.entry_count,
+        open_entry_count=basket.entry_count,
+        settled_entry_count=state.settled.count,
         waived_pair=state.waived_pair,
     )
     return ReopenedBasket(state=state, basket=basket, lifecycle=lifecycle)

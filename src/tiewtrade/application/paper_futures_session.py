@@ -74,6 +74,9 @@ class PaperFuturesSessionSnapshot:
     # Read against the last candle the Session accepted, so it answers for the
     # same moment the Session used to decide entries. None until one arrives.
     entry_gate: EntryGate | None
+    # Entry Pairs the Basket has completed across its whole life, never back —
+    # the same count that decides which Entry a standing Cooldown blocks.
+    entry_completed_pairs: int = 0
 
     @property
     def sold_entry_numbers(self) -> tuple[int, ...]:
@@ -434,4 +437,5 @@ class PaperFuturesSession:
             capital_plan=self._capital_plan,
             failure_reason=self._failure_reason,
             entry_gate=self._entry_gate(),
+            entry_completed_pairs=self._lifecycle.completed_pairs,
         )

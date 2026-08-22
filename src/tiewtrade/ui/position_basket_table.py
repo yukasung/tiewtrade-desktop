@@ -22,7 +22,7 @@ from tiewtrade.application.trading_workspace import (
 )
 from tiewtrade.ui.blank_text import BLANK
 from tiewtrade.ui.display_time import display_timestamp
-from tiewtrade.ui.entry_gate_display import blocked_entry_reason
+from tiewtrade.ui.entry_gate_display import blocked_entry_reason, effective_entry_gate
 from tiewtrade.ui.money_text import money_text, price_text
 from tiewtrade.ui.sign_state import sign_colour
 from tiewtrade.ui.table_column import (
@@ -62,8 +62,9 @@ def _take_profit_price(row: _Row) -> str:
 
 
 def _entry_gate(row: _Row) -> str:
-    """Whether the Basket can still take an Entry, and when it cannot, why."""
-    return blocked_entry_reason(row.basket) or "Active"
+    """Whether this Entry's own Pair is what a Cooldown is blocking, and why."""
+    gate = effective_entry_gate(row.basket, row.entry.entry_number)
+    return blocked_entry_reason(gate) or "Active"
 
 
 def _quantity(row: _Row) -> str:
@@ -256,7 +257,10 @@ class PositionBasketTable(QWidget):
         button = QPushButton(self.CLOSE_LABEL)
         button.setObjectName("positionEntryCloseButton")
         button.setAccessibleName(f"Close Entry {entry_number} at Market")
-        button.setEnabled(self._closing_enabled)
+        cooling_down = (
+            effective_entry_gate(row.basket, entry_number) is BasketEntryGate.COOLDOWN
+        )
+        button.setEnabled(self._closing_enabled and not cooling_down)
         button.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
         button.setCursor(Qt.CursorShape.PointingHandCursor)
         button.clicked.connect(

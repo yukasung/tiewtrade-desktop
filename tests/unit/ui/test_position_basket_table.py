@@ -569,6 +569,81 @@ def test_the_order_is_taken_away_while_one_is_still_in_flight(
     assert _close_button(widget, 0).isEnabled() is True
 
 
+def test_the_order_is_taken_away_while_the_basket_is_in_cooldown(
+    qtbot: QtBot,
+) -> None:
+    """A Cooldown never lapses on its own, so a manual sale must not lift it."""
+    widget = PositionBasketTable()
+    qtbot.addWidget(widget)
+    widget.show_snapshot(
+        ready_position_basket_tab(
+            basket_snapshot(
+                entry_gate=BasketEntryGate.COOLDOWN,
+                entry_count=1,
+                entries=(_entry(1, "100", "1"),),
+            ),
+            observed_at_utc=OBSERVED_AT,
+        )
+    )
+
+    assert _close_button(widget, 0).isEnabled() is False
+
+    widget.show_snapshot(
+        ready_position_basket_tab(
+            basket_snapshot(
+                entry_gate=BasketEntryGate.OPEN,
+                entry_count=1,
+                entries=(_entry(1, "100", "1"),),
+            ),
+            observed_at_utc=OBSERVED_AT,
+        )
+    )
+
+    assert _close_button(widget, 0).isEnabled() is True
+
+
+def test_only_the_pair_that_just_completed_reads_as_cooling_down(
+    qtbot: QtBot,
+) -> None:
+    """Four Entries, two Pairs: only the second Pair is what is cooling down.
+
+    The first Pair's own Cooldown was cancelled long before the second Pair
+    could form, so it reads Active — the Status column and the Market button
+    must not paint every row with a Cooldown that only the newest Pair holds.
+    """
+    widget = PositionBasketTable()
+    qtbot.addWidget(widget)
+    widget.show_snapshot(
+        ready_position_basket_tab(
+            basket_snapshot(
+                entry_gate=BasketEntryGate.COOLDOWN,
+                completed_pairs=2,
+                entry_count=4,
+                entries=(
+                    _entry(1, "100", "1"),
+                    _entry(2, "101", "1"),
+                    _entry(3, "102", "1"),
+                    _entry(4, "103", "1"),
+                ),
+            ),
+            observed_at_utc=OBSERVED_AT,
+        )
+    )
+
+    assert [_cell(widget, "Status", row).text() for row in range(4)] == [
+        "Active",
+        "Active",
+        "Cooldown",
+        "Cooldown",
+    ]
+    assert [_close_button(widget, row).isEnabled() for row in range(4)] == [
+        True,
+        True,
+        False,
+        False,
+    ]
+
+
 def test_a_sale_that_failed_is_said_over_the_position_that_is_still_there(
     qtbot: QtBot,
 ) -> None:

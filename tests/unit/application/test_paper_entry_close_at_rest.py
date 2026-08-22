@@ -45,8 +45,13 @@ def history(tmp_path: Path) -> SQLiteTradeHistory:
     return SQLiteTradeHistory(database)
 
 
-def _record_two_entries(history: SQLiteTradeHistory) -> None:
-    """A Basket left open with Entries at 100 and 110, targets 106 and 116."""
+def _record_two_entries(history: SQLiteTradeHistory, *, waived: bool = True) -> None:
+    """A Basket left open with Entries at 100 and 110, targets 106 and 116.
+
+    The pair these two Entries complete is waived by default, so a manual
+    sale is not blocked by the Cooldown they leave behind — pass
+    `waived=False` to get the Basket exactly as its Cooldown stands.
+    """
     session = configured_spot_session()
     spot = PaperSpotSQLiteHistory(
         PaperSpotHistoryContext(
@@ -71,6 +76,8 @@ def _record_two_entries(history: SQLiteTradeHistory) -> None:
             ),
             entry_atr=Decimal("2"),
         )
+    if waived:
+        history.record_cooldown_waiver(BASKET_ID, 1, OPENED_AT)
 
 
 def _sell(history: SQLiteTradeHistory, entry_number: int, price: str) -> bool:
@@ -133,6 +140,24 @@ def test_selling_the_last_entry_closes_the_basket_on_the_running_total(
     assert row["status"] == "closed"
     assert row["entry_count"] == 2
     assert Decimal(row["realized_pnl"]) == Decimal("31.34")
+
+
+def test_selling_an_entry_at_rest_is_rejected_while_the_basket_is_in_cooldown(
+    history: SQLiteTradeHistory,
+) -> None:
+    """A stopped Bot's Basket is no exception to the Cooldown standing over it."""
+    _record_two_entries(history, waived=False)
+
+    assert _sell(history, 1, "105.678") is False
+
+    basket = history.find_open_basket(configured_spot_session().config.session_id)
+    fills = history.list_fills(BASKET_ID)
+    assert basket is not None
+    assert basket.realized_pnl == Decimal("0")
+    assert [(fill.side.value, fill.closes_entry_number) for fill in fills] == [
+        ("buy", None),
+        ("buy", None),
+    ]
 
 
 def test_an_entry_that_has_gone_is_not_sold_twice(
@@ -225,7 +250,7 @@ def _waive(history: SQLiteTradeHistory, observed_at: datetime) -> bool:
 
 
 def test_a_cooldown_at_rest_can_be_waived(history: SQLiteTradeHistory) -> None:
-    _record_two_entries(history)
+    _record_two_entries(history, waived=False)
 
     assert _waive(history, datetime(2026, 8, 5, tzinfo=UTC)) is True
     assert history.find_cooldown_waiver(BASKET_ID) is not None
