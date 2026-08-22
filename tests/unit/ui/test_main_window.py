@@ -3019,6 +3019,77 @@ def test_a_start_that_sells_only_part_of_the_position_still_offers_to_start(
     assert len(started) == 1
 
 
+def test_a_start_before_any_price_is_still_offered_a_start(qtbot: QtBot) -> None:
+    """The window opens with no price, and Start has to work from there.
+
+    Nothing can be said about what a Start would sell until a candle has
+    arrived, and that silence used to be read as every Entry being at its
+    target: the box came up offering to close the whole Position at the
+    market price, or nothing. Pressing Start on a Position that was losing
+    on every Entry had no answer that ran the Bot.
+    """
+    started: list[BotControlSnapshot] = []
+    asked: list[tuple[str, Callable[[], None]]] = []
+    closed: list[str] = []
+    window = _open_position_window(
+        qtbot,
+        started=started,
+        asked=asked,
+        price=None,
+        replaceable=True,
+        closed=closed,
+    )
+    qtbot.waitUntil(window.setup.isVisible)
+    qtbot.waitUntil(window.setup.create_button.isEnabled)
+    seen: list[QMessageBox] = []
+
+    QTimer.singleShot(0, _answer_position_dialog("Cancel", seen))
+    click(window.setup.create_button)
+
+    qtbot.waitUntil(lambda: len(seen) == 1)
+    dialog = seen[0]
+    assert {button.text() for button in dialog.buttons()} == {
+        "Start Bot",
+        "Close at Market",
+        "Cancel",
+    }
+    # What is held is known without a price; what a Start would sell is not,
+    # and the box says so rather than guessing either way.
+    assert dialog.informativeText().startswith("1 Entry is open.")
+    assert "cannot be read yet" in dialog.informativeText()
+    assert dialog.defaultButton() is not None
+    assert dialog.defaultButton().text() == "Cancel"
+    assert closed == []
+    assert started == []
+
+
+def test_starting_on_a_position_no_price_has_reached_yet_resumes_the_session(
+    qtbot: QtBot,
+) -> None:
+    """The answer that runs the Bot on runs it, and sells nothing to do it."""
+    started: list[BotControlSnapshot] = []
+    asked: list[tuple[str, Callable[[], None]]] = []
+    closed: list[str] = []
+    window = _open_position_window(
+        qtbot,
+        started=started,
+        asked=asked,
+        price=None,
+        replaceable=True,
+        closed=closed,
+    )
+    qtbot.waitUntil(window.setup.isVisible)
+    qtbot.waitUntil(window.setup.create_button.isEnabled)
+    seen: list[QMessageBox] = []
+
+    QTimer.singleShot(0, _answer_position_dialog("Start Bot", seen))
+    click(window.setup.create_button)
+
+    qtbot.waitUntil(lambda: _runtime_state(window) is BotRuntimeState.RUNNING)
+    assert len(started) == 1
+    assert closed == []
+
+
 def test_a_position_wholly_at_its_target_is_still_offered_no_start(
     qtbot: QtBot,
 ) -> None:

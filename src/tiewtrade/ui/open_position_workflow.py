@@ -170,8 +170,9 @@ class OpenPositionWorkflow(QObject):
         """Whether a Start would leave part of the Position unsold.
 
         Nothing to read it from answers the same way as a Basket a Start would
-        take whole: the question that follows is then the one that offers no
-        Start at all, which is the answer to be wrong towards.
+        take whole, and that answer alone is not acted on: what_a_start_sells_
+        is_unknown says the reading is missing, and the course a Start takes
+        asks it before it withholds anything.
         """
         basket = self._basket
         candle = self._candle

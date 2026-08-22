@@ -10,6 +10,7 @@ def test_nothing_open_makes_the_session_the_form_describes() -> None:
             position_open=False,
             sells_on_start=True,
             leaves_entries_holding=False,
+            sale_is_unknown=False,
         )
         is StartCourse.REPLACE_SESSION
     )
@@ -22,6 +23,7 @@ def test_a_position_wholly_at_its_target_is_asked_about_as_a_sale() -> None:
             position_open=True,
             sells_on_start=True,
             leaves_entries_holding=False,
+            sale_is_unknown=False,
         )
         is StartCourse.ASK_ABOUT_THE_SALE
     )
@@ -39,6 +41,7 @@ def test_a_position_short_of_its_target_is_still_asked_about() -> None:
             position_open=True,
             sells_on_start=False,
             leaves_entries_holding=True,
+            sale_is_unknown=False,
         )
         is StartCourse.ASK_ABOUT_THE_POSITION
     )
@@ -56,6 +59,26 @@ def test_a_start_that_sells_only_part_of_it_still_offers_to_start() -> None:
             position_open=True,
             sells_on_start=True,
             leaves_entries_holding=True,
+            sale_is_unknown=False,
+        )
+        is StartCourse.ASK_ABOUT_THE_POSITION
+    )
+
+
+def test_a_sale_that_cannot_be_read_is_not_read_as_a_sale_of_everything() -> None:
+    """Not knowing what a Start sells is not knowing that it sells the lot.
+
+    The sale course withholds Start Bot, which leaves closing at the market
+    price as the only way forward. Taking it on a guess is how a window that
+    had simply not been told a price yet came to offer selling the whole
+    Position and nothing else.
+    """
+    assert (
+        course_before_start(
+            position_open=True,
+            sells_on_start=True,
+            leaves_entries_holding=False,
+            sale_is_unknown=True,
         )
         is StartCourse.ASK_ABOUT_THE_POSITION
     )
@@ -63,9 +86,11 @@ def test_a_start_that_sells_only_part_of_it_still_offers_to_start() -> None:
 
 @pytest.mark.parametrize("sells_on_start", [True, False])
 @pytest.mark.parametrize("leaves_entries_holding", [True, False])
+@pytest.mark.parametrize("sale_is_unknown", [True, False])
 def test_a_question_is_put_for_every_position_and_no_other_start(
     sells_on_start: bool,
     leaves_entries_holding: bool,
+    sale_is_unknown: bool,
 ) -> None:
     """Every Start that meets a Position asks, and no other Start does.
 
@@ -79,5 +104,6 @@ def test_a_question_is_put_for_every_position_and_no_other_start(
             position_open=position_open,
             sells_on_start=sells_on_start,
             leaves_entries_holding=leaves_entries_holding,
+            sale_is_unknown=sale_is_unknown,
         )
         assert (course in asking) is position_open

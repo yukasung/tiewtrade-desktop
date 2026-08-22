@@ -369,6 +369,7 @@ class MainWindow(QMainWindow):
             position_open=self._position_is_open(),
             sells_on_start=self._sells_on_start_message() is not None,
             leaves_entries_holding=self._open_position.leaves_entries_holding(),
+            sale_is_unknown=self._open_position.what_a_start_sells_is_unknown(),
         )
         if course is StartCourse.ASK_ABOUT_THE_SALE:
             self._act_on_a_position_at_its_target()
