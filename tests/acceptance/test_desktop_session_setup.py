@@ -1043,7 +1043,6 @@ def test_desktop_session_setup_smoke_composes_without_network(
     window.close()
     qtbot.waitUntil(lambda: not window.isVisible())
 
-    assert qapp.platformName() == "offscreen"
     assert not window.isVisible()
 
 

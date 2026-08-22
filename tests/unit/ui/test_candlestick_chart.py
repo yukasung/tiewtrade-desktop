@@ -12,7 +12,7 @@ from pytestqt.qtbot import QtBot
 import tiewtrade.ui.candlestick_chart as candlestick_chart_module
 import tiewtrade.ui.chart_painter_model as chart_module
 from tests.support.paper_session_setup import configured_spot_session
-from tests.support.qt_interactions import click
+from tests.support.qt_interactions import click, hover
 from tiewtrade.application.chart_data import (
     ChartRange,
     ChartReadState,
@@ -142,7 +142,23 @@ def test_chart_selector_header_leaves_readable_space_between_controls(
     chart.show_snapshot(ready_snapshot())
     chart.show()
 
-    assert chart.timeframe.geometry().left() - chart.symbol.geometry().right() - 1 == 12
+    header = chart._header
+    items = [header.itemAt(index) for index in range(header.count())]
+    symbol_at = next(
+        index
+        for index, item in enumerate(items)
+        if item is not None and item.widget() is chart.symbol
+    )
+    after_symbol = items[symbol_at + 1]
+
+    assert after_symbol is not None
+    spacer = after_symbol.spacerItem()
+    assert spacer is not None
+    assert spacer.sizeHint().width() == 12
+    # Measured pixels are the native style's to decide — macOS spends some of
+    # the gap on a combo box's own margin — so what is asserted is the space
+    # the header asks for, and that the two do not run together.
+    assert chart.timeframe.geometry().left() > chart.symbol.geometry().right()
 
 
 def test_painter_model_contains_only_chart_presentation_facts() -> None:
@@ -316,7 +332,7 @@ def test_mouse_over_plot_shows_crosshair_price_and_time(qtbot: QtBot) -> None:
     chart.show_snapshot(ready_snapshot())
     chart.show()
 
-    cast(Any, qtbot).mouseMove(chart, QPoint(280, 180))
+    hover(chart, 280, 180)
 
     assert chart.crosshair is not None
     assert chart.crosshair.price_label.label
@@ -332,9 +348,9 @@ def test_crosshair_hides_outside_plot_area(qtbot: QtBot) -> None:
     chart.show_snapshot(ready_snapshot())
     chart.show()
 
-    cast(Any, qtbot).mouseMove(chart, QPoint(300, 180))
+    hover(chart, 300, 180)
     assert chart.crosshair is not None
-    cast(Any, qtbot).mouseMove(chart, QPoint(chart.width() - 4, 20))
+    hover(chart, chart.width() - 4, 20)
 
     assert chart.crosshair is None
 
@@ -390,7 +406,7 @@ def test_crosshair_survives_live_refresh_but_not_a_view_change(qtbot: QtBot) -> 
     chart.resize(640, 360)
     chart.show_snapshot(ready_snapshot())
     chart.show()
-    cast(Any, qtbot).mouseMove(chart, QPoint(280, 180))
+    hover(chart, 280, 180)
     assert chart.crosshair is not None
 
     chart.show_snapshot(
@@ -665,10 +681,7 @@ def test_legend_reads_the_latest_candle_until_the_mouse_picks_one(
 
     model = chart_module.build_painter_model(ready_snapshot(), chart._chart_surface())
     first = model.candles[0].body.center()
-    cast(Any, qtbot).mouseMove(
-        chart,
-        QPoint(int(first.x()), int(model.plot_surface.center().y())),
-    )
+    hover(chart, int(first.x()), int(model.plot_surface.center().y()))
 
     hovered = chart.readout
     assert hovered is not None
