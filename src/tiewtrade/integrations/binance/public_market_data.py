@@ -39,12 +39,18 @@ _HTTP_REQUEST_TIMEOUT_SECONDS = 30.0
 # 4h one. A ping is the thing that asks, and a pong that never comes closes
 # the stream, which the runtime already knows how to reconnect.
 #
+# Ten seconds, because the number is how long the screen goes on being wrong
+# without saying so: a chart drawing prices that stopped arriving, or a Bot
+# reading as though it were watching the market. Half a minute of that was
+# long enough for a reader to turn the network back on before the app had
+# noticed it was gone.
+#
 # Well inside what Binance allows. What it caps is the rate, not the count:
 # five incoming messages a second on Spot, and a ping frame is one of them.
-# Two a minute spends about half a percent of that, and the pongs owed to
+# Six a minute spends about two percent of that, and the pongs owed to
 # Binance's own pings — every twenty seconds on Spot, every three minutes on
-# Futures — leave it under two percent together.
-WEBSOCKET_HEARTBEAT_SECONDS = 30.0
+# Futures — leave it under four percent together.
+WEBSOCKET_HEARTBEAT_SECONDS = 10.0
 
 
 def _parse_retry_after(value: str | None) -> RetryAfter | None:
