@@ -1,3 +1,6 @@
+import ast
+from pathlib import Path
+
 from PySide6.QtGui import QColor, QPalette
 from PySide6.QtWidgets import (
     QAbstractItemView,
@@ -299,3 +302,49 @@ def test_a_confirmation_dialog_gives_its_answers_room_without_clipping_them(
         text_width = button.fontMetrics().horizontalAdvance(button.text())
         assert button.width() >= button.sizeHint().width(), button.text()
         assert button.width() - text_width >= 36, button.text()
+
+
+def test_every_message_box_is_built_under_a_window_that_carries_the_theme() -> None:
+    """The theme reaches a box through its parent, so a box needs one.
+
+    Only the main window is given the stylesheet, and Qt hands it down the
+    object tree. A box built with no parent is outside that tree: it comes up
+    in the desktop's own light colours, with none of the room these boxes are
+    given to be read in, and nothing in a rendering test would catch it
+    because such a box is never the one a test builds.
+    """
+    offenders: list[str] = []
+    paths = tuple(Path("src/tiewtrade").rglob("*.py"))
+
+    assert paths
+    for path in paths:
+        for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
+            if not isinstance(node, ast.Call):
+                continue
+            where = f"{path}:{node.lineno}"
+            if _is_message_box_name(node.func) and _parentless(node.args, 0):
+                offenders.append(f"{where} QMessageBox()")
+            # QMessageBox.warning(None, ...) and its siblings take the parent
+            # first too, and skip the constructor entirely.
+            if (
+                isinstance(node.func, ast.Attribute)
+                and _is_message_box_name(node.func.value)
+                and node.func.attr
+                in ("information", "warning", "critical", "question", "about")
+                and _parentless(node.args, 0)
+            ):
+                offenders.append(f"{where} QMessageBox.{node.func.attr}()")
+
+    assert offenders == []
+
+
+def _is_message_box_name(node: ast.expr) -> bool:
+    return isinstance(node, ast.Name) and node.id == "QMessageBox"
+
+
+def _parentless(args: list[ast.expr], index: int) -> bool:
+    """Whether the parent argument is missing or handed a literal None."""
+    if len(args) <= index:
+        return True
+    parent = args[index]
+    return isinstance(parent, ast.Constant) and parent.value is None
