@@ -81,8 +81,12 @@ QComboBox#chartTimeframe QAbstractItemView::item {
     padding: 6px 12px;
 }
 QLineEdit:focus, QComboBox:focus, QSpinBox:focus, QDateEdit:focus,
-QPushButton:focus, QTableWidget:focus {
+QPushButton:focus {
     border: 2px solid #4C7DFF;
+}
+QTableWidget:focus {
+    border: 0;
+    outline: 0;
 }
 QLineEdit:read-only, QComboBox:disabled, QDateEdit:disabled {
     background: #151C25;
@@ -326,6 +330,7 @@ QTableWidget {
     selection-color: #F8FAFC;
 }
 QTableWidget::item { padding: 7px 8px; }
+QTableWidget::item:focus { outline: 0; }
 /* The strip past the last column is the header widget itself, not a
    section, and it is on show whenever the columns do not fill the width. */
 QHeaderView {
