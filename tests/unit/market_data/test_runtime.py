@@ -695,6 +695,7 @@ class RecordingSink:
         self._scheduler = scheduler
         self.calls: list[tuple[str, tuple[Candle, ...] | Candle]] = []
         self.live_candles: list[Candle] = []
+        self.backfilled_flags: list[bool] = []
         self.in_progress_candles: list[Candle] = []
         self.states_at_calls: list[MarketDataRuntimeState] = []
         self.warm_up_within_deadline = False
@@ -711,13 +712,16 @@ class RecordingSink:
             raise RuntimeError("warm-up sink failed")
         self.calls.append(("warm_up", candles))
 
-    async def process_completed(self, candle: Candle, *, received_at: datetime) -> None:
+    async def process_completed(
+        self, candle: Candle, *, received_at: datetime, backfilled: bool
+    ) -> None:
         self._record_state()
         self._live_attempt_count += 1
         if self._fail_live or self._live_attempt_count == self._fail_live_at:
             raise RuntimeError("live sink failed")
         self.calls.append(("process_completed", candle))
         self.live_candles.append(candle)
+        self.backfilled_flags.append(backfilled)
         self._live_received.set()
 
     async def process_in_progress(
@@ -2688,3 +2692,30 @@ def test_a_fatal_error_still_ends_a_run_that_would_otherwise_retry() -> None:
     assert scheduler.sleeps == [1.0, 2.0, 4.0, 8.0]
     assert runtime.snapshot.state is MarketDataRuntimeState.FAILED_CLOSED
     assert runtime.snapshot.reason is MarketDataRuntimeReason.SOURCE_FATAL
+
+
+def test_candles_recovered_after_an_outage_arrive_marked_as_backfilled() -> None:
+    """The Session downstream refuses to open an Entry from these.
+
+    It can only refuse if it is told, and the only place that knows is the
+    runtime that went and fetched them.
+    """
+    source = DisconnectThenRecoverSource()
+    scheduler = FakeScheduler(now=datetime(2026, 1, 1, 0, 25, tzinfo=UTC))
+    sink = RecordingSink()
+    runtime = runtime_for(source, sink, scheduler=scheduler)
+
+    asyncio.run(run_until_sink_receives_or_runtime_stops(runtime, sink, count=2))
+
+    assert sink.live_candles == [candle_at(15), candle_at(20)]
+    assert sink.backfilled_flags == [True, True]
+
+
+def test_a_candle_that_arrived_live_is_not_marked_as_backfilled() -> None:
+    source = FakeSource(recent=warm_up_candles(), live=[candle_at(15)])
+    sink = RecordingSink()
+    runtime = runtime_for(source, sink)
+
+    asyncio.run(run_until_sink_receives_or_runtime_stops(runtime, sink, count=1))
+
+    assert sink.backfilled_flags == [False]

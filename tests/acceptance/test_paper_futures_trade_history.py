@@ -49,6 +49,7 @@ def test_paper_futures_history_survives_restart_and_duplicate_replay(
         current = persistent.process_completed_candle(
             candle,
             received_at=candle.close_time,
+            backfilled=False,
         ).session
         if current.entry_fill is not None:
             entry_snapshot = current

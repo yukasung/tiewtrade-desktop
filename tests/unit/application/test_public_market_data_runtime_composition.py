@@ -64,7 +64,9 @@ class RecordingSink:
     ) -> None:
         return None
 
-    async def process_completed(self, candle: Candle, *, received_at: datetime) -> None:
+    async def process_completed(
+        self, candle: Candle, *, received_at: datetime, backfilled: bool
+    ) -> None:
         return None
 
     async def process_in_progress(

@@ -152,7 +152,15 @@ class PaperFuturesSession:
         candle: Candle,
         *,
         received_at: datetime,
+        backfilled: bool = False,
     ) -> PaperFuturesSessionSnapshot:
+        """Act on one completed candle, live or recovered after a disconnect.
+
+        A recovered candle counts for everything except opening an Entry: it
+        feeds the indicators, and it can still liquidate or take profit,
+        because those happened in the market whether the feed saw them or
+        not. Only buying at its open is refused, that price being gone.
+        """
         if self._state is not PaperFuturesSessionState.ACTIVE:
             return self._snapshot(accepted=False)
         if self._candles.accept(candle, received_at) is not CandleAcceptance.ACCEPTED:
@@ -162,7 +170,13 @@ class PaperFuturesSession:
         basket_existed_at_open = self._basket is not None
         closed: ClosedBasket | None
         try:
-            entry_fill = self._fill_pending_intent(candle)
+            # An Intent handed back can be signalled again on a live candle;
+            # one left pending would fill there off a signal read long before.
+            if backfilled:
+                self._reject_pending_intent()
+                entry_fill = None
+            else:
+                entry_fill = self._fill_pending_intent(candle)
             exit_fill = self._fill_liquidation(candle)
             if exit_fill is not None:
                 closed = self._close_basket(exit_fill)
@@ -248,6 +262,18 @@ class PaperFuturesSession:
         self._lifecycle = candidate_lifecycle
         return self._snapshot(accepted=True)
 
+    def _reject_pending_intent(self) -> None:
+        """Give the Intent back to the strategy, which signals again when it can.
+
+        Holding it instead would fill it at a later open than the candle it
+        was read from, pricing an Entry off a signal the market has left.
+        """
+        intent = self._pending_intent
+        if intent is None:
+            return
+        self._strategy.on_entry_rejected(intent.intent_id)
+        self._pending_intent = None
+
     def _fill_pending_intent(self, candle: Candle) -> PaperFuturesEntryFill | None:
         if self._pending_intent is None:
             return None
@@ -255,8 +281,7 @@ class PaperFuturesSession:
         intent = self._pending_intent
         fill = self._executor.fill_entry(intent, candle)
         if fill is None:
-            self._strategy.on_entry_rejected(intent.intent_id)
-            self._pending_intent = None
+            self._reject_pending_intent()
             return None
 
         if self._basket is None:

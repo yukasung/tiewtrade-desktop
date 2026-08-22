@@ -77,6 +77,7 @@ def test_sqlite_failure_blocks_new_paper_entry_fail_closed(tmp_path: Path) -> No
             snapshot = persistent.process_completed_candle(
                 candle,
                 received_at=candle.close_time,
+                backfilled=False,
             )
         except TradeHistoryUnavailableError as raised:
             assert "SQLite write failed" in str(raised)
@@ -94,6 +95,7 @@ def test_sqlite_failure_blocks_new_paper_entry_fail_closed(tmp_path: Path) -> No
         persistent.process_completed_candle(
             next_candle,
             received_at=next_candle.close_time,
+            backfilled=False,
         )
 
     reopened_database = SQLiteDatabase(path)

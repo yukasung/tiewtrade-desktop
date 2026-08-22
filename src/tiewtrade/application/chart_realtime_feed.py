@@ -44,8 +44,10 @@ class _ChartOnlySink(MarketDataCandleSink):
         candle: Candle,
         *,
         received_at: datetime,
+        backfilled: bool,
     ) -> None:
-        del received_at
+        # A chart draws a Candle wherever it came from; only trading cares.
+        del received_at, backfilled
         self._publish_completed(candle)
 
     async def process_in_progress(

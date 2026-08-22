@@ -152,6 +152,7 @@ def run_closed_spot(store: SQLiteTradeHistory) -> UUID:
         snapshot = persistent.process_completed_candle(
             candle,
             received_at=candle.close_time,
+            backfilled=False,
         )
         assert snapshot.persistence_state is PersistenceState.READY
         if snapshot.session.closed_basket is not None:
@@ -168,6 +169,7 @@ def run_spot_until_entry(store: SQLiteTradeHistory) -> OpenSpotHistory:
         snapshot = persistent.process_completed_candle(
             candle,
             received_at=candle.close_time,
+            backfilled=False,
         )
         assert snapshot.persistence_state is PersistenceState.READY
         if snapshot.session.entry_fill is None:
@@ -197,6 +199,7 @@ def run_closed_futures(store: SQLiteTradeHistory) -> UUID:
         snapshot = persistent.process_completed_candle(
             candle,
             received_at=candle.close_time,
+            backfilled=False,
         )
         assert snapshot.persistence_state is PersistenceState.READY
         if snapshot.session.closed_basket is not None:

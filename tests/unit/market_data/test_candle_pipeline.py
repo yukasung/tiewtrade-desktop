@@ -45,6 +45,7 @@ class RecordingSink:
         self.live_attempts = 0
         self.events: list[str] = []
         self.received_ats: list[datetime] = []
+        self.backfilled_flags: list[bool] = []
 
     async def warm_up(
         self,
@@ -61,12 +62,14 @@ class RecordingSink:
         candle: Candle,
         *,
         received_at: datetime,
+        backfilled: bool,
     ) -> None:
         self.live_attempts += 1
         if self.live_attempts == self._fail_at:
             raise RuntimeError("sink failed")
         self.events.append(f"sink:{candle.open_time.minute}")
         self.received_ats.append(received_at)
+        self.backfilled_flags.append(backfilled)
 
     async def process_in_progress(
         self, candle: Candle, *, received_at: datetime
@@ -96,6 +99,51 @@ def test_backfill_requires_a_buffered_observation() -> None:
 
     assert parameter.default is Parameter.empty
     assert hints["observed"] is Candle
+
+
+def test_a_live_candle_reaches_the_sink_marked_as_live() -> None:
+    sink = RecordingSink()
+    deliveries: list[datetime] = []
+    pipeline = pipeline_for(sink, deliveries)
+    asyncio.run(
+        pipeline.warm_up((candle_at(0),), expected_count=1, received_at=RECEIVED_AT)
+    )
+
+    asyncio.run(pipeline.process_live(candle_at(5), received_at=RECEIVED_AT))
+
+    assert sink.backfilled_flags == [False]
+
+
+def test_a_backfilled_candle_reaches_the_sink_marked_as_backfilled() -> None:
+    """The sink cannot tell a recovered Candle from a live one on its own.
+
+    Both arrive the same way, and only the pipeline knows which is which. A
+    Session that may not open an Entry from a price the market has left
+    behind has to be told, because it cannot look and see.
+    """
+    sink = RecordingSink()
+    deliveries: list[datetime] = []
+    pipeline = pipeline_for(sink, deliveries)
+    asyncio.run(
+        pipeline.warm_up(
+            (candle_at(0), candle_at(5), candle_at(10)),
+            expected_count=3,
+            received_at=RECEIVED_AT,
+        )
+    )
+
+    asyncio.run(
+        pipeline.process_backfill(
+            (candle_at(15), candle_at(20)),
+            start=candle_at(15).open_time,
+            end=candle_at(25).open_time,
+            observed=candle_at(20),
+            received_at=RECEIVED_AT,
+            on_ready_for_delivery=lambda: None,
+        )
+    )
+
+    assert sink.backfilled_flags == [True, True]
 
 
 def test_delivered_received_at_is_clamped_to_close_time_within_tolerance() -> None:

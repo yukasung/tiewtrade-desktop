@@ -161,6 +161,7 @@ def test_entry_is_durable_before_ready_snapshot_returns() -> None:
     result = persistent.process_completed_candle(
         candle,
         received_at=candle.close_time,
+        backfilled=False,
     )
 
     history.record_entry.assert_called_once_with(
@@ -218,6 +219,7 @@ def test_exit_is_durable_before_ready_snapshot_returns(
     result = persistent.process_completed_candle(
         candle,
         received_at=candle.close_time,
+        backfilled=False,
     )
 
     history.record_close.assert_called_once_with(
@@ -253,6 +255,7 @@ def test_same_candle_entry_and_liquidation_use_closed_entry_count() -> None:
     persistent.process_completed_candle(
         candle,
         received_at=candle.close_time,
+        backfilled=False,
     )
 
     history.record_entry.assert_called_once_with(
@@ -286,12 +289,14 @@ def test_persistence_error_blocks_every_later_candle(error: Exception) -> None:
         persistent.process_completed_candle(
             candle,
             received_at=candle.close_time,
+            backfilled=False,
         )
 
     with pytest.raises(SessionPersistenceBlockedError, match="blocked"):
         persistent.process_completed_candle(
             candle,
             received_at=candle.close_time,
+            backfilled=False,
         )
 
     session.process_completed_candle.assert_called_once()
@@ -310,11 +315,13 @@ def test_invalid_snapshot_invariant_fails_closed() -> None:
         persistent.process_completed_candle(
             candle,
             received_at=candle.close_time,
+            backfilled=False,
         )
     with pytest.raises(SessionPersistenceBlockedError, match="blocked"):
         persistent.process_completed_candle(
             candle,
             received_at=candle.close_time,
+            backfilled=False,
         )
 
     session.process_completed_candle.assert_called_once()
@@ -332,6 +339,7 @@ def test_exit_without_closed_basket_fails_closed() -> None:
         persistent.process_completed_candle(
             candle,
             received_at=candle.close_time,
+            backfilled=False,
         )
 
     history.record_close.assert_not_called()

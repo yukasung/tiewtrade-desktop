@@ -17,6 +17,7 @@ class _CandleProcessor[ProcessorSnapshotT](Protocol):
         candle: Candle,
         *,
         received_at: datetime,
+        backfilled: bool,
     ) -> ProcessorSnapshotT:
         pass
 
@@ -60,11 +61,13 @@ class SQLiteSessionPersistenceCoordinator[CoordinatorSnapshotT]:
         candle: Candle,
         *,
         received_at: datetime,
+        backfilled: bool,
     ) -> PersistentSessionSnapshot[CoordinatorSnapshotT]:
         return self._recorded(
             lambda: self._session.process_completed_candle(
                 candle,
                 received_at=received_at,
+                backfilled=backfilled,
             )
         )
 

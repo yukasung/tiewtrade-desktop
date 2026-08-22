@@ -29,6 +29,7 @@ class FakeSession:
         candle: Candle,
         *,
         received_at: datetime,
+        backfilled: bool,
     ) -> FakeSnapshot:
         self.calls += 1
         if self.error is not None:
@@ -74,6 +75,7 @@ def test_snapshot_is_recorded_before_ready_result_returns() -> None:
     result = coordinator.process_completed_candle(
         completed,
         received_at=completed.close_time,
+        backfilled=False,
     )
 
     assert recorded == [result.session]
@@ -96,6 +98,7 @@ def test_recorder_failure_blocks_every_later_candle() -> None:
         coordinator.process_completed_candle(
             completed,
             received_at=completed.close_time,
+            backfilled=False,
         )
     with pytest.raises(
         SessionPersistenceBlockedError,
@@ -104,6 +107,7 @@ def test_recorder_failure_blocks_every_later_candle() -> None:
         coordinator.process_completed_candle(
             completed,
             received_at=completed.close_time,
+            backfilled=False,
         )
 
     assert session.calls == 1
@@ -120,12 +124,14 @@ def test_session_failure_does_not_become_persistence_failure() -> None:
         coordinator.process_completed_candle(
             completed,
             received_at=completed.close_time,
+            backfilled=False,
         )
 
     session.error = None
     result = coordinator.process_completed_candle(
         completed,
         received_at=completed.close_time,
+        backfilled=False,
     )
     assert result.persistence_state is PersistenceState.READY
     assert session.calls == 2

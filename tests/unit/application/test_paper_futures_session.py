@@ -480,6 +480,50 @@ def test_warm_up_seeds_indicators_without_execution_side_effects() -> None:
     assert session.snapshot.state is PaperFuturesSessionState.ACTIVE
 
 
+def test_a_backfilled_candle_opens_no_futures_entry() -> None:
+    """A recovered candle counts, but its open is a price already gone."""
+    session = make_session()
+    pending = arm_entry_intent(session)
+    entry_candle = next_candle(
+        pending.signal_candle, open="120", high="121", low="100", close="120"
+    )
+
+    snapshot = session.process_completed_candle(
+        entry_candle, received_at=entry_candle.close_time, backfilled=True
+    )
+
+    assert snapshot.accepted is True
+    assert snapshot.entry_fill is None
+    assert snapshot.basket_entry_count == 0
+
+
+def test_a_backfilled_candle_still_liquidates() -> None:
+    """A Liquidation the market reached while the feed was down still happened.
+
+    Binance would have closed the position for real. Skipping it because the
+    candle arrived late would report collateral the trader does not have and
+    flatter every result after it.
+    """
+    session, entry_candle = make_session_with_open_long_basket()
+    liquidation_price = session.snapshot.liquidation_price
+    assert liquidation_price is not None
+    adverse = next_candle(
+        entry_candle,
+        open="120",
+        high="121",
+        low=str(liquidation_price - Decimal("1")),
+        close="119",
+    )
+
+    snapshot = session.process_completed_candle(
+        adverse, received_at=adverse.close_time, backfilled=True
+    )
+
+    assert snapshot.state is PaperFuturesSessionState.LIQUIDATED
+    assert snapshot.closed_basket is not None
+    assert snapshot.closed_basket.close_reason is BasketCloseReason.LIQUIDATION
+
+
 def make_session_in_cooldown() -> PaperFuturesSession:
     """A Basket holding a completed Entry Pair, which is a Basket in Cooldown.
 

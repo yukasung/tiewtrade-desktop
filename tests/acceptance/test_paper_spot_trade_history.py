@@ -56,6 +56,7 @@ def test_replayed_paper_spot_history_is_idempotent_after_sqlite_restart(
             snapshot = persistent.process_completed_candle(
                 candle,
                 received_at=candle.close_time,
+                backfilled=False,
             )
             assert snapshot.persistence_state is PersistenceState.READY
         current_basket = store.get_basket(BASKET_ID)

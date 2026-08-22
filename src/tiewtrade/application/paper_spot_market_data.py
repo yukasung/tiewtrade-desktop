@@ -29,10 +29,12 @@ class PaperSpotMarketDataSink:
         candle: Candle,
         *,
         received_at: datetime,
+        backfilled: bool,
     ) -> None:
         self.last_snapshot = self._session.process_completed_candle(
             candle,
             received_at=received_at,
+            backfilled=backfilled,
         )
         self.live_candle_count += 1
 

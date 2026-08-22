@@ -120,6 +120,17 @@ candle ถัดไปเมื่อยืนยัน durability ไม่ไ�
 generic interface ล่วงหน้า เมื่อมี consumer ของ persistence adapter อย่างน้อยสองแบบ
 จึงค่อยย้าย contract ไปไว้ที่ Module ผู้ใช้งาน
 
+## Backfilled Candle
+
+`market_data` เป็นผู้รู้ว่า candle ใดมาสดและ candle ใดถูกดึงย้อนหลังหลังการเชื่อมต่อขาด จึงส่ง
+ข้อเท็จจริงนี้ลงมาทาง `MarketDataCandleSink.process_completed(..., backfilled=...)` แต่
+**ไม่ตัดสินใจแทน** — กฎที่ว่า candle ย้อนหลังห้ามเปิด Entry เป็น business rule ที่ Session
+(`PaperSpotSession` / `PaperFuturesSession`) เป็นผู้บังคับ
+
+Session ที่ได้รับ candle ย้อนหลังจะคืน Entry Intent ที่ค้างอยู่ให้ Strategy แทนการ Fill แต่ยัง
+ประมวลผลทุกอย่างที่เหลือตามปกติ ทั้ง indicator, Take Profit, Stop Loss และ Liquidation
+รายละเอียดกฎอยู่ใน PRODUCT.md ข้อ 8.1
+
 ## Cooldown Waiver
 
 `trading` เป็นเจ้าของกลไก waive Cooldown แบบ pure ใน `EntryPairLifecycle`

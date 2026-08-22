@@ -183,8 +183,14 @@ class PaperSpotSession:
         return self._snapshot(accepted=self._state is PaperSpotSessionState.ACTIVE)
 
     def process_completed_candle(
-        self, candle: Candle, *, received_at: datetime
+        self, candle: Candle, *, received_at: datetime, backfilled: bool = False
     ) -> PaperSpotSessionSnapshot:
+        """Act on one completed candle, live or recovered after a disconnect.
+
+        A recovered candle counts for everything except opening an Entry: it
+        feeds the indicators, it can reach a target and close a Basket, but
+        it cannot buy, because its open is a price the market has left.
+        """
         if self._state is not PaperSpotSessionState.ACTIVE:
             return self._snapshot(accepted=False)
         if self._candles.accept(candle, received_at) is not CandleAcceptance.ACCEPTED:
@@ -203,7 +209,9 @@ class PaperSpotSession:
                 if transition.pending_intent is None
                 else transition.pending_intent.atr
             )
-            if sold_between_ticks:
+            # An Intent handed back can be signalled again on a live candle;
+            # one left pending would fill there off a signal read long before.
+            if sold_between_ticks or backfilled:
                 self._reject_pending_intent(transition)
             else:
                 entry_fill = self._fill_pending_intent(transition, candle)

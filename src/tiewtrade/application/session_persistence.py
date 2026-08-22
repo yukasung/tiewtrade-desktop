@@ -28,6 +28,7 @@ class SessionPersistenceCoordinator[SessionSnapshotT](Protocol):
         candle: Candle,
         *,
         received_at: datetime,
+        backfilled: bool,
     ) -> PersistentSessionSnapshot[SessionSnapshotT]:
         pass
 

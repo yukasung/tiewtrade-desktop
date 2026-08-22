@@ -511,7 +511,9 @@ class AcceptingWarmUpSink:
         del candles, received_at
         self.warmed_up += 1
 
-    async def process_completed(self, candle: Candle, *, received_at: datetime) -> None:
+    async def process_completed(
+        self, candle: Candle, *, received_at: datetime, backfilled: bool
+    ) -> None:
         del candle, received_at
 
     async def process_in_progress(
@@ -529,7 +531,9 @@ class RejectingWarmUpSink:
     ) -> None:
         raise AssertionError("timed-out source must not reach the sink")
 
-    async def process_completed(self, candle: Candle, *, received_at: datetime) -> None:
+    async def process_completed(
+        self, candle: Candle, *, received_at: datetime, backfilled: bool
+    ) -> None:
         raise AssertionError("timed-out source must not reach the sink")
 
     async def process_in_progress(

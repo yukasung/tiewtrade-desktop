@@ -181,6 +181,7 @@ def test_successful_entry_is_durable_before_ready_snapshot_returns() -> None:
     result = persistent.process_completed_candle(
         candle,
         received_at=candle.close_time,
+        backfilled=False,
     )
 
     history.record_entry.assert_called_once_with(
@@ -204,6 +205,7 @@ def test_successful_close_is_durable_before_ready_snapshot_returns() -> None:
     result = persistent.process_completed_candle(
         candle,
         received_at=candle.close_time,
+        backfilled=False,
     )
 
     history.record_close.assert_called_once_with(
@@ -251,7 +253,9 @@ def test_a_failed_close_between_candles_blocks_the_session() -> None:
         persistent.process_in_progress_candle(candle, observed_at=candle.open_time)
 
     with pytest.raises(SessionPersistenceBlockedError):
-        persistent.process_completed_candle(candle, received_at=candle.close_time)
+        persistent.process_completed_candle(
+            candle, received_at=candle.close_time, backfilled=False
+        )
 
 
 def test_exit_fill_without_closed_basket_blocks_persistence() -> None:
@@ -271,7 +275,9 @@ def test_exit_fill_without_closed_basket_blocks_persistence() -> None:
     candle = completed_candle()
 
     with pytest.raises(ValueError, match="present together"):
-        persistent.process_completed_candle(candle, received_at=candle.close_time)
+        persistent.process_completed_candle(
+            candle, received_at=candle.close_time, backfilled=False
+        )
 
     history.record_close.assert_not_called()
 
@@ -287,7 +293,9 @@ def test_closed_basket_with_mismatched_snapshot_basket_id_blocks_persistence() -
     candle = completed_candle()
 
     with pytest.raises(ValueError, match="matching Basket ID"):
-        persistent.process_completed_candle(candle, received_at=candle.close_time)
+        persistent.process_completed_candle(
+            candle, received_at=candle.close_time, backfilled=False
+        )
 
     history.record_close.assert_not_called()
 
@@ -311,12 +319,14 @@ def test_persistence_error_blocks_every_later_candle(error: Exception) -> None:
         persistent.process_completed_candle(
             candle,
             received_at=candle.close_time,
+            backfilled=False,
         )
 
     with pytest.raises(SessionPersistenceBlockedError, match="blocked"):
         persistent.process_completed_candle(
             candle,
             received_at=candle.close_time,
+            backfilled=False,
         )
 
     session.process_completed_candle.assert_called_once()

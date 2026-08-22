@@ -107,6 +107,15 @@ survives a restart, Futures does not (it never takes an open Basket back). `Trad
 through Preflight and explicit user confirmation — setting `LIVE` is not itself a command
 to trade.
 
+**Backfilled candles never open an Entry.** After a disconnect the runtime refetches the
+missed candles up to now and delivers them through the same sink call a live candle takes,
+so `market_data` reports *whether* a candle was backfilled and the Session enforces the
+rule. A backfilled candle still feeds indicators and still closes a Basket (take-profit,
+stop-loss, liquidation — those happened in the market whether the feed saw them or not),
+but it may not fill an Entry, and a pending Entry Intent is handed back to the strategy
+rather than left to fill on the first live candle off a stale signal. Applies to Paper and
+Live alike; see PRODUCT.md 8.1.
+
 **Desktop UI boundary.** `ui` (PySide6) is a thin presentation layer: it converts form
 input into application requests and renders durable results. It must not import SQLite,
 Strategy, or Execution adapters directly, and persistence work must run on a background

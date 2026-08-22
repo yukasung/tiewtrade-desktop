@@ -65,6 +65,13 @@ Cooldown เกิดขึ้นเมื่อ Basket ทำ Entry Pair คร
 - Futures ใช้ `FuturesTradingPolicy` ที่กำหนด One-way Mode, Cross Margin, leverage และ collateral buffer
 - Paper และ Live ใช้ business/risk policy เดียวกัน แต่ใช้ execution adapter แยกกัน
 
+### Candle ที่ดึงย้อนหลัง (Backfilled Candle)
+
+Candle ที่ระบบดึงย้อนหลังมาหลังการเชื่อมต่อขาด ห้ามใช้เปิด Entry ใหม่ เพราะราคาเปิดของมันเป็น
+ราคาที่ตลาดผ่านไปแล้ว แต่ยังใช้ปิด Position ได้เต็มรูปแบบ (Take Profit / Stop Loss /
+Liquidation) และยังใช้คำนวณ Indicator ตามปกติ กฎนี้ใช้กับทั้ง `PAPER` และ `LIVE` ทุก Market
+Type — ดู PRODUCT.md ข้อ 8.1
+
 ### Liquidation
 
 Liquidation เป็นผลลัพธ์แบบ deterministic ของ Paper Futures Policy v1 ที่ปิด Basket

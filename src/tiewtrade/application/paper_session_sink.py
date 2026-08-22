@@ -185,12 +185,13 @@ class PaperRuntimeSink[Snapshot: _CandleSnapshot]:
         candle: Candle,
         *,
         received_at: datetime,
+        backfilled: bool,
     ) -> None:
         with self._entry_lock:
             if not self._entries_enabled():
                 return
             snapshot = self._persistent.process_completed_candle(
-                candle, received_at=received_at
+                candle, received_at=received_at, backfilled=backfilled
             ).session
             self._candle = candle
             self._publish_snapshot(snapshot, candle, candle.close_time)
