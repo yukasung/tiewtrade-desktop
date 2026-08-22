@@ -354,6 +354,13 @@ QLabel#unavailableMessage {
     color: #FF9CAA;
     padding: 10px 12px;
 }
+QLabel#connectionNotice {
+    background: #2A2418;
+    border: 1px solid #6B5A2A;
+    border-radius: 6px;
+    color: #F2C86B;
+    padding: 10px 12px;
+}
 QMessageBox {
     background: #141A22;
     color: #F1F5F9;

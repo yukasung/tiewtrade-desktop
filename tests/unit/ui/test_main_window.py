@@ -69,6 +69,7 @@ from tiewtrade.application.trading_workspace import (
     BasketSnapshot,
     BotRuntimeState,
     DataFreshness,
+    paper_runtime_blocked_workspace_snapshot,
     paper_runtime_workspace_snapshot,
 )
 from tiewtrade.integrations.sqlite.active_paper_sessions import (
@@ -1404,6 +1405,86 @@ def test_blocked_runtime_reopens_the_editable_setup_form(
     qtbot.waitUntil(lambda: _runtime_state(window) is BotRuntimeState.BLOCKED)
     qtbot.waitUntil(window.setup.isVisible)
     assert window.setup.capital_per_entry.isEnabled()
+
+
+def test_a_runtime_that_dies_while_running_says_so_before_the_setup_form(
+    qtbot: QtBot,
+) -> None:
+    """The Bot stopping on its own is news, and the window used to swallow it.
+
+    A Runtime that fails closed takes the workspace back to the setup form
+    with nothing said, which reads as the application forgetting the Session
+    rather than as the Bot having stopped.
+    """
+    session = configured_spot_session()
+    runtime_snapshots = RuntimeSnapshotRelay()
+    notices: list[str] = []
+    reason = "Paper Bot stopped: market data could not be recovered"
+
+    def start(snapshot: BotControlSnapshot) -> BotLifecycleResult:
+        return BotLifecycleResult(
+            workspace=workspace_with_runtime_state(
+                snapshot.workspace,
+                BotRuntimeState.RUNNING,
+                data_freshness=DataFreshness.FRESH,
+            )
+        )
+
+    window = MainWindow(
+        create_session=unused_create,
+        load_active=lambda: session,
+        list_basket_history=empty_basket_history,
+        list_trade_fills=empty_trade_fills,
+        bot=BotActions(start=start, runtime_snapshots=runtime_snapshots),
+        blocked_notice=notices.append,
+    )
+    qtbot.addWidget(window)
+    window.show()
+    control = window.workspace.bot_control_widget
+    qtbot.waitUntil(control.start_button.isEnabled)
+    click(control.start_button)
+    qtbot.waitUntil(lambda: _runtime_state(window) is BotRuntimeState.RUNNING)
+
+    runtime_snapshots.new_generation()(
+        BotLifecycleResult(
+            workspace=paper_runtime_blocked_workspace_snapshot(
+                window._lifecycle_workflow.snapshot.workspace
+            ),
+            blocked_reason=reason,
+        )
+    )
+
+    qtbot.waitUntil(lambda: _runtime_state(window) is BotRuntimeState.BLOCKED)
+    qtbot.waitUntil(window.setup.isVisible)
+    assert notices == [reason]
+
+
+def test_a_bot_that_never_started_reopens_the_setup_form_without_a_notice(
+    qtbot: QtBot,
+) -> None:
+    def fail_start(snapshot: BotControlSnapshot) -> BotLifecycleResult:
+        raise RuntimeError("raw fake exception must not reach the UI")
+
+    notices: list[str] = []
+    window = MainWindow(
+        create_session=unused_create,
+        load_active=configured_spot_session,
+        list_basket_history=empty_basket_history,
+        list_trade_fills=empty_trade_fills,
+        bot=BotActions(start=fail_start),
+        blocked_notice=notices.append,
+    )
+    qtbot.addWidget(window)
+    window.show()
+    qtbot.waitUntil(
+        lambda: window.workspace.bot_control_widget.start_button.isEnabled()
+    )
+
+    click(window.workspace.bot_control_widget.start_button)
+
+    qtbot.waitUntil(lambda: _runtime_state(window) is BotRuntimeState.BLOCKED)
+    qtbot.waitUntil(window.setup.isVisible)
+    assert notices == []
 
 
 def test_stop_reopens_an_editable_setup_form(qtbot: QtBot) -> None:

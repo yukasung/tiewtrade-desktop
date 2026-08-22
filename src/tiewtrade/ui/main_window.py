@@ -72,6 +72,10 @@ WORKER_SHUTDOWN_TIMEOUT_MS = 5_000
 # plain callable in a test rather than a dialog to click.
 TakeProfitConfirmation = Callable[[str, Callable[[], None]], None]
 
+# Told to the trader, not asked of them: the Bot has already stopped by the
+# time this is called. A plain callable, so a test can read what was said.
+BlockedNotice = Callable[[str], None]
+
 
 @dataclass(frozen=True, slots=True)
 class BotActions:
@@ -136,11 +140,14 @@ class MainWindow(QMainWindow):
         chart: ChartSources = NO_CHART,
         thread_pool: QThreadPool | None = None,
         take_profit_confirmation: TakeProfitConfirmation | None = None,
+        blocked_notice: BlockedNotice | None = None,
     ) -> None:
         super().__init__()
         self._take_profit_confirmation = (
             take_profit_confirmation or self._open_take_profit_confirmation
         )
+        self._blocked_notice = blocked_notice or self._open_blocked_notice
+        self._last_bot_state: BotRuntimeState | None = None
         self._take_profit_confirmation_pending = False
         self._take_profit_confirmation_dialog: QMessageBox | None = None
         self._thread_pool = thread_pool or QThreadPool.globalInstance()
@@ -652,6 +659,8 @@ class MainWindow(QMainWindow):
     def _bot_control_changed(self, value: object) -> None:
         if not isinstance(value, BotControlSnapshot):
             return
+        previous_state = self._last_bot_state
+        self._last_bot_state = value.state
         self.workspace.show_bot_control_snapshot(value)
         self._chart_workflow.runtime_snapshot(value)
         if value.state is BotRuntimeState.RUNNING:
@@ -679,12 +688,43 @@ class MainWindow(QMainWindow):
             self._show_editable_setup(value)
             return
         if value.state is BotRuntimeState.BLOCKED:
+            self._announce_blocked_runtime(value, previous_state)
             self._show_editable_setup(value)
 
     @Slot()
     def _stop_requested(self) -> None:
         self._return_to_setup_after_stop = True
         self._lifecycle_workflow.stop_bot()
+
+    def _announce_blocked_runtime(
+        self,
+        snapshot: BotControlSnapshot,
+        previous_state: BotRuntimeState | None,
+    ) -> None:
+        """Say why a running Bot stopped; a Bot that never ran needs no telling.
+
+        A start that fails answers on the form the trader is looking at. This
+        is the other case: the Bot was running, the trader was elsewhere, and
+        the workspace is about to go back to the form on its own.
+        """
+        if previous_state is not BotRuntimeState.RUNNING:
+            return
+        reason = snapshot.blocked_reason
+        if reason is None:
+            return
+        self._blocked_notice(reason)
+
+    def _open_blocked_notice(self, reason: str) -> None:
+        dialog = QMessageBox(self)
+        dialog.setWindowTitle("Paper Bot Stopped")
+        dialog.setIcon(QMessageBox.Icon.Warning)
+        dialog.setText(reason)
+        dialog.setInformativeText(
+            "The Session is open on the setup form. Start the Bot again when "
+            "the connection is back."
+        )
+        dialog.addButton(QMessageBox.StandardButton.Ok)
+        dialog.open()
 
     def _show_editable_setup(self, snapshot: BotControlSnapshot) -> None:
         self._replacement_session = snapshot.session

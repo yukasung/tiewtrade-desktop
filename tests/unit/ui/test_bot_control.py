@@ -22,6 +22,7 @@ from tiewtrade.application.trading_workspace import (
     DataFreshness,
     empty_position_basket_tab,
     ready_position_basket_tab,
+    stale_workspace_snapshot,
 )
 from tiewtrade.ui.bot_control import BotControlWidget
 
@@ -106,6 +107,53 @@ def test_running_shows_runtime_and_basket_facts_without_manual_order_controls(
     assert widget.stop_button.text() == "Stop Bot"
     assert widget.findChildren(QPushButton, "manualBuyButton") == []
     assert widget.findChildren(QPushButton, "manualSellButton") == []
+
+
+def running_snapshot(freshness: DataFreshness) -> BotControlSnapshot:
+    configured = configured_bot_control(
+        configured_spot_session(),
+        observed_at_utc=datetime(2026, 8, 1, 12, tzinfo=UTC),
+        actions=frozenset({BotControlAction.START}),
+    )
+    workspace = workspace_with_runtime_state(
+        configured.workspace,
+        BotRuntimeState.RUNNING,
+        data_freshness=DataFreshness.FRESH,
+    )
+    if freshness is DataFreshness.STALE:
+        workspace = stale_workspace_snapshot(workspace)
+    return BotControlSnapshot(
+        state=BotRuntimeState.RUNNING,
+        session=configured.session,
+        workspace=workspace,
+        available_actions=frozenset({BotControlAction.STOP}),
+    )
+
+
+def test_running_on_stale_data_says_the_connection_is_being_retried(
+    qtbot: QtBot,
+) -> None:
+    """A Bot waiting on a dropped connection looks identical to a live one.
+
+    The Runtime reconnects on its own and says so through data freshness;
+    without this the screen holds the last price it saw and reads as a Bot
+    that is trading, which is the one thing it is not doing.
+    """
+    widget = BotControlWidget()
+    qtbot.addWidget(widget)
+    widget.show()
+    widget.show_snapshot(running_snapshot(DataFreshness.FRESH))
+
+    assert widget.connection_notice.isHidden()
+
+    widget.show_snapshot(running_snapshot(DataFreshness.STALE))
+
+    assert widget.connection_notice.isVisible()
+    assert "Reconnecting" in widget.connection_notice.text()
+
+    widget.show_snapshot(running_snapshot(DataFreshness.FRESH))
+
+    assert widget.connection_notice.isHidden()
 
 
 def test_configured_and_blocked_show_readable_data_freshness(qtbot: QtBot) -> None:
