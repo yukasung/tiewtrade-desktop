@@ -337,7 +337,7 @@ def test_entry_pnl_reads_as_a_two_decimal_figure_coloured_by_its_sign(
     [
         pytest.param(
             basket_snapshot(entry_gate=BasketEntryGate.COOLDOWN),
-            "Cooldown — cancel to take another Entry",
+            "Cooldown",
             id="cooldown",
         ),
         pytest.param(
