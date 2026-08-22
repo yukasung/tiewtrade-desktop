@@ -66,7 +66,17 @@ class EntryPairLifecycle:
     def record_fill(self) -> None:
         if not self.can_enter():
             raise ValueError("entry is blocked by pair lifecycle")
+        self.replay_fill()
 
+    def replay_fill(self) -> None:
+        """Count a Fill that has already happened, without asking the gate.
+
+        The gate decides whether a *new* Entry may open; an Entry the market
+        has already taken is not up for decision. Replay went through the gate
+        and so re-argued Cooldowns the trader had lifted long ago — and only
+        the latest waiver is kept, so the ones before it can never be answered
+        for. A Basket carried past two Cooldowns could not be put back at all.
+        """
         self._entry_count += 1
         if self._entry_count % 2 == 0:
             self._completed_pairs += 1

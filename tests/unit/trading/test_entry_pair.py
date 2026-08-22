@@ -161,3 +161,22 @@ def test_reset_clears_the_waiver() -> None:
     lifecycle.record_fill()
 
     assert not lifecycle.can_enter()
+
+
+def test_replay_puts_back_a_fill_a_cooldown_would_have_blocked() -> None:
+    """A Fill that already happened is counted, not re-decided."""
+    lifecycle = completed_pair()
+
+    lifecycle.replay_fill()
+
+    assert lifecycle.entry_count == 3
+    assert lifecycle.completed_pairs == 1
+
+
+def test_a_replayed_fill_still_completes_its_pair() -> None:
+    lifecycle = completed_pair()
+    lifecycle.replay_fill()
+    lifecycle.replay_fill()
+
+    assert lifecycle.completed_pairs == 2
+    assert lifecycle.entry_gate() == EntryGate(EntryGateState.COOLDOWN)

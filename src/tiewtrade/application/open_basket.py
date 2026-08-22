@@ -88,7 +88,7 @@ def reopen_basket(
             tick_size=tick_size,
             entry_number=entry.entry_number,
         )
-        lifecycle.record_fill()
+        lifecycle.replay_fill()
     if state.waived_pair is not None:
         lifecycle.restore_waiver(state.waived_pair)
     return ReopenedBasket(state=state, basket=basket, lifecycle=lifecycle)
