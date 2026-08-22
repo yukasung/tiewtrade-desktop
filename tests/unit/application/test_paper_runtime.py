@@ -158,6 +158,19 @@ class FailingSpotTradeHistory(SQLiteTradeHistory):
         )
 
 
+class FailingSaleSpotTradeHistory(SQLiteTradeHistory):
+    """Records the Entry that was bought, and never the sale that closes it."""
+
+    def record_closed_basket(
+        self,
+        basket: object,
+        fill: object,
+    ) -> bool:
+        raise TradeHistoryUnavailableError(
+            "sqlite failed at /private/tmp with api_key=secret"
+        )
+
+
 class FailingRuntimeLifecycle(SQLitePaperRuntimeLifecycle):
     def mark_running(
         self,
@@ -483,7 +496,10 @@ def test_persistence_failure_blocks_and_preserves_last_known_workspace(
     assert current.header.runtime_state is BotRuntimeState.BLOCKED
     assert current.read_state is WorkspaceReadState.STALE
     assert current.basket is None
-    assert controller.current_result.blocked_reason == "Paper Bot could not be started"
+    assert (
+        controller.current_result.blocked_reason
+        == "Paper Bot stopped: the Session could not continue"
+    )
     assert "api_key" not in (controller.current_result.blocked_reason or "")
     assert source.closed.wait(2)
 
@@ -829,6 +845,49 @@ def test_a_running_runtime_sells_the_entry_it_is_asked_for(
         # Floored to the tick this Session trades in.
         ("sell", "103.4"),
     ]
+    controller.stop(session)
+
+
+def test_a_sale_that_kills_the_session_blocks_the_bot_instead_of_looking_alive(
+    tmp_path: Path,
+) -> None:
+    """The Bot must not read as running once the Session behind it is done.
+
+    A sale the trader asks for goes through the Session, and a Session that
+    cannot finish one is finished itself: every candle after it is answered
+    unaccepted. The Runtime keeps reading the market either way, so unless
+    the failure is published the screen shows a Bot that is trading.
+    """
+    session = configured_spot_session()
+    database = _database_with_session(tmp_path, session)
+    _record_open_spot_entry(database, session, entry_atr=Decimal("2"))
+    published: list[TradingWorkspaceSnapshot] = []
+    source = ControllablePublicCandleSource(warm_up=_warm_up_candles(), live=())
+    controller = PaperRuntimeController(
+        lifecycle=SQLitePaperRuntimeLifecycle(database),
+        trade_history=FailingSaleSpotTradeHistory(database),
+        symbol_rules=_symbol_rules(),
+        source_factory=lambda _endpoints: source,
+        scheduler=ImmediateScheduler(),
+        snapshot_callback=published.append,
+    )
+    started = controller.start(session)
+    assert started.workspace.header is not None
+    assert started.workspace.header.runtime_state is BotRuntimeState.RUNNING
+
+    with pytest.raises(TradeHistoryUnavailableError):
+        controller.close_entry(session, 1, price=Decimal("103"))
+
+    current = controller.current_workspace
+    assert current.header is not None
+    assert current.header.runtime_state is BotRuntimeState.BLOCKED
+    assert (
+        controller.current_result.blocked_reason
+        == "Paper Bot stopped: the Session could not continue"
+    )
+    assert "api_key" not in (controller.current_result.blocked_reason or "")
+    assert published[-1].header is not None
+    assert published[-1].header.runtime_state is BotRuntimeState.BLOCKED
     controller.stop(session)
 
 

@@ -69,6 +69,10 @@ class PaperPositionRestoreError(RuntimeError):
     """An open Basket cannot be put back the way it was left."""
 
 
+class PaperSessionFailedClosedError(RuntimeError):
+    """The Session has stopped for good, so nothing more may be fed to it."""
+
+
 class _CandleSnapshot(Protocol):
     """What a Session's snapshot tells the sink, whichever market wrote it."""
 
@@ -89,6 +93,9 @@ class _CandleSnapshot(Protocol):
 
     @property
     def sold_entry_numbers(self) -> tuple[int, ...]: ...
+
+    @property
+    def failed_closed(self) -> bool: ...
 
 
 type CloseOneEntry[Snapshot] = Callable[
@@ -193,6 +200,7 @@ class PaperRuntimeSink[Snapshot: _CandleSnapshot]:
             snapshot = self._persistent.process_completed_candle(
                 candle, received_at=received_at, backfilled=backfilled
             ).session
+            self._require_running(snapshot)
             self._candle = candle
             self._publish_snapshot(snapshot, candle, candle.close_time)
 
@@ -214,6 +222,7 @@ class PaperRuntimeSink[Snapshot: _CandleSnapshot]:
             snapshot = self._persistent.process_in_progress_candle(
                 candle, observed_at=received_at
             ).session
+            self._require_running(snapshot)
             if not snapshot.accepted:
                 return
             self._candle = candle
@@ -275,6 +284,20 @@ class PaperRuntimeSink[Snapshot: _CandleSnapshot]:
                 return False
             self._publish_snapshot(snapshot, candle, observed_at)
             return True
+
+    @staticmethod
+    def _require_running(snapshot: Snapshot) -> None:
+        """Stop feeding a Session that has stopped deciding.
+
+        A Session that failed closed answers an unaccepted snapshot to every
+        candle after it, which reads from outside exactly like a market with
+        nothing happening in it. Said out loud here, the Runtime fails closed
+        on it and the Bot goes Blocked instead of looking alive.
+        """
+        if snapshot.failed_closed:
+            raise PaperSessionFailedClosedError(
+                "the Paper Session has stopped and cannot take this candle"
+            )
 
     def _publish_snapshot(
         self,

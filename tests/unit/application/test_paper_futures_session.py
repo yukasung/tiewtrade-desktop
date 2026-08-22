@@ -106,6 +106,9 @@ def test_unexpected_execution_error_fails_closed(
     assert session.snapshot.state is PaperFuturesSessionState.FAILED_CLOSED
     assert session.snapshot.failure_reason is PaperFuturesFailureReason.EXECUTION_ERROR
     assert session.snapshot.pending_intent is None
+    # Said as a plain fact, because what reads it next feeds Spot and Futures
+    # alike and cannot ask either one about its own state enum.
+    assert session.snapshot.failed_closed is True
     assert cast(RsiStepGridStrategy, session._strategy)._pending_intent is None
 
     before = session.snapshot

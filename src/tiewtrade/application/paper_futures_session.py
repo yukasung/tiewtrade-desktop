@@ -80,6 +80,11 @@ class PaperFuturesSessionSnapshot:
         """Futures takes its Basket whole, so no Entry ever leaves alone."""
         return ()
 
+    @property
+    def failed_closed(self) -> bool:
+        """This Session has stopped for good, whatever it was asked next."""
+        return self.state is PaperFuturesSessionState.FAILED_CLOSED
+
 
 class PaperFuturesSession:
     def __init__(

@@ -906,6 +906,7 @@ def test_entry_transition_is_atomic_when_lifecycle_rejects_fill(
         backfilled=False,
     )
     assert first_fill.basket_entry_count == 1
+    assert first_fill.failed_closed is False
 
     second_intent = arm_entry_intent(
         application,
@@ -934,6 +935,9 @@ def test_entry_transition_is_atomic_when_lifecycle_rejects_fill(
     assert str(captured.value.__cause__) == "entry is blocked by pair lifecycle"
     assert application.snapshot.state is PaperSpotSessionState.FAILED_CLOSED
     assert application.snapshot.failure_reason is PaperSpotFailureReason.EXECUTION_ERROR
+    # Said as a plain fact, because what reads it next feeds Spot and Futures
+    # alike and cannot ask either one about its own state enum.
+    assert application.snapshot.failed_closed is True
     assert application.snapshot.pending_intent is None
     assert application.snapshot.basket_entry_count == 1
     assert application._lifecycle.entry_count == 1

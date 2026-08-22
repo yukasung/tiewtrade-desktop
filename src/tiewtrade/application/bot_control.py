@@ -238,6 +238,8 @@ _SAFE_BLOCKED_REASONS = frozenset(
         "Paper Bot recovery failed",
         "Paper Bot recovery required",
         "Paper Position could not be restored",
+        "Paper Bot stopped: market data could not be recovered",
+        "Paper Bot stopped: the Session could not continue",
     }
 )
 

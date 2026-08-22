@@ -92,6 +92,11 @@ class PaperSpotSessionSnapshot:
         """The Entries this snapshot took out of the Basket."""
         return tuple(item.closed.entry_number for item in self.entry_exits)
 
+    @property
+    def failed_closed(self) -> bool:
+        """This Session has stopped for good, whatever it was asked next."""
+        return self.state is PaperSpotSessionState.FAILED_CLOSED
+
 
 @dataclass(frozen=True, slots=True)
 class PaperSpotSessionIdentity:

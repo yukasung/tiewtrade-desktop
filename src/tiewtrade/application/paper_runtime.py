@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from datetime import UTC, datetime
 from decimal import Decimal
 from threading import Event, Lock, Thread
@@ -48,6 +49,7 @@ from tiewtrade.market_data.runtime import (
     RuntimeScheduler,
 )
 from tiewtrade.market_data.runtime_state import (
+    MarketDataRuntimeReason,
     MarketDataRuntimeSnapshot,
     MarketDataRuntimeState,
 )
@@ -60,6 +62,11 @@ _STOP_BLOCKED_REASON = "Paper Bot could not be stopped"
 _RECOVERY_BLOCKED_REASON = "Paper Bot recovery failed"
 _RECOVERY_REQUIRED_REASON = "Paper Bot recovery required"
 _RESTORE_BLOCKED_REASON = "Paper Position could not be restored"
+_RUNTIME_DATA_BLOCKED_REASON = "Paper Bot stopped: market data could not be recovered"
+# One message for every way the Session itself ends: a write that could not
+# be confirmed, execution that broke an invariant, and the candle refused
+# afterwards because of either. Naming only one of them would be a guess.
+_SESSION_BLOCKED_REASON = "Paper Bot stopped: the Session could not continue"
 _STOP_TIMEOUT_SECONDS = 30.0
 
 
@@ -370,7 +377,19 @@ class PaperRuntimeController:
                 finally:
                     self._request_runtime_stop()
         elif snapshot.state is MarketDataRuntimeState.FAILED_CLOSED:
-            self._publish_blocked(readiness=True)
+            # A Bot that ran and then stopped is not a Bot that failed to
+            # start, and the screen says whichever of the two this was. A
+            # Session that never went live has not run yet, whatever ended it.
+            with self._lock:
+                had_run = self._readiness_result is not None
+            self._publish_blocked(
+                readiness=True,
+                reason=(
+                    _failed_closed_reason(snapshot.reason)
+                    if had_run
+                    else _START_BLOCKED_REASON
+                ),
+            )
         elif snapshot.state in {
             MarketDataRuntimeState.STALE,
             MarketDataRuntimeState.RECONNECTING,
@@ -407,7 +426,10 @@ class PaperRuntimeController:
             active = self._active_session
         if sink is None or active != session:
             return False
-        return sink.close_entry(entry_number, price=price, observed_at=self._clock())
+        with self._blocked_on_failure():
+            return sink.close_entry(
+                entry_number, price=price, observed_at=self._clock()
+            )
 
     def waive_cooldown(self, session: ConfiguredPaperSession) -> bool:
         """Lift the Cooldown holding the running Session's Basket now.
@@ -421,7 +443,29 @@ class PaperRuntimeController:
             active = self._active_session
         if sink is None or active != session:
             return False
-        return sink.waive_cooldown(self._clock())
+        with self._blocked_on_failure():
+            return sink.waive_cooldown(self._clock())
+
+    @contextmanager
+    def _blocked_on_failure(self) -> Iterator[None]:
+        """Publish Blocked when an ask from the trader ends the Session.
+
+        Everything reachable through here is terminal where it fails: a
+        Session that failed closed answers nothing but unaccepted snapshots,
+        and persistence that could not confirm a write refuses the next
+        candle for good. The Runtime is still reading the market either way,
+        so without this the screen would keep saying the Bot is trading.
+
+        The Runtime is left to notice on its next candle, which the sink
+        refuses on a Session that has stopped — reaching into its loop from
+        the thread the trader is waiting on would be a deadlock looking for
+        a reason. The error carries on to whoever asked.
+        """
+        try:
+            yield
+        except Exception:
+            self._publish_blocked(reason=_SESSION_BLOCKED_REASON)
+            raise
 
     def _publish_restored_basket(
         self,
@@ -633,6 +677,13 @@ class PaperRuntimeController:
             raise ValueError("Paper Runtime requires TradeMode.PAPER")
         if session.market_data.symbol != self._symbol_rules.symbol:
             raise ValueError("Paper Runtime SymbolRules must match Session symbol")
+
+
+def _failed_closed_reason(reason: MarketDataRuntimeReason) -> str:
+    """Say which half of the run stopped: reading the market, or saving it."""
+    if reason is MarketDataRuntimeReason.SINK_ERROR:
+        return _SESSION_BLOCKED_REASON
+    return _RUNTIME_DATA_BLOCKED_REASON
 
 
 def _remaining_seconds(deadline: float) -> float:
