@@ -18,12 +18,10 @@ from tiewtrade.market_data.config import MarketDataConfig
 from tiewtrade.strategies.entry_intent import EntryIntent
 from tiewtrade.strategies.rsi_step_grid.preset import RsiStepGridPreset
 from tiewtrade.strategies.rsi_step_grid.strategy import RsiStepGridStrategy
-from tiewtrade.trading.basket import BasketCloseReason
+from tiewtrade.trading.entry_pair import EntryGate, EntryGateState
 from tiewtrade.trading.entry_policy import EntryPolicy
 from tiewtrade.trading.futures_policy import FuturesTradingPolicy
-from tiewtrade.trading.position import PositionSide
 from tiewtrade.trading.session_config import MarketType, SessionConfig, TradeMode
-from tiewtrade.trading.spot_policy import SpotTradingPolicy
 from tiewtrade.trading.symbol_rules import SymbolRules
 
 
@@ -38,9 +36,8 @@ def test_session_requires_paper_futures_configuration_and_matching_preset() -> N
         preset_version=session.preset_version,
         market_type=MarketType.SPOT,
         trade_mode=TradeMode.PAPER,
-        available_capital=session.available_capital,
+        capital_per_entry=session.capital_per_entry,
         entry_policy=session.entry_policy,
-        spot_policy=SpotTradingPolicy(trading_capital_ratio=Decimal("0.8")),
     )
     with pytest.raises(ValueError, match="Paper Futures"):
         make_session(spot_session)
@@ -80,109 +77,6 @@ def test_incomplete_candle_is_not_processed() -> None:
 
     assert snapshot.accepted is False
     assert session._latest_mark_price is None
-
-
-def test_entry_fill_can_liquidate_on_the_same_candle() -> None:
-    session = make_session()
-    pending = arm_entry_intent(session)
-    liquidation_candle = next_candle(
-        pending.signal_candle,
-        open="120",
-        high="121",
-        low="10",
-        close="20",
-    )
-
-    snapshot = session.process_completed_candle(
-        liquidation_candle,
-        received_at=liquidation_candle.close_time,
-    )
-
-    assert snapshot.entry_fill is not None
-    assert snapshot.exit_fill is not None
-    assert snapshot.exit_fill.close_reason is BasketCloseReason.LIQUIDATION
-    assert snapshot.state is PaperFuturesSessionState.LIQUIDATED
-    assert snapshot.closed_basket is not None
-    assert snapshot.closed_basket.close_reason is BasketCloseReason.LIQUIDATION
-
-
-def test_liquidation_wins_when_same_candle_touches_take_profit() -> None:
-    session, entry_candle = make_session_with_open_long_basket()
-    ambiguous_candle = next_candle(
-        entry_candle,
-        open="120",
-        high="200",
-        low="10",
-        close="120",
-    )
-
-    snapshot = session.process_completed_candle(
-        ambiguous_candle,
-        received_at=ambiguous_candle.close_time,
-    )
-
-    assert snapshot.exit_fill is not None
-    assert snapshot.exit_fill.close_reason is BasketCloseReason.LIQUIDATION
-    assert snapshot.closed_basket is not None
-    assert snapshot.closed_basket.close_reason is BasketCloseReason.LIQUIDATION
-    assert snapshot.state is PaperFuturesSessionState.LIQUIDATED
-
-
-def test_session_does_not_call_executor_before_liquidation_crossing(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    session, entry_candle = make_session_with_open_long_basket()
-    session._liquidation_price = Decimal("80")
-    safe_candle = next_candle(
-        entry_candle,
-        open="100",
-        high="110",
-        low="90",
-        close="100",
-    )
-
-    def unexpected_liquidation_fill(*args: object, **kwargs: object) -> None:
-        raise AssertionError("executor called before liquidation crossing")
-
-    monkeypatch.setattr(
-        session._executor,
-        "fill_liquidation",
-        unexpected_liquidation_fill,
-    )
-
-    snapshot = session.process_completed_candle(
-        safe_candle,
-        received_at=safe_candle.close_time,
-    )
-
-    assert snapshot.accepted
-    assert snapshot.state is PaperFuturesSessionState.ACTIVE
-    assert snapshot.exit_fill is None
-
-
-def test_liquidated_session_rejects_future_candles_without_mutation() -> None:
-    session, liquidation_candle = make_liquidated_session()
-    before = session.snapshot
-    following_candle = next_candle(
-        liquidation_candle,
-        open="20",
-        high="21",
-        low="19",
-        close="20",
-    )
-
-    after = session.process_completed_candle(
-        following_candle,
-        received_at=following_candle.close_time,
-    )
-
-    assert not after.accepted
-    assert after.state is before.state
-    assert after.closed_basket == before.closed_basket
-    assert after.basket_id == before.basket_id
-    assert after.basket_entry_count == before.basket_entry_count
-    assert after.account_equity == before.account_equity
-    assert after.failure_reason is before.failure_reason
 
 
 def test_unexpected_execution_error_fails_closed(
@@ -233,9 +127,10 @@ def test_unexpected_execution_error_fails_closed(
     assert after.account_equity == before.account_equity
 
 
-def test_unexpected_margin_error_fails_closed(
+def test_an_entry_that_failed_leaves_the_session_holding_nothing(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """A Fill that raised must not leave half a Basket behind it."""
     session = make_session()
     pending = arm_entry_intent(session)
     entry_candle = next_candle(
@@ -246,10 +141,10 @@ def test_unexpected_margin_error_fails_closed(
         close="120",
     )
 
-    def raise_margin_error(*args: object, **kwargs: object) -> None:
-        raise ValueError("broken margin invariant")
+    def raise_execution_error(*args: object, **kwargs: object) -> None:
+        raise ValueError("broken execution invariant")
 
-    monkeypatch.setattr(session._margin, "liquidation_price", raise_margin_error)
+    monkeypatch.setattr(session._executor, "fill_entry", raise_execution_error)
 
     with pytest.raises(PaperFuturesSessionError, match="execution failed"):
         session.process_completed_candle(
@@ -264,220 +159,61 @@ def test_unexpected_margin_error_fails_closed(
     assert session.snapshot.basket_entry_count == 0
     assert session.snapshot.position_side is None
     assert session.snapshot.take_profit_price is None
-    assert session.snapshot.liquidation_price is None
-    assert session.snapshot.account_equity == Decimal("1000")
+    assert session.snapshot.account_equity == futures_session().session_capital
     assert session._basket is None
     assert session._lifecycle.entry_count == 0
     assert cast(RsiStepGridStrategy, session._strategy)._pending_intent is None
 
 
-@pytest.mark.parametrize("failure_path", ["executor", "margin"])
-def test_failure_cleanup_cannot_prevent_terminal_fail_closed(
-    monkeypatch: pytest.MonkeyPatch,
-    failure_path: str,
-) -> None:
-    session = make_session()
+def make_session_in_cooldown() -> PaperFuturesSession:
+    """A Basket holding a completed Entry Pair, which is a Basket in Cooldown.
+
+    Four Entries of quota rather than two, so the Pair closes the gate with a
+    Cooldown rather than with the Session running out of Entries.
+    """
+    session = make_session(
+        replace(futures_session(), entry_policy=EntryPolicy(max_entries=4))
+    )
     pending = arm_entry_intent(session)
-    entry_candle = next_candle(
-        pending.signal_candle,
-        open="120",
-        high="121",
-        low="119",
-        close="120",
+    first_candle = next_candle(
+        pending.signal_candle, open="120", high="121", low="100", close="120"
     )
-
-    def raise_primary_error(*args: object, **kwargs: object) -> None:
-        raise ValueError(f"broken {failure_path} invariant")
-
-    def raise_cleanup_error(*args: object, **kwargs: object) -> None:
-        raise RuntimeError("strategy cleanup failed")
-
-    monkeypatch.setattr(session._strategy, "on_entry_rejected", raise_cleanup_error)
-    if failure_path == "executor":
-        monkeypatch.setattr(session._executor, "fill_entry", raise_primary_error)
-    else:
-        monkeypatch.setattr(
-            session._margin,
-            "liquidation_price",
-            raise_primary_error,
-        )
-
-    captured: Exception | None = None
-    try:
-        session.process_completed_candle(
-            entry_candle,
-            received_at=entry_candle.close_time,
-        )
-    except Exception as error:
-        captured = error
-
-    actual = f"error={type(captured).__name__}, state={session.snapshot.state.value}"
-    assert (
-        isinstance(captured, PaperFuturesSessionError)
-        and session.snapshot.state is PaperFuturesSessionState.FAILED_CLOSED
-    ), actual
-    assert session.snapshot.failure_reason is PaperFuturesFailureReason.EXECUTION_ERROR
-    assert session.snapshot.pending_intent is None
-    assert cast(RsiStepGridStrategy, session._strategy)._pending_intent is None
-
-
-def test_rejected_entry_releases_strategy_to_rearm_pending_intent() -> None:
-    session = make_session(min_notional=Decimal("50000"))
-    pending = arm_entry_intent(session)
-    rejected_candle = next_candle(
-        pending.signal_candle,
-        open="120",
-        high="122",
-        low="119",
-        close="121",
+    session.process_completed_candle(first_candle, received_at=first_candle.close_time)
+    second_pending = arm_next_entry_intent(session, first_candle)
+    second_candle = next_candle(
+        second_pending.signal_candle, open="120", high="121", low="100", close="120"
     )
-
     snapshot = session.process_completed_candle(
-        rejected_candle,
-        received_at=rejected_candle.close_time,
+        second_candle, received_at=second_candle.close_time
     )
-
-    assert snapshot.entry_fill is None
-    assert snapshot.basket_id is None
-    assert snapshot.pending_intent is not None
-    assert snapshot.pending_intent.intent_id != pending.intent_id
-    assert (
-        cast(RsiStepGridStrategy, session._strategy)._pending_intent
-        == snapshot.pending_intent
-    )
+    assert snapshot.basket_entry_count == 2
+    assert snapshot.entry_gate == EntryGate(EntryGateState.COOLDOWN)
+    return session
 
 
-def test_new_take_profit_cannot_fill_on_the_entry_candle() -> None:
+def test_waive_cooldown_opens_the_futures_gate() -> None:
+    session = make_session_in_cooldown()
+
+    snapshot = session.waive_cooldown(datetime(2026, 1, 25, tzinfo=UTC))
+
+    assert snapshot.accepted is True
+    assert snapshot.entry_gate == EntryGate(EntryGateState.OPEN)
+
+
+def test_waive_cooldown_rejects_a_futures_session_not_in_cooldown() -> None:
+    session, _entry_candle = make_session_with_open_long_basket()
+
+    snapshot = session.waive_cooldown(datetime(2026, 1, 25, tzinfo=UTC))
+
+    assert snapshot.accepted is False
+
+
+def test_waive_cooldown_rejects_a_futures_session_with_no_basket() -> None:
     session = make_session()
-    pending = arm_entry_intent(session)
-    entry_candle = next_candle(
-        pending.signal_candle,
-        open="120",
-        high="1000",
-        low="100",
-        close="121",
-    )
 
-    snapshot = session.process_completed_candle(
-        entry_candle,
-        received_at=entry_candle.close_time,
-    )
+    snapshot = session.waive_cooldown(datetime(2026, 1, 25, tzinfo=UTC))
 
-    assert snapshot.entry_fill is not None
-    assert snapshot.exit_fill is None
-    assert snapshot.closed_basket is None
-    assert snapshot.state is PaperFuturesSessionState.ACTIVE
-    assert snapshot.basket_entry_count == 1
-    assert snapshot.take_profit_price is not None
-
-
-def test_normal_take_profit_closes_and_resets_basket_without_ending_session() -> None:
-    session, first_entry_candle = make_session_with_open_long_basket()
-    second_pending = arm_next_entry_intent(session, first_entry_candle)
-    second_entry_price = second_pending.signal_candle.close
-    second_entry_candle = next_candle(
-        second_pending.signal_candle,
-        open=str(second_entry_price),
-        high=str(second_entry_price + Decimal("1")),
-        low=str(second_entry_price - Decimal("1")),
-        close=str(second_entry_price),
-    )
-    second_entry = session.process_completed_candle(
-        second_entry_candle,
-        received_at=second_entry_candle.close_time,
-    )
-    assert second_entry.entry_fill is not None
-    assert second_entry.basket_entry_count == 2
-
-    target_candle = next_candle(
-        second_entry_candle,
-        open="120",
-        high="200",
-        low="100",
-        close="120",
-    )
-
-    closed = session.process_completed_candle(
-        target_candle,
-        received_at=target_candle.close_time,
-    )
-
-    assert closed.exit_fill is not None
-    assert closed.exit_fill.close_reason is BasketCloseReason.TAKE_PROFIT
-    assert closed.closed_basket is not None
-    assert closed.closed_basket.close_reason is BasketCloseReason.TAKE_PROFIT
-    assert closed.state is PaperFuturesSessionState.ACTIVE
-    assert closed.basket_entry_count == 0
-    assert closed.take_profit_price is None
-    assert closed.liquidation_price is None
-
-    new_pending = arm_next_entry_intent(session, target_candle)
-    new_entry_price = new_pending.signal_candle.close
-    new_entry_candle = next_candle(
-        new_pending.signal_candle,
-        open=str(new_entry_price),
-        high=str(new_entry_price + Decimal("1")),
-        low=str(new_entry_price - Decimal("1")),
-        close=str(new_entry_price),
-    )
-    new_entry = session.process_completed_candle(
-        new_entry_candle,
-        received_at=new_entry_candle.close_time,
-    )
-
-    assert new_entry.entry_fill is not None
-    assert new_entry.state is PaperFuturesSessionState.ACTIVE
-    assert new_entry.basket_entry_count == 1
-    assert new_entry.basket_id != closed.basket_id
-
-
-def test_entry_updates_account_equity_and_liquidation_threshold() -> None:
-    session, _ = make_session_with_open_long_basket()
-
-    snapshot = session.snapshot
-
-    assert snapshot.entry_fill is None
-    assert snapshot.position_side is PositionSide.LONG
-    # Opening costs nothing now, so equity is untouched until the mark moves.
-    assert snapshot.account_equity == snapshot.capital_plan.available_capital
-    assert snapshot.liquidation_price is not None
-
-
-def test_account_equity_marks_open_long_to_latest_accepted_close() -> None:
-    session, entry_candle = make_session_with_open_long_basket()
-    mark_candle = next_candle(
-        entry_candle,
-        open="120",
-        high="121",
-        low="100",
-        close="110",
-    )
-
-    snapshot = session.process_completed_candle(
-        mark_candle,
-        received_at=mark_candle.close_time,
-    )
-
-    assert snapshot.accepted
-    assert snapshot.exit_fill is None
-    assert snapshot.state is PaperFuturesSessionState.ACTIVE
-    assert snapshot.account_equity == Decimal("896.0")
-
-
-def test_warm_up_seeds_indicators_without_execution_side_effects() -> None:
-    session = make_session()
-    candles = signal_candles()
-
-    session.warm_up_completed_candles(
-        candles,
-        received_at=candles[-1].close_time,
-    )
-
-    assert session.snapshot.accepted
-    assert session.snapshot.pending_intent is None
-    assert session.snapshot.entry_fill is None
-    assert session.snapshot.basket_id is None
-    assert session.snapshot.state is PaperFuturesSessionState.ACTIVE
+    assert snapshot.accepted is False
 
 
 def make_session(
@@ -504,9 +240,8 @@ def futures_session() -> SessionConfig:
         preset_version="rsi-step-grid-v1",
         market_type=MarketType.FUTURES,
         trade_mode=TradeMode.PAPER,
-        available_capital=Decimal("1000"),
+        capital_per_entry=Decimal("250"),
         entry_policy=EntryPolicy(max_entries=2),
-        spot_policy=None,
         futures_policy=FuturesTradingPolicy.v1(leverage=5),
     )
 
@@ -526,25 +261,7 @@ def make_session_with_open_long_basket() -> tuple[PaperFuturesSession, Candle]:
         received_at=entry_candle.close_time,
     )
     assert snapshot.entry_fill is not None
-    assert snapshot.liquidation_price is not None
     return session, entry_candle
-
-
-def make_liquidated_session() -> tuple[PaperFuturesSession, Candle]:
-    session, entry_candle = make_session_with_open_long_basket()
-    liquidation_candle = next_candle(
-        entry_candle,
-        open="20",
-        high="30",
-        low="10",
-        close="20",
-    )
-    snapshot = session.process_completed_candle(
-        liquidation_candle,
-        received_at=liquidation_candle.close_time,
-    )
-    assert snapshot.state is PaperFuturesSessionState.LIQUIDATED
-    return session, liquidation_candle
 
 
 def arm_entry_intent(session: PaperFuturesSession) -> EntryIntent:

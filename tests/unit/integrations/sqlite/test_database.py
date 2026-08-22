@@ -48,13 +48,73 @@ def test_reader_can_read_committed_snapshot_while_writer_is_active(
 def test_migrate_reports_newer_schema_with_version_facts(tmp_path: Path) -> None:
     database = SQLiteDatabase(tmp_path / "tiewtrade.sqlite3")
     with database.connect() as connection:
-        connection.execute("PRAGMA user_version = 11")
+        connection.execute("PRAGMA user_version = 16")
 
     with pytest.raises(UnsupportedDatabaseSchemaError) as caught:
         database.migrate()
 
-    assert caught.value.database_version == 11
-    assert caught.value.supported_version == 10
+    assert caught.value.database_version == 16
+    assert caught.value.supported_version == 15
+
+
+def test_migrate_creates_cooldown_waivers_table_on_a_fresh_database(
+    tmp_path: Path,
+) -> None:
+    database = SQLiteDatabase(tmp_path / "tiewtrade.sqlite3")
+
+    database.migrate()
+
+    with database.connect() as connection:
+        connection.execute(
+            "SELECT basket_id, waived_pair, waived_at_utc FROM paper_cooldown_waivers"
+        )
+
+
+def test_migrate_adds_cooldown_waivers_table_to_an_older_database(
+    tmp_path: Path,
+) -> None:
+    database = SQLiteDatabase(tmp_path / "tiewtrade.sqlite3")
+    with database.connect() as connection:
+        connection.execute("PRAGMA user_version = 12")
+
+    database.migrate()
+
+    with database.connect() as connection:
+        connection.execute(
+            "SELECT basket_id, waived_pair, waived_at_utc FROM paper_cooldown_waivers"
+        )
+
+
+def test_migrate_replaces_a_v13_waiver_table_keyed_by_month(
+    tmp_path: Path,
+) -> None:
+    """A month named when a Cooldown lapsed; nothing lapses now, so it goes."""
+    database = SQLiteDatabase(tmp_path / "tiewtrade.sqlite3")
+    with database.connect() as connection:
+        connection.execute(
+            """
+            CREATE TABLE paper_cooldown_waivers (
+                basket_id TEXT PRIMARY KEY,
+                completed_pair_month INTEGER NOT NULL,
+                waived_at_utc TEXT NOT NULL
+            )
+            """
+        )
+        connection.execute(
+            "INSERT INTO paper_cooldown_waivers "
+            "(basket_id, completed_pair_month, waived_at_utc) "
+            "VALUES ('basket', 24313, '2026-01-25T00:00:00+00:00')"
+        )
+        connection.execute("PRAGMA user_version = 13")
+
+    database.migrate()
+
+    with database.connect() as connection:
+        rows = connection.execute(
+            "SELECT basket_id, waived_pair, waived_at_utc FROM paper_cooldown_waivers"
+        ).fetchall()
+
+    assert rows == []
 
 
 def test_migrate_v5_rebuilds_lifecycle_constraint_for_blocked_state(

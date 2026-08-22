@@ -2,6 +2,10 @@ from dataclasses import dataclass
 from datetime import datetime
 from decimal import Decimal
 
+from tiewtrade.execution.paper_fill_identity import (
+    paper_fill_id,
+    require_matching_symbol,
+)
 from tiewtrade.market_data.candle import Candle
 from tiewtrade.strategies.entry_intent import EntryIntent
 from tiewtrade.trading.basket import Basket, BasketCloseReason
@@ -46,16 +50,15 @@ class PaperFuturesExecutor:
 
         self._session = session
         self._symbol_rules = symbol_rules
-        self._capital_plan = FuturesCapitalPlan.from_available(
-            session.available_capital,
+        self._capital_plan = FuturesCapitalPlan.from_capital_per_entry(
+            session.capital_per_entry,
             session.futures_policy,
-            session.entry_policy,
         )
 
     def fill_entry(
         self, intent: EntryIntent, candle: Candle
     ) -> PaperFuturesEntryFill | None:
-        self._require_matching_symbol(candle)
+        require_matching_symbol(candle, self._symbol_rules)
         if intent.side is PositionSide.LONG:
             price = self._symbol_rules.ceil_price(candle.open)
         else:
@@ -70,7 +73,7 @@ class PaperFuturesExecutor:
         order_id = f"entry:{intent.intent_id}"
         return PaperFuturesEntryFill(
             order_id=order_id,
-            fill_id=f"paper:{self._session.session_id}:{order_id}:fill",
+            fill_id=paper_fill_id(self._session.session_id, order_id),
             intent_id=intent.intent_id,
             side=intent.side,
             price=price,
@@ -81,7 +84,7 @@ class PaperFuturesExecutor:
     def fill_take_profit(
         self, basket: Basket, candle: Candle
     ) -> PaperFuturesExitFill | None:
-        self._require_matching_symbol(candle)
+        require_matching_symbol(candle, self._symbol_rules)
         if basket.take_profit_price is None:
             return None
 
@@ -101,38 +104,6 @@ class PaperFuturesExecutor:
             filled_at=candle.close_time,
         )
 
-    def fill_liquidation(
-        self,
-        basket: Basket,
-        candle: Candle,
-        *,
-        liquidation_price: Decimal,
-    ) -> PaperFuturesExitFill | None:
-        self._require_matching_symbol(candle)
-        if not liquidation_price.is_finite() or liquidation_price <= 0:
-            raise ValueError("liquidation_price must be finite and positive")
-
-        if basket.position_side is PositionSide.LONG:
-            # The gap is what makes a liquidation fill worse than its
-            # threshold, so the open still wins when it opened through it.
-            price = self._symbol_rules.floor_price(min(candle.open, liquidation_price))
-        else:
-            price = self._symbol_rules.ceil_price(max(candle.open, liquidation_price))
-
-        return self._exit_fill(
-            basket=basket,
-            price=price,
-            close_reason=BasketCloseReason.LIQUIDATION,
-            filled_at=candle.close_time,
-        )
-
-    def _require_matching_symbol(self, candle: Candle) -> None:
-        if candle.symbol != self._symbol_rules.symbol:
-            raise ValueError(
-                "candle symbol must match SymbolRules.symbol: "
-                f"candle={candle.symbol!r}, rules={self._symbol_rules.symbol!r}"
-            )
-
     def _exit_fill(
         self,
         *,
@@ -151,7 +122,7 @@ class PaperFuturesExecutor:
         order_id = f"{close_reason.value}:{basket.basket_id}"
         return PaperFuturesExitFill(
             order_id=order_id,
-            fill_id=f"paper:{self._session.session_id}:{order_id}:fill",
+            fill_id=paper_fill_id(self._session.session_id, order_id),
             side=basket.position_side,
             close_reason=close_reason,
             price=price,

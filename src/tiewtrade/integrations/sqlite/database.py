@@ -1,5 +1,6 @@
 import shutil
 import sqlite3
+from decimal import Decimal
 from pathlib import Path
 
 
@@ -23,7 +24,7 @@ class UnsupportedDatabaseSchemaError(ValueError):
 
 
 class SQLiteDatabase:
-    _SCHEMA_VERSION = 10
+    _SCHEMA_VERSION = 15
     _BUSY_TIMEOUT_MS = 5_000
 
     def __init__(self, path: Path) -> None:
@@ -60,7 +61,15 @@ class SQLiteDatabase:
                 return
             if 1 <= version <= 9:
                 _require_drop_column_support()
+            if 1 <= version <= 14:
                 self._keep_a_copy(connection, version)
+                # v11 and v15 both drop the table paper_runtime_lifecycle
+                # points at and put one back under the same name. Enforcement
+                # would read the moment in between as an orphaned lifecycle,
+                # so it is off for the migration and the connection is closed
+                # before anything else can use it. Only a transaction-free
+                # moment can switch it, which is why it is switched here.
+                connection.execute("PRAGMA foreign_keys = OFF")
 
             with connection:
                 if version == 0:
@@ -97,6 +106,22 @@ class SQLiteDatabase:
                     _migrate_drop_fees_v9(connection)
                 if 1 <= version <= 9:
                     _migrate_drop_slippage_v10(connection)
+                if 1 <= version <= 10:
+                    _migrate_drop_spot_ratio_v11(connection)
+                if 1 <= version <= 11:
+                    _migrate_capital_per_entry_v12(connection)
+                if version == 13:
+                    # v13 keyed a waiver by the calendar month a Pair
+                    # completed, because a Cooldown lapsed two months on.
+                    # A Cooldown now stands until it is waived, so the month
+                    # names nothing and the Pair is what a waiver holds. No
+                    # waiver written under the old meaning can be read under
+                    # the new one, so none is carried over.
+                    connection.execute("DROP TABLE IF EXISTS paper_cooldown_waivers")
+                if 0 <= version <= 13:
+                    _create_paper_cooldown_waiver_schema(connection)
+                if 1 <= version <= 14:
+                    _migrate_drop_maintenance_margin_rate_v15(connection)
                 connection.execute(f"PRAGMA user_version = {self._SCHEMA_VERSION}")
         finally:
             connection.close()
@@ -214,6 +239,129 @@ def _migrate_drop_slippage_v10(connection: sqlite3.Connection) -> None:
         connection.execute("ALTER TABLE bot_sessions DROP COLUMN slippage_bps")
 
 
+def _raise_scratch_bot_sessions(connection: sqlite3.Connection, table_sql: str) -> None:
+    """Put up an empty table to rebuild bot_sessions into.
+
+    A rebuild that was interrupted leaves its half-built table behind, and
+    CREATE IF NOT EXISTS would take that one for its own — renaming a stale
+    shape over the real Sessions without saying a word. The name is cleared
+    first so the table raised here is always the one the caller described.
+
+    Safe only after the caller's own guard has found bot_sessions still in
+    its old shape: that is what says the copy has not started, and so that
+    anything under the scratch name is left over rather than in use.
+    """
+    connection.execute("DROP TABLE IF EXISTS new_bot_sessions")
+    connection.execute(table_sql.format(table="new_bot_sessions"))
+
+
+def _migrate_drop_spot_ratio_v11(connection: sqlite3.Connection) -> None:
+    """Take the Spot trading ratio out of a Session's configuration.
+
+    A Spot Session now trades the capital it was given, so the ratio it was
+    started with is not a smaller number to keep — it is a rule that no longer
+    exists. Sessions written before this migrate to trading all of it.
+
+    The table is rebuilt rather than altered: the column is named in the
+    table's own CHECK, which SQLite will not let a DROP COLUMN leave dangling.
+    Guarded on the column because a database created by
+    _create_bot_sessions_schema already has the shape this leaves.
+    """
+    if not _has_column(connection, "bot_sessions", "spot_trading_capital_ratio"):
+        return
+    # The new table is raised beside the old one and takes its name only once
+    # the old one is gone. Renaming the old one out of the way instead would
+    # move paper_runtime_lifecycle's reference along with it, leaving the
+    # lifecycle pointing at a table this migration then drops.
+    _raise_scratch_bot_sessions(connection, _V11_BOT_SESSIONS_TABLE_SQL)
+    connection.execute(
+        f"""
+        INSERT INTO new_bot_sessions ({_V11_BOT_SESSIONS_COLUMNS})
+        SELECT {_V11_BOT_SESSIONS_COLUMNS} FROM bot_sessions
+        """
+    )
+    connection.execute("DROP TABLE bot_sessions")
+    connection.execute("ALTER TABLE new_bot_sessions RENAME TO bot_sessions")
+    # The single-active index went with the table it indexed.
+    _create_bot_sessions_indexes(connection)
+
+
+def _migrate_drop_maintenance_margin_rate_v15(connection: sqlite3.Connection) -> None:
+    """Take the Maintenance Margin Rate out of a Session's configuration.
+
+    It existed to compute a Liquidation Price, and nothing computes one any
+    more, so a Session started with it is not carrying a smaller number to
+    keep — it is carrying a rule that no longer exists.
+
+    The table is rebuilt rather than altered, for the same reason v11 did:
+    a DROP COLUMN cannot leave the table's own CHECK dangling, and the new
+    table takes the name only once the old one is gone so that
+    paper_runtime_lifecycle's reference is not carried off with a rename.
+    """
+    if not _has_column(connection, "bot_sessions", "futures_maintenance_margin_rate"):
+        return
+    _raise_scratch_bot_sessions(connection, _BOT_SESSIONS_TABLE_SQL)
+    connection.execute(
+        f"""
+        INSERT INTO new_bot_sessions ({_BOT_SESSIONS_COLUMNS})
+        SELECT {_BOT_SESSIONS_COLUMNS} FROM bot_sessions
+        """
+    )
+    connection.execute("DROP TABLE bot_sessions")
+    connection.execute("ALTER TABLE new_bot_sessions RENAME TO bot_sessions")
+    # The single-active index went with the table it indexed.
+    _create_bot_sessions_indexes(connection)
+
+
+def _migrate_capital_per_entry_v12(connection: sqlite3.Connection) -> None:
+    """Ask what one Entry spends instead of what the wallet holds.
+
+    A Session used to state a total that was divided down to reach the figure
+    every Entry was actually sized with. It states that figure now, so the
+    column is not renamed but converted: read as a total, an old 10,000 would
+    come back as ten thousand per Entry and trade a hundred times the size it
+    was started with.
+
+    The arithmetic is the arithmetic the old plans did — Spot divided the
+    total by its Entries, Futures took half of it first — so every Session
+    that migrates goes on trading exactly what it traded before.
+    """
+    if not _has_column(connection, "bot_sessions", "available_capital"):
+        return
+    rows = connection.execute("SELECT * FROM bot_sessions").fetchall()
+    converted = [
+        (
+            *tuple(row[name] for name in _BOT_SESSIONS_COLUMN_NAMES[:6]),
+            str(_capital_per_entry_of(row)),
+            *tuple(row[name] for name in _BOT_SESSIONS_COLUMN_NAMES[7:]),
+        )
+        for row in rows
+    ]
+    _raise_scratch_bot_sessions(connection, _BOT_SESSIONS_TABLE_SQL)
+    placeholders = ", ".join("?" for _ in _BOT_SESSIONS_COLUMN_NAMES)
+    connection.executemany(
+        f"""
+        INSERT INTO new_bot_sessions ({_BOT_SESSIONS_COLUMNS})
+        VALUES ({placeholders})
+        """,
+        converted,
+    )
+    connection.execute("DROP TABLE bot_sessions")
+    connection.execute("ALTER TABLE new_bot_sessions RENAME TO bot_sessions")
+    # The single-active index went with the table it indexed.
+    _create_bot_sessions_indexes(connection)
+
+
+def _capital_per_entry_of(row: sqlite3.Row) -> Decimal:
+    """What this Session was already spending on one Entry."""
+    total = Decimal(row["available_capital"])
+    entries = Decimal(row["max_entries"])
+    ratio = row["futures_trading_capital_ratio"]
+    if ratio is not None:
+        total = total * Decimal(ratio)
+    return total / entries
+
+
 def _has_column(connection: sqlite3.Connection, table: str, column: str) -> bool:
     return _table_exists(connection, table) and not _column_is_missing(
         connection, table, column
@@ -240,10 +388,16 @@ def _table_exists(connection: sqlite3.Connection, name: str) -> bool:
     )
 
 
-def _create_bot_sessions_schema(connection: sqlite3.Connection) -> None:
-    connection.execute(
-        """
-        CREATE TABLE IF NOT EXISTS bot_sessions (
+"""The shape of bot_sessions, written once because v11 rebuilds the table.
+
+The name is a parameter so the rebuild can raise the same table beside the old
+one; nothing else may fill it in, and no value but a literal name ever reaches
+it.
+"""
+# The shape bot_sessions had at v11, frozen: a migration rebuilds the table
+# of its own moment, not the one the code has since moved on to.
+_V11_BOT_SESSIONS_TABLE_SQL = """
+        CREATE TABLE IF NOT EXISTS {table} (
             session_id TEXT PRIMARY KEY,
             trade_mode TEXT NOT NULL CHECK (trade_mode = 'paper'),
             market_type TEXT NOT NULL CHECK (
@@ -256,7 +410,6 @@ def _create_bot_sessions_schema(connection: sqlite3.Connection) -> None:
             max_entries INTEGER NOT NULL CHECK (
                 max_entries BETWEEN 2 AND 20 AND max_entries % 2 = 0
             ),
-            spot_trading_capital_ratio TEXT,
             futures_policy_version TEXT,
             futures_leverage INTEGER,
             futures_trading_capital_ratio TEXT,
@@ -267,21 +420,90 @@ def _create_bot_sessions_schema(connection: sqlite3.Connection) -> None:
             created_at_utc TEXT NOT NULL,
             ended_at_utc TEXT,
             CHECK (
-                (
-                    market_type = 'spot'
-                    AND spot_trading_capital_ratio IS NOT NULL
-                    AND futures_policy_version IS NULL
-                )
+                (market_type = 'spot' AND futures_policy_version IS NULL)
                 OR
-                (
-                    market_type = 'futures'
-                    AND spot_trading_capital_ratio IS NULL
-                    AND futures_policy_version IS NOT NULL
-                )
+                (market_type = 'futures' AND futures_policy_version IS NOT NULL)
             )
         )
-        """
-    )
+"""
+
+_V11_BOT_SESSIONS_COLUMNS = """
+            session_id, trade_mode, market_type, symbol, timeframe,
+            preset_version, available_capital, max_entries,
+            futures_policy_version, futures_leverage,
+            futures_trading_capital_ratio, futures_collateral_buffer_ratio,
+            futures_maintenance_margin_rate, futures_margin_mode,
+            futures_position_mode, created_at_utc, ended_at_utc
+"""
+
+
+_BOT_SESSIONS_TABLE_SQL = """
+        CREATE TABLE IF NOT EXISTS {table} (
+            session_id TEXT PRIMARY KEY,
+            trade_mode TEXT NOT NULL CHECK (trade_mode = 'paper'),
+            market_type TEXT NOT NULL CHECK (
+                market_type IN ('spot', 'futures')
+            ),
+            symbol TEXT NOT NULL,
+            timeframe TEXT NOT NULL,
+            preset_version TEXT NOT NULL,
+            capital_per_entry TEXT NOT NULL,
+            max_entries INTEGER NOT NULL CHECK (
+                max_entries BETWEEN 2 AND 20 AND max_entries % 2 = 0
+            ),
+            futures_policy_version TEXT,
+            futures_leverage INTEGER,
+            futures_trading_capital_ratio TEXT,
+            futures_collateral_buffer_ratio TEXT,
+            futures_margin_mode TEXT,
+            futures_position_mode TEXT,
+            created_at_utc TEXT NOT NULL,
+            ended_at_utc TEXT,
+            CHECK (
+                (market_type = 'spot' AND futures_policy_version IS NULL)
+                OR
+                (market_type = 'futures' AND futures_policy_version IS NOT NULL)
+            )
+        )
+"""
+
+# Every column of bot_sessions in one order, for a rebuild that copies rather
+# than reshapes: naming them keeps the copy honest if the shape moves again.
+_BOT_SESSIONS_COLUMN_NAMES = (
+    "session_id",
+    "trade_mode",
+    "market_type",
+    "symbol",
+    "timeframe",
+    "preset_version",
+    "capital_per_entry",
+    "max_entries",
+    "futures_policy_version",
+    "futures_leverage",
+    "futures_trading_capital_ratio",
+    "futures_collateral_buffer_ratio",
+    "futures_margin_mode",
+    "futures_position_mode",
+    "created_at_utc",
+    "ended_at_utc",
+)
+
+_BOT_SESSIONS_COLUMNS = """
+            session_id, trade_mode, market_type, symbol, timeframe,
+            preset_version, capital_per_entry, max_entries,
+            futures_policy_version, futures_leverage,
+            futures_trading_capital_ratio, futures_collateral_buffer_ratio,
+            futures_margin_mode, futures_position_mode,
+            created_at_utc, ended_at_utc
+"""
+
+
+def _create_bot_sessions_schema(connection: sqlite3.Connection) -> None:
+    connection.execute(_BOT_SESSIONS_TABLE_SQL.format(table="bot_sessions"))
+    _create_bot_sessions_indexes(connection)
+
+
+def _create_bot_sessions_indexes(connection: sqlite3.Connection) -> None:
     connection.execute(
         """
         CREATE UNIQUE INDEX IF NOT EXISTS bot_sessions_single_active_idx
@@ -298,6 +520,18 @@ def _create_paper_runtime_lifecycle_schema(connection: sqlite3.Connection) -> No
             session_id TEXT PRIMARY KEY REFERENCES bot_sessions(session_id),
             state TEXT NOT NULL CHECK (state IN ('running', 'stopped', 'blocked')),
             observed_at_utc TEXT NOT NULL
+        )
+        """
+    )
+
+
+def _create_paper_cooldown_waiver_schema(connection: sqlite3.Connection) -> None:
+    connection.execute(
+        """
+        CREATE TABLE IF NOT EXISTS paper_cooldown_waivers (
+            basket_id TEXT PRIMARY KEY REFERENCES basket_results(basket_id),
+            waived_pair INTEGER NOT NULL,
+            waived_at_utc TEXT NOT NULL
         )
         """
     )

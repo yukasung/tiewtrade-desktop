@@ -15,7 +15,6 @@ from tiewtrade.strategies.registry import (
 )
 from tiewtrade.trading.entry_policy import EntryPolicy
 from tiewtrade.trading.session_config import MarketType, SessionConfig, TradeMode
-from tiewtrade.trading.spot_policy import SpotTradingPolicy
 from tiewtrade.trading.symbol_rules import SymbolRules
 
 _SESSION_ID = UUID("00000000-0000-0000-0000-000000000080")
@@ -35,11 +34,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             preset_version=preset.version,
             market_type=MarketType.SPOT,
             trade_mode=TradeMode.PAPER,
-            available_capital=arguments.available_capital,
+            capital_per_entry=arguments.capital_per_entry,
             entry_policy=EntryPolicy(max_entries=arguments.max_entries),
-            spot_policy=SpotTradingPolicy(
-                trading_capital_ratio=arguments.trading_capital_ratio
-            ),
         )
         result = run_paper_spot_replay(
             load_candles_csv(arguments.csv_path, market_data),
@@ -66,8 +62,7 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("csv_path", type=Path)
     parser.add_argument("--symbol", choices=("BTCUSDT",), default="BTCUSDT")
     parser.add_argument("--timeframe", choices=("5m",), default="5m")
-    parser.add_argument("--available-capital", required=True, type=_finite_decimal)
-    parser.add_argument("--trading-capital-ratio", required=True, type=_finite_decimal)
+    parser.add_argument("--capital-per-entry", required=True, type=_finite_decimal)
     parser.add_argument("--max-entries", required=True, type=int)
     parser.add_argument(
         "--strategy",

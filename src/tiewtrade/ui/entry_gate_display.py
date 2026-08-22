@@ -10,6 +10,6 @@ def blocked_entry_reason(basket: BasketSnapshot) -> str:
     if basket.entry_gate is BasketEntryGate.MAX_ENTRIES_REACHED:
         return "Max Entries reached"
     if basket.entry_gate is BasketEntryGate.COOLDOWN:
-        assert basket.cooldown_until is not None
-        return f"Cooldown until {basket.cooldown_until:%b %Y}"
+        # No date to name: a Cooldown waits on the trader, not on the calendar.
+        return "Cooldown — cancel to take another Entry"
     return ""

@@ -3,6 +3,10 @@ from dataclasses import dataclass
 from datetime import datetime
 from decimal import Decimal
 
+from tiewtrade.execution.paper_fill_identity import (
+    paper_fill_id,
+    require_matching_symbol,
+)
 from tiewtrade.market_data.candle import Candle
 from tiewtrade.strategies.entry_intent import EntryIntent
 from tiewtrade.trading.basket import Basket
@@ -38,21 +42,16 @@ class PaperSpotExitFill:
 
 class PaperSpotExecutor:
     def __init__(self, session: SessionConfig, symbol_rules: SymbolRules) -> None:
-        if session.spot_policy is None:
-            raise ValueError("spot_policy is required for Paper Spot execution")
-
         self._session = session
         self._symbol_rules = symbol_rules
-        self._capital_plan = SpotCapitalPlan.from_available(
-            session.available_capital,
-            session.spot_policy,
-            session.entry_policy,
+        self._capital_plan = SpotCapitalPlan.from_capital_per_entry(
+            session.capital_per_entry
         )
 
     def fill_entry(
         self, intent: EntryIntent, candle: Candle
     ) -> PaperSpotEntryFill | None:
-        self._require_matching_symbol(candle)
+        require_matching_symbol(candle, self._symbol_rules)
 
         price = self._symbol_rules.ceil_price(candle.open)
         quantity = self._symbol_rules.floor_quantity(
@@ -65,7 +64,7 @@ class PaperSpotExecutor:
         order_id = f"entry:{intent.intent_id}"
         return PaperSpotEntryFill(
             order_id=order_id,
-            fill_id=f"paper:{self._session.session_id}:{order_id}:fill",
+            fill_id=paper_fill_id(self._session.session_id, order_id),
             intent_id=intent.intent_id,
             price=price,
             quantity=quantity,
@@ -80,7 +79,7 @@ class PaperSpotExecutor:
         Each Entry is sold on its own, so a candle that runs past two targets
         books two Fills rather than one averaged sale.
         """
-        self._require_matching_symbol(candle)
+        require_matching_symbol(candle, self._symbol_rules)
 
         fills: list[PaperSpotExitFill] = []
         for entry in basket.entries_reaching_take_profit(candle.high, candle.low):
@@ -89,7 +88,7 @@ class PaperSpotExecutor:
             fills.append(
                 PaperSpotExitFill(
                     order_id=order_id,
-                    fill_id=f"paper:{self._session.session_id}:{order_id}:fill",
+                    fill_id=paper_fill_id(self._session.session_id, order_id),
                     price=price,
                     quantity=entry.quantity,
                     filled_at=filled_at,
@@ -98,10 +97,41 @@ class PaperSpotExecutor:
             )
         return tuple(fills)
 
+    def fill_entry_close(
+        self,
+        basket: Basket,
+        entry_number: int,
+        *,
+        price: Decimal,
+        filled_at: datetime,
+    ) -> PaperSpotExitFill:
+        """A Fill for one Entry sold on demand, at the price the market is at.
+
+        The same sale a target makes, at a price nobody promised: the trader
+        asked for it, so it books where the market is rather than where the
+        Entry was aiming. Rounded the way every sale here is rounded — down,
+        against the seller — so a Paper Fill cannot flatter itself.
+        """
+        entry = next(
+            (item for item in basket.entries if item.entry_number == entry_number),
+            None,
+        )
+        if entry is None:
+            raise ValueError("basket has no open Entry with that number")
+        order_id = f"close-entry:{basket.basket_id}:{entry_number}"
+        return PaperSpotExitFill(
+            order_id=order_id,
+            fill_id=paper_fill_id(self._session.session_id, order_id),
+            price=self._symbol_rules.floor_price(price),
+            quantity=entry.quantity,
+            filled_at=filled_at,
+            entry_number=entry_number,
+        )
+
     def fill_stop_loss(
         self, basket: Basket, candle: Candle, *, filled_at: datetime
     ) -> PaperSpotExitFill | None:
-        self._require_matching_symbol(candle)
+        require_matching_symbol(candle, self._symbol_rules)
 
         if basket.stop_loss_price is None or candle.low > basket.stop_loss_price:
             return None
@@ -112,7 +142,7 @@ class PaperSpotExecutor:
         order_id = f"stop-loss:{basket.basket_id}"
         return PaperSpotExitFill(
             order_id=order_id,
-            fill_id=f"paper:{self._session.session_id}:{order_id}:fill",
+            fill_id=paper_fill_id(self._session.session_id, order_id),
             price=price,
             quantity=quantity,
             filled_at=filled_at,
@@ -126,7 +156,7 @@ class PaperSpotExecutor:
         try:
             _LOGGER.warning(
                 "%s: per-entry budget %s cannot afford one %s lot (costs %s at price"
-                " %s) - raise Available Capital or lower Max Entries",
+                " %s) - raise the Amount",
                 ENTRY_REJECTED_EVENT,
                 budget,
                 rules.step_size,
@@ -145,10 +175,3 @@ class PaperSpotExecutor:
             )
         except Exception:
             return
-
-    def _require_matching_symbol(self, candle: Candle) -> None:
-        if candle.symbol != self._symbol_rules.symbol:
-            raise ValueError(
-                "candle symbol must match SymbolRules.symbol: "
-                f"candle={candle.symbol!r}, rules={self._symbol_rules.symbol!r}"
-            )

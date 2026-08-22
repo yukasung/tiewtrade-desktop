@@ -49,6 +49,7 @@ def test_paper_futures_history_survives_restart_and_duplicate_replay(
         current = persistent.process_completed_candle(
             candle,
             received_at=candle.close_time,
+            backfilled=False,
         ).session
         if current.entry_fill is not None:
             entry_snapshot = current
@@ -101,9 +102,8 @@ def build_session() -> PaperFuturesSession:
             preset_version="rsi-step-grid-v1",
             market_type=MarketType.FUTURES,
             trade_mode=TradeMode.PAPER,
-            available_capital=Decimal("200000"),
+            capital_per_entry=Decimal("200000"),
             entry_policy=EntryPolicy(max_entries=10),
-            spot_policy=None,
             futures_policy=FuturesTradingPolicy.v1(leverage=3),
         ),
         MarketDataConfig(symbol="BTCUSDT", timeframe="5m"),

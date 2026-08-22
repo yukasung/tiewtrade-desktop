@@ -39,15 +39,14 @@ make run
 ```bash
 PYTHONPATH=src .venv/bin/python -m tiewtrade.paper_replay_main \
   tests/fixtures/btcusdt_5m_tracer.csv \
-  --available-capital 1000 \
-  --trading-capital-ratio 0.6 \
+  --capital-per-entry 250 \
   --max-entries 4
 ```
 
 ผลลัพธ์ JSON ที่คงที่คือ:
 
 ```json
-{"accepted_candles":40,"closed_baskets":1,"current_entries":0,"realized_pnl":"13.84062222"}
+{"accepted_candles":40,"closed_baskets":1,"current_entries":0,"realized_pnl":"23.679"}
 ```
 
 ## การตรวจสอบ

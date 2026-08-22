@@ -152,13 +152,18 @@ def reopened_basket_snapshot(
     reopened: ReopenedBasket,
     *,
     symbol: str,
-    current_price: Decimal,
+    current_price: Decimal | None,
     observed_at_utc: datetime,
 ) -> BasketSnapshot:
     """Show a Basket no Runtime holds yet, marked on the price of the moment.
 
     The Entry Pair gate is read against now rather than against a candle,
     because no candle has reached this Basket since it was left.
+
+    A price of None is a Basket read before one arrived. Everything the
+    database already answered — what was bought, when, how much, and the
+    target it is sold at — is shown at once; only what it is worth waits.
+    Holding the whole tab back for that one figure read as no Position at all.
     """
     return _updated_basket_snapshot(
         open_basket_position(reopened.basket.entries),
@@ -168,8 +173,7 @@ def reopened_basket_snapshot(
         current_price=current_price,
         take_profit_price=reopened.basket.take_profit_price,
         position_side=reopened.basket.position_side,
-        liquidation_price=None,
-        entry_gate=reopened.lifecycle.entry_gate(observed_at_utc),
+        entry_gate=reopened.lifecycle.entry_gate(),
         observed_at_utc=observed_at_utc,
     )
 
@@ -190,7 +194,6 @@ def spot_basket_snapshot(
         current_price=candle.close,
         take_profit_price=snapshot.take_profit_price,
         position_side=PositionSide.LONG,
-        liquidation_price=None,
         entry_gate=snapshot.entry_gate,
         observed_at_utc=observed_at_utc,
     )
@@ -214,7 +217,6 @@ def futures_basket_snapshot(
         current_price=candle.close,
         take_profit_price=snapshot.take_profit_price,
         position_side=snapshot.position_side,
-        liquidation_price=snapshot.liquidation_price,
         entry_gate=snapshot.entry_gate,
         observed_at_utc=observed_at_utc,
     )
@@ -226,10 +228,9 @@ def _updated_basket_snapshot(
     symbol: str,
     market_type: MarketType,
     entry_count: int,
-    current_price: Decimal,
+    current_price: Decimal | None,
     take_profit_price: Decimal | None,
     position_side: PositionSide,
-    liquidation_price: Decimal | None,
     entry_gate: EntryGate | None,
     observed_at_utc: datetime,
 ) -> BasketSnapshot:
@@ -241,11 +242,15 @@ def _updated_basket_snapshot(
     average_entry_price = position.average_entry_price
     if take_profit_price is None:
         raise ValueError("open Basket requires take_profit_price")
-    marked_pnl = unrealized_pnl(
-        side=position_side,
-        average_entry_price=average_entry_price,
-        quantity=total_quantity,
-        current_price=current_price,
+    marked_pnl = (
+        None
+        if current_price is None
+        else unrealized_pnl(
+            side=position_side,
+            average_entry_price=average_entry_price,
+            quantity=total_quantity,
+            current_price=current_price,
+        )
     )
     return BasketSnapshot(
         symbol=symbol,
@@ -261,9 +266,7 @@ def _updated_basket_snapshot(
         current_price=current_price,
         take_profit_price=take_profit_price,
         unrealized_pnl=marked_pnl,
-        liquidation_price=liquidation_price,
         entry_gate=BasketEntryGate(entry_gate.state),
-        cooldown_until=entry_gate.reopens_at,
         updated_at_utc=observed_at_utc,
     )
 
@@ -272,9 +275,13 @@ def _marked_entries(
     entries: tuple[FilledEntry, ...],
     *,
     position_side: PositionSide,
-    current_price: Decimal,
+    current_price: Decimal | None,
 ) -> tuple[BasketEntrySnapshot, ...]:
-    """Each Entry marked on its own entry price, by the same rule as the Basket."""
+    """Each Entry marked on its own entry price, by the same rule as the Basket.
+
+    With no price to mark on, every Entry says so the same way the Basket
+    does: what it paid stands, what it is worth is not answered yet.
+    """
     return tuple(
         BasketEntrySnapshot(
             entry_number=entry.entry_number,
@@ -283,11 +290,15 @@ def _marked_entries(
             quantity=entry.quantity,
             take_profit_price=entry.take_profit_price,
             notional=entry.price * entry.quantity,
-            unrealized_pnl=unrealized_pnl(
-                side=position_side,
-                average_entry_price=entry.price,
-                quantity=entry.quantity,
-                current_price=current_price,
+            unrealized_pnl=(
+                None
+                if current_price is None
+                else unrealized_pnl(
+                    side=position_side,
+                    average_entry_price=entry.price,
+                    quantity=entry.quantity,
+                    current_price=current_price,
+                )
             ),
         )
         for entry in entries

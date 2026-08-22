@@ -188,6 +188,53 @@ QPushButton[rangeChip="true"]:disabled {
     border-color: #2B3441;
     color: #6F7D93;
 }
+/* The order a row can send sits inside the row, so it is sized to the row
+   rather than to a form's button, and it reads as the sale it is. */
+QPushButton#positionEntryCloseButton {
+    background: transparent;
+    border: 1px solid #3A4656;
+    border-radius: 4px;
+    color: #E2E8F0;
+    font-size: 11px;
+    font-weight: 600;
+    min-height: 0;
+    padding: 0 10px;
+}
+QPushButton#positionEntryCloseButton:hover {
+    border-color: #F6465D;
+    color: #F6465D;
+}
+QPushButton#positionEntryCloseButton:focus {
+    border: 2px solid #4C7DFF;
+}
+QPushButton#positionEntryCloseButton:disabled {
+    border-color: #2B3441;
+    color: #6F7D93;
+}
+/* Sits on the tab row rather than in the form of buttons beside it, so it
+   is sized to its own words, at the tab strip's own height, not the taller
+   minimum a form button reads against. */
+QPushButton#cancelCooldownButton {
+    background: transparent;
+    border: 1px solid #3A4656;
+    border-radius: 4px;
+    color: #E2E8F0;
+    font-size: 12px;
+    font-weight: 600;
+    min-height: 28px;
+    padding: 0 12px;
+}
+QPushButton#cancelCooldownButton:hover {
+    border-color: #F6465D;
+    color: #F6465D;
+}
+QPushButton#cancelCooldownButton:focus {
+    border: 2px solid #4C7DFF;
+}
+QPushButton#cancelCooldownButton:disabled {
+    border-color: #2B3441;
+    color: #6F7D93;
+}
 QPushButton#destructiveButton {
     background: #F6465D;
     border: 0;

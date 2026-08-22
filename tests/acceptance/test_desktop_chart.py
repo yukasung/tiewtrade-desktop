@@ -389,12 +389,14 @@ def test_running_paper_session_shows_open_candle_then_commits_closed_candle(
         candle: Candle,
         *,
         received_at: datetime,
+        backfilled: bool = False,
     ) -> PaperSpotSessionSnapshot:
         processed_strategy_candles.append(candle)
         return original_process_completed(
             application,
             candle,
             received_at=received_at,
+            backfilled=backfilled,
         )
 
     monkeypatch.setattr(

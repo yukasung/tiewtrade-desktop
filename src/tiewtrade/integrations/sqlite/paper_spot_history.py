@@ -1,17 +1,14 @@
 from dataclasses import dataclass, replace
+from datetime import datetime
 from decimal import Decimal
 from uuid import UUID
 
 from tiewtrade.application.paper_spot_session import PaperSpotSessionIdentity
 from tiewtrade.execution.paper_spot import PaperSpotEntryFill, PaperSpotExitFill
+from tiewtrade.integrations.sqlite.paper_fill_record import paper_fill_record
 from tiewtrade.integrations.sqlite.trade_history import SQLiteTradeHistory
 from tiewtrade.trading.basket import ClosedBasket, ClosedEntry
-from tiewtrade.trading.trade_history import (
-    BasketStatus,
-    FillSide,
-    FillSource,
-    TradeFill,
-)
+from tiewtrade.trading.trade_history import BasketStatus, FillSide
 
 
 @dataclass(frozen=True, slots=True)
@@ -52,20 +49,12 @@ class PaperSpotSQLiteHistory:
         fill: PaperSpotEntryFill,
         entry_atr: Decimal,
     ) -> bool:
-        normalized_fill = TradeFill(
-            fill_id=fill.fill_id,
+        normalized_fill = paper_fill_record(
+            fill,
             basket_id=basket_id,
             session_id=self._context.session_id,
-            order_id=fill.order_id,
-            exchange_trade_id=None,
             side=FillSide.BUY,
             entry_number=entry_number,
-            filled_at_utc=fill.filled_at,
-            price=fill.price,
-            quantity=fill.quantity,
-            notional=fill.price * fill.quantity,
-            realized_pnl=Decimal("0"),
-            source=FillSource.PAPER_EXECUTOR,
             entry_atr=entry_atr,
         )
         return self._store.record_paper_spot_entry_fill(
@@ -92,28 +81,24 @@ class PaperSpotSQLiteHistory:
         if existing is None:
             raise ValueError("Basket does not exist")
 
-        normalized_fill = TradeFill(
-            fill_id=fill.fill_id,
+        normalized_fill = paper_fill_record(
+            fill,
             basket_id=basket_id,
             session_id=self._context.session_id,
-            order_id=fill.order_id,
-            exchange_trade_id=None,
             side=FillSide.SELL,
-            entry_number=None,
-            filled_at_utc=fill.filled_at,
-            price=fill.price,
-            quantity=fill.quantity,
-            notional=fill.price * fill.quantity,
             realized_pnl=closed.realized_pnl,
-            source=FillSource.PAPER_EXECUTOR,
             closes_entry_number=closed.entry_number,
         )
         if closed_basket is not None:
+            # The store's own totals, grown by this last sale, rather than the
+            # Basket's. A Basket taken back from the database counts only what
+            # it has sold since it was taken back: closing the last Entry after
+            # a restart wrote a total and a count that left out every Entry
+            # sold before it.
             basket = replace(
                 existing,
                 closed_at_utc=closed_basket.closed_at,
-                entry_count=closed_basket.entry_count,
-                realized_pnl=closed_basket.realized_pnl,
+                realized_pnl=existing.realized_pnl + closed.realized_pnl,
                 status=BasketStatus.CLOSED,
             )
             return self._store.record_closed_basket(basket, normalized_fill)
@@ -135,20 +120,12 @@ class PaperSpotSQLiteHistory:
         if existing is None:
             raise ValueError("Basket does not exist")
 
-        normalized_fill = TradeFill(
-            fill_id=fill.fill_id,
+        normalized_fill = paper_fill_record(
+            fill,
             basket_id=basket_id,
             session_id=self._context.session_id,
-            order_id=fill.order_id,
-            exchange_trade_id=None,
             side=FillSide.SELL,
-            entry_number=None,
-            filled_at_utc=fill.filled_at,
-            price=fill.price,
-            quantity=fill.quantity,
-            notional=fill.price * fill.quantity,
             realized_pnl=closed.realized_pnl,
-            source=FillSource.PAPER_EXECUTOR,
         )
         basket = replace(
             existing,
@@ -158,3 +135,12 @@ class PaperSpotSQLiteHistory:
             status=BasketStatus.CLOSED,
         )
         return self._store.record_closed_basket(basket, normalized_fill)
+
+    def record_cooldown_waiver(
+        self,
+        *,
+        basket_id: UUID,
+        waived_pair: int,
+        waived_at: datetime,
+    ) -> None:
+        self._store.record_cooldown_waiver(basket_id, waived_pair, waived_at)

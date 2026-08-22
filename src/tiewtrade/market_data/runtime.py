@@ -45,7 +45,8 @@ _T = TypeVar("_T")
 _WARM_UP_TIMEOUT_SECONDS = 30.0
 _BACKFILL_TIMEOUT_SECONDS = 30.0
 _STALE_GRACE = timedelta(seconds=30)
-_RECONNECT_DELAYS_SECONDS = (1.0, 2.0, 4.0)
+_RECONNECT_BACKOFF_BASE_SECONDS = 1.0
+_RECONNECT_BACKOFF_CAP_SECONDS = 30.0
 _RATE_LIMIT_FALLBACK_SECONDS = 60.0
 # Binance marks a kline closed (k.x=true) authoritatively; local delivery can
 # still arrive a moment before our wall clock reaches the boundary due to
@@ -243,12 +244,7 @@ class MarketDataRuntime:
                 ),
                 timeout=_WARM_UP_TIMEOUT_SECONDS,
             )
-        except (
-            MarketDataFatalError,
-            MarketDataRateLimitError,
-            MarketDataRetryableError,
-            TimeoutError,
-        ):
+        except MarketDataFatalError:
             raise
         except Exception as error:
             raise _WarmUpSourceError from error
@@ -538,11 +534,6 @@ class MarketDataRuntime:
         *,
         pending_rate_limit: MarketDataRateLimitError | None = None,
     ) -> AsyncIterator[MarketDataKlineUpdate] | None:
-        last_failure_kind = (
-            _failure_kind(pending_rate_limit)
-            if pending_rate_limit is not None
-            else None
-        )
         if pending_rate_limit is None:
             if reason is MarketDataRuntimeReason.DATA_STALE:
                 self._runtime_log.stale_detected(
@@ -552,12 +543,11 @@ class MarketDataRuntime:
                     ),
                 )
             self._transition(MarketDataRuntimeState.STALE, reason)
-        for attempt, reconnect_delay in enumerate(
-            _RECONNECT_DELAYS_SECONDS,
-            start=1,
-        ):
+        attempt = 0
+        while True:
+            attempt += 1
             if pending_rate_limit is None:
-                attempt_delay = reconnect_delay
+                attempt_delay = _reconnect_backoff_seconds(attempt)
                 await self._scheduler.sleep(attempt_delay)
                 self._transition(MarketDataRuntimeState.RECONNECTING, reason)
             else:
@@ -601,19 +591,16 @@ class MarketDataRuntime:
                 return None
             except MarketDataRateLimitError as error:
                 pending_rate_limit = error
-                last_failure_kind = _failure_kind(error)
                 self._transition(
                     MarketDataRuntimeState.RATE_LIMITED,
                     MarketDataRuntimeReason.RATE_LIMITED,
                 )
                 continue
-            except MarketDataSourceError as error:
+            except MarketDataSourceError:
                 pending_rate_limit = None
-                last_failure_kind = _failure_kind(error)
                 continue
             except Exception:
                 pending_rate_limit = None
-                last_failure_kind = None
                 continue
 
             received_at = self._scheduler.now()
@@ -633,37 +620,30 @@ class MarketDataRuntime:
                 return None
             return stream
 
-        exhausted_reason = (
-            MarketDataRuntimeReason.RATE_LIMIT_EXHAUSTED
-            if pending_rate_limit is not None
-            else MarketDataRuntimeReason.RECONNECT_EXHAUSTED
-        )
-        self._fail_closed(
-            exhausted_reason,
-            failure_kind=last_failure_kind,
-        )
-        return None
-
     async def _run_source_operation(
         self,
         operation: Callable[[], Awaitable[_T]],
         *,
         timeout: float,
     ) -> _T:
-        last_error: Exception | None = None
-        for attempt in range(len(_RECONNECT_DELAYS_SECONDS) + 1):
+        attempt = 0
+        while True:
+            attempt += 1
+            # The wait below has no end, so a Stop has to be able to reach it.
+            # CancelledError is what run() already answers a Stop with, and
+            # being a BaseException it passes the callers' except clauses
+            # untouched rather than reading to them as a source that failed.
+            if self._stop_requested:
+                raise asyncio.CancelledError
             try:
                 return await self._scheduler.wait_for(operation(), timeout)
             except MarketDataFatalError:
                 raise
             except MarketDataRateLimitError as error:
-                last_error = error
                 self._transition(
                     MarketDataRuntimeState.RATE_LIMITED,
                     MarketDataRuntimeReason.RATE_LIMITED,
                 )
-                if attempt == len(_RECONNECT_DELAYS_SECONDS):
-                    raise
                 await self._scheduler.sleep(
                     _retry_after_seconds(error, now=self._scheduler.now())
                 )
@@ -671,14 +651,8 @@ class MarketDataRuntime:
                     MarketDataRuntimeState.RECONNECTING,
                     MarketDataRuntimeReason.RATE_LIMITED,
                 )
-            except (MarketDataRetryableError, TimeoutError) as error:
-                last_error = error
-                if attempt == len(_RECONNECT_DELAYS_SECONDS):
-                    raise
-                await self._scheduler.sleep(_RECONNECT_DELAYS_SECONDS[attempt])
-        if last_error is None:
-            raise RuntimeError("source retry loop did not execute")
-        raise last_error
+            except (MarketDataRetryableError, TimeoutError):
+                await self._scheduler.sleep(_reconnect_backoff_seconds(attempt))
 
     async def _close_source_once(self) -> None:
         async with self._source_close_lock:
@@ -726,6 +700,27 @@ def _latest_completed_boundary(value: datetime, *, interval: timedelta) -> datet
     return datetime.fromtimestamp(boundary_timestamp, UTC)
 
 
+def _reconnect_backoff_seconds(attempt: int) -> float:
+    """How long to wait before the attempt-th try at reaching the source.
+
+    Doubles from a second and then holds — 1, 2, 4, 8, 16, 30, 30 — so a blip
+    is waited out in about the time it takes to notice one, while an outage
+    that lasts is not asked about every few seconds for as long as it lasts.
+
+    There is no last delay here, because there is no last attempt: a source
+    that cannot be reached is waited for, not given up on.
+    """
+    if attempt < 1:
+        raise ValueError("attempt must be at least 1")
+    # Capped before it is doubled as well as after: an outage lasting days
+    # would otherwise raise two to the power of every attempt it took.
+    doublings = min(attempt - 1, 30)
+    return min(
+        _RECONNECT_BACKOFF_BASE_SECONDS * float(2**doublings),
+        _RECONNECT_BACKOFF_CAP_SECONDS,
+    )
+
+
 def _retry_after_seconds(error: MarketDataRateLimitError, *, now: datetime) -> float:
     """How long the provider asked to be left alone, never less than nothing.
 
@@ -765,8 +760,6 @@ def _source_failure(
     kind = _failure_kind(error)
     if isinstance(error, MarketDataFatalError):
         return _SourceFailure(MarketDataRuntimeReason.SOURCE_FATAL, kind)
-    if isinstance(error, MarketDataRateLimitError):
-        return _SourceFailure(MarketDataRuntimeReason.RATE_LIMIT_EXHAUSTED, kind)
     if isinstance(error, _WarmUpSinkError | CandlePipelineSinkError):
         return _SourceFailure(MarketDataRuntimeReason.SINK_ERROR, kind)
     # Checked before the retryable base it inherits from, which would swallow it.

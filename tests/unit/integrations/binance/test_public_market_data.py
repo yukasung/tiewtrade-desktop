@@ -14,13 +14,15 @@ from multidict import CIMultiDict, CIMultiDictProxy
 from yarl import URL
 
 from tiewtrade.integrations.binance.public_endpoints import BinancePublicEndpoints
-from tiewtrade.integrations.binance.public_market_data import BinancePublicMarketData
+from tiewtrade.integrations.binance.public_market_data import (
+    WEBSOCKET_HEARTBEAT_SECONDS,
+    BinancePublicMarketData,
+)
 from tiewtrade.market_data.candle import Candle
 from tiewtrade.market_data.candle_source import MarketDataKlineUpdate
 from tiewtrade.market_data.config import MarketDataConfig
 from tiewtrade.market_data.runtime import MarketDataRuntime
 from tiewtrade.market_data.runtime_state import (
-    MarketDataRuntimeReason,
     MarketDataRuntimeState,
 )
 from tiewtrade.market_data.source_errors import (
@@ -118,14 +120,16 @@ class FakeSession:
         self._websocket_failure = websocket_failure
         self.requests: list[tuple[str, dict[str, str | int]]] = []
         self.websocket_urls: list[str] = []
+        self.websocket_heartbeats: list[float | None] = []
         self.close_count = 0
 
     def get(self, url: str, *, params: dict[str, str | int]) -> FakeResponse:
         self.requests.append((url, params))
         return next(self._rest_pages)
 
-    def ws_connect(self, url: str) -> FakeWebSocket:
+    def ws_connect(self, url: str, *, heartbeat: float | None = None) -> FakeWebSocket:
         self.websocket_urls.append(url)
+        self.websocket_heartbeats.append(heartbeat)
         return FakeWebSocket(
             self._websocket_payloads,
             failure=self._websocket_failure,
@@ -484,9 +488,38 @@ class ImmediateRuntimeScheduler:
 
     async def sleep(self, seconds: float) -> None:
         self.sleeps.append(seconds)
+        # Retrying has no end of its own any more, so a wait that never gives
+        # the loop back would starve the test watching it.
+        await asyncio.sleep(0)
 
     async def wait_for(self, awaitable: Awaitable[_T], timeout: float) -> _T:
         return await awaitable
+
+
+class AcceptingWarmUpSink:
+    """Counts the warm-up that finally lands, and refuses anything after it."""
+
+    def __init__(self) -> None:
+        self.warmed_up = 0
+
+    async def warm_up(
+        self,
+        candles: tuple[Candle, ...],
+        *,
+        received_at: datetime,
+    ) -> None:
+        del candles, received_at
+        self.warmed_up += 1
+
+    async def process_completed(
+        self, candle: Candle, *, received_at: datetime, backfilled: bool
+    ) -> None:
+        del candle, received_at
+
+    async def process_in_progress(
+        self, candle: Candle, *, received_at: datetime
+    ) -> None:
+        del candle, received_at
 
 
 class RejectingWarmUpSink:
@@ -498,7 +531,9 @@ class RejectingWarmUpSink:
     ) -> None:
         raise AssertionError("timed-out source must not reach the sink")
 
-    async def process_completed(self, candle: Candle, *, received_at: datetime) -> None:
+    async def process_completed(
+        self, candle: Candle, *, received_at: datetime, backfilled: bool
+    ) -> None:
         raise AssertionError("timed-out source must not reach the sink")
 
     async def process_in_progress(
@@ -507,25 +542,43 @@ class RejectingWarmUpSink:
         del candle, received_at
 
 
-def test_binance_timeout_exhaustion_remains_warm_up_timeout_in_runtime() -> None:
+def test_binance_timeouts_are_waited_out_until_the_rest_api_answers() -> None:
+    """A Binance timeout reads as one the runtime waits on, not one it quits on.
+
+    Five in a row is more than the runtime used to sit through, and the sink
+    hears nothing until the answer that finally arrives is a real one.
+    """
     source, session = source_with(
-        rest_pages=[FakeResponse(payload=TimeoutError("timed out")) for _ in range(4)]
+        rest_pages=[
+            *(FakeResponse(payload=TimeoutError("timed out")) for _ in range(5)),
+            FakeResponse(payload=[rest_kline(0)]),
+        ]
     )
     scheduler = ImmediateRuntimeScheduler()
+    sink = AcceptingWarmUpSink()
     runtime = MarketDataRuntime(
         config=config(),
         warm_up_count=1,
         source=source,
-        sink=RejectingWarmUpSink(),
+        sink=sink,
         scheduler=scheduler,
     )
 
-    asyncio.run(runtime.run())
+    async def exercise() -> None:
+        run_task = asyncio.create_task(runtime.run())
+        for _ in range(1000):
+            if sink.warmed_up or run_task.done():
+                break
+            await asyncio.sleep(0)
+        await runtime.stop()
+        await run_task
 
-    assert len(session.requests) == 4
-    assert scheduler.sleeps == [1.0, 2.0, 4.0]
-    assert runtime.snapshot.state is MarketDataRuntimeState.FAILED_CLOSED
-    assert runtime.snapshot.reason is MarketDataRuntimeReason.WARM_UP_TIMEOUT
+    asyncio.run(exercise())
+
+    assert len(session.requests) >= 6
+    assert scheduler.sleeps[:5] == [1.0, 2.0, 4.0, 8.0, 16.0]
+    assert MarketDataRuntimeState.FAILED_CLOSED is not runtime.snapshot.state
+    assert sink.warmed_up == 1
 
 
 @pytest.mark.parametrize(
@@ -630,6 +683,29 @@ def test_websocket_timeout_message_preserves_timeout_action() -> None:
     with pytest.raises(MarketDataTimeoutError) as captured:
         asyncio.run(collect_updates(source))
 
+    assert captured.value.kind is MarketDataFailureKind.TRANSPORT
+
+
+def test_a_pong_that_never_arrives_reads_as_a_stream_to_reconnect() -> None:
+    """What aiohttp reports when the heartbeat goes unanswered.
+
+    A ping without a pong is how a silently dead connection gives itself
+    away, so it has to read as a stream worth reopening — never as a fatal
+    error, which would stop the Bot instead of reconnecting it.
+    """
+    source, _ = source_with(
+        websocket_payloads=[
+            FakeMessage(
+                aiohttp.ServerTimeoutError("pong not received"),
+                message_type=WSMsgType.ERROR,
+            )
+        ]
+    )
+
+    with pytest.raises(MarketDataTimeoutError) as captured:
+        asyncio.run(collect_updates(source))
+
+    assert isinstance(captured.value, MarketDataRetryableError)
     assert captured.value.kind is MarketDataFailureKind.TRANSPORT
 
 
@@ -853,3 +929,23 @@ def test_owned_session_cancelled_close_can_be_retried(
     asyncio.run(exercise())
 
     assert session.close_count == 2
+
+
+def test_stream_klines_pings_so_a_silent_connection_is_noticed() -> None:
+    """A dropped WiFi leaves a socket that looks open and never speaks again.
+
+    Nothing arriving is indistinguishable from a quiet market until something
+    asks, and the only thing that asks is a ping. Without one the silence is
+    only noticed when a Candle fails to arrive, which on a 4h timeframe is
+    hours after the connection actually died.
+    """
+    source, session = source_with(websocket_payloads=[websocket_kline(closed=True)])
+
+    asyncio.run(collect_updates(source))
+
+    assert session.websocket_heartbeats == [WEBSOCKET_HEARTBEAT_SECONDS]
+    # Under a minute, or the silence outlasts the point of asking about it.
+    assert WEBSOCKET_HEARTBEAT_SECONDS <= 60.0
+    # Binance counts a ping against five incoming messages a second, so the
+    # probe has to stay rare enough to be free.
+    assert 1.0 / WEBSOCKET_HEARTBEAT_SECONDS < 5.0

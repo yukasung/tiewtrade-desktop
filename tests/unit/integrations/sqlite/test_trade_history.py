@@ -56,6 +56,41 @@ def test_exact_duplicate_fill_is_a_no_op(history: SQLiteTradeHistory) -> None:
     assert history.list_fills(basket.basket_id) == (fill,)
 
 
+def test_find_cooldown_waiver_returns_none_when_none_recorded(
+    history: SQLiteTradeHistory,
+) -> None:
+    basket = open_basket()
+    history.record_open_basket(basket, trade_fill())
+
+    assert history.find_cooldown_waiver(basket.basket_id) is None
+
+
+def test_cooldown_waiver_round_trips(history: SQLiteTradeHistory) -> None:
+    basket = open_basket()
+    history.record_open_basket(basket, trade_fill())
+    waived_at = datetime(2026, 1, 25, tzinfo=UTC)
+
+    history.record_cooldown_waiver(basket.basket_id, 24313, waived_at)
+
+    assert history.find_cooldown_waiver(basket.basket_id) == 24313
+
+
+def test_cooldown_waiver_upsert_overwrites_the_prior_month(
+    history: SQLiteTradeHistory,
+) -> None:
+    basket = open_basket()
+    history.record_open_basket(basket, trade_fill())
+    history.record_cooldown_waiver(
+        basket.basket_id, 24313, datetime(2026, 1, 25, tzinfo=UTC)
+    )
+
+    history.record_cooldown_waiver(
+        basket.basket_id, 24316, datetime(2026, 4, 25, tzinfo=UTC)
+    )
+
+    assert history.find_cooldown_waiver(basket.basket_id) == 24316
+
+
 def test_find_open_basket_returns_only_open_basket_for_session(
     history: SQLiteTradeHistory,
 ) -> None:
@@ -70,31 +105,30 @@ def test_find_open_basket_returns_only_open_basket_for_session(
     assert history.find_open_basket(basket.session_id) is None
 
 
-def test_list_session_fills_orders_by_utc_then_fill_id_and_excludes_other_session(
+def test_list_pair_fills_orders_by_utc_then_fill_id_across_sessions(
     history: SQLiteTradeHistory,
 ) -> None:
-    session_id = UUID("00000000-0000-0000-0000-000000000138")
+    """The chart's marks belong to the Pair, so they outlive a Session.
+
+    Read by Session, every trade vanished from the chart the moment a Start
+    replaced the one that made it — while the trades themselves sat in this
+    table, still true of BTCUSDT.
+    """
     start = datetime(2026, 1, 1, tzinfo=UTC)
     end = datetime(2026, 1, 2, tzinfo=UTC)
     first = trade_fill(
         fill_id="fill-a",
         basket_id=uuid4(),
-        session_id=session_id,
+        session_id=UUID("00000000-0000-0000-0000-000000000138"),
         filled_at_utc=start + timedelta(hours=1),
     )
     second = trade_fill(
         fill_id="fill-b",
         basket_id=uuid4(),
-        session_id=session_id,
-        filled_at_utc=start + timedelta(hours=1),
-    )
-    other_session = trade_fill(
-        fill_id="fill-other",
-        basket_id=uuid4(),
         session_id=uuid4(),
         filled_at_utc=start + timedelta(hours=1),
     )
-    for fill in (second, other_session, first):
+    for fill in (second, first):
         history.record_open_basket(
             replace(
                 open_basket(),
@@ -105,7 +139,50 @@ def test_list_session_fills_orders_by_utc_then_fill_id_and_excludes_other_sessio
             fill,
         )
 
-    assert history.list_session_fills(session_id, start, end) == (first, second)
+    assert history.list_pair_fills(
+        "BTCUSDT", TradeMode.PAPER, MarketType.SPOT, start, end
+    ) == (first, second)
+
+
+def test_list_pair_fills_leaves_out_another_pair_mode_or_market(
+    history: SQLiteTradeHistory,
+) -> None:
+    """Paper marks have no business on a live chart, nor spot on futures."""
+    start = datetime(2026, 1, 1, tzinfo=UTC)
+    end = datetime(2026, 1, 2, tzinfo=UTC)
+
+    def record(hour: int, basket: BasketResult) -> None:
+        fill = trade_fill(
+            fill_id=f"fill-{hour}",
+            basket_id=uuid4(),
+            session_id=uuid4(),
+            filled_at_utc=start + timedelta(hours=hour),
+        )
+        history.record_open_basket(
+            replace(
+                basket,
+                basket_id=fill.basket_id,
+                session_id=fill.session_id,
+                opened_at_utc=fill.filled_at_utc,
+            ),
+            fill,
+        )
+
+    record(1, replace(open_basket(), symbol="ETHUSDT"))
+    record(2, replace(open_basket(), trade_mode=TradeMode.LIVE))
+    record(3, replace(open_basket(), market_type=MarketType.FUTURES, leverage=3))
+
+    assert (
+        history.list_pair_fills("BTCUSDT", TradeMode.PAPER, MarketType.SPOT, start, end)
+        == ()
+    )
+    # Recorded all the same, or the emptiness above would prove nothing.
+    for symbol, mode, market in (
+        ("ETHUSDT", TradeMode.PAPER, MarketType.SPOT),
+        ("BTCUSDT", TradeMode.LIVE, MarketType.SPOT),
+        ("BTCUSDT", TradeMode.PAPER, MarketType.FUTURES),
+    ):
+        assert len(history.list_pair_fills(symbol, mode, market, start, end)) == 1
 
 
 def test_open_basket_requires_open_status(history: SQLiteTradeHistory) -> None:
@@ -448,7 +525,7 @@ def test_migration_creates_versioned_history_schema_and_indexes(tmp_path: Path) 
             for row in connection.execute("PRAGMA table_info(trade_fills)")
         }
 
-    assert version == 10
+    assert version == 15
     assert "paper_runtime_lifecycle" in table_names
     assert {"basket_results", "trade_fills"} <= table_names
     assert {
@@ -544,7 +621,7 @@ def test_migration_from_legacy_schema_adds_session_fill_history_index(
 def test_migration_rejects_future_schema_version(tmp_path: Path) -> None:
     database = SQLiteDatabase(tmp_path / "history.sqlite3")
     with database.connect() as connection:
-        connection.execute("PRAGMA user_version = 11")
+        connection.execute("PRAGMA user_version = 16")
 
     with pytest.raises(ValueError, match="newer than supported"):
         database.migrate()
@@ -616,7 +693,7 @@ def test_migration_from_v1_preserves_spot_basket_with_null_leverage(
             "SELECT leverage FROM basket_results WHERE basket_id = ?",
             (str(legacy.basket_id),),
         ).fetchone()[0]
-    assert version == 10
+    assert version == 15
     assert leverage is None
     assert SQLiteTradeHistory(database).get_basket(legacy.basket_id) == legacy
 
@@ -666,7 +743,7 @@ def test_migration_from_v6_keeps_fills_and_leaves_their_atr_unknown(
 
     with database.connect() as connection:
         version = connection.execute("PRAGMA user_version").fetchone()[0]
-    assert version == 10
+    assert version == 15
     assert history.list_fills(basket.basket_id) == (legacy_fill,)
     assert history.list_fills(basket.basket_id)[0].entry_atr is None
 
@@ -819,7 +896,7 @@ def test_migration_to_v9_keeps_what_each_basket_realised(tmp_path: Path) -> None
         }
         broken = connection.execute("PRAGMA foreign_key_check").fetchall()
 
-    assert version == 10
+    assert version == 15
     # The stored text is carried across untouched, not recomputed.
     assert realized == "20"
     assert not columns & {"gross_realized_pnl", "trading_fees", "funding_fee"}
@@ -833,7 +910,7 @@ def test_migration_to_v9_keeps_what_each_basket_realised(tmp_path: Path) -> None
     database.migrate()
 
     with database.connect() as connection:
-        assert connection.execute("PRAGMA user_version").fetchone()[0] == 10
+        assert connection.execute("PRAGMA user_version").fetchone()[0] == 15
 
 
 def _create_v8_schema(connection: sqlite3.Connection) -> None:
@@ -927,7 +1004,7 @@ def test_migration_to_v10_takes_slippage_out_of_a_session(tmp_path: Path) -> Non
         sessions = connection.execute("SELECT COUNT(*) FROM bot_sessions").fetchone()[0]
         broken = connection.execute("PRAGMA foreign_key_check").fetchall()
 
-    assert version == 10
+    assert version == 15
     assert "slippage_bps" not in columns
     # The Session itself survives; only what it charged is gone.
     assert sessions == 1
@@ -937,4 +1014,4 @@ def test_migration_to_v10_takes_slippage_out_of_a_session(tmp_path: Path) -> Non
     database.migrate()
 
     with database.connect() as connection:
-        assert connection.execute("PRAGMA user_version").fetchone()[0] == 10
+        assert connection.execute("PRAGMA user_version").fetchone()[0] == 15

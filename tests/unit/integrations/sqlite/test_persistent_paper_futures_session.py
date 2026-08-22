@@ -56,9 +56,6 @@ def completed_candle() -> Candle:
 
 def capital_plan() -> FuturesCapitalPlan:
     return FuturesCapitalPlan(
-        available_capital=Decimal("200000"),
-        trading_capital=Decimal("100000"),
-        collateral_buffer=Decimal("100000"),
         initial_margin_per_entry=Decimal("10000"),
         target_notional_per_entry=Decimal("30000"),
     )
@@ -125,7 +122,6 @@ def snapshot(
         basket_entry_count=1 if entry is not None else 0,
         position_side=PositionSide.LONG,
         take_profit_price=Decimal("105") if closed is None else None,
-        liquidation_price=Decimal("50") if closed is None else None,
         account_equity=Decimal("200000"),
         capital_plan=capital_plan(),
         failure_reason=None,
@@ -164,6 +160,7 @@ def test_entry_is_durable_before_ready_snapshot_returns() -> None:
     result = persistent.process_completed_candle(
         candle,
         received_at=candle.close_time,
+        backfilled=False,
     )
 
     history.record_entry.assert_called_once_with(
@@ -175,22 +172,36 @@ def test_entry_is_durable_before_ready_snapshot_returns() -> None:
     assert result.persistence_state is PersistenceState.READY
 
 
-@pytest.mark.parametrize(
-    ("reason", "state"),
-    [
-        (BasketCloseReason.TAKE_PROFIT, PaperFuturesSessionState.ACTIVE),
-        (BasketCloseReason.LIQUIDATION, PaperFuturesSessionState.LIQUIDATED),
-    ],
-)
-def test_exit_is_durable_before_ready_snapshot_returns(
-    reason: BasketCloseReason,
-    state: PaperFuturesSessionState,
-) -> None:
+def test_waived_cooldown_goes_through_the_coordinator_writing_no_fill() -> None:
+    """Lifting a Cooldown moves no money, so there is no Fill to record.
+
+    It still goes through the coordinator, so a Session already blocked on a
+    failed write cannot quietly reopen its own gate.
+    """
     session = create_autospec(PaperFuturesSession, instance=True)
     history = create_autospec(PaperFuturesSQLiteHistory, instance=True)
-    fill = exit_fill(reason)
-    closed = closed_basket(reason)
-    core_snapshot = snapshot(exit=fill, closed=closed, state=state)
+    core_snapshot = snapshot()
+    session.waive_cooldown.return_value = core_snapshot
+    persistent = persistent_session(session, history)
+    observed_at = datetime(2026, 1, 25, tzinfo=UTC)
+
+    result = persistent.waive_cooldown(observed_at)
+
+    session.waive_cooldown.assert_called_once_with(observed_at)
+    history.record_entry.assert_not_called()
+    history.record_close.assert_not_called()
+    assert result.session == core_snapshot
+    assert result.persistence_state is PersistenceState.READY
+
+
+def test_exit_is_durable_before_ready_snapshot_returns() -> None:
+    session = create_autospec(PaperFuturesSession, instance=True)
+    history = create_autospec(PaperFuturesSQLiteHistory, instance=True)
+    fill = exit_fill(BasketCloseReason.TAKE_PROFIT)
+    closed = closed_basket(BasketCloseReason.TAKE_PROFIT)
+    core_snapshot = snapshot(
+        exit=fill, closed=closed, state=PaperFuturesSessionState.ACTIVE
+    )
     session.process_completed_candle.return_value = core_snapshot
     history.record_close.return_value = True
     persistent = persistent_session(session, history)
@@ -199,6 +210,7 @@ def test_exit_is_durable_before_ready_snapshot_returns(
     result = persistent.process_completed_candle(
         candle,
         received_at=candle.close_time,
+        backfilled=False,
     )
 
     history.record_close.assert_called_once_with(
@@ -210,18 +222,18 @@ def test_exit_is_durable_before_ready_snapshot_returns(
     assert result.persistence_state is PersistenceState.READY
 
 
-def test_same_candle_entry_and_liquidation_use_closed_entry_count() -> None:
+def test_same_candle_entry_and_exit_use_closed_entry_count() -> None:
     session = create_autospec(PaperFuturesSession, instance=True)
     history = create_autospec(PaperFuturesSQLiteHistory, instance=True)
     entry = entry_fill()
-    exit = exit_fill(BasketCloseReason.LIQUIDATION)
-    closed = closed_basket(BasketCloseReason.LIQUIDATION)
+    exit = exit_fill(BasketCloseReason.TAKE_PROFIT)
+    closed = closed_basket(BasketCloseReason.TAKE_PROFIT)
     core_snapshot = replace(
         snapshot(
             entry=entry,
             exit=exit,
             closed=closed,
-            state=PaperFuturesSessionState.LIQUIDATED,
+            state=PaperFuturesSessionState.ACTIVE,
         ),
         basket_entry_count=0,
     )
@@ -234,6 +246,7 @@ def test_same_candle_entry_and_liquidation_use_closed_entry_count() -> None:
     persistent.process_completed_candle(
         candle,
         received_at=candle.close_time,
+        backfilled=False,
     )
 
     history.record_entry.assert_called_once_with(
@@ -267,12 +280,14 @@ def test_persistence_error_blocks_every_later_candle(error: Exception) -> None:
         persistent.process_completed_candle(
             candle,
             received_at=candle.close_time,
+            backfilled=False,
         )
 
     with pytest.raises(SessionPersistenceBlockedError, match="blocked"):
         persistent.process_completed_candle(
             candle,
             received_at=candle.close_time,
+            backfilled=False,
         )
 
     session.process_completed_candle.assert_called_once()
@@ -291,11 +306,13 @@ def test_invalid_snapshot_invariant_fails_closed() -> None:
         persistent.process_completed_candle(
             candle,
             received_at=candle.close_time,
+            backfilled=False,
         )
     with pytest.raises(SessionPersistenceBlockedError, match="blocked"):
         persistent.process_completed_candle(
             candle,
             received_at=candle.close_time,
+            backfilled=False,
         )
 
     session.process_completed_candle.assert_called_once()
@@ -313,6 +330,7 @@ def test_exit_without_closed_basket_fails_closed() -> None:
         persistent.process_completed_candle(
             candle,
             received_at=candle.close_time,
+            backfilled=False,
         )
 
     history.record_close.assert_not_called()

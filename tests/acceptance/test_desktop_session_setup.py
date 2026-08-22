@@ -83,7 +83,6 @@ class _SessionCase:
     market_type: str
     timeframe: str
     max_entries: int
-    spot_ratio: str | None
     futures_leverage: int | None
 
 
@@ -157,11 +156,11 @@ class _AcceptancePublicCandleSource:
     "case",
     [
         pytest.param(
-            _SessionCase("spot", "5m", 10, "80", None),
+            _SessionCase("spot", "5m", 10, None),
             id="spot",
         ),
         pytest.param(
-            _SessionCase("futures", "5m", 10, None, 3),
+            _SessionCase("futures", "5m", 10, 3),
             id="futures",
         ),
     ],
@@ -335,7 +334,7 @@ def test_desktop_restart_blocked_runtime_reopens_setup_form(
     active_sessions = SQLiteActivePaperSessions(database)
     session = (
         CreatePaperSession(create_active=active_sessions.create)
-        .execute(_setup_values(_SessionCase("spot", "5m", 10, "80", None)))
+        .execute(_setup_values(_SessionCase("spot", "5m", 10, None)))
         .session
     )
     lifecycle = SQLitePaperRuntimeLifecycle(database)
@@ -375,7 +374,7 @@ def test_desktop_restart_blocked_runtime_reopens_setup_form(
     qtbot.waitUntil(lambda: _runtime_state(window) is BotRuntimeState.BLOCKED)
     assert initialize_calls == 1
     qtbot.waitUntil(window.setup.isVisible)
-    assert window.setup.available_capital.isEnabled()
+    assert window.setup.capital_per_entry.isEnabled()
     marker = lifecycle.read(session.config.session_id)
     assert marker is not None
     assert marker.state is PaperRuntimeLifecycleState.RUNNING
@@ -396,11 +395,11 @@ def test_desktop_restart_blocked_runtime_reopens_setup_form(
     "case",
     [
         pytest.param(
-            _SessionCase("spot", "15m", 12, "80", None),
+            _SessionCase("spot", "15m", 12, None),
             id="spot",
         ),
         pytest.param(
-            _SessionCase("futures", "1h", 14, None, 4),
+            _SessionCase("futures", "1h", 14, 4),
             id="futures",
         ),
     ],
@@ -451,14 +450,14 @@ def test_desktop_fake_snapshots_render_orders_and_basket_without_manual_trading(
     )
 
     assert start_calls == 0
-    # One row per Entry taken, each restating the Basket it belongs to.
+    # One row per Entry taken, each with the price it paid and its own target.
     assert window.workspace.position_basket.table.rowCount() == 1
     lifecycle = PositionBasketTable.HEADERS.index("Status")
     assert table_item(window.workspace.position_basket.table, 0, lifecycle).text() == (
         "Active"
     )
-    average = PositionBasketTable.HEADERS.index("Average")
-    assert table_item(window.workspace.position_basket.table, 0, average).text() != ""
+    target = PositionBasketTable.HEADERS.index("Take Profit")
+    assert table_item(window.workspace.position_basket.table, 0, target).text() != ""
     assert _manual_order_buttons(window) == ()
     assert _trade_side_effect_counts(database) == initial_counts
 
@@ -474,7 +473,7 @@ def test_spot_partial_fills_keep_one_order_and_basket_entry_across_tabs(
     active_sessions = SQLiteActivePaperSessions(database)
     session = (
         CreatePaperSession(create_active=active_sessions.create)
-        .execute(_setup_values(_SessionCase("spot", "5m", 10, "80", None)))
+        .execute(_setup_values(_SessionCase("spot", "5m", 10, None)))
         .session
     )
     store = SQLiteTradeHistory(database)
@@ -565,7 +564,6 @@ def test_spot_partial_fills_keep_one_order_and_basket_entry_across_tabs(
                 market_type="spot",
                 timeframe="15m",
                 max_entries=12,
-                spot_ratio="80",
                 futures_leverage=None,
             ),
             id="spot",
@@ -575,7 +573,6 @@ def test_spot_partial_fills_keep_one_order_and_basket_entry_across_tabs(
                 market_type="futures",
                 timeframe="1h",
                 max_entries=14,
-                spot_ratio=None,
                 futures_leverage=4,
             ),
             id="futures",
@@ -730,11 +727,11 @@ def test_desktop_paper_session_create_overview_and_restart_restore(
     "case",
     [
         pytest.param(
-            _SessionCase("spot", "15m", 12, "80", None),
+            _SessionCase("spot", "15m", 12, None),
             id="spot",
         ),
         pytest.param(
-            _SessionCase("futures", "1h", 14, None, 4),
+            _SessionCase("futures", "1h", 14, 4),
             id="futures",
         ),
     ],
@@ -889,7 +886,6 @@ def test_desktop_session_sqlite_write_failure_after_setup_fails_closed(
             market_type="spot",
             timeframe="15m",
             max_entries=12,
-            spot_ratio="80",
             futures_leverage=None,
         ),
     )
@@ -897,10 +893,9 @@ def test_desktop_session_sqlite_write_failure_after_setup_fails_closed(
     qtbot.waitUntil(window.unavailable_panel.isVisible)
 
     assert window.unavailable_message.text() == "Session storage is unavailable"
-    assert window.setup.available_capital.text() == "200000"
+    assert window.setup.capital_per_entry.text() == "200000"
     assert window.setup.timeframe.currentData() == "15m"
     assert window.setup.max_entries.value() == 12
-    assert window.setup.spot_ratio.text() == "80"
     assert not window.overview.isVisible()
     assert SQLiteActivePaperSessions(durable_database).get_active() is None
 
@@ -931,24 +926,19 @@ def test_desktop_session_validation_failure_after_setup_preserves_input(
             market_type="spot",
             timeframe="15m",
             max_entries=12,
-            spot_ratio="80",
             futures_leverage=None,
         ),
     )
-    window.setup.available_capital.setText("0")
+    window.setup.capital_per_entry.setText("0")
     click(window.setup.create_button)
     qtbot.waitUntil(
-        lambda: (
-            window.setup.available_capital_error.text()
-            == "Available Capital must be positive"
-        )
+        lambda: window.setup.capital_per_entry_error.text() == "Amount must be positive"
     )
 
     assert window.setup.isVisible()
-    assert window.setup.available_capital.text() == "0"
+    assert window.setup.capital_per_entry.text() == "0"
     assert window.setup.timeframe.currentData() == "15m"
     assert window.setup.max_entries.value() == 12
-    assert window.setup.spot_ratio.text() == "80"
     assert not window.overview.isVisible()
     assert store.get_active() is None
 
@@ -1053,7 +1043,6 @@ def test_desktop_session_setup_smoke_composes_without_network(
     window.close()
     qtbot.waitUntil(lambda: not window.isVisible())
 
-    assert qapp.platformName() == "offscreen"
     assert not window.isVisible()
 
 
@@ -1078,13 +1067,7 @@ def _fake_running_workspace(
                 current_price=Decimal("66321.1200"),
                 take_profit_price=Decimal("67000.0000"),
                 unrealized_pnl=Decimal("1.92600000"),
-                liquidation_price=(
-                    None
-                    if session.config.market_type is MarketType.SPOT
-                    else Decimal("44000.5000")
-                ),
                 entry_gate=BasketEntryGate.OPEN,
-                cooldown_until=None,
                 updated_at_utc=observed_at,
             ),
             observed_at_utc=observed_at,
@@ -1112,11 +1095,9 @@ def _enter_form_values(window: MainWindow, case: _SessionCase) -> None:
     setup = window.setup
     setup.market_type.setCurrentIndex(setup.market_type.findData(case.market_type))
     setup.timeframe.setCurrentIndex(setup.timeframe.findData(case.timeframe))
-    setup.available_capital.setText("200000")
+    setup.capital_per_entry.setText("200000")
     setup.max_entries.setValue(case.max_entries)
     if case.market_type == "spot":
-        assert case.spot_ratio is not None
-        setup.spot_ratio.setText(case.spot_ratio)
         return
     assert case.futures_leverage is not None
     setup.leverage.setValue(case.futures_leverage)
@@ -1127,9 +1108,8 @@ def _setup_values(case: _SessionCase) -> PaperSessionSetupValues:
         market_type=case.market_type,
         symbol="BTCUSDT",
         timeframe=case.timeframe,
-        available_capital="200000",
+        capital_per_entry="200000",
         max_entries=str(case.max_entries),
-        spot_trading_capital_percent=case.spot_ratio,
         futures_leverage=(
             None if case.futures_leverage is None else str(case.futures_leverage)
         ),
@@ -1213,7 +1193,7 @@ def _assert_durable_session_matches_case(
     assert config.trade_mode is TradeMode.PAPER
     assert config.market_type is MarketType(case.market_type)
     assert config.preset_version == "rsi-step-grid-v1"
-    assert config.available_capital == Decimal("200000")
+    assert config.capital_per_entry == Decimal("200000")
     assert config.entry_policy.max_entries == case.max_entries
     assert session.market_data.symbol == "BTCUSDT"
     assert session.market_data.timeframe == case.timeframe
@@ -1221,16 +1201,11 @@ def _assert_durable_session_matches_case(
     assert session.ended_at_utc is None
 
     if case.market_type == "spot":
-        assert case.spot_ratio is not None
-        assert config.spot_policy is not None
-        expected_spot_ratio = Decimal(case.spot_ratio) / Decimal("100")
-        assert config.spot_policy.trading_capital_ratio == expected_spot_ratio
-        assert config.spot_policy.reserve_ratio == Decimal("1") - expected_spot_ratio
+        # Spot carries no policy of its own: all of its capital is traded.
         assert config.futures_policy is None
         return
 
     assert case.futures_leverage is not None
-    assert config.spot_policy is None
     assert config.futures_policy is not None
     assert config.futures_policy.version == "paper-futures-v1"
     assert config.futures_policy.leverage == case.futures_leverage
@@ -1238,7 +1213,6 @@ def _assert_durable_session_matches_case(
     assert config.futures_policy.margin_mode is MarginMode.CROSS
     assert config.futures_policy.trading_capital_ratio == Decimal("0.5")
     assert config.futures_policy.collateral_buffer_ratio == Decimal("0.5")
-    assert config.futures_policy.maintenance_margin_rate == Decimal("0.005")
 
 
 def _assert_overview_matches_case(
@@ -1256,26 +1230,18 @@ def _assert_overview_matches_case(
     assert window.overview.symbol_value.text() == "BTCUSDT"
     assert window.overview.timeframe_value.text() == case.timeframe
     assert window.overview.preset_value.text() == "RSI Step Grid v1"
-    assert window.overview.available_capital_value.text() == "200000 USDT"
+    assert window.overview.capital_per_entry_value.text() == "200000 USDT"
     assert window.overview.max_entries_value.text() == str(case.max_entries)
     assert window.overview.created_at_value.text() == display_timestamp(
         expected_created_at
     )
 
     if case.market_type == "spot":
-        assert case.spot_ratio is not None
-        reserve_percent = Decimal("100") - Decimal(case.spot_ratio)
-        assert window.overview.spot_ratio_value.text() == f"{case.spot_ratio}%"
-        assert window.overview.spot_reserve_ratio_value.text() == (
-            f"{_decimal_text(reserve_percent)}%"
-        )
         assert window.overview.margin_mode_value.text() == "—"
         assert window.overview.position_mode_value.text() == "—"
         return
 
     assert case.futures_leverage is not None
-    assert window.overview.spot_ratio_value.text() == "—"
-    assert window.overview.spot_reserve_ratio_value.text() == "—"
     assert window.overview.margin_mode_value.text() == "Cross Margin"
     assert window.overview.position_mode_value.text() == "One-way Mode"
 

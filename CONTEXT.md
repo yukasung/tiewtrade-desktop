@@ -8,7 +8,7 @@
 ## Market Type
 
 - `SPOT` — ซื้อขาย Spot และใช้ Spot capital policy
-- `FUTURES` — ใช้ Futures margin, leverage, funding และ liquidation-related account facts
+- `FUTURES` — ใช้ Futures margin, leverage และ funding
 
 ## Position Side
 
@@ -49,39 +49,30 @@ Paper และ Live ใช้ business rules ชุดเดียวกัน�
 - `market_type` — `SPOT` หรือ `FUTURES`
 - `trade_mode` — `PAPER` หรือ `LIVE`
 - `available_capital` และ `preset_version`
-- `trading_capital_ratio` และ `max_entries` — เลือกจาก form ก่อนเริ่ม Session
+- `max_entries` — เลือกจาก form ก่อนเริ่ม Session
 
 ระบบใช้ `UTC` เป็น timezone กลางเสมอ และไม่เปิดให้เปลี่ยน timezone ใน session configuration
 
-ค่าจาก form ต้องผ่าน validation แล้วสร้างเป็น immutable Session policy ห้ามเปลี่ยนระหว่าง Session โดย `trading_capital_ratio` ต้องมากกว่า 0 และน้อยกว่า 1 ส่วน `max_entries` ต้องเป็นเลขคู่ตั้งแต่ 2–20
+ค่าจาก form ต้องผ่าน validation แล้วสร้างเป็น immutable Session policy ห้ามเปลี่ยนระหว่าง Session โดย `max_entries` ต้องเป็นเลขคู่ตั้งแต่ 2–20
 
-RSI parameters, take-profit rule, Entry Pair และ Cooldown Month ยังคงอยู่ใน Strategy Preset หรือ product policy และไม่ใช่ค่าที่ผู้ใช้เปลี่ยนระหว่าง Session
+RSI parameters, take-profit rule และ Entry Pair ยังคงอยู่ใน Strategy Preset หรือ product policy และไม่ใช่ค่าที่ผู้ใช้เปลี่ยนระหว่าง Session
+
+Cooldown เกิดขึ้นเมื่อ Basket ทำ Entry Pair ครบสอง Entries และไม่หมดอายุเองตามเวลา — ไม่มีการนับเดือนอีกต่อไป Basket จะถูกบล็อกจนกว่าผู้ใช้กดปุ่ม "Cancel Cooldown" พร้อม confirmation dialog เพราะเป็นการข้าม risk policy ที่ตั้งใจไว้ การกดหนึ่งครั้งยกเลิกได้เฉพาะ Cooldown รอบที่กำลังบล็อกอยู่ Pair ถัดไปที่ Basket เดียวกันทำครบยังเข้า Cooldown ตามปกติ waiver ผูกกับ Basket และ persist คู่กับ Fills ของมัน จึงอยู่รอดแม้ restart หรือ replay กลับ ปุ่มนี้ใช้ได้ทั้ง Paper Spot และ Paper Futures โดย Paper Spot เก็บ waiver ลงฐานข้อมูลจึงอยู่รอดข้าม restart ส่วน Paper Futures ไม่เก็บ เพราะไม่รับ Basket ที่เปิดค้างกลับมาอยู่แล้ว waiver จึงมีอายุเท่ากับ Runtime ที่ถืออยู่
 
 กฎเฉพาะตลาดต้องถูกตรวจสอบที่ boundary ก่อนเริ่ม session:
 
-- Spot ใช้ Spot capital policy
+- Spot ไม่มี capital policy ของตัวเอง: เทรด Available Capital ทั้งจำนวน แบ่งเท่ากันตาม `max_entries`
 - Futures ใช้ `FuturesTradingPolicy` ที่กำหนด One-way Mode, Cross Margin, leverage และ collateral buffer
 - Paper และ Live ใช้ business/risk policy เดียวกัน แต่ใช้ execution adapter แยกกัน
 
-### Liquidation
+### Candle ที่ดึงย้อนหลัง (Backfilled Candle)
 
-Liquidation เป็นผลลัพธ์แบบ deterministic ของ Paper Futures Policy v1 ที่ปิด Basket
-และห้ามสร้าง Entry ใหม่ โดยใช้ price-crossing เป็นเกณฑ์ตัดสินเพียงแบบเดียว:
-
-- LONG เกิด Liquidation เมื่อ `candle.low <= liquidation_price`
-- SHORT เกิด Liquidation เมื่อ `candle.high >= liquidation_price`
-- หากราคาแตะระดับ Liquidation ระหว่าง completed Candle แล้วฟื้นกลับก่อน Candle ปิด
-  ให้ถือว่าเกิด Liquidation แล้ว
-
-`account_equity` และ `liquidation_price` เป็นข้อมูล Paper ที่ใช้แสดงผลและตรวจสอบ
-ย้อนหลัง ส่วน Liquidation verdict ใช้ price-crossing rule ข้างต้นเพียงแบบเดียว
-
-สำหรับ Live Futures ค่า `liquidationPrice`, `markPrice` และ maintenance-margin facts
-จาก Binance เป็น authoritative source เพื่อแสดงผล เฝ้าระวัง และ reconciliation โดย
-Binance เป็นผู้ตัดสินและดำเนินการ Liquidation จริง ห้ามใช้สูตร Paper Futures เป็น
-authoritative Live verdict
+Candle ที่ระบบดึงย้อนหลังมาหลังการเชื่อมต่อขาด ห้ามใช้เปิด Entry ใหม่ เพราะราคาเปิดของมันเป็น
+ราคาที่ตลาดผ่านไปแล้ว แต่ยังใช้ปิด Position ได้เต็มรูปแบบ (Take Profit / Stop Loss /
+Stop Loss) และยังใช้คำนวณ Indicator ตามปกติ กฎนี้ใช้กับทั้ง `PAPER` และ `LIVE` ทุก Market
+Type — ดู PRODUCT.md ข้อ 8.1
 
 ### Basket Close Reason
 
-เมื่อเกิด Liquidation Basket ต้องมี `close_reason = LIQUIDATION` และ Session เปลี่ยนเป็น
-terminal `LIQUIDATED`
+Basket ปิดได้ด้วย `TAKE_PROFIT`, `STOP_LOSS` หรือ `MANUAL` เมื่อผู้ใช้สั่งปิดเอง
+Internal Alpha ไม่มี Liquidation: ไม่มีกลไกใดบังคับปิด Position ไม่ว่าราคาจะเสียหายเพียงใด

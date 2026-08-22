@@ -10,6 +10,7 @@ from tiewtrade.market_data.completed_candle_stream import (
     CompletedCandleStream,
 )
 from tiewtrade.market_data.config import MarketDataConfig
+from tiewtrade.market_data.warm_up import require_warm_up_candle
 
 
 class CandlePipelineInputError(ValueError):
@@ -33,7 +34,15 @@ class MarketDataCandleSink(Protocol):
         candle: Candle,
         *,
         received_at: datetime,
-    ) -> None: ...
+        backfilled: bool,
+    ) -> None:
+        """Take one completed candle, and whether it was recovered rather than live.
+
+        A Candle fetched back after a disconnect arrives here exactly as a
+        live one does, so a sink that must treat the two differently — a
+        Session that may not open an Entry at a price the market has already
+        left behind — has no way to tell them apart unless it is told.
+        """
 
     async def process_in_progress(
         self,
@@ -72,11 +81,7 @@ class CompletedCandlePipeline:
             if len(candles) < expected_count:
                 raise ValueError("insufficient warm-up candles")
             for candle in candles:
-                if (
-                    self._candles.accept(candle, received_at)
-                    is not CandleAcceptance.ACCEPTED
-                ):
-                    raise ValueError("warm-up requires new completed candles")
+                require_warm_up_candle(self._candles, candle, received_at)
         except Exception as error:
             raise CandlePipelineInputError from error
         try:
@@ -111,7 +116,7 @@ class CompletedCandlePipeline:
             raise CandlePipelineInputError from error
         if decision is not CandleAcceptance.ACCEPTED:
             return decision
-        await self._deliver(candle, received_at=received_at)
+        await self._deliver(candle, received_at=received_at, backfilled=False)
         return decision
 
     async def process_backfill(
@@ -162,13 +167,14 @@ class CompletedCandlePipeline:
             raise CandlePipelineInputError from error
         on_ready_for_delivery()
         for candle in accepted:
-            await self._deliver(candle, received_at=received_at)
+            await self._deliver(candle, received_at=received_at, backfilled=True)
 
     async def _deliver(
         self,
         candle: Candle,
         *,
         received_at: datetime,
+        backfilled: bool,
     ) -> None:
         # A candle accepted here already passed the (possibly tolerant)
         # not-closed gate above, so it is authoritatively closed. Downstream
@@ -177,7 +183,9 @@ class CompletedCandlePipeline:
         # close_time, silently dropping the delivery.
         delivered_at = max(received_at, candle.close_time)
         try:
-            await self._sink.process_completed(candle, received_at=delivered_at)
+            await self._sink.process_completed(
+                candle, received_at=delivered_at, backfilled=backfilled
+            )
         except Exception as error:
             raise CandlePipelineSinkError from error
         self._on_delivery(candle.open_time)

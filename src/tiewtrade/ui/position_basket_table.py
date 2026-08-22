@@ -1,21 +1,26 @@
 from dataclasses import dataclass
 
-from PySide6.QtCore import QSignalBlocker, Qt
+from PySide6.QtCore import QSignalBlocker, Qt, Signal
 from PySide6.QtWidgets import (
     QAbstractItemView,
+    QHBoxLayout,
     QHeaderView,
     QLabel,
+    QPushButton,
+    QSizePolicy,
     QTableWidget,
     QVBoxLayout,
     QWidget,
 )
 
 from tiewtrade.application.trading_workspace import (
+    BasketEntryGate,
     BasketEntrySnapshot,
     BasketSnapshot,
     PositionBasketTabSnapshot,
     WorkspaceTabState,
 )
+from tiewtrade.ui.blank_text import BLANK
 from tiewtrade.ui.display_time import display_timestamp
 from tiewtrade.ui.entry_gate_display import blocked_entry_reason
 from tiewtrade.ui.money_text import money_text, price_text
@@ -70,20 +75,19 @@ def _notional(row: _Row) -> str:
 
 
 def _pnl(row: _Row) -> str:
-    return money_text(row.entry.unrealized_pnl)
+    """What the Entry is worth against the price, once there is one.
+
+    A Basket read out of the database is shown before its first candle, and
+    an unmarked Entry has no result yet. A dash says the question was asked
+    and has no answer, where 0.00 would say it broke even.
+    """
+    pnl = row.entry.unrealized_pnl
+    return BLANK if pnl is None else money_text(pnl)
 
 
 def _pnl_colour(row: _Row) -> str | None:
-    return sign_colour(row.entry.unrealized_pnl)
-
-
-def _average_entry_price(row: _Row) -> str:
-    """What the Basket paid on average, restated on every Entry that moved it.
-
-    Read in the same format as the price each row paid, since the pair is only
-    worth printing to be compared.
-    """
-    return price_text(row.basket.average_entry_price)
+    pnl = row.entry.unrealized_pnl
+    return None if pnl is None else sign_colour(pnl)
 
 
 class PositionBasketTable(QWidget):
@@ -91,10 +95,14 @@ class PositionBasketTable(QWidget):
 
     A trader enters the same Basket more than once, so an averaged single row
     hides the prices actually paid. The rows are the Entries, each with the
-    price it paid and the target it is sold at. Facts the Basket holds for all
-    of them — its average and its lifecycle — are restated on every row so a
-    row can be read on its own; the market it trades, which no row can carry,
-    frames the table instead.
+    price it paid and the target it is sold at.
+
+    Every column reads at the same level — the Entry's own. The Basket's
+    average used to be restated on every row, which read as a third price
+    beside the two the row paid and aimed at, and invited the target to be
+    read as measured from it. It is measured from the Entry's own price, so
+    the average is no longer printed here. Only the lifecycle, one gate for
+    every Entry, is still the Basket's.
     """
 
     # Measured numbers hang on the right so their digits line up and a minus
@@ -105,15 +113,24 @@ class PositionBasketTable(QWidget):
         Column("Entry Price", RIGHT, _price),
         # Beside the price paid, so the distance left to run reads at a glance.
         Column("Take Profit", RIGHT, _take_profit_price),
-        # The Basket's own price, following the two each row paid and aims at.
-        Column("Average", RIGHT, _average_entry_price),
         Column("Quantity", RIGHT, _quantity),
         Column("Total", RIGHT, _notional),
         Column("Unrealized P/L", RIGHT, _pnl, _pnl_colour),
         Column("Status", LEFT, _entry_gate),
     )
-    HEADERS = headers(COLUMNS)
+    # Binance names the column after the position and the button after the
+    # order that closes it — [Market] under [Close Position] — because the
+    # button is the order type, not the verb. One kind of order can be sent
+    # from here, so there is one button.
+    CLOSE_HEADER = "Close Position"
+    CLOSE_LABEL = "Market"
+    HEADERS = (*headers(COLUMNS), CLOSE_HEADER)
     ALIGNMENTS = tuple(column.alignment for column in COLUMNS)
+
+    #: The Entry a row asked to be sold at the price the market is at.
+    close_entry_requested = Signal(int)
+    #: The Basket asked to lift the Cooldown blocking its next Entry.
+    cancel_cooldown_requested = Signal()
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -121,12 +138,31 @@ class PositionBasketTable(QWidget):
         self.setAccessibleName("Position")
 
         self.table = self._table()
+        self._closing_enabled = True
+        self._cancelling_enabled = True
+        #: The Basket the Cancel Cooldown button asks about, if it is shown.
+        self.basket: BasketSnapshot | None = None
         self.empty_state = TableEmptyStateOverlay(self.table)
         self.state_label = QLabel("No open Position")
         self.state_label.setObjectName("positionBasketState")
         self.state_label.setAccessibleName("Position status")
         self.state_label.setProperty("stateMessage", True)
         self.state_label.setWordWrap(True)
+        # Owned here, where the Cooldown it acts on is read — shown wherever
+        # the workspace around this table chooses to put it, on the same row
+        # as the tabs it sits beside. A caller that never places it still
+        # gets a button that shows and hides correctly, sized to its own text.
+        self.cancel_cooldown_button = QPushButton("Cancel Cooldown", self)
+        self.cancel_cooldown_button.setObjectName("cancelCooldownButton")
+        self.cancel_cooldown_button.setAccessibleName("Cancel Cooldown")
+        self.cancel_cooldown_button.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.cancel_cooldown_button.setSizePolicy(
+            QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed
+        )
+        self.cancel_cooldown_button.setVisible(False)
+        self.cancel_cooldown_button.clicked.connect(
+            lambda _checked=False: self.cancel_cooldown_requested.emit()
+        )
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -142,6 +178,7 @@ class PositionBasketTable(QWidget):
             return
         self._show_basket(value.basket)
         self._show_state(value)
+        self._show_cooldown(value.basket)
 
     def _show_basket(self, basket: BasketSnapshot | None) -> None:
         rows = (
@@ -156,6 +193,9 @@ class PositionBasketTable(QWidget):
             for index, row in enumerate(rows):
                 for position, column in enumerate(self.COLUMNS):
                     self.table.setItem(index, position, table_item(column, row))
+                self.table.setCellWidget(
+                    index, len(self.COLUMNS), self._close_cell(row)
+                )
 
     def _show_state(self, snapshot: PositionBasketTabSnapshot) -> None:
         text = self._state_text(snapshot)
@@ -166,6 +206,14 @@ class PositionBasketTable(QWidget):
             return
         self.empty_state.clear_message()
         self.state_label.setVisible(bool(text))
+
+    def _show_cooldown(self, basket: BasketSnapshot | None) -> None:
+        self.basket = basket
+        in_cooldown = (
+            basket is not None and basket.entry_gate is BasketEntryGate.COOLDOWN
+        )
+        self.cancel_cooldown_button.setVisible(in_cooldown)
+        self.cancel_cooldown_button.setEnabled(in_cooldown and self._cancelling_enabled)
 
     @staticmethod
     def _state_text(snapshot: PositionBasketTabSnapshot) -> str:
@@ -183,15 +231,84 @@ class PositionBasketTable(QWidget):
             return f"Stale Position data as of {stamp}"
         return ""
 
+    def _close_cell(self, row: _Row) -> QWidget:
+        """The button, held in the middle of the room a cell leaves it.
+
+        A cell widget is stretched to the whole cell, so on its own the button
+        ran the width of the column and stood taller than the row. What the
+        cell leaves is the height of a line of text, which is the size the
+        button is drawn at.
+        """
+        cell = QWidget()
+        layout = QHBoxLayout(cell)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.addWidget(self._close_button(row), 0, Qt.AlignmentFlag.AlignCenter)
+        return cell
+
+    def _close_button(self, row: _Row) -> QPushButton:
+        """The order this row can send, which is the only one it can send.
+
+        The Entry number travels with the button rather than the row it sits
+        in: rows are rebuilt on every price, and a number cannot drift the way
+        a position in a table can.
+        """
+        entry_number = row.entry.entry_number
+        button = QPushButton(self.CLOSE_LABEL)
+        button.setObjectName("positionEntryCloseButton")
+        button.setAccessibleName(f"Close Entry {entry_number} at Market")
+        button.setEnabled(self._closing_enabled)
+        button.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
+        button.setCursor(Qt.CursorShape.PointingHandCursor)
+        button.clicked.connect(
+            lambda _checked=False: self.close_entry_requested.emit(entry_number)
+        )
+        return button
+
+    def show_close_error(self, message: str) -> None:
+        """Say a sale did not happen, over the Position that is still there.
+
+        The rows are what they were, so the tab is not repainted: only the line
+        above them changes, and the next reading of the Basket clears it.
+        """
+        self.state_label.setText(message)
+        self.state_label.setVisible(True)
+
+    def set_closing_enabled(self, enabled: bool) -> None:
+        """Take the buttons away while a sale of theirs is still in flight."""
+        self._closing_enabled = enabled
+        for index in range(self.table.rowCount()):
+            button = self.close_button(index)
+            if button is not None:
+                button.setEnabled(enabled)
+
+    def show_cancel_error(self, message: str) -> None:
+        """Say a waiver did not happen, over the Position that is still there."""
+        self.state_label.setText(message)
+        self.state_label.setVisible(True)
+
+    def set_cancelling_enabled(self, enabled: bool) -> None:
+        """Take the button away while a waiver of its own is still in flight."""
+        self._cancelling_enabled = enabled
+        self.cancel_cooldown_button.setEnabled(
+            enabled and self.cancel_cooldown_button.isVisible()
+        )
+
+    def close_button(self, row: int) -> QPushButton | None:
+        """The order button of a row, wherever the cell keeps it."""
+        cell = self.table.cellWidget(row, len(self.COLUMNS))
+        if cell is None:
+            return None
+        return cell.findChild(QPushButton)
+
     def _table(self) -> QTableWidget:
-        table = QTableWidget(0, len(self.COLUMNS))
+        table = QTableWidget(0, len(self.HEADERS))
         table.setObjectName("positionBasketGrid")
         table.setAccessibleName("Position")
         table.setHorizontalHeaderLabels(list(self.HEADERS))
         # Headings sit centred over every column, whichever way the values
         # under them run. The cells keep their own alignment, so figures
         # still line up on one right edge to be read down.
-        for index in range(len(self.COLUMNS)):
+        for index in range(len(self.HEADERS)):
             header_item = table.horizontalHeaderItem(index)
             if header_item is not None:
                 header_item.setTextAlignment(CENTER)
@@ -206,5 +323,11 @@ class PositionBasketTable(QWidget):
         table.horizontalHeader().setSectionResizeMode(
             QHeaderView.ResizeMode.ResizeToContents
         )
-        table.horizontalHeader().setStretchLastSection(True)
+        # The slack goes to the last column of values, not to the one holding
+        # a button: stretched, that column ran the width of the table with a
+        # button stretched along with it.
+        table.horizontalHeader().setStretchLastSection(False)
+        table.horizontalHeader().setSectionResizeMode(
+            len(self.COLUMNS) - 1, QHeaderView.ResizeMode.Stretch
+        )
         return table

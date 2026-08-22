@@ -1,4 +1,5 @@
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
@@ -15,7 +16,11 @@ from tiewtrade.integrations.sqlite.paper_spot_history import (
     PaperSpotSQLiteHistory,
 )
 from tiewtrade.integrations.sqlite.trade_history import SQLiteTradeHistory
-from tiewtrade.trading.basket import ClosedBasket, ClosedEntry
+from tiewtrade.trading.basket import (
+    BasketCloseReason,
+    ClosedBasket,
+    ClosedEntry,
+)
 from tiewtrade.trading.session_config import MarketType, TradeMode
 from tiewtrade.trading.trade_history import (
     BasketResult,
@@ -352,6 +357,75 @@ def test_entry_exit_keeps_the_basket_open_and_adds_what_it_realised(
     assert len(fills) == 2
     assert fills[1].closes_entry_number == 1
     assert fills[1].realized_pnl == Decimal("20")
+
+
+def test_the_last_entry_closes_the_basket_on_the_totals_the_store_kept(
+    history: PaperSpotSQLiteHistory,
+    store: SQLiteTradeHistory,
+) -> None:
+    """A Basket taken back counts only what it has sold since it was taken back.
+
+    Its own tally starts empty on every restart, so closing the last Entry
+    after one used to write a total and a count that left out every Entry sold
+    before it — 20 realised on a Basket that had made 31.34, over two Entries
+    reported as one. The store kept both all along.
+    """
+    for number, price in ((1, "100"), (2, "110")):
+        history.record_entry(
+            basket_id=BASKET_ID,
+            entry_number=number,
+            fill=replace(
+                entry_fill(),
+                order_id=f"entry:{number}",
+                fill_id=f"paper:{SESSION_ID}:entry:{number}:fill",
+                intent_id=f"intent-{number}",
+                price=Decimal(price),
+            ),
+            entry_atr=ENTRY_ATR,
+        )
+    history.record_entry_exit(
+        basket_id=BASKET_ID,
+        fill=replace(exit_fill(), order_id="close-entry:1", fill_id="fill-exit-1"),
+        closed=ClosedEntry(
+            entry_number=1,
+            quantity=Decimal("2"),
+            entry_price=Decimal("100"),
+            exit_price=Decimal("105.67"),
+            realized_pnl=Decimal("11.34"),
+            closed_at=OPENED_AT + timedelta(hours=1),
+        ),
+        closed_basket=None,
+    )
+
+    # The Session that sells the last Entry has only ever seen that Entry, so
+    # the Basket it hands over knows nothing of the 11.34 already realised.
+    history.record_entry_exit(
+        basket_id=BASKET_ID,
+        fill=replace(exit_fill(), order_id="close-entry:2", fill_id="fill-exit-2"),
+        closed=ClosedEntry(
+            entry_number=2,
+            quantity=Decimal("2"),
+            entry_price=Decimal("110"),
+            exit_price=Decimal("120"),
+            realized_pnl=Decimal("20"),
+            closed_at=OPENED_AT + timedelta(hours=2),
+        ),
+        closed_basket=ClosedBasket(
+            basket_id=BASKET_ID,
+            entry_count=1,
+            average_entry_price=Decimal("110"),
+            exit_price=Decimal("120"),
+            realized_pnl=Decimal("20"),
+            closed_at=OPENED_AT + timedelta(hours=2),
+            close_reason=BasketCloseReason.TAKE_PROFIT,
+        ),
+    )
+
+    basket = store.get_basket(BASKET_ID)
+    assert basket is not None
+    assert basket.status is BasketStatus.CLOSED
+    assert basket.realized_pnl == Decimal("31.34")
+    assert basket.entry_count == 2
 
 
 def test_close_records_exact_closed_basket_and_sell_fill(

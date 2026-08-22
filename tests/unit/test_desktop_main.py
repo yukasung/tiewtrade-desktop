@@ -189,9 +189,8 @@ def test_desktop_composition_supplies_migrated_create_and_load_operations(
             market_type="spot",
             symbol="BTCUSDT",
             timeframe="5m",
-            available_capital="200000",
+            capital_per_entry="200000",
             max_entries="10",
-            spot_trading_capital_percent="80",
             futures_leverage=None,
         )
     )
@@ -677,7 +676,7 @@ def test_concurrent_session_load_and_history_query_serialize_v1_migration(
             row[1] for row in connection.execute("PRAGMA table_info(basket_results)")
         }
 
-    assert schema_version == 10
+    assert schema_version == 15
     assert "leverage" in basket_columns
 
 

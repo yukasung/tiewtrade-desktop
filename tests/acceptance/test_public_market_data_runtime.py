@@ -31,7 +31,6 @@ from tiewtrade.market_data.source_errors import (
 from tiewtrade.strategies.rsi_step_grid.preset import RsiStepGridPreset
 from tiewtrade.trading.entry_policy import EntryPolicy
 from tiewtrade.trading.session_config import MarketType, SessionConfig, TradeMode
-from tiewtrade.trading.spot_policy import SpotTradingPolicy
 from tiewtrade.trading.symbol_rules import SymbolRules
 
 _NOW = datetime(2026, 1, 1, 1, 20, tzinfo=UTC)
@@ -106,6 +105,9 @@ class FakeFailureRuntimeScheduler(FakeRuntimeScheduler):
 
     async def sleep(self, seconds: float) -> None:
         self.sleeps.append(seconds)
+        # Retrying has no end of its own any more, so a wait that never gives
+        # the loop back would starve the test watching it.
+        await asyncio.sleep(0)
 
 
 class FailedKlineStream:
@@ -174,17 +176,31 @@ def test_fake_public_runtime_warms_then_processes_paper_spot_live_candle() -> No
     assert not hasattr(source, "place_order")
 
 
-def test_rate_limit_exhaustion_fails_closed_without_paper_spot_delivery() -> None:
+def test_rate_limit_waits_for_the_provider_without_paper_spot_delivery() -> None:
+    """A provider that keeps refusing is waited on, not given up on.
+
+    Nothing is delivered while it refuses, which is the part that matters
+    here: waiting is not the same as trading on data that never arrived.
+    """
     runtime, source, sink, scheduler = runtime_with_failing_stream(
         MarketDataRateLimitError("429", retry_after=None)
     )
 
-    asyncio.run(runtime.run())
+    async def exercise() -> None:
+        run_task = asyncio.create_task(runtime.run())
+        # Past the four attempts the old policy would have stopped at.
+        for _ in range(1000):
+            if source.stream_count > 5:
+                break
+            await asyncio.sleep(0)
+        assert runtime.snapshot.state is not MarketDataRuntimeState.FAILED_CLOSED
+        await runtime.stop()
+        await run_task
 
-    assert runtime.snapshot.state is MarketDataRuntimeState.FAILED_CLOSED
-    assert runtime.snapshot.reason is MarketDataRuntimeReason.RATE_LIMIT_EXHAUSTED
-    assert scheduler.sleeps == [60.0, 60.0, 60.0]
-    assert source.stream_count == 4
+    asyncio.run(exercise())
+
+    assert runtime.snapshot.state is MarketDataRuntimeState.STOPPED
+    assert scheduler.sleeps[:4] == [60.0, 60.0, 60.0, 60.0]
     assert sink.live_candle_count == 0
     assert sink.last_snapshot is None
 
@@ -295,9 +311,8 @@ def configured_paper_spot_session(
             preset_version=preset.version,
             market_type=MarketType.SPOT,
             trade_mode=TradeMode.PAPER,
-            available_capital=Decimal("1000"),
+            capital_per_entry=Decimal("1000"),
             entry_policy=EntryPolicy(max_entries=4),
-            spot_policy=SpotTradingPolicy(trading_capital_ratio=Decimal("0.6")),
         ),
         market_data,
         SymbolRules(

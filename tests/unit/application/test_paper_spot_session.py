@@ -1,4 +1,4 @@
-from datetime import UTC, date, datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from typing import cast
 from unittest.mock import Mock, create_autospec
@@ -40,7 +40,6 @@ from tiewtrade.trading.session_config import (
     SessionConfig,
     TradeMode,
 )
-from tiewtrade.trading.spot_policy import SpotTradingPolicy
 from tiewtrade.trading.symbol_rules import SymbolRules
 
 
@@ -108,13 +107,14 @@ def test_snapshot_has_no_basket_id_before_first_entry() -> None:
     snapshot = application.process_completed_candle(
         first_candle,
         received_at=first_candle.close_time,
+        backfilled=False,
     )
 
     assert snapshot.accepted is True
     assert snapshot.basket_id is None
 
 
-def test_entry_gate_waits_for_a_candle_to_date_it() -> None:
+def test_entry_gate_waits_for_a_candle_to_answer_against() -> None:
     application = paper_session()
 
     assert application.snapshot.entry_gate is None
@@ -123,12 +123,13 @@ def test_entry_gate_waits_for_a_candle_to_date_it() -> None:
     snapshot = application.process_completed_candle(
         first_candle,
         received_at=first_candle.close_time,
+        backfilled=False,
     )
 
     assert snapshot.entry_gate == EntryGate(EntryGateState.OPEN)
 
 
-def test_completed_pair_reports_its_cooldown_month_in_the_snapshot() -> None:
+def test_completed_pair_reports_its_cooldown_in_the_snapshot() -> None:
     application = paper_session()
     first_intent = arm_entry_intent(application)
     first_fill_candle = candle(
@@ -150,9 +151,168 @@ def test_completed_pair_reports_its_cooldown_month_in_the_snapshot() -> None:
         second_fill_candle, received_at=second_fill_candle.close_time
     )
 
-    # Both Entries filled in January, so the pair reopens in March.
+    # A completed Pair holds the gate until the trader lifts it.
     assert snapshot.basket_entry_count == 2
-    assert snapshot.entry_gate == EntryGate(EntryGateState.COOLDOWN, date(2026, 3, 1))
+    assert snapshot.entry_gate == EntryGate(EntryGateState.COOLDOWN)
+
+
+def test_waive_cooldown_opens_the_gate_and_reports_the_waived_pair() -> None:
+    application = paper_session()
+    first_intent = arm_entry_intent(application)
+    first_fill_candle = candle(
+        minute_after(first_intent), open_price="120", close_price="121"
+    )
+    application.process_completed_candle(
+        first_fill_candle, received_at=first_fill_candle.close_time
+    )
+    second_intent = arm_entry_intent(
+        application,
+        start_minute=minute_after(first_intent) + 5,
+        downtrend_candles=60,
+    )
+    second_fill_candle = candle(
+        minute_after(second_intent), open_price="100", close_price="101"
+    )
+    application.process_completed_candle(
+        second_fill_candle, received_at=second_fill_candle.close_time
+    )
+
+    snapshot = application.waive_cooldown(datetime(2026, 1, 25, tzinfo=UTC))
+
+    assert snapshot.accepted is True
+    assert snapshot.waived_pair is not None
+    assert snapshot.entry_gate == EntryGate(EntryGateState.OPEN)
+
+
+def test_waive_cooldown_rejects_a_session_that_is_not_in_cooldown() -> None:
+    application = paper_session()
+    first_intent = arm_entry_intent(application)
+    first_fill_candle = candle(
+        minute_after(first_intent), open_price="120", close_price="121"
+    )
+    application.process_completed_candle(
+        first_fill_candle, received_at=first_fill_candle.close_time
+    )
+
+    snapshot = application.waive_cooldown(datetime(2026, 1, 25, tzinfo=UTC))
+
+    assert snapshot.accepted is False
+    assert snapshot.waived_pair is None
+
+
+def test_waive_cooldown_rejects_a_session_with_no_open_basket() -> None:
+    application = paper_session()
+
+    snapshot = application.waive_cooldown(datetime(2026, 1, 25, tzinfo=UTC))
+
+    assert snapshot.accepted is False
+
+
+def test_a_backfilled_candle_opens_no_entry() -> None:
+    """A price the market has already left behind must not buy anything.
+
+    Candles recovered after a disconnect are real and must be counted, but
+    filling an Entry at one means paying an open that is minutes or hours
+    gone — harmless to pretend on Paper, an order at a price that no longer
+    exists on Live.
+    """
+    application = paper_session()
+    pending = arm_entry_intent(application)
+    fill_candle = candle(minute_after(pending), open_price="120", close_price="121")
+
+    snapshot = application.process_completed_candle(
+        fill_candle, received_at=fill_candle.close_time, backfilled=True
+    )
+
+    assert snapshot.accepted is True
+    assert snapshot.entry_fill is None
+    assert snapshot.basket_entry_count == 0
+
+
+def test_an_intent_a_backfilled_candle_refused_can_arm_again() -> None:
+    """The Intent goes back to the strategy rather than waiting in line.
+
+    Left pending, it would fill on the first live candle off a signal read
+    from a candle long past. Handed back, the strategy signals again when
+    the live market still says the same thing.
+    """
+    application = paper_session()
+    pending = arm_entry_intent(application)
+    fill_candle = candle(minute_after(pending), open_price="120", close_price="121")
+
+    snapshot = application.process_completed_candle(
+        fill_candle, received_at=fill_candle.close_time, backfilled=True
+    )
+
+    # The strategy is free to signal again off this candle; what must not
+    # survive is the Intent that was already waiting to be filled.
+    assert snapshot.entry_fill is None
+    if snapshot.pending_intent is not None:
+        assert snapshot.pending_intent.intent_id != pending.intent_id
+
+
+def test_a_backfilled_candle_still_feeds_the_indicators() -> None:
+    """RSI and ATR have to see every candle or they answer for the wrong ones."""
+    application = paper_session()
+    pending = arm_entry_intent(application)
+    before = application.snapshot.entry_gate
+    fill_candle = candle(minute_after(pending), open_price="120", close_price="121")
+
+    application.process_completed_candle(
+        fill_candle, received_at=fill_candle.close_time, backfilled=True
+    )
+
+    # The candle was accepted into the stream, which is what dates the gate.
+    assert before is not None
+    assert application.snapshot.entry_gate is not None
+
+
+def test_a_backfilled_candle_still_takes_profit() -> None:
+    """A target the market reached while the feed was down was still reached.
+
+    Refusing to sell there would report a Basket the trader does not have,
+    and would flatter every result that followed it.
+    """
+    original = buy_only_paper_session()
+    entry_snapshot, next_minute, entry_atr = arm_and_fill_buy_only_entry(original)
+    assert entry_snapshot.entry_fill is not None
+    assert entry_snapshot.basket_id is not None
+    target = entry_snapshot.take_profit_price
+    assert target is not None
+    entry = entry_snapshot.entry_fill
+    resumed = buy_only_paper_session(
+        open_basket=OpenBasketState(
+            basket_id=entry_snapshot.basket_id,
+            entries=(
+                OpenBasketEntry(
+                    entry_number=1,
+                    price=entry.price,
+                    quantity=entry.quantity,
+                    filled_at=entry.filled_at,
+                    atr=entry_atr,
+                ),
+            ),
+            closed_basket_count=0,
+        )
+    )
+    reached = candle(
+        next_minute,
+        open_price=str(target - Decimal("5")),
+        close_price=str(target - Decimal("1")),
+        high=str(target),
+        low=str(target - Decimal("5")),
+    )
+    resumed.warm_up_completed_candles(
+        [candle(next_minute - 5, open_price="100", close_price="101")],
+        received_at=reached.open_time,
+    )
+
+    sold = resumed.process_completed_candle(
+        reached, received_at=reached.close_time, backfilled=True
+    )
+
+    assert sold.closed_basket is not None
+    assert sold.closed_basket.close_reason is BasketCloseReason.TAKE_PROFIT
 
 
 def test_incomplete_candle_is_not_processed() -> None:
@@ -162,6 +322,7 @@ def test_incomplete_candle_is_not_processed() -> None:
     snapshot = application.process_completed_candle(
         incomplete,
         received_at=incomplete.close_time - timedelta(seconds=1),
+        backfilled=False,
     )
 
     assert snapshot.accepted is False
@@ -180,6 +341,7 @@ def test_warm_up_seeds_indicators_without_creating_trade_side_effects() -> None:
     snapshot = application.process_completed_candle(
         next_candle,
         received_at=next_candle.close_time,
+        backfilled=False,
     )
 
     assert snapshot.entry_fill is None
@@ -589,11 +751,10 @@ def test_a_reopened_basket_counts_its_entries_against_the_pair_gate() -> None:
         )
     )
 
-    gate = resumed._lifecycle.entry_gate(filled_at + timedelta(minutes=10))
+    gate = resumed._lifecycle.entry_gate()
 
     assert resumed.snapshot.basket_entry_count == 2
     assert gate.state is EntryGateState.COOLDOWN
-    assert gate.reopens_at == date(2026, 3, 1)
 
 
 def fill_second_fast_test_entry(
@@ -715,7 +876,7 @@ def test_a_reopened_basket_leaves_out_the_entries_that_already_sold() -> None:
 
 
 def test_minimum_notional_rejection_releases_strategy_to_create_a_new_intent() -> None:
-    application = paper_session(min_notional=Decimal("200"))
+    application = paper_session(min_notional=Decimal("400"))
     first_intent = arm_entry_intent(application)
     rejected_candle = candle(125, open_price="120", close_price="121")
 
@@ -742,6 +903,7 @@ def test_entry_transition_is_atomic_when_lifecycle_rejects_fill(
     first_fill = application.process_completed_candle(
         first_fill_candle,
         received_at=first_fill_candle.close_time,
+        backfilled=False,
     )
     assert first_fill.basket_entry_count == 1
 
@@ -756,7 +918,7 @@ def test_entry_transition_is_atomic_when_lifecycle_rejects_fill(
         close_price="101",
     )
 
-    def reject_fill(self: EntryPairLifecycle, filled_at: datetime) -> None:
+    def reject_fill(self: EntryPairLifecycle) -> None:
         raise ValueError("entry is blocked by pair lifecycle")
 
     monkeypatch.setattr(EntryPairLifecycle, "record_fill", reject_fill)
@@ -765,6 +927,7 @@ def test_entry_transition_is_atomic_when_lifecycle_rejects_fill(
         application.process_completed_candle(
             second_fill_candle,
             received_at=second_fill_candle.close_time,
+            backfilled=False,
         )
 
     assert isinstance(captured.value.__cause__, ValueError)
@@ -797,6 +960,7 @@ def test_late_entry_failure_does_not_commit_or_persist_entry(
         persistent.process_completed_candle(
             entry_candle,
             received_at=entry_candle.close_time,
+            backfilled=False,
         )
 
     assert application.snapshot.state is PaperSpotSessionState.FAILED_CLOSED
@@ -820,6 +984,7 @@ def test_late_close_failure_keeps_open_basket_and_does_not_persist_close(
     entry = persistent.process_completed_candle(
         entry_candle,
         received_at=entry_candle.close_time,
+        backfilled=False,
     )
     assert entry.session.basket_entry_count == 1
 
@@ -838,6 +1003,7 @@ def test_late_close_failure_keeps_open_basket_and_does_not_persist_close(
         persistent.process_completed_candle(
             close_candle,
             received_at=close_candle.close_time,
+            backfilled=False,
         )
 
     assert application.snapshot.state is PaperSpotSessionState.FAILED_CLOSED
@@ -860,6 +1026,7 @@ def test_strategy_callback_failure_does_not_commit_candidate_transition(
     application.process_completed_candle(
         first_fill_candle,
         received_at=first_fill_candle.close_time,
+        backfilled=False,
     )
     second_intent = arm_entry_intent(
         application,
@@ -887,6 +1054,7 @@ def test_strategy_callback_failure_does_not_commit_candidate_transition(
         application.process_completed_candle(
             second_fill_candle,
             received_at=second_fill_candle.close_time,
+            backfilled=False,
         )
 
     assert str(captured.value.__cause__) == "strategy transition failed"
@@ -915,6 +1083,7 @@ def test_failed_closed_session_rejects_later_candles_and_warm_up(
         application.process_completed_candle(
             failed_candle,
             received_at=failed_candle.close_time,
+            backfilled=False,
         )
 
     before = application.snapshot
@@ -926,6 +1095,7 @@ def test_failed_closed_session_rejects_later_candles_and_warm_up(
     after = application.process_completed_candle(
         following,
         received_at=following.close_time,
+        backfilled=False,
     )
 
     assert after.accepted is False
@@ -1024,6 +1194,111 @@ def paper_session(*, min_notional: Decimal = Decimal("5")) -> PaperSpotSession:
         ),
         RsiStepGridPreset.v1(),
     )
+
+
+def _two_entry_basket() -> OpenBasketState:
+    """Entries at 100 and 110, a day apart so the Entry Pair lets both in.
+
+    With an ATR of 2 and a multiplier of 3 their targets are 106 and 116, so a
+    price between them reaches one and leaves the other holding.
+    """
+    return OpenBasketState(
+        basket_id=UUID("00000000-0000-0000-0000-0000000000c1"),
+        entries=(
+            OpenBasketEntry(
+                entry_number=1,
+                price=Decimal("100"),
+                quantity=Decimal("2"),
+                filled_at=datetime(2026, 8, 1, 12, tzinfo=UTC),
+                atr=Decimal("2"),
+            ),
+            OpenBasketEntry(
+                entry_number=2,
+                price=Decimal("110"),
+                quantity=Decimal("2"),
+                filled_at=datetime(2026, 8, 2, 12, tzinfo=UTC),
+                atr=Decimal("2"),
+            ),
+        ),
+        closed_basket_count=0,
+    )
+
+
+def test_one_entry_is_sold_on_demand_and_the_rest_left_holding() -> None:
+    """The sale a target makes, at a price nobody promised.
+
+    The Entry hands its place back the way a target sale does, so what is left
+    is a Basket that still holds the other Entry — not a Position closed
+    because one row of it was.
+    """
+    session = buy_only_paper_session(open_basket=_two_entry_basket())
+
+    snapshot = session.close_entry(
+        1,
+        price=Decimal("105.678"),
+        observed_at=datetime(2026, 8, 3, tzinfo=UTC),
+    )
+
+    assert snapshot.accepted is True
+    assert len(snapshot.entry_exits) == 1
+    sold = snapshot.entry_exits[0]
+    assert sold.fill.entry_number == 1
+    # Floored to the tick, against the seller, the way every sale here rounds.
+    assert sold.fill.price == Decimal("105.67")
+    assert sold.closed.realized_pnl == Decimal("11.34")
+    assert snapshot.closed_basket is None
+    assert snapshot.basket_entry_count == 1
+    assert [entry.entry_number for entry in session.open_entries] == [2]
+
+
+def test_selling_the_last_entry_closes_the_basket_as_a_manual_close() -> None:
+    session = buy_only_paper_session(open_basket=_two_entry_basket())
+    session.close_entry(
+        1, price=Decimal("105"), observed_at=datetime(2026, 8, 3, tzinfo=UTC)
+    )
+
+    snapshot = session.close_entry(
+        2, price=Decimal("120"), observed_at=datetime(2026, 8, 4, tzinfo=UTC)
+    )
+
+    assert snapshot.closed_basket is not None
+    assert snapshot.closed_basket.close_reason is BasketCloseReason.MANUAL
+    assert snapshot.basket_entry_count == 0
+    assert session.open_entries == ()
+
+
+def test_an_entry_already_gone_sells_nothing_twice() -> None:
+    """The row a hand reaches for redraws on every tick.
+
+    An unaccepted snapshot is what a stale row gets, rather than a second sale
+    of an Entry the Basket has already let go, or an error over a Position
+    that is doing nothing wrong.
+    """
+    session = buy_only_paper_session(open_basket=_two_entry_basket())
+    session.close_entry(
+        1, price=Decimal("105"), observed_at=datetime(2026, 8, 3, tzinfo=UTC)
+    )
+
+    again = session.close_entry(
+        1, price=Decimal("105"), observed_at=datetime(2026, 8, 3, tzinfo=UTC)
+    )
+    unknown = session.close_entry(
+        9, price=Decimal("105"), observed_at=datetime(2026, 8, 3, tzinfo=UTC)
+    )
+
+    assert again.accepted is False
+    assert unknown.accepted is False
+    assert [entry.entry_number for entry in session.open_entries] == [2]
+
+
+def test_a_session_holding_nothing_has_no_entry_to_sell() -> None:
+    session = buy_only_paper_session()
+
+    snapshot = session.close_entry(
+        1, price=Decimal("105"), observed_at=datetime(2026, 8, 3, tzinfo=UTC)
+    )
+
+    assert snapshot.accepted is False
 
 
 def buy_only_paper_session(
@@ -1260,9 +1535,10 @@ def session_config(**overrides: object) -> SessionConfig:
         "preset_version": "rsi-step-grid-v1",
         "market_type": MarketType.SPOT,
         "trade_mode": TradeMode.PAPER,
-        "available_capital": Decimal("1000"),
+        # 1000 over four Entries was 250 an Entry: the same size, stated the
+        # way the form states it now.
+        "capital_per_entry": Decimal("250"),
         "entry_policy": EntryPolicy(max_entries=4),
-        "spot_policy": SpotTradingPolicy(trading_capital_ratio=Decimal("0.6")),
     }
     values.update(overrides)
     return SessionConfig(**values)  # type: ignore[arg-type]

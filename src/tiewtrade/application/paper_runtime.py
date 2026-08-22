@@ -3,8 +3,10 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Callable
 from datetime import UTC, datetime
+from decimal import Decimal
 from threading import Event, Lock, Thread
 from time import monotonic
+from typing import Any
 
 from tiewtrade.application.bot_control import (
     BotLifecycleResult,
@@ -15,6 +17,7 @@ from tiewtrade.application.paper_session_sink import (
     PaperPositionRestoreError as PaperPositionRestoreError,
 )
 from tiewtrade.application.paper_session_sink import (
+    PaperRuntimeSink,
     paper_session_sink,
 )
 from tiewtrade.application.paper_session_sink import (
@@ -93,6 +96,7 @@ class PaperRuntimeController:
         self._result: BotLifecycleResult | None = None
         self._readiness_result: BotLifecycleResult | None = None
         self._runtime: MarketDataRuntime | None = None
+        self._sink: PaperRuntimeSink[Any] | None = None
         self._loop: asyncio.AbstractEventLoop | None = None
         self._thread: Thread | None = None
         self._active_session: ConfiguredPaperSession | None = None
@@ -295,7 +299,10 @@ class PaperRuntimeController:
             publish=self._publish_candle,
             entry_lock=self._entry_lock,
             entries_enabled=self._entries_enabled.is_set,
+            restored=self._publish_restored_basket,
         )
+        with self._lock:
+            self._sink = sink
         endpoints = BinancePublicEndpoints.for_market_type(session.config.market_type)
         source = self._source_factory(endpoints)
         runtime = MarketDataRuntime(
@@ -378,6 +385,64 @@ class PaperRuntimeController:
                         workspace=stale_workspace_snapshot(self.current_workspace)
                     )
                 )
+
+    def close_entry(
+        self,
+        session: ConfiguredPaperSession,
+        entry_number: int,
+        *,
+        price: Decimal,
+    ) -> bool:
+        """Sell one Entry of the running Session's Basket, at a price now.
+
+        The Runtime holds the Basket while it runs, so a sale written behind
+        its back would be a Basket sold twice — once in the database and once
+        by the next candle to reach the target it still thinks it holds. The
+        ask goes to the Session that owns it instead, under the lock a candle
+        takes, and what is left is published the way a Fill is.
+        """
+        self._validate_session(session)
+        with self._lock:
+            sink = self._sink
+            active = self._active_session
+        if sink is None or active != session:
+            return False
+        return sink.close_entry(entry_number, price=price, observed_at=self._clock())
+
+    def waive_cooldown(self, session: ConfiguredPaperSession) -> bool:
+        """Lift the Cooldown holding the running Session's Basket now.
+
+        The Runtime holds the Basket's lifecycle while it runs, so the ask
+        goes to the Session that owns it, under the same lock a candle takes.
+        """
+        self._validate_session(session)
+        with self._lock:
+            sink = self._sink
+            active = self._active_session
+        if sink is None or active != session:
+            return False
+        return sink.waive_cooldown(self._clock())
+
+    def _publish_restored_basket(
+        self,
+        basket: BasketSnapshot,
+        observed_at_utc: datetime,
+    ) -> None:
+        """Put the Basket that was taken back into the workspace at once.
+
+        Only the workspace: the candle it is marked on is a warm-up candle the
+        chart already has, and handing it round again as a completed candle
+        would be reporting it twice.
+        """
+        self._publish(
+            BotLifecycleResult(
+                workspace=paper_runtime_workspace_snapshot(
+                    self.current_workspace,
+                    basket=basket,
+                    observed_at_utc=observed_at_utc,
+                )
+            )
+        )
 
     def _publish_candle(
         self,

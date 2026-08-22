@@ -28,6 +28,7 @@ from tiewtrade.application.chart_data import (
 from tiewtrade.application.chart_view_selection import ChartViewSelection
 from tiewtrade.application.paper_symbols import PAPER_SYMBOLS
 from tiewtrade.market_data.config import SUPPORTED_V1_TIMEFRAME_CHOICES
+from tiewtrade.ui.blank_text import BLANK
 from tiewtrade.ui.chart_painter_model import (
     CHART_SURFACE_COLOR,
     MARKER_BADGE_RADIUS,
@@ -491,9 +492,9 @@ def _view_key(snapshot: ChartSnapshot | None) -> tuple[str, str, ChartRange] | N
 
 def _legend_text(readout: CandleReadout) -> str:
     candle = readout.candle
-    rsi = "—" if readout.rsi is None else f"{readout.rsi:,.2f}"
+    rsi = BLANK if readout.rsi is None else f"{readout.rsi:,.2f}"
     # ATR is a distance in price, so it reads in the same units as OHLC.
-    atr = "—" if readout.atr is None else f"{readout.atr:,.2f}"
+    atr = BLANK if readout.atr is None else f"{readout.atr:,.2f}"
     return (
         f"{in_display_timezone(candle.open_time):%Y-%m-%d %H:%M}  "
         f"O {candle.open:,.2f}  H {candle.high:,.2f}  "

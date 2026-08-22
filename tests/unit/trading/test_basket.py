@@ -7,6 +7,7 @@ import pytest
 from tiewtrade.trading.basket import (
     Basket,
     BasketCloseReason,
+    SettledEntries,
     average_entry_price_after_fill,
 )
 from tiewtrade.trading.entry_policy import EntryPolicy
@@ -463,27 +464,6 @@ def test_short_basket_close_calculates_directional_pnl() -> None:
     assert closed.realized_pnl == Decimal("20")
 
 
-def test_close_records_explicit_liquidation_reason() -> None:
-    basket = Basket(
-        basket_id=basket_id(), policy=policy(), take_profit_atr_multiplier=Decimal("3")
-    )
-    basket.add_entry(
-        price=Decimal("100"),
-        quantity=Decimal("1"),
-        filled_at=datetime(2026, 1, 1, tzinfo=UTC),
-        atr=Decimal("2"),
-        tick_size=Decimal("0.1"),
-    )
-
-    closed = basket.close(
-        exit_price=Decimal("80"),
-        closed_at=datetime(2026, 1, 2, tzinfo=UTC),
-        close_reason=BasketCloseReason.LIQUIDATION,
-    )
-
-    assert closed.close_reason is BasketCloseReason.LIQUIDATION
-
-
 def test_basket_rejects_entries_beyond_configured_maximum() -> None:
     basket = Basket(
         basket_id=basket_id(), policy=policy(4), take_profit_atr_multiplier=Decimal("3")
@@ -765,3 +745,82 @@ def test_non_finite_close_does_not_close_basket(
         )
 
     assert not basket.is_closed
+
+
+def test_a_basket_told_what_it_settled_closes_on_that_too() -> None:
+    """A Basket is one record however many times it was sold out of.
+
+    Taken back from the database it cannot replay the Entries that already
+    went — they are not in the position any more — so what they left is handed
+    to it. Starting that at nothing wrote a result and a count that left out
+    every Entry sold before the Runtime restarted.
+    """
+    basket = Basket(
+        basket_id=basket_id(),
+        policy=policy(),
+        take_profit_atr_multiplier=Decimal("3"),
+        settled=SettledEntries(
+            count=1,
+            quantity=Decimal("2"),
+            notional=Decimal("200"),
+            realized_pnl=Decimal("11.34"),
+        ),
+    )
+    basket.add_entry(
+        price=Decimal("110"),
+        quantity=Decimal("2"),
+        filled_at=datetime(2026, 8, 2, 12, tzinfo=UTC),
+        atr=Decimal("2"),
+        tick_size=Decimal("0.01"),
+    )
+
+    closed = basket.close(
+        exit_price=Decimal("120"),
+        closed_at=datetime(2026, 8, 3, tzinfo=UTC),
+        close_reason=BasketCloseReason.STOP_LOSS,
+    )
+
+    # The Entry it holds made 20; the one it was told about made 11.34.
+    assert closed.realized_pnl == Decimal("31.34")
+    assert closed.entry_count == 2
+    # Averaged over both, at the prices each was paid.
+    assert closed.average_entry_price == Decimal("105")
+
+
+def test_what_a_basket_was_told_it_settled_is_its_own() -> None:
+    """The tally handed in is a reading, not a thing the Basket goes on using."""
+    settled = SettledEntries(
+        count=1,
+        quantity=Decimal("2"),
+        notional=Decimal("200"),
+        realized_pnl=Decimal("10"),
+    )
+    basket = Basket(
+        basket_id=basket_id(),
+        policy=policy(),
+        take_profit_atr_multiplier=Decimal("3"),
+        settled=settled,
+    )
+    basket.add_entry(
+        price=Decimal("100"),
+        quantity=Decimal("2"),
+        filled_at=datetime(2026, 8, 2, 12, tzinfo=UTC),
+        atr=Decimal("2"),
+        tick_size=Decimal("0.01"),
+    )
+
+    basket.close_entry(
+        1,
+        exit_price=Decimal("110"),
+        closed_at=datetime(2026, 8, 3, tzinfo=UTC),
+    )
+
+    assert settled.count == 1
+    assert settled.realized_pnl == Decimal("10")
+
+
+def test_a_settled_tally_of_nothing_carries_no_figures() -> None:
+    with pytest.raises(ValueError, match="no settled Entry leaves figures"):
+        SettledEntries(realized_pnl=Decimal("10"))
+    with pytest.raises(ValueError, match="count must not be negative"):
+        SettledEntries(count=-1)

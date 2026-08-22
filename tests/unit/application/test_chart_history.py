@@ -15,7 +15,6 @@ from tiewtrade.market_data.candle import Candle
 from tiewtrade.market_data.config import MarketDataConfig
 from tiewtrade.trading.entry_policy import EntryPolicy
 from tiewtrade.trading.session_config import MarketType, SessionConfig, TradeMode
-from tiewtrade.trading.spot_policy import SpotTradingPolicy
 from tiewtrade.trading.trade_history import FillSide, FillSource, TradeFill
 
 
@@ -50,14 +49,14 @@ class FakeLoadChartCandles:
 class FakeListChartFills:
     def __init__(self, fills: tuple[TradeFill, ...]) -> None:
         self._fills = fills
-        self.requests: list[tuple[UUID, ChartRange]] = []
+        self.requests: list[tuple[ConfiguredPaperSession, ChartRange]] = []
 
     def __call__(
         self,
-        session_id: UUID,
+        session: ConfiguredPaperSession,
         requested: ChartRange,
     ) -> tuple[TradeFill, ...]:
-        self.requests.append((session_id, requested))
+        self.requests.append((session, requested))
         return self._fills
 
 
@@ -76,7 +75,7 @@ def test_chart_history_loads_only_requested_public_range_and_session_fills() -> 
     snapshot = asyncio.run(history.load(session(), selected_range))
 
     assert load_candles.requests == [(session(), warm_up_range(selected_range))]
-    assert list_fills.requests == [(session().config.session_id, selected_range)]
+    assert list_fills.requests == [(session(), selected_range)]
     assert snapshot.state is ChartReadState.READY
     assert [marker.fill_id for marker in snapshot.markers] == ["buy-1", "sell-1"]
 
@@ -127,12 +126,7 @@ def test_refresh_completed_candle_advances_latest_range_and_reloads_durable_fill
         datetime(2026, 1, 1, 0, 25, tzinfo=UTC),
     )
     assert [item.open_time.minute for item in refreshed.candles] == [5, 10, 15, 20]
-    assert fills.requests == [
-        (
-            session().config.session_id,
-            refreshed.chart_range,
-        )
-    ]
+    assert fills.requests == [(session(), refreshed.chart_range)]
     assert [marker.fill_id for marker in refreshed.markers] == ["runtime-buy"]
 
 
@@ -167,7 +161,7 @@ def test_refresh_after_candle_gap_reloads_latest_bounded_range_and_durable_fills
     refreshed = asyncio.run(history.refresh_completed(session(), current, completed))
 
     assert load_candles.requests == [(session(), warm_up_range(latest_range))]
-    assert fills.requests == [(session().config.session_id, latest_range)]
+    assert fills.requests == [(session(), latest_range)]
     assert refreshed.chart_range == latest_range
     assert refreshed.candles == latest_candles
     assert [marker.fill_id for marker in refreshed.markers] == ["runtime-gap-buy"]
@@ -280,9 +274,8 @@ def session() -> ConfiguredPaperSession:
             preset_version="rsi-step-grid-v1",
             market_type=MarketType.SPOT,
             trade_mode=TradeMode.PAPER,
-            available_capital=Decimal("1000"),
+            capital_per_entry=Decimal("1000"),
             entry_policy=EntryPolicy(max_entries=10),
-            spot_policy=SpotTradingPolicy(trading_capital_ratio=Decimal("0.8")),
         ),
         market_data=MarketDataConfig(symbol="BTCUSDT", timeframe="5m"),
         created_at_utc=datetime(2026, 1, 1, tzinfo=UTC),

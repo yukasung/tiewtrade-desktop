@@ -7,17 +7,12 @@ from tiewtrade.execution.paper_futures import (
     PaperFuturesEntryFill,
     PaperFuturesExitFill,
 )
+from tiewtrade.integrations.sqlite.paper_fill_record import paper_fill_record
 from tiewtrade.integrations.sqlite.trade_history import SQLiteTradeHistory
 from tiewtrade.trading.basket import ClosedBasket
 from tiewtrade.trading.position import PositionSide
 from tiewtrade.trading.session_config import MarketType, TradeMode
-from tiewtrade.trading.trade_history import (
-    BasketResult,
-    BasketStatus,
-    FillSide,
-    FillSource,
-    TradeFill,
-)
+from tiewtrade.trading.trade_history import BasketResult, BasketStatus, FillSide
 
 PAPER_FUTURES_FUNDING_FEE = Decimal("0.00")
 
@@ -69,20 +64,12 @@ class PaperFuturesSQLiteHistory:
         entry_number: int,
         fill: PaperFuturesEntryFill,
     ) -> bool:
-        normalized_fill = TradeFill(
-            fill_id=fill.fill_id,
+        normalized_fill = paper_fill_record(
+            fill,
             basket_id=basket_id,
             session_id=self._context.session_id,
-            order_id=fill.order_id,
-            exchange_trade_id=None,
             side=_entry_fill_side(fill.side),
             entry_number=entry_number,
-            filled_at_utc=fill.filled_at,
-            price=fill.price,
-            quantity=fill.quantity,
-            notional=fill.price * fill.quantity,
-            realized_pnl=Decimal("0"),
-            source=FillSource.PAPER_EXECUTOR,
         )
         existing = self._store.get_basket(basket_id)
         if existing is None:
@@ -136,20 +123,12 @@ class PaperFuturesSQLiteHistory:
         if existing is None:
             raise ValueError("Basket does not exist")
 
-        normalized_fill = TradeFill(
-            fill_id=fill.fill_id,
+        normalized_fill = paper_fill_record(
+            fill,
             basket_id=basket_id,
             session_id=self._context.session_id,
-            order_id=fill.order_id,
-            exchange_trade_id=None,
             side=_exit_fill_side(fill.side),
-            entry_number=None,
-            filled_at_utc=fill.filled_at,
-            price=fill.price,
-            quantity=fill.quantity,
-            notional=fill.price * fill.quantity,
             realized_pnl=closed.realized_pnl,
-            source=FillSource.PAPER_EXECUTOR,
         )
         basket = replace(
             existing,

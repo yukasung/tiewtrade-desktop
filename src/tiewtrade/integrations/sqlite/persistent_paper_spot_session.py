@@ -2,10 +2,10 @@ from tiewtrade.application.paper_spot_session import (
     PaperSpotSession,
     PaperSpotSessionSnapshot,
 )
-from tiewtrade.application.session_persistence import SessionPersistenceCoordinator
+from tiewtrade.application.session_persistence import EntryClosingPersistence
 from tiewtrade.integrations.sqlite.paper_spot_history import PaperSpotSQLiteHistory
 from tiewtrade.integrations.sqlite.session_persistence import (
-    SQLiteSessionPersistenceCoordinator,
+    SQLiteEntryClosingCoordinator,
 )
 
 
@@ -14,6 +14,17 @@ class _PaperSpotSnapshotRecorder:
         self._history = history
 
     def record(self, snapshot: PaperSpotSessionSnapshot) -> None:
+        if snapshot.waived_pair is not None:
+            if snapshot.basket_id is None:
+                raise ValueError("cooldown waiver requires a Basket ID")
+            if snapshot.waived_at is None:
+                raise ValueError("cooldown waiver requires the moment it was granted")
+            self._history.record_cooldown_waiver(
+                basket_id=snapshot.basket_id,
+                waived_pair=snapshot.waived_pair,
+                waived_at=snapshot.waived_at,
+            )
+            return
         if snapshot.entry_fill is not None:
             if snapshot.basket_id is None:
                 raise ValueError("entry Fill requires a Basket ID")
@@ -69,8 +80,8 @@ class _PaperSpotSnapshotRecorder:
 def create_persistent_paper_spot_session(
     session: PaperSpotSession,
     history: PaperSpotSQLiteHistory,
-) -> SessionPersistenceCoordinator[PaperSpotSessionSnapshot]:
+) -> EntryClosingPersistence[PaperSpotSessionSnapshot]:
     if session.identity != history.session_identity:
         raise ValueError("Paper Spot Session and Trade History identity differ")
     recorder = _PaperSpotSnapshotRecorder(history)
-    return SQLiteSessionPersistenceCoordinator(session, recorder.record)
+    return SQLiteEntryClosingCoordinator(session, recorder.record)

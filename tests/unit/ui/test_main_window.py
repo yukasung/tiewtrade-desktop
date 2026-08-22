@@ -1,5 +1,6 @@
 import ast
 import inspect
+import itertools
 import threading
 from collections.abc import Callable
 from copy import copy
@@ -13,7 +14,12 @@ from uuid import UUID
 import pytest
 from PySide6.QtCore import QDeadlineTimer, QPoint, QRect, Qt, QThreadPool, QTimer
 from PySide6.QtTest import QTest
-from PySide6.QtWidgets import QApplication, QMessageBox, QWidget
+from PySide6.QtWidgets import (
+    QApplication,
+    QMessageBox,
+    QPushButton,
+    QWidget,
+)
 from pytestqt.qtbot import QtBot
 
 import tiewtrade.ui.main_window as main_window_module
@@ -71,7 +77,7 @@ from tiewtrade.integrations.sqlite.active_paper_sessions import (
 from tiewtrade.integrations.sqlite.database import SQLiteDatabase
 from tiewtrade.trading.futures_policy import FuturesTradingPolicy
 from tiewtrade.trading.session_config import MarketType, TradeMode
-from tiewtrade.trading.spot_policy import SpotTradingPolicy
+from tiewtrade.ui.blank_text import BLANK
 from tiewtrade.ui.bot_lifecycle_workflow import RuntimeSnapshotRelay
 from tiewtrade.ui.chart_workflow import ChartFactRelay
 from tiewtrade.ui.display_time import display_today
@@ -253,9 +259,8 @@ def _session_configuration_controls(window: MainWindow) -> tuple[QWidget, ...]:
         setup.symbol,
         setup.timeframe,
         setup.strategy,
-        setup.available_capital,
+        setup.capital_per_entry,
         setup.max_entries,
-        setup.spot_ratio,
         setup.leverage,
         setup.create_button,
     )
@@ -536,14 +541,16 @@ def test_created_spot_session_returns_to_editable_form_without_runtime_actions(
     qtbot.addWidget(window)
     window.show()
     qtbot.waitUntil(window.setup.create_button.isEnabled)
-    window.setup.available_capital.setText("200000")
+    # What the fixture Session spends per Entry, so the form coming back
+    # showing that Session reads as the form the trader filled in.
+    window.setup.capital_per_entry.setText("20000")
 
     click(window.setup.create_button)
 
     qtbot.waitUntil(lambda: window._replacement_session == created)
     assert window.setup.market_type.currentData() == "spot"
     assert window.setup.timeframe.currentData() == "5m"
-    assert window.setup.available_capital.text() == "200000"
+    assert window.setup.capital_per_entry.text() == "20000"
 
 
 def test_futures_overview_shows_immutable_policy(qtbot: QtBot) -> None:
@@ -573,12 +580,13 @@ def test_futures_overview_marks_missing_required_policy_unavailable(
     assert overview.position_mode_value.text() == "Unavailable"
 
 
-def test_futures_overview_marks_mixed_spot_policy_unavailable(
+def test_spot_overview_marks_a_mixed_futures_policy_unavailable(
     qtbot: QtBot,
 ) -> None:
+    """A Spot Session carries no policy, so holding one is malformed."""
     session = _session_with_policy_changes(
-        configured_futures_session(),
-        spot_policy=SpotTradingPolicy(Decimal("0.8")),
+        configured_spot_session(),
+        futures_policy=FuturesTradingPolicy.v1(leverage=3),
     )
     overview = SessionOverviewWidget()
     qtbot.addWidget(overview)
@@ -589,28 +597,16 @@ def test_futures_overview_marks_mixed_spot_policy_unavailable(
     assert overview.position_mode_value.text() == "Unavailable"
 
 
-@pytest.mark.parametrize(
-    "changes",
-    [
-        pytest.param({"spot_policy": None}, id="missing-spot-policy"),
-        pytest.param(
-            {"futures_policy": FuturesTradingPolicy.v1(leverage=3)},
-            id="mixed-futures-policy",
-        ),
-    ],
-)
-def test_spot_overview_marks_missing_or_mixed_policy_unavailable(
-    qtbot: QtBot,
-    changes: dict[str, object],
-) -> None:
-    session = _session_with_policy_changes(configured_spot_session(), **changes)
+def test_spot_overview_leaves_the_futures_rows_blank(qtbot: QtBot) -> None:
     overview = SessionOverviewWidget()
     qtbot.addWidget(overview)
 
-    overview.show_session(session)
+    overview.show_session(configured_spot_session())
 
-    assert overview.spot_ratio_value.text() == "Unavailable"
-    assert overview.spot_reserve_ratio_value.text() == "Unavailable"
+    assert overview.margin_mode_value.text() == "—"
+    assert overview.position_mode_value.text() == "—"
+    assert not hasattr(overview, "spot_ratio_value")
+    assert not hasattr(overview, "spot_reserve_ratio_value")
 
 
 def test_repeated_submit_while_worker_is_running_calls_create_once(
@@ -637,7 +633,7 @@ def test_repeated_submit_while_worker_is_running_calls_create_once(
     qtbot.addWidget(window)
     window.show()
     qtbot.waitUntil(window.setup.create_button.isEnabled)
-    window.setup.available_capital.setText("200000")
+    window.setup.capital_per_entry.setText("200000")
 
     click(window.setup.create_button)
     qtbot.waitUntil(started.is_set)
@@ -656,7 +652,7 @@ def test_repeated_submit_while_worker_is_running_calls_create_once(
 def test_validation_failure_restores_form_and_shows_field_error(qtbot: QtBot) -> None:
     def reject(values: PaperSessionSetupValues) -> PaperSessionCreateOutcome:
         raise PaperSessionValidationError(
-            "available_capital", "Available Capital must be positive"
+            "capital_per_entry", "Amount must be positive"
         )
 
     window = MainWindow(
@@ -668,19 +664,16 @@ def test_validation_failure_restores_form_and_shows_field_error(qtbot: QtBot) ->
     qtbot.addWidget(window)
     window.show()
     qtbot.waitUntil(window.setup.create_button.isEnabled)
-    window.setup.available_capital.setText("0")
+    window.setup.capital_per_entry.setText("0")
 
     click(window.setup.create_button)
 
     qtbot.waitUntil(
-        lambda: (
-            window.setup.available_capital_error.text()
-            == "Available Capital must be positive"
-        )
+        lambda: window.setup.capital_per_entry_error.text() == "Amount must be positive"
     )
     assert window.setup.isVisible()
     assert window.setup.create_button.isEnabled() is True
-    assert window.setup.available_capital.text() == "0"
+    assert window.setup.capital_per_entry.text() == "0"
 
 
 def test_an_out_of_range_value_reveals_and_focuses_its_field(
@@ -705,28 +698,24 @@ def test_an_out_of_range_value_reveals_and_focuses_its_field(
     qtbot.waitUntil(window.isActiveWindow)
     qtbot.waitUntil(window.setup.create_button.isEnabled)
 
-    window.setup.available_capital.setText("200000")
-    window.setup.spot_ratio.setText("200")
+    window.setup.capital_per_entry.setText("0")
     window.workspace.bot_control_scroll.ensureWidgetVisible(window.setup.create_button)
     click(window.setup.create_button)
 
     qtbot.waitUntil(
-        lambda: (
-            window.setup.spot_ratio_error.text()
-            == "trading_capital_ratio must be between 0 and 1"
-        )
+        lambda: window.setup.capital_per_entry_error.text() == "Amount must be positive"
     )
     viewport = window.workspace.bot_control_scroll.viewport()
 
     assert window.workspace.bot_control.isVisible()
-    assert window.setup.spot_ratio_error.isVisible()
+    assert window.setup.capital_per_entry_error.isVisible()
     assert viewport.rect().contains(
-        _widget_rect_in_viewport(window.setup.spot_ratio, viewport)
+        _widget_rect_in_viewport(window.setup.capital_per_entry, viewport)
     )
     assert viewport.rect().contains(
-        _widget_rect_in_viewport(window.setup.spot_ratio_error, viewport)
+        _widget_rect_in_viewport(window.setup.capital_per_entry_error, viewport)
     )
-    assert window.setup.spot_ratio.hasFocus()
+    assert window.setup.capital_per_entry.hasFocus()
 
 
 def test_a_required_field_left_empty_is_revealed_and_focused(
@@ -753,13 +742,12 @@ def test_a_required_field_left_empty_is_revealed_and_focused(
     qtbot.waitUntil(window.isActiveWindow)
     qtbot.waitUntil(window.setup.create_button.isEnabled)
 
-    window.setup.available_capital.setText("200000")
-    window.setup.spot_ratio.clear()
+    window.setup.capital_per_entry.clear()
     window.workspace.bot_control_scroll.ensureWidgetVisible(window.setup.create_button)
     click(window.setup.create_button)
 
-    control = window.setup.spot_ratio
-    error_label = window.setup.spot_ratio_error
+    control = window.setup.capital_per_entry
+    error_label = window.setup.capital_per_entry_error
     qtbot.waitUntil(lambda: error_label.text() == "This field is required")
     viewport = window.workspace.bot_control_scroll.viewport()
 
@@ -805,8 +793,7 @@ def test_delayed_validation_reveals_the_failed_field(
     window.activateWindow()
     qtbot.waitUntil(window.isActiveWindow)
     qtbot.waitUntil(window.setup.create_button.isEnabled)
-    window.setup.available_capital.setText("200000")
-    window.setup.spot_ratio.setText("200")
+    window.setup.capital_per_entry.setText("0")
     window.workspace.bot_control_scroll.ensureWidgetVisible(window.setup.create_button)
     click(window.setup.create_button)
     qtbot.waitUntil(started.is_set)
@@ -814,22 +801,19 @@ def test_delayed_validation_reveals_the_failed_field(
     release.set()
 
     qtbot.waitUntil(
-        lambda: (
-            window.setup.spot_ratio_error.text()
-            == "trading_capital_ratio must be between 0 and 1"
-        )
+        lambda: window.setup.capital_per_entry_error.text() == "Amount must be positive"
     )
     viewport = window.workspace.bot_control_scroll.viewport()
 
     assert window.workspace.bot_control.isVisible()
-    assert window.setup.spot_ratio_error.isVisible()
+    assert window.setup.capital_per_entry_error.isVisible()
     assert viewport.rect().contains(
-        _widget_rect_in_viewport(window.setup.spot_ratio, viewport)
+        _widget_rect_in_viewport(window.setup.capital_per_entry, viewport)
     )
     assert viewport.rect().contains(
-        _widget_rect_in_viewport(window.setup.spot_ratio_error, viewport)
+        _widget_rect_in_viewport(window.setup.capital_per_entry_error, viewport)
     )
-    assert window.setup.spot_ratio.hasFocus()
+    assert window.setup.capital_per_entry.hasFocus()
     assert thread_pool.waitForDone(1_000)
 
 
@@ -869,8 +853,7 @@ def test_delayed_spot_validation_freezes_configuration_until_result(
     window.activateWindow()
     qtbot.waitUntil(window.isActiveWindow)
     qtbot.waitUntil(window.setup.create_button.isEnabled)
-    window.setup.available_capital.setText("200000")
-    window.setup.spot_ratio.setText("100")
+    window.setup.capital_per_entry.setText("0")
     window.workspace.bot_control_scroll.ensureWidgetVisible(window.setup.create_button)
     click(window.setup.create_button)
     qtbot.waitUntil(started.is_set)
@@ -882,23 +865,20 @@ def test_delayed_spot_validation_freezes_configuration_until_result(
     release.set()
 
     qtbot.waitUntil(
-        lambda: (
-            window.setup.spot_ratio_error.text()
-            == "trading_capital_ratio must be between 0 and 1"
-        )
+        lambda: window.setup.capital_per_entry_error.text() == "Amount must be positive"
     )
     qtbot.waitUntil(lambda: all(control.isEnabled() for control in controls))
     viewport = window.workspace.bot_control_scroll.viewport()
     assert window.setup.market_type.currentData() == "spot"
-    assert window.setup.spot_ratio.text() == "100"
-    assert window.setup.spot_ratio_error.isVisible()
+    assert window.setup.capital_per_entry.text() == "0"
+    assert window.setup.capital_per_entry_error.isVisible()
     assert viewport.rect().contains(
-        _widget_rect_in_viewport(window.setup.spot_ratio, viewport)
+        _widget_rect_in_viewport(window.setup.capital_per_entry, viewport)
     )
     assert viewport.rect().contains(
-        _widget_rect_in_viewport(window.setup.spot_ratio_error, viewport)
+        _widget_rect_in_viewport(window.setup.capital_per_entry_error, viewport)
     )
-    assert window.setup.spot_ratio.hasFocus()
+    assert window.setup.capital_per_entry.hasFocus()
     assert thread_pool.waitForDone(1_000)
 
 
@@ -966,7 +946,7 @@ def test_existing_create_outcome_opens_editable_form(qtbot: QtBot) -> None:
     qtbot.addWidget(window)
     window.show()
     qtbot.waitUntil(window.setup.create_button.isEnabled)
-    window.setup.available_capital.setText("200000")
+    window.setup.capital_per_entry.setText("200000")
 
     click(window.setup.create_button)
 
@@ -1085,7 +1065,7 @@ def test_retry_after_startup_load_failure_reloads_existing_session(
     ("error", "expected_message"),
     [
         pytest.param(
-            PaperSessionValidationError("available_capital", "invalid persisted value"),
+            PaperSessionValidationError("capital_per_entry", "invalid persisted value"),
             "Paper Session could not be loaded",
             id="validation",
         ),
@@ -1124,7 +1104,7 @@ def test_load_failures_stay_fail_closed_with_sanitized_copy(
 
     assert window.unavailable_message.text() == expected_message
     assert not window.setup.isVisible()
-    assert window.setup.available_capital_error.text() == ""
+    assert window.setup.capital_per_entry_error.text() == ""
     assert "private/tmp" not in window.unavailable_message.text()
 
 
@@ -1423,7 +1403,7 @@ def test_blocked_runtime_reopens_the_editable_setup_form(
 
     qtbot.waitUntil(lambda: _runtime_state(window) is BotRuntimeState.BLOCKED)
     qtbot.waitUntil(window.setup.isVisible)
-    assert window.setup.available_capital.isEnabled()
+    assert window.setup.capital_per_entry.isEnabled()
 
 
 def test_stop_reopens_an_editable_setup_form(qtbot: QtBot) -> None:
@@ -1474,7 +1454,7 @@ def test_stop_reopens_an_editable_setup_form(qtbot: QtBot) -> None:
     qtbot.waitUntil(window.setup.isVisible)
     qtbot.waitUntil(window.setup.timeframe.isEnabled)
     assert window.setup.timeframe.currentData() == "5m"
-    assert window.setup.available_capital.isEnabled()
+    assert window.setup.capital_per_entry.isEnabled()
 
 
 def test_start_from_setup_creates_and_starts_paper_bot_in_one_action(
@@ -1508,13 +1488,13 @@ def test_start_from_setup_creates_and_starts_paper_bot_in_one_action(
     qtbot.addWidget(window)
     window.show()
     qtbot.waitUntil(window.setup.create_button.isEnabled)
-    window.setup.available_capital.setText("1000")
+    window.setup.capital_per_entry.setText("1000")
 
     click(window.setup.create_button)
 
     qtbot.waitUntil(lambda: _runtime_state(window) is BotRuntimeState.RUNNING)
     assert len(created) == 1
-    assert created[0].available_capital == "1000"
+    assert created[0].capital_per_entry == "1000"
     assert len(started) == 1
 
 
@@ -1557,7 +1537,7 @@ def test_start_from_setup_skips_recovery_inspection_for_new_session(
     qtbot.addWidget(window)
     window.show()
     qtbot.waitUntil(window.setup.create_button.isEnabled)
-    window.setup.available_capital.setText("1000")
+    window.setup.capital_per_entry.setText("1000")
 
     click(window.setup.create_button)
 
@@ -1611,8 +1591,8 @@ def test_stop_without_exposure_keeps_session_and_reopens_prefilled_form(
 
     qtbot.waitUntil(window.setup.isVisible)
     assert retired == []
-    assert window.setup.available_capital.text() == format(
-        session.config.available_capital, "f"
+    assert window.setup.capital_per_entry.text() == format(
+        session.config.capital_per_entry, "f"
     )
     assert window.setup.timeframe.currentData() == "5m"
 
@@ -1635,9 +1615,7 @@ def test_stop_with_open_position_reopens_editable_setup_without_closing(
         current_price=Decimal("110"),
         take_profit_price=Decimal("120"),
         unrealized_pnl=Decimal("10"),
-        liquidation_price=None,
         entry_gate=BasketEntryGate.OPEN,
-        cooldown_until=None,
         updated_at_utc=observed_at,
     )
 
@@ -1722,7 +1700,7 @@ def test_stop_with_open_position_reopens_editable_setup_without_closing(
 
     # A different Session is being asked for, which is what the question is
     # about: one cannot be made while a Position of the old one is open.
-    window.setup.available_capital.setText("2500")
+    window.setup.capital_per_entry.setText("2500")
     QTimer.singleShot(0, confirm_close)
     click(window.setup.create_button)
     qtbot.waitUntil(lambda: events == ["close", "retire"])
@@ -1770,7 +1748,7 @@ def test_an_open_position_shows_before_any_bot_is_started(qtbot: QtBot) -> None:
     )
 
     table = window.workspace.position_basket
-    qtbot.waitUntil(lambda: table.table.rowCount() == 1)
+    qtbot.waitUntil(lambda: _marked_rows(window) == 1)
     assert table.state_label.text() == ""
     # Read by heading: a column added or dropped must not silently shift
     # which cell this asserts on.
@@ -1838,34 +1816,63 @@ def test_a_running_runtime_keeps_the_position_tab_to_itself(qtbot: QtBot) -> Non
     assert table.table.rowCount() == 0
 
 
+def _record_close_entry(
+    sold: list[tuple[str, int]],
+) -> Callable[[ConfiguredPaperSession, int], bool]:
+    """Take the ask the way the desktop takes it: the Pair, and which Entry."""
+
+    def close_entry(session: ConfiguredPaperSession, entry_number: int) -> bool:
+        sold.append((session.market_data.symbol, entry_number))
+        return True
+
+    return close_entry
+
+
 def _open_position_window(
     qtbot: QtBot,
     *,
     started: list[BotControlSnapshot],
     asked: list[tuple[str, Callable[[], None]]],
-    price: int,
+    price: int | None,
     replaceable: bool = False,
     closed: list[str] | None = None,
+    second_entry_price: int | None = None,
+    closed_entries: list[tuple[str, int]] | None = None,
 ) -> MainWindow:
     """A stopped Session holding one Entry, with the chart at a given price.
 
     The Entry is taken at 100 with an ATR of 2 and a multiplier of 3, so its
-    target is 106: a price above that is one a Start would sell at.
+    target is 106: a price above that is one a Start would sell at. No price
+    at all is the state a window opens in, before the chart has said one.
+
+    A second Entry, taken a day later so the Entry Pair lets it in, is what
+    makes a Position a Start would sell only part of.
     """
     session = configured_spot_session()
     relay = ChartFactRelay()
+    entries: tuple[OpenBasketEntry, ...] = (
+        OpenBasketEntry(
+            entry_number=1,
+            price=Decimal("100"),
+            quantity=Decimal("2"),
+            filled_at=datetime(2026, 8, 1, 12, tzinfo=UTC),
+            atr=Decimal("2"),
+        ),
+    )
+    if second_entry_price is not None:
+        entries += (
+            OpenBasketEntry(
+                entry_number=2,
+                price=Decimal(second_entry_price),
+                quantity=Decimal("2"),
+                filled_at=datetime(2026, 8, 2, 12, tzinfo=UTC),
+                atr=Decimal("2"),
+            ),
+        )
     reopened = reopen_basket(
         OpenBasketState(
             basket_id=UUID("00000000-0000-0000-0000-0000000000d2"),
-            entries=(
-                OpenBasketEntry(
-                    entry_number=1,
-                    price=Decimal("100"),
-                    quantity=Decimal("2"),
-                    filled_at=datetime(2026, 8, 1, 12, tzinfo=UTC),
-                    atr=Decimal("2"),
-                ),
-            ),
+            entries=entries,
             closed_basket_count=0,
         ),
         entry_policy=session.config.entry_policy,
@@ -1909,6 +1916,9 @@ def _open_position_window(
             close_position=(
                 (lambda _session: closes.append("closed")) if replaceable else None
             ),
+            close_entry=(
+                None if closed_entries is None else _record_close_entry(closed_entries)
+            ),
             retire_session=(lambda _session: None) if replaceable else None,
         ),
         chart=ChartSources(facts=relay),
@@ -1919,11 +1929,102 @@ def _open_position_window(
     qtbot.addWidget(window)
     window.show()
     qtbot.waitUntil(lambda: window._open_position.basket is not None)
+    if price is None:
+        return window
     relay.new_generation().in_progress_candle(
         flat_candle(datetime(2026, 8, 1, 12, 5, tzinfo=UTC), price)
     )
-    qtbot.waitUntil(lambda: window.workspace.position_basket.table.rowCount() == 1)
+    # The rows are there as soon as the Basket is read, so their arrival says
+    # nothing about the candle. What the candle adds is the marking, which is
+    # what a test asking about a price has to wait for.
+    qtbot.waitUntil(lambda: _marked_rows(window) == len(entries))
     return window
+
+
+def _marked_rows(window: MainWindow) -> int:
+    """How many rows have been marked against a price."""
+    table = window.workspace.position_basket
+    column = table.headers.index("Unrealized P/L")
+    marked = 0
+    for row in range(table.table.rowCount()):
+        item = table.table.item(row, column)
+        if item is not None and item.text() != BLANK:
+            marked += 1
+    return marked
+
+
+def test_an_open_position_is_on_the_tab_before_any_price_arrives(
+    qtbot: QtBot,
+) -> None:
+    """The window opens on a Position, and the chart says a price seconds later.
+
+    In between, the tab used to read "Loading Position…" over an empty table —
+    so a trader who pressed Start met a question about an Entry the tab had
+    never shown, and read the question as the mistake.
+    """
+    started: list[BotControlSnapshot] = []
+    asked: list[tuple[str, Callable[[], None]]] = []
+    window = _open_position_window(qtbot, started=started, asked=asked, price=None)
+    table = window.workspace.position_basket
+
+    qtbot.waitUntil(lambda: table.table.rowCount() == 1)
+    headings = table.headers
+    entry_price = table.table.item(0, headings.index("Entry Price"))
+    pnl = table.table.item(0, headings.index("Unrealized P/L"))
+    assert entry_price is not None and pnl is not None
+    assert "100" in entry_price.text()
+    # The one column a price answers, and no price has arrived.
+    assert pnl.text() == BLANK
+    assert table.empty_state.isHidden()
+
+
+def test_a_position_no_price_has_reached_yet_is_still_asked_about(
+    qtbot: QtBot,
+) -> None:
+    """An unanswerable question is not the same as one worth skipping.
+
+    The chart had said no price yet, so nothing could tell whether a Start
+    would sell at a target. Read as "nothing to ask about", that started the
+    Bot onto an open Position and sold it at its target — 63,728.02 against a
+    market of 64,194 — with no question put at all.
+    """
+    started: list[BotControlSnapshot] = []
+    asked: list[tuple[str, Callable[[], None]]] = []
+    window = _open_position_window(qtbot, started=started, asked=asked, price=None)
+    control = window.workspace.bot_control_widget
+    qtbot.waitUntil(control.start_button.isEnabled)
+
+    click(control.start_button)
+
+    qtbot.waitUntil(lambda: len(asked) == 1)
+    message, confirm = asked[0]
+    assert "cannot be read yet" in message
+    assert started == []
+
+    confirm()
+
+    qtbot.waitUntil(lambda: _runtime_state(window) is BotRuntimeState.RUNNING)
+    assert len(started) == 1
+
+
+def test_a_position_still_being_read_is_asked_about_before_it_is_started_onto(
+    qtbot: QtBot,
+) -> None:
+    """A read on its way holds no Basket, and that is not an empty one."""
+    started: list[BotControlSnapshot] = []
+    asked: list[tuple[str, Callable[[], None]]] = []
+    window = _open_position_window(qtbot, started=started, asked=asked, price=105)
+    control = window.workspace.bot_control_widget
+    qtbot.waitUntil(control.start_button.isEnabled)
+    # The window drops what it holds and asks the database again on every
+    # stop, which is exactly when a trader reaches for Start.
+    window._open_position.read_for(configured_spot_session())
+    assert window._open_position.basket is None
+
+    click(control.start_button)
+
+    qtbot.waitUntil(lambda: len(asked) == 1)
+    assert started == []
 
 
 def test_starting_into_a_reached_take_profit_asks_before_it_sells(
@@ -1938,11 +2039,14 @@ def test_starting_into_a_reached_take_profit_asks_before_it_sells(
 
     click(control.start_button)
 
-    assert len(asked) == 1
+    qtbot.waitUntil(lambda: len(asked) == 1)
     message, confirm = asked[0]
-    # The target it books at, and the price it is not booking at.
-    assert "106" in message
-    assert "110" in message
+    # That the sale books at a target rather than at the price on screen —
+    # counted, not priced: the figures are columns in the tab behind it.
+    assert message.startswith("1 Entry is already at its Take Profit.")
+    assert "at the target it was given, not at the price now" in message
+    assert "106" not in message
+    assert "110" not in message
     assert started == []
 
     confirm()
@@ -1962,16 +2066,21 @@ def test_declining_the_sale_leaves_the_position_open_and_the_bot_stopped(
 
     click(control.start_button)
 
-    assert len(asked) == 1
+    qtbot.waitUntil(lambda: len(asked) == 1)
     assert started == []
     assert window._open_position.basket is not None
     assert _runtime_state(window) is not BotRuntimeState.RUNNING
 
 
-def test_a_position_short_of_its_target_starts_without_being_asked(
+def test_a_position_short_of_its_target_is_still_said_before_it_is_run_on(
     qtbot: QtBot,
 ) -> None:
-    """Nothing would be sold, so there is nothing to put a question about."""
+    """Nothing would be sold, and a Position is still being handed to a Bot.
+
+    Silent here and asking on the setup form, the same press would say two
+    different things about the same Position depending on which screen it was
+    pressed from.
+    """
     started: list[BotControlSnapshot] = []
     asked: list[tuple[str, Callable[[], None]]] = []
     window = _open_position_window(qtbot, started=started, asked=asked, price=105)
@@ -1980,21 +2089,259 @@ def test_a_position_short_of_its_target_starts_without_being_asked(
 
     click(control.start_button)
 
+    qtbot.waitUntil(lambda: len(asked) == 1)
+    message, confirm = asked[0]
+    # What is held, not what a sale would book: this one has reached nothing.
+    assert message == "1 Entry is open."
+    assert started == []
+
+    confirm()
+
     qtbot.waitUntil(lambda: _runtime_state(window) is BotRuntimeState.RUNNING)
-    assert asked == []
     assert len(started) == 1
+
+
+def test_a_row_sells_its_own_entry_once_the_trader_says_so(qtbot: QtBot) -> None:
+    """A Fill has no way back, and the row redraws under the hand every tick.
+
+    So the Entry is named in the question, and the answer that trades nothing
+    is the one a stray key finds.
+    """
+    started: list[BotControlSnapshot] = []
+    asked: list[tuple[str, Callable[[], None]]] = []
+    sold: list[tuple[str, int]] = []
+    window = _open_position_window(
+        qtbot,
+        started=started,
+        asked=asked,
+        price=105,
+        closed_entries=sold,
+    )
+    qtbot.waitUntil(lambda: window.workspace.position_basket.table.rowCount() == 1)
+    seen: list[QMessageBox] = []
+
+    QTimer.singleShot(0, _answer_position_dialog("Market", seen))
+    _click_close_entry(window, 0)
+
+    qtbot.waitUntil(lambda: sold == [("BTCUSDT", 1)])
+    assert len(seen) == 1
+    assert "Entry 1" in seen[0].text()
+    assert seen[0].defaultButton() is not None
+    assert seen[0].defaultButton().text() == "Cancel"
+
+
+def test_cancelling_the_sale_of_an_entry_leaves_it_where_it_is(
+    qtbot: QtBot,
+) -> None:
+    started: list[BotControlSnapshot] = []
+    asked: list[tuple[str, Callable[[], None]]] = []
+    sold: list[tuple[str, int]] = []
+    window = _open_position_window(
+        qtbot,
+        started=started,
+        asked=asked,
+        price=105,
+        closed_entries=sold,
+    )
+    qtbot.waitUntil(lambda: window.workspace.position_basket.table.rowCount() == 1)
+    seen: list[QMessageBox] = []
+
+    QTimer.singleShot(0, _answer_position_dialog("Cancel", seen))
+    _click_close_entry(window, 0)
+
+    assert len(seen) == 1
+    assert sold == []
+    assert window._open_position.basket is not None
+
+
+def _click_close_entry(window: MainWindow, row: int) -> None:
+    button = window.workspace.position_basket.close_button(row)
+    assert isinstance(button, QPushButton)
+    click(button)
+
+
+def test_the_question_is_put_to_the_position_that_is_there_now(
+    qtbot: QtBot,
+) -> None:
+    """The copy on screen is only as new as the last time something read it.
+
+    A Session left running elsewhere trades past it, and the window read the
+    Basket when it opened with nothing asking since — so Start put a question
+    about an Entry at its Take Profit while the Basket had moved on to one
+    that had reached nothing. The reading is taken again before the asking.
+    """
+    session = configured_spot_session()
+    relay = ChartFactRelay()
+    reads: list[int] = []
+
+    def read_open_basket(_session: ConfiguredPaperSession) -> ReopenedBasket | None:
+        reads.append(len(reads))
+        # Taken at 100 its target of 106 is behind the price of 110; taken at
+        # 120 its target of 126 is still ahead of it.
+        return _basket_of(session, "100" if len(reads) == 1 else "120")
+
+    window = _position_window(
+        qtbot,
+        session=session,
+        relay=relay,
+        read_open_basket=read_open_basket,
+        price=110,
+    )
+    seen: list[QMessageBox] = []
+
+    QTimer.singleShot(0, _answer_position_dialog("Cancel", seen))
+    click(window.setup.create_button)
+
+    qtbot.waitUntil(lambda: len(seen) == 1)
+    # The Entry that was at its target has gone; what is held has reached
+    # nothing, so running the Session on is on offer again.
+    assert {button.text() for button in seen[0].buttons()} == {
+        "Start Bot",
+        "Close at Market",
+        "Cancel",
+    }
+    assert len(reads) >= 2
+
+
+def test_the_workspace_start_asks_about_the_position_that_is_there_now(
+    qtbot: QtBot,
+) -> None:
+    """The other Start means the same thing to a Position, and reads it too.
+
+    Its copy refreshes when a Session loads, when the Bot reports stopped, and
+    when something forgets it — never because a question is about to be put on
+    it. Asked from that copy, it warned about selling at a target belonging to
+    an Entry that had gone.
+    """
+    session = configured_spot_session()
+    relay = ChartFactRelay()
+    reads: list[int] = []
+    asked: list[tuple[str, Callable[[], None]]] = []
+
+    def read_open_basket(_session: ConfiguredPaperSession) -> ReopenedBasket | None:
+        reads.append(len(reads))
+        # Taken at 100 its target of 106 is behind the price of 110; taken at
+        # 120 its target of 126 is still ahead of it.
+        return _basket_of(session, "100" if len(reads) == 1 else "120")
+
+    window = _position_window(
+        qtbot,
+        session=session,
+        relay=relay,
+        read_open_basket=read_open_basket,
+        price=110,
+        take_profit_confirmation=lambda message, confirm: asked.append(
+            (message, confirm)
+        ),
+    )
+    control = window.workspace.bot_control_widget
+    qtbot.waitUntil(control.start_button.isEnabled)
+
+    click(control.start_button)
+
+    qtbot.waitUntil(lambda: len(asked) == 1)
+    # What is held now, which has reached nothing — not the sale at a target
+    # the first reading would have warned about.
+    assert asked[0][0] == "1 Entry is open."
+    assert len(reads) >= 2
+
+
+def _basket_of(session: ConfiguredPaperSession, price: str) -> ReopenedBasket:
+    """One Entry taken at a price, with an ATR of 2 and a multiplier of 3."""
+    return reopen_basket(
+        OpenBasketState(
+            basket_id=UUID("00000000-0000-0000-0000-0000000000d3"),
+            entries=(
+                OpenBasketEntry(
+                    entry_number=1,
+                    price=Decimal(price),
+                    quantity=Decimal("2"),
+                    filled_at=datetime(2026, 8, 1, 12, tzinfo=UTC),
+                    atr=Decimal("2"),
+                ),
+            ),
+            closed_basket_count=0,
+        ),
+        entry_policy=session.config.entry_policy,
+        take_profit_atr_multiplier=Decimal("3"),
+        stop_loss_atr_multiplier=None,
+        tick_size=Decimal("0.01"),
+    )
+
+
+def _position_window(
+    qtbot: QtBot,
+    *,
+    session: ConfiguredPaperSession,
+    relay: ChartFactRelay,
+    read_open_basket: Callable[[ConfiguredPaperSession], ReopenedBasket | None],
+    price: int,
+    take_profit_confirmation: Callable[[str, Callable[[], None]], None] | None = None,
+) -> MainWindow:
+    """A stopped Session whose Basket is read by the test, at a given price."""
+    window = MainWindow(
+        create_session=lambda _values: PaperSessionCreateOutcome(
+            session=session, created=True
+        ),
+        load_active=lambda: session,
+        list_basket_history=empty_basket_history,
+        list_trade_fills=empty_trade_fills,
+        bot=BotActions(
+            start=lambda snapshot: BotLifecycleResult(
+                workspace=workspace_with_runtime_state(
+                    snapshot.workspace,
+                    BotRuntimeState.RUNNING,
+                    data_freshness=DataFreshness.FRESH,
+                )
+            ),
+            read_open_basket=read_open_basket,
+            has_open_position=lambda _session: True,
+            close_position=lambda _session: None,
+            retire_session=lambda _session: None,
+        ),
+        chart=ChartSources(facts=relay),
+        take_profit_confirmation=take_profit_confirmation,
+    )
+    qtbot.addWidget(window)
+    window.show()
+    qtbot.waitUntil(lambda: window._open_position.basket is not None)
+    relay.new_generation().in_progress_candle(
+        flat_candle(datetime(2026, 8, 1, 12, 5, tzinfo=UTC), price)
+    )
+    qtbot.waitUntil(window.setup.isVisible)
+    qtbot.waitUntil(window.setup.create_button.isEnabled)
+    return window
+
+
+def _when_asked(answer: Callable[[QMessageBox], None]) -> Callable[[], None]:
+    """Do this to the dialog once it is on screen, however long that takes.
+
+    The question waits on a reading of the Basket, so it is not up the instant
+    Start is pressed. Fired into the moment before it opens, an answer clicks
+    nothing and leaves the dialog waiting for one that never comes.
+    """
+    attempts = itertools.count()
+
+    def waiting() -> None:
+        dialog = QApplication.activeModalWidget()
+        if dialog is None:
+            if next(attempts) < 500:
+                QTimer.singleShot(5, waiting)
+            return
+        assert isinstance(dialog, QMessageBox)
+        answer(dialog)
+
+    return waiting
 
 
 def _answer_position_dialog(label: str, seen: list[QMessageBox]) -> Callable[[], None]:
     """Click a button of the dialog the setup form's Start puts up."""
 
-    def answer() -> None:
-        dialog = QApplication.activeModalWidget()
-        assert isinstance(dialog, QMessageBox)
+    def answer(dialog: QMessageBox) -> None:
         seen.append(dialog)
         click(next(button for button in dialog.buttons() if button.text() == label))
 
-    return answer
+    return _when_asked(answer)
 
 
 def test_a_position_at_its_target_is_asked_about_as_a_sale_not_a_replacement(
@@ -2003,9 +2350,8 @@ def test_a_position_at_its_target_is_asked_about_as_a_sale_not_a_replacement(
     """One decision, one dialog, about the thing actually being decided.
 
     The Position has reached its target, so that — not replacing the Session —
-    is what the trader is answering. Selling at the targets and selling the lot
-    at the price now are different trades, so both are named, and neither is
-    what a stray Enter picks.
+    is what the trader is answering. The only trade offered is the lot at the
+    price now, and it is not what a stray Enter picks.
     """
     started: list[BotControlSnapshot] = []
     asked: list[tuple[str, Callable[[], None]]] = []
@@ -2022,30 +2368,150 @@ def test_a_position_at_its_target_is_asked_about_as_a_sale_not_a_replacement(
     qtbot.waitUntil(window.setup.create_button.isEnabled)
     seen: list[QMessageBox] = []
 
-    QTimer.singleShot(0, _answer_position_dialog("Sell at Take Profit", seen))
+    QTimer.singleShot(0, _answer_position_dialog("Close at Market", seen))
     click(window.setup.create_button)
 
-    qtbot.waitUntil(lambda: _runtime_state(window) is BotRuntimeState.RUNNING)
+    qtbot.waitUntil(lambda: closed == ["closed"])
     assert len(seen) == 1
     dialog = seen[0]
-    # The target it books at, and the price it is not booking at.
-    assert "106" in dialog.informativeText()
-    assert "110" in dialog.informativeText()
+    # The state it is in, said once however many Entries reached a target.
+    assert dialog.informativeText().startswith("1 Entry is already at its Take Profit.")
+    assert "106" not in dialog.informativeText()
+    assert "110" not in dialog.informativeText()
     # The price-now sale is named rather than hidden behind a "Yes", and the
-    # answer a stray key hits is the one that trades nothing. The order the
-    # three sit in is the platform's convention, not this window's.
+    # answer a stray key hits is the one that trades nothing.
     assert {button.text() for button in dialog.buttons()} == {
-        "Sell at Take Profit",
         "Close at Market",
         "Cancel",
     }
     assert dialog.defaultButton() is not None
     assert dialog.defaultButton().text() == "Cancel"
-    # The Bot sells at the targets, so nothing is closed at the market price.
-    assert closed == []
     # No second dialog is opened on top of the one just answered.
     assert asked == []
+
+
+def test_selling_at_a_target_the_price_has_left_is_not_offered(
+    qtbot: QtBot,
+) -> None:
+    """The Bot's own sale would book below the market, so no button makes it.
+
+    Running the Session on would fill the Entry at 106 while 110 is on the
+    screen. That trade is gone from the dialog, so the Bot cannot be started
+    onto the Position from here at all.
+    """
+    started: list[BotControlSnapshot] = []
+    asked: list[tuple[str, Callable[[], None]]] = []
+    closed: list[str] = []
+    window = _open_position_window(
+        qtbot,
+        started=started,
+        asked=asked,
+        price=110,
+        replaceable=True,
+        closed=closed,
+    )
+    qtbot.waitUntil(window.setup.isVisible)
+    qtbot.waitUntil(window.setup.create_button.isEnabled)
+    seen: list[QMessageBox] = []
+
+    QTimer.singleShot(0, _answer_position_dialog("Cancel", seen))
+    click(window.setup.create_button)
+
+    qtbot.waitUntil(lambda: len(seen) == 1)
+    labels = {button.text() for button in seen[0].buttons()}
+    assert "Sell at Take Profit" not in labels
+    assert not any("Take Profit" in label for label in labels)
+    # Nothing on offer resumes the Session onto the Position it holds.
+    assert started == []
+
+
+def test_a_start_that_sells_only_part_of_the_position_still_offers_to_start(
+    qtbot: QtBot,
+) -> None:
+    """One Entry at its target must not close the ones still holding.
+
+    Entry 1 is at 100 with a target of 106, Entry 2 at 110 with a target of
+    116, and the price is 112. Only the sale course was reached before, whose
+    one way forward — closing at the market price — sold Entry 2 as well.
+    """
+    started: list[BotControlSnapshot] = []
+    asked: list[tuple[str, Callable[[], None]]] = []
+    closed: list[str] = []
+    window = _open_position_window(
+        qtbot,
+        started=started,
+        asked=asked,
+        price=112,
+        replaceable=True,
+        closed=closed,
+        second_entry_price=110,
+    )
+    qtbot.waitUntil(window.setup.isVisible)
+    qtbot.waitUntil(window.setup.create_button.isEnabled)
+    seen: list[QMessageBox] = []
+
+    QTimer.singleShot(0, _answer_position_dialog("Start Bot", seen))
+    click(window.setup.create_button)
+
+    qtbot.waitUntil(lambda: _runtime_state(window) is BotRuntimeState.RUNNING)
+    assert len(seen) == 1
+    dialog = seen[0]
+    assert {button.text() for button in dialog.buttons()} == {
+        "Start Bot",
+        "Close at Market",
+        "Cancel",
+    }
+    assert dialog.defaultButton() is not None
+    assert dialog.defaultButton().text() == "Cancel"
+    # What is held, and the part of it a Start is not free to run on with.
+    assert dialog.informativeText().startswith(
+        "2 Entries are open. 1 Entry is already at its Take Profit."
+    )
+    assert "sold at once at the target it was given" in dialog.informativeText()
+    # The Entry short of its target is not closed to get the Bot started.
+    assert closed == []
     assert len(started) == 1
+
+
+def test_a_position_wholly_at_its_target_is_still_offered_no_start(
+    qtbot: QtBot,
+) -> None:
+    """Both Entries reached, so running on would book the lot at old prices.
+
+    Entry 2 is taken at 101, whose target of 107 the price of 112 has also
+    passed: nothing would be left holding, and Start Bot stays off the box.
+    """
+    started: list[BotControlSnapshot] = []
+    asked: list[tuple[str, Callable[[], None]]] = []
+    closed: list[str] = []
+    window = _open_position_window(
+        qtbot,
+        started=started,
+        asked=asked,
+        price=112,
+        replaceable=True,
+        closed=closed,
+        second_entry_price=101,
+    )
+    qtbot.waitUntil(window.setup.isVisible)
+    qtbot.waitUntil(window.setup.create_button.isEnabled)
+    seen: list[QMessageBox] = []
+
+    QTimer.singleShot(0, _answer_position_dialog("Cancel", seen))
+    click(window.setup.create_button)
+
+    qtbot.waitUntil(lambda: len(seen) == 1)
+    assert {button.text() for button in seen[0].buttons()} == {
+        "Close at Market",
+        "Cancel",
+    }
+    assert (
+        seen[0]
+        .informativeText()
+        .startswith("2 Entries are already at their Take Profit.")
+    )
+    assert started == []
+    assert closed == []
 
 
 def test_cancelling_the_sale_leaves_the_position_and_the_bot_alone(
@@ -2069,7 +2535,7 @@ def test_cancelling_the_sale_leaves_the_position_and_the_bot_alone(
     QTimer.singleShot(0, _answer_position_dialog("Cancel", seen))
     click(window.setup.create_button)
 
-    assert len(seen) == 1
+    qtbot.waitUntil(lambda: len(seen) == 1)
     assert started == []
     assert closed == []
     assert window._open_position.basket is not None
@@ -2127,12 +2593,14 @@ def test_the_default_take_profit_confirmation_defaults_to_cancel(
 
     click(control.start_button)
 
+    # The question waits on a reading of the Basket before it is put.
+    qtbot.waitUntil(lambda: window.findChild(QMessageBox) is not None)
     dialog = window.findChild(QMessageBox)
     assert dialog is not None
     cancel = next(button for button in dialog.buttons() if button.text() == "Cancel")
     assert dialog.defaultButton() is cancel
     assert dialog.escapeButton() is cancel
-    assert "106" in dialog.informativeText()
+    assert "1 Entry is already at its Take Profit." in dialog.informativeText()
     assert started == []
 
     click(cancel)
@@ -2165,15 +2633,14 @@ def test_a_position_that_cannot_be_read_back_says_so_instead_of_nothing(
     assert window.workspace.position_basket.table.rowCount() == 0
 
 
-def test_an_untouched_form_starts_the_session_it_describes_without_asking(
+def test_an_untouched_form_runs_the_session_on_once_that_is_answered_for(
     qtbot: QtBot,
 ) -> None:
-    """Nothing was asked for and nothing is at its target: nothing to ask.
+    """Start Bot is the answer that closes nothing and creates nothing.
 
-    The form still says exactly what the Session says, and the Position is
-    below its Take Profit, so Start closes nothing and creates nothing — it
-    runs the same Session on. A question here would be about nothing, which
-    is how a hand learns to dismiss the questions that are about something.
+    The form still says exactly what the Session says, so running it on is
+    all that is left to do — but it is still an open Position being handed
+    back to a Bot, and the answer that does it is picked rather than assumed.
     """
     session = configured_spot_session()
     created: list[PaperSessionSetupValues] = []
@@ -2228,14 +2695,17 @@ def test_an_untouched_form_starts_the_session_it_describes_without_asking(
     )
     qtbot.waitUntil(window.setup.isVisible)
     assert start_calls == [session.config.session_id]
+    seen: list[QMessageBox] = []
 
+    QTimer.singleShot(0, _answer_position_dialog("Start Bot", seen))
     click(window.setup.create_button)
 
     qtbot.waitUntil(lambda: _runtime_state(window) is BotRuntimeState.RUNNING)
+    assert len(seen) == 1
+    # The same Session, run on: nothing closed, retired, or created.
     assert start_calls == [session.config.session_id] * 2
     assert events == []
     assert created == []
-    assert window.findChild(QMessageBox) is None
 
 
 def test_an_edited_form_still_asks_before_it_closes_the_position(
@@ -2258,9 +2728,7 @@ def test_an_edited_form_still_asks_before_it_closes_the_position(
     qtbot.waitUntil(window.setup.create_button.isEnabled)
     seen: list[str] = []
 
-    def close_at_market() -> None:
-        dialog = QApplication.activeModalWidget()
-        assert isinstance(dialog, QMessageBox)
+    def close_at_market(dialog: QMessageBox) -> None:
         seen.append(dialog.informativeText())
         click(
             next(
@@ -2270,23 +2738,26 @@ def test_an_edited_form_still_asks_before_it_closes_the_position(
             )
         )
 
-    window.setup.available_capital.setText("2500")
-    QTimer.singleShot(0, close_at_market)
+    window.setup.capital_per_entry.setText("2500")
+    QTimer.singleShot(0, _when_asked(close_at_market))
     click(window.setup.create_button)
 
     qtbot.waitUntil(lambda: closed == ["closed"])
     assert len(seen) == 1
     assert "sells the whole Position at the price now" in seen[0]
-    # The sale at a target is not what is being decided here, so it is not
-    # described: this Position has not reached one.
-    assert "Take Profit" not in seen[0]
+    # How much is open, and no figure the Position tab behind it already
+    # shows: what it was paid, what it is worth, where its target is.
+    assert seen[0].startswith("1 Entry is open.")
+    assert "100" not in seen[0]
+    assert "105" not in seen[0]
+    assert "106" not in seen[0]
 
 
 def test_the_answer_that_sells_at_market_is_not_the_default(qtbot: QtBot) -> None:
     """This question, with Yes as its default, sold two Positions by accident.
 
-    Both answers are named after the trade they make, and the one a stray
-    Enter or Escape finds is the one that trades nothing.
+    Every answer is named after what it does to the Position, and the one a
+    stray Enter or Escape finds is the one that does nothing to it.
     """
     started: list[BotControlSnapshot] = []
     asked: list[tuple[str, Callable[[], None]]] = []
@@ -2305,9 +2776,7 @@ def test_the_answer_that_sells_at_market_is_not_the_default(qtbot: QtBot) -> Non
     qtbot.waitUntil(window.setup.create_button.isEnabled)
     buttons: list[tuple[str, str, str]] = []
 
-    def read_and_keep() -> None:
-        dialog = QApplication.activeModalWidget()
-        assert isinstance(dialog, QMessageBox)
+    def read_and_keep(dialog: QMessageBox) -> None:
         default = dialog.defaultButton()
         escape = dialog.escapeButton()
         assert default is not None and escape is not None
@@ -2320,16 +2789,80 @@ def test_the_answer_that_sells_at_market_is_not_the_default(qtbot: QtBot) -> Non
         )
         click(default)
 
-    window.setup.available_capital.setText("2500")
-    QTimer.singleShot(0, read_and_keep)
+    window.setup.capital_per_entry.setText("2500")
+    QTimer.singleShot(0, _when_asked(read_and_keep))
     click(window.setup.create_button)
 
-    assert buttons == [
-        ("Close at Market · Keep Position", "Keep Position", "Keep Position")
-    ]
-    # Keeping is what it says: nothing was sold, and the Session runs on.
+    qtbot.waitUntil(lambda: len(buttons) == 1)
+    assert buttons == [("Cancel · Close at Market · Start Bot", "Cancel", "Cancel")]
+    # Cancel is what it says: nothing was sold, and no Bot was started.
     assert closed == []
-    qtbot.waitUntil(lambda: len(started) == 1)
+    assert started == []
+
+
+def test_starting_on_the_position_closes_nothing_and_creates_nothing(
+    qtbot: QtBot,
+) -> None:
+    """The answer that runs the Session on is the answer that trades nothing."""
+    started: list[BotControlSnapshot] = []
+    asked: list[tuple[str, Callable[[], None]]] = []
+    closed: list[str] = []
+    window = _open_position_window(
+        qtbot,
+        started=started,
+        asked=asked,
+        price=105,
+        replaceable=True,
+        closed=closed,
+    )
+    qtbot.waitUntil(window.setup.isVisible)
+    qtbot.waitUntil(window.setup.create_button.isEnabled)
+    seen: list[QMessageBox] = []
+
+    # Edited, and then answered with the Session rather than the form: the
+    # values go back to the ones the Session actually holds.
+    window.setup.capital_per_entry.setText("2500")
+    QTimer.singleShot(0, _answer_position_dialog("Start Bot", seen))
+    click(window.setup.create_button)
+
+    qtbot.waitUntil(lambda: _runtime_state(window) is BotRuntimeState.RUNNING)
+    assert len(seen) == 1
+    assert closed == []
+    assert len(started) == 1
+    # The Runtime holds the Basket once it runs, which is what this window
+    # handed to it rather than sold.
+    assert window._open_position.basket is None
+    # No second question on top of the one just answered.
+    assert asked == []
+
+
+def test_cancelling_the_position_question_leaves_it_and_the_bot_alone(
+    qtbot: QtBot,
+) -> None:
+    """Cancel is the answer a stray key finds, so it must do nothing at all."""
+    started: list[BotControlSnapshot] = []
+    asked: list[tuple[str, Callable[[], None]]] = []
+    closed: list[str] = []
+    window = _open_position_window(
+        qtbot,
+        started=started,
+        asked=asked,
+        price=105,
+        replaceable=True,
+        closed=closed,
+    )
+    qtbot.waitUntil(window.setup.isVisible)
+    qtbot.waitUntil(window.setup.create_button.isEnabled)
+    seen: list[QMessageBox] = []
+
+    QTimer.singleShot(0, _answer_position_dialog("Cancel", seen))
+    click(window.setup.create_button)
+
+    qtbot.waitUntil(lambda: len(seen) == 1)
+    assert started == []
+    assert closed == []
+    assert window._open_position.basket is not None
+    assert _runtime_state(window) is not BotRuntimeState.RUNNING
 
 
 def test_start_from_active_session_reports_missing_replacement_service(
@@ -2344,11 +2877,11 @@ def test_start_from_active_session_reports_missing_replacement_service(
     )
     qtbot.addWidget(window)
     window.show()
-    qtbot.waitUntil(lambda: window.setup.available_capital.text() != "")
+    qtbot.waitUntil(lambda: window.setup.capital_per_entry.text() != "")
 
     click(window.setup.create_button)
 
-    assert "replacement is unavailable" in window.setup.available_capital_error.text()
+    assert "replacement is unavailable" in window.setup.capital_per_entry_error.text()
 
 
 def test_configured_session_does_not_auto_start_and_explains_missing_runtime(

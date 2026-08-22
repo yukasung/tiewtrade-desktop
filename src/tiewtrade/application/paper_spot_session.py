@@ -18,6 +18,7 @@ from tiewtrade.market_data.completed_candle_stream import (
     CompletedCandleStream,
 )
 from tiewtrade.market_data.config import MarketDataConfig
+from tiewtrade.market_data.warm_up import require_warm_up_candle
 from tiewtrade.strategies.entry_intent import EntryIntent
 from tiewtrade.strategies.indicators import IndicatorSnapshot, WilderIndicators
 from tiewtrade.strategies.protocols import EntryStrategy, StrategyPreset
@@ -81,6 +82,10 @@ class PaperSpotSessionSnapshot:
     # Read against the last candle the Session accepted, so it answers for the
     # same moment the Session used to decide entries. None until one arrives.
     entry_gate: EntryGate | None
+    # The Pair a Cooldown waiver just accepted, numbered the way the lifecycle
+    # numbers it. Present exactly when a waiver was accepted.
+    waived_pair: int | None
+    waived_at: datetime | None
 
     @property
     def sold_entry_numbers(self) -> tuple[int, ...]:
@@ -178,8 +183,14 @@ class PaperSpotSession:
         return self._snapshot(accepted=self._state is PaperSpotSessionState.ACTIVE)
 
     def process_completed_candle(
-        self, candle: Candle, *, received_at: datetime
+        self, candle: Candle, *, received_at: datetime, backfilled: bool = False
     ) -> PaperSpotSessionSnapshot:
+        """Act on one completed candle, live or recovered after a disconnect.
+
+        A recovered candle counts for everything except opening an Entry: it
+        feeds the indicators, it can reach a target and close a Basket, but
+        it cannot buy, because its open is a price the market has left.
+        """
         if self._state is not PaperSpotSessionState.ACTIVE:
             return self._snapshot(accepted=False)
         if self._candles.accept(candle, received_at) is not CandleAcceptance.ACCEPTED:
@@ -198,7 +209,9 @@ class PaperSpotSession:
                 if transition.pending_intent is None
                 else transition.pending_intent.atr
             )
-            if sold_between_ticks:
+            # An Intent handed back can be signalled again on a live candle;
+            # one left pending would fill there off a signal read long before.
+            if sold_between_ticks or backfilled:
                 self._reject_pending_intent(transition)
             else:
                 entry_fill = self._fill_pending_intent(transition, candle)
@@ -321,12 +334,92 @@ class PaperSpotSession:
         if self._state is not PaperSpotSessionState.ACTIVE:
             raise PaperSpotSessionError("Paper Spot session is not active")
         for candle in candles:
-            if (
-                self._candles.accept(candle, received_at)
-                is not CandleAcceptance.ACCEPTED
-            ):
-                raise ValueError("warm-up requires new completed candles")
+            require_warm_up_candle(self._candles, candle, received_at)
             self._indicators.update(candle)
+
+    def close_entry(
+        self,
+        entry_number: int,
+        *,
+        price: Decimal,
+        observed_at: datetime,
+    ) -> PaperSpotSessionSnapshot:
+        """Sell one Entry now, at the price the trader asked for it at.
+
+        The same sale a target makes, and made the same way: the Entry hands
+        its place in the Basket back, so the quota and the Entry Pair count it
+        was using are free again, and the Basket closes only when its last
+        Entry has gone. What differs is who asked and at what price.
+
+        An unaccepted snapshot is the answer where there is nothing to sell —
+        no Basket, or no Entry by that number — so a stale row on screen
+        cannot sell an Entry the Session has already let go.
+        """
+        if self._state is not PaperSpotSessionState.ACTIVE or self._basket is None:
+            return self._snapshot(accepted=False)
+        if all(entry.entry_number != entry_number for entry in self._basket.entries):
+            return self._snapshot(accepted=False)
+
+        try:
+            transition = self._new_transition()
+            basket = transition.basket
+            assert basket is not None
+            fill = self._executor.fill_entry_close(
+                basket, entry_number, price=price, filled_at=observed_at
+            )
+            closed_entry = basket.close_entry(
+                entry_number,
+                exit_price=fill.price,
+                closed_at=fill.filled_at,
+            )
+            transition.lifecycle.release_fill()
+            closed_basket: ClosedBasket | None = None
+            if basket.is_empty:
+                closed_basket = basket.settled_result(
+                    exit_price=fill.price,
+                    closed_at=observed_at,
+                    close_reason=BasketCloseReason.MANUAL,
+                )
+                transition.basket = None
+                transition.lifecycle.reset()
+                transition.closed_basket_count += 1
+            self._commit_transition(transition)
+            return self._snapshot(
+                accepted=True,
+                entry_exits=(PaperSpotEntryExit(fill=fill, closed=closed_entry),),
+                closed_basket=closed_basket,
+            )
+        except PaperSpotSessionError:
+            raise
+        except Exception as error:
+            self._fail_closed()
+            raise PaperSpotSessionError("Paper Spot execution failed") from error
+
+    def waive_cooldown(self, observed_at: datetime) -> PaperSpotSessionSnapshot:
+        """Let the trader open past the Cooldown blocking this Basket now.
+
+        An unaccepted snapshot is the answer where there is nothing to waive —
+        no Basket, or a gate that is not a Cooldown right now.
+        """
+        if self._state is not PaperSpotSessionState.ACTIVE or self._basket is None:
+            return self._snapshot(accepted=False)
+        try:
+            transition = self._new_transition()
+            transition.lifecycle.waive_cooldown()
+            waived_pair = transition.lifecycle.completed_pairs
+            self._commit_transition(transition)
+            return self._snapshot(
+                accepted=True,
+                waived_pair=waived_pair,
+                waived_at=observed_at,
+            )
+        except ValueError:
+            return self._snapshot(accepted=False)
+        except PaperSpotSessionError:
+            raise
+        except Exception as error:
+            self._fail_closed()
+            raise PaperSpotSessionError("Paper Spot execution failed") from error
 
     def _new_transition(self) -> _PaperSpotTransition:
         return _PaperSpotTransition(
@@ -392,7 +485,7 @@ class PaperSpotSession:
             atr=intent.atr,
             tick_size=self._symbol_rules.tick_size,
         )
-        transition.lifecycle.record_fill(fill.filled_at)
+        transition.lifecycle.record_fill()
         filled_entry = transition.basket.entries[-1]
         transition.entry_number_filled = filled_entry.entry_number
         transition.entry_take_profit_filled = filled_entry.take_profit_price
@@ -496,7 +589,7 @@ class PaperSpotSession:
         # earliest a new entry can be signalled is the candle after the sell.
         can_enter = (
             not exited_on_this_candle
-            and transition.lifecycle.can_enter(candle.close_time)
+            and transition.lifecycle.can_enter()
             and (
                 transition.basket is None
                 or transition.basket.entry_count
@@ -518,9 +611,14 @@ class PaperSpotSession:
             transition.pending_intent = intent
 
     def _entry_gate(self) -> EntryGate | None:
-        """Read the gate against the last candle, the clock entries are judged on."""
-        closed_at = self._candles.last_close_time
-        return None if closed_at is None else self._lifecycle.entry_gate(closed_at)
+        """The gate, once the Session has seen a candle to state one against.
+
+        The gate itself no longer turns on the clock, but a Session that has
+        watched no market yet is not holding a Basket to answer for either.
+        """
+        if self._candles.last_close_time is None:
+            return None
+        return self._lifecycle.entry_gate()
 
     def _snapshot(
         self,
@@ -533,6 +631,8 @@ class PaperSpotSession:
         entry_exits: tuple[PaperSpotEntryExit, ...] = (),
         exit_fill: PaperSpotExitFill | None = None,
         closed_basket: ClosedBasket | None = None,
+        waived_pair: int | None = None,
+        waived_at: datetime | None = None,
     ) -> PaperSpotSessionSnapshot:
         if self._basket is not None:
             basket_id = self._basket.basket_id
@@ -559,4 +659,6 @@ class PaperSpotSession:
                 None if self._basket is None else self._basket.take_profit_price
             ),
             entry_gate=self._entry_gate(),
+            waived_pair=waived_pair,
+            waived_at=waived_at,
         )

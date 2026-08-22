@@ -8,7 +8,7 @@ import pytest
 FIXTURE_PATH = Path("tests/fixtures/btcusdt_5m_tracer.csv")
 EXPECTED_JSON = (
     '{"accepted_candles":40,"closed_baskets":1,"current_entries":0,'
-    '"realized_pnl":"14.202"}\n'
+    '"realized_pnl":"23.679"}\n'
 )
 
 
@@ -28,17 +28,8 @@ def test_replay_cli_reports_a_missing_csv_file() -> None:
     assert completed.stderr.startswith("error:")
 
 
-def test_replay_cli_rejects_non_finite_available_capital() -> None:
-    completed = _run_cli(FIXTURE_PATH, available_capital="NaN")
-
-    assert completed.returncode == 2
-    assert completed.stdout == ""
-    assert "error:" in completed.stderr
-    assert "Traceback" not in completed.stderr
-
-
-def test_replay_cli_rejects_non_finite_trading_capital_ratio() -> None:
-    completed = _run_cli(FIXTURE_PATH, trading_capital_ratio="NaN")
+def test_replay_cli_rejects_non_finite_capital_per_entry() -> None:
+    completed = _run_cli(FIXTURE_PATH, capital_per_entry="NaN")
 
     assert completed.returncode == 2
     assert completed.stdout == ""
@@ -64,8 +55,7 @@ def test_replay_cli_rejects_unsupported_market_identity(
 def _run_cli(
     csv_path: Path,
     *identity_arguments: str,
-    available_capital: str = "1000",
-    trading_capital_ratio: str = "0.6",
+    capital_per_entry: str = "250",
 ) -> subprocess.CompletedProcess[str]:
     environment = os.environ | {"PYTHONPATH": "src"}
     return subprocess.run(
@@ -74,10 +64,8 @@ def _run_cli(
             "-m",
             "tiewtrade.paper_replay_main",
             str(csv_path),
-            "--available-capital",
-            available_capital,
-            "--trading-capital-ratio",
-            trading_capital_ratio,
+            "--capital-per-entry",
+            capital_per_entry,
             "--max-entries",
             "4",
             *identity_arguments,

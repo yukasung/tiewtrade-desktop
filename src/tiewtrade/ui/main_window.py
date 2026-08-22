@@ -1,3 +1,4 @@
+import logging
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -18,10 +19,9 @@ from tiewtrade.application.paper_session_setup import (
     ConfiguredPaperSession,
     PaperSessionSetupValues,
     PaperSessionValidationError,
-    setup_values_of,
     validate_paper_session,
 )
-from tiewtrade.application.trading_workspace import BotRuntimeState
+from tiewtrade.application.trading_workspace import BasketEntryGate, BotRuntimeState
 from tiewtrade.ui.background_task import BackgroundTask
 from tiewtrade.ui.bot_lifecycle_workflow import (
     BotLifecycleWorkflow,
@@ -39,6 +39,10 @@ from tiewtrade.ui.open_position_workflow import (
     OpenPositionWorkflow,
     ReadOpenBasket,
 )
+from tiewtrade.ui.position_dialogs import (
+    ask_about_cancelling_cooldown,
+    ask_about_selling_one_entry,
+)
 from tiewtrade.ui.session_workflow import (
     CreateSession,
     LoadActiveSession,
@@ -47,16 +51,19 @@ from tiewtrade.ui.session_workflow import (
 from tiewtrade.ui.start_decision import StartCourse, course_before_start
 from tiewtrade.ui.start_dialogs import (
     PositionAtTarget,
-    ReplaceSession,
+    PositionOnStart,
     ask_about_a_position_at_its_target,
-    ask_about_replacing_the_session,
+    ask_about_the_open_position,
 )
+from tiewtrade.ui.take_profit_confirmation import UNREADABLE_POSITION_MESSAGE
 from tiewtrade.ui.trade_history_workflow import (
     ListBasketHistory,
     ListTradeFills,
     TradeHistoryWorkflow,
 )
 from tiewtrade.ui.trading_workspace import TradingWorkspace
+
+_LOGGER = logging.getLogger("tiewtrade.ui.main_window")
 
 WORKER_SHUTDOWN_TIMEOUT_MS = 5_000
 
@@ -84,6 +91,12 @@ class BotActions:
     shutdown_runtime: Callable[[], None] | None = None
     stop_for_replacement: Callable[[ConfiguredPaperSession], None] | None = None
     close_position: Callable[[ConfiguredPaperSession], None] | None = None
+    # One Entry of the open Basket, sold at the price the market is at. True
+    # where it sold, False where there was no such Entry left to sell.
+    close_entry: Callable[[ConfiguredPaperSession, int], bool] | None = None
+    # Lifts the Cooldown blocking the open Basket's next Entry. True where
+    # one was blocking it and got lifted, False otherwise.
+    cancel_cooldown: Callable[[ConfiguredPaperSession], bool] | None = None
     has_open_position: Callable[[ConfiguredPaperSession], bool] | None = None
     retire_session: Callable[[ConfiguredPaperSession], None] | None = None
     read_open_basket: ReadOpenBasket | None = None
@@ -133,6 +146,11 @@ class MainWindow(QMainWindow):
         self._thread_pool = thread_pool or QThreadPool.globalInstance()
         self._load_chart = chart.load
         self._close_position = bot.close_position
+        self._close_entry = bot.close_entry
+        self._close_entry_task: BackgroundTask | None = None
+        self._cancel_cooldown = bot.cancel_cooldown
+        self._cancel_cooldown_task: BackgroundTask | None = None
+        self._waiting_on_a_reading: list[Callable[[], None]] = []
         self._has_open_position = bot.has_open_position
         self._clock = chart.clock
         self._retire_session = bot.retire_session
@@ -192,6 +210,13 @@ class MainWindow(QMainWindow):
         self._open_position.snapshot_changed.connect(
             self.workspace.position_basket.show_snapshot
         )
+        self.workspace.position_basket.close_entry_requested.connect(
+            self._close_entry_requested
+        )
+        self.workspace.position_basket.cancel_cooldown_requested.connect(
+            self._cancel_cooldown_requested
+        )
+        self._open_position.reading_landed.connect(self._position_reading_landed)
 
         self._lifecycle_workflow = BotLifecycleWorkflow(
             start_bot=bot.start,
@@ -276,24 +301,55 @@ class MainWindow(QMainWindow):
             self._show_validation_error(error.field, str(error))
             return
         self._replacement_values = raw_values
+        # The copy on screen is only as new as the last time something asked
+        # the database — a Session left running elsewhere goes on trading past
+        # it. A question about a Position is put to the Position that is there
+        # now, not to the one the window happens to be holding.
+        self._once_the_position_is_read(
+            self._replacement_session, self._take_the_start_course
+        )
+
+    def _take_the_start_course(self) -> None:
+        if self._replacement_values is None or self._replacement_session is None:
+            return
         course = course_before_start(
             position_open=self._position_is_open(),
             sells_on_start=self._sells_on_start_message() is not None,
-            form_matches_session=(
-                raw_values == setup_values_of(self._replacement_session)
-            ),
+            leaves_entries_holding=self._open_position.leaves_entries_holding(),
         )
         if course is StartCourse.ASK_ABOUT_THE_SALE:
             self._act_on_a_position_at_its_target()
             return
-        if course is StartCourse.RESUME_SESSION:
-            self._resume_replacement_session()
+        if course is StartCourse.ASK_ABOUT_THE_POSITION:
+            self._act_on_the_open_position()
             return
-        if course is StartCourse.ASK_ABOUT_REPLACING:
-            if ask_about_replacing_the_session(self) is ReplaceSession.KEEP_AND_RESUME:
-                self._resume_replacement_session()
-                return
         self._replace_session()
+
+    def _once_the_position_is_read(
+        self,
+        session: ConfiguredPaperSession | None,
+        then: Callable[[], None],
+    ) -> None:
+        """Read the Basket again, and do this with the answer that comes back.
+
+        A Start puts an irreversible question, and it once put one about an
+        Entry that had already sold: the window had read the Basket when it
+        opened and nothing had asked since. No Session to read for is nothing
+        to wait on.
+        """
+        self._waiting_on_a_reading.append(then)
+        if session is None:
+            self._position_reading_landed()
+            return
+        self._open_position.read_for(session)
+
+    @Slot()
+    def _position_reading_landed(self) -> None:
+        """Whatever was waiting for a current reading now has one."""
+        waiting = self._waiting_on_a_reading
+        self._waiting_on_a_reading = []
+        for then in waiting:
+            then()
 
     def _position_is_open(self) -> bool:
         """Whether anything is held — by the database, or by a running Bot."""
@@ -308,18 +364,34 @@ class MainWindow(QMainWindow):
         return persisted or running
 
     def _act_on_a_position_at_its_target(self) -> None:
-        sells = self._sells_on_start_message()
-        if sells is None:
+        reached = self._position_at_target_message()
+        if reached is None:
             return
-        answer = ask_about_a_position_at_its_target(self, sells)
-        if answer is PositionAtTarget.SELL_AT_TARGET:
-            self._resume_replacement_session()
-        elif answer is PositionAtTarget.CLOSE_AT_MARKET:
+        answer = ask_about_a_position_at_its_target(self, reached)
+        if answer is PositionAtTarget.CLOSE_AT_MARKET:
             self._replace_session()
-        else:
-            # Nothing was decided, so the form's edits describe a Session that
-            # is not being made.
-            self._replacement_values = None
+            return
+        # Nothing was decided, so the form's edits describe a Session that is
+        # not being made.
+        self._replacement_values = None
+
+    def _act_on_the_open_position(self) -> None:
+        answer = ask_about_the_open_position(
+            self,
+            self._position_held_message() or UNREADABLE_POSITION_MESSAGE,
+            # Said only where part of the Position has reached a target, which
+            # is what makes running the Session on a sale of its own.
+            self._position_at_target_message(),
+        )
+        if answer is PositionOnStart.START_ON_IT:
+            self._resume_replacement_session()
+            return
+        if answer is PositionOnStart.CLOSE_AT_MARKET:
+            self._replace_session()
+            return
+        # Nothing was decided, so the form's edits describe a Session that is
+        # not being made.
+        self._replacement_values = None
 
     def _resume_replacement_session(self) -> None:
         """Run the Session that is already there on, position and all.
@@ -335,29 +407,42 @@ class MainWindow(QMainWindow):
         available = self._lifecycle_workflow.snapshot.available_actions
         if BotControlAction.START not in available:
             self.setup.show_field_error(
-                "available_capital",
+                "capital_per_entry",
                 "The existing Paper Session cannot be started again. "
                 "Close its positions to start a new one.",
             )
             return
         self.setup.set_values_from_session(session)
-        # Started without asking again: getting here means the trader was
-        # asked what to do with this Position and answered "leave it open",
-        # in a question that already said what leaving it open would sell.
+        # Started without asking again: a Position at its target never reaches
+        # here — that course closes at the market price or does nothing — so
+        # there is no sale left for a question to be about.
         self._start_now()
 
     @Slot()
     def _start_requested(self) -> None:
-        """Start the Bot, asking first when starting is itself a sale.
+        """Start the Bot, asking first about any Position it would run on.
 
         A Position left open goes on being marked while nothing runs, so the
         price can reach an Entry's target with no Bot to act on it. The first
         live tick after a Start sells every such Entry at once, at the target
         it was given rather than at the price on screen — and there is no way
-        back from a Fill. The routes that put no question of their own come
-        through here, which is where this one is put.
+        back from a Fill. Short of a target it sells nothing, but it is still
+        this press that hands an open Position back to a Bot, so it is said
+        here too. The routes that put no question of their own come through
+        here, which is where this one is put — to the Position that is there
+        now, which is why the Basket is read again before it is asked about.
         """
-        message = self._sells_on_start_message()
+        if self._take_profit_confirmation_pending:
+            return
+        try:
+            session = self._lifecycle_workflow.snapshot.session
+        except RuntimeError:
+            session = None
+        self._once_the_position_is_read(session, self._ask_before_starting)
+
+    def _ask_before_starting(self) -> None:
+        """Put the question the reading turned out to be worth, or none."""
+        message = self._sells_on_start_message() or self._position_held_message()
         if message is None:
             self._start_now()
             return
@@ -376,7 +461,39 @@ class MainWindow(QMainWindow):
         A Futures Session never takes a Basket back, so it answers the same
         way as having none: there is nothing to put a question about.
         """
-        return self._open_position.sells_on_start_message()
+        return self._said_or_asked_anyway(self._open_position.sells_on_start_message())
+
+    def _position_at_target_message(self) -> str | None:
+        """What the held Position has reached, in the words the dialog puts it.
+
+        Read from the same Basket and price as _sells_on_start_message, which
+        is what decided a question was worth putting at all.
+        """
+        return self._said_or_asked_anyway(
+            self._open_position.position_at_target_message()
+        )
+
+    def _position_held_message(self) -> str | None:
+        """What the Position stands at, in the words the dialog puts it in.
+
+        Read from the same Basket and price as the other two, which is what
+        decided a question was worth putting at all.
+        """
+        return self._said_or_asked_anyway(self._open_position.position_held_message())
+
+    def _said_or_asked_anyway(self, message: str | None) -> str | None:
+        """The reading itself, or the reason there is none to be had.
+
+        Silence has two meanings — nothing is at its target, and nothing can
+        be told yet — and only one of them makes it safe to start without
+        asking. A Basket still being read, or one with no price yet, took the
+        question away and sold a Position at a target the price had left.
+        """
+        if message is not None:
+            return message
+        if self._open_position.what_a_start_sells_is_unknown():
+            return UNREADABLE_POSITION_MESSAGE
+        return None
 
     def _confirm_start(self) -> None:
         self._take_profit_confirmation_pending = False
@@ -386,9 +503,9 @@ class MainWindow(QMainWindow):
         self, message: str, confirm: Callable[[], None]
     ) -> None:
         dialog = QMessageBox(self)
-        dialog.setWindowTitle("Sell at Take Profit?")
+        dialog.setWindowTitle("Open Position")
         dialog.setIcon(QMessageBox.Icon.Warning)
-        dialog.setText("Start the Bot and sell at once?")
+        dialog.setText("Start the Bot on the Position it holds?")
         dialog.setInformativeText(message)
         start_button = dialog.addButton("Start Bot", QMessageBox.ButtonRole.AcceptRole)
         cancel_button = dialog.addButton("Cancel", QMessageBox.ButtonRole.RejectRole)
@@ -417,7 +534,7 @@ class MainWindow(QMainWindow):
             return
         if retire_session is None:
             self.setup.show_field_error(
-                "available_capital",
+                "capital_per_entry",
                 "Paper Session replacement is unavailable. Restart the application.",
             )
             return
@@ -473,7 +590,7 @@ class MainWindow(QMainWindow):
                 "Stop it, or restart the application."
             )
         self.setup.show_field_error(
-            "available_capital",
+            "capital_per_entry",
             f"{message} Try Start Paper Bot again.",
         )
 
@@ -595,6 +712,115 @@ class MainWindow(QMainWindow):
             return
         self._mark_chart_candle(candle)
         self._chart_workflow.in_progress_candle(candle)
+
+    @Slot(int)
+    def _close_entry_requested(self, entry_number: int) -> None:
+        """Sell one Entry, once the trader has said so in as many words.
+
+        Which of the two is holding the Basket is not this window's to know:
+        the action is asked, and it goes to the Runtime that owns it or to the
+        database a stopped Bot left it in.
+        """
+        close_entry = self._close_entry
+        if close_entry is None or self._close_entry_task is not None:
+            return
+        try:
+            session = self._lifecycle_workflow.snapshot.session
+        except RuntimeError:
+            return
+        if not ask_about_selling_one_entry(self, entry_number):
+            return
+        self.workspace.position_basket.set_closing_enabled(False)
+        task = BackgroundTask(lambda: close_entry(session, entry_number))
+        task.signals.succeeded.connect(self._entry_closed)
+        task.signals.failed.connect(self._entry_close_failed)
+        task.signals.finished.connect(self._entry_close_finished)
+        self._close_entry_task = task
+        self._thread_pool.start(task)
+
+    @Slot(object)
+    def _entry_closed(self, _result: object) -> None:
+        """Read the Basket back, which is how a stopped Bot's tab hears of it.
+
+        A running Runtime publishes the sale itself; a stopped one leaves the
+        database as the only witness, and the tab is showing what it last read
+        from it — an Entry that has just gone.
+        """
+        try:
+            session = self._lifecycle_workflow.snapshot.session
+        except RuntimeError:
+            return
+        if self._lifecycle_workflow.snapshot.state is not BotRuntimeState.RUNNING:
+            self._open_position.read_for(session)
+
+    @Slot(object)
+    def _entry_close_failed(self, error: object) -> None:
+        if isinstance(error, BaseException):
+            _LOGGER.exception("Could not sell that Entry", exc_info=error)
+        self.workspace.position_basket.show_close_error(
+            "Could not sell that Entry. Check your connection, then try again."
+        )
+
+    @Slot()
+    def _entry_close_finished(self) -> None:
+        self._close_entry_task = None
+        self.workspace.position_basket.set_closing_enabled(True)
+
+    @Slot()
+    def _cancel_cooldown_requested(self) -> None:
+        """Lift a Cooldown, once the trader has said so in as many words.
+
+        Which of the two is holding the Basket is not this window's to know:
+        the action is asked, and it goes to the Runtime that owns it or to the
+        database a stopped Bot left it in.
+        """
+        cancel_cooldown = self._cancel_cooldown
+        if cancel_cooldown is None or self._cancel_cooldown_task is not None:
+            return
+        basket = self.workspace.position_basket.basket
+        if basket is None or basket.entry_gate is not BasketEntryGate.COOLDOWN:
+            return
+        try:
+            session = self._lifecycle_workflow.snapshot.session
+        except RuntimeError:
+            return
+        if not ask_about_cancelling_cooldown(self):
+            return
+        self.workspace.position_basket.set_cancelling_enabled(False)
+        task = BackgroundTask(lambda: cancel_cooldown(session))
+        task.signals.succeeded.connect(self._cooldown_cancelled)
+        task.signals.failed.connect(self._cancel_cooldown_failed)
+        task.signals.finished.connect(self._cancel_cooldown_finished)
+        self._cancel_cooldown_task = task
+        self._thread_pool.start(task)
+
+    @Slot(object)
+    def _cooldown_cancelled(self, _result: object) -> None:
+        """Read the Basket back, which is how a stopped Bot's tab hears of it.
+
+        A running Runtime publishes the waiver itself; a stopped one leaves
+        the database as the only witness, and the tab is showing what it last
+        read from it — a gate that has just opened.
+        """
+        try:
+            session = self._lifecycle_workflow.snapshot.session
+        except RuntimeError:
+            return
+        if self._lifecycle_workflow.snapshot.state is not BotRuntimeState.RUNNING:
+            self._open_position.read_for(session)
+
+    @Slot(object)
+    def _cancel_cooldown_failed(self, error: object) -> None:
+        if isinstance(error, BaseException):
+            _LOGGER.exception("Could not waive the Cooldown", exc_info=error)
+        self.workspace.position_basket.show_cancel_error(
+            "Could not waive the Cooldown. Check your connection, then try again."
+        )
+
+    @Slot()
+    def _cancel_cooldown_finished(self) -> None:
+        self._cancel_cooldown_task = None
+        self.workspace.position_basket.set_cancelling_enabled(True)
 
     @Slot(object)
     def _chart_view_requested(self, value: object) -> None:

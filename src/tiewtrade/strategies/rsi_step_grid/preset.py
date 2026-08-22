@@ -1,6 +1,11 @@
 from dataclasses import dataclass
 from decimal import Decimal
 
+from tiewtrade.strategies.preset_rules import (
+    minimum_warm_up_candles,
+    require_shared_preset_rules,
+)
+
 _V1_VERSION = "rsi-step-grid-v1"
 _V1_RSI_PERIOD = 14
 _V1_RSI_RESET_THRESHOLD = Decimal("30")
@@ -22,12 +27,13 @@ class RsiStepGridPreset:
     def __post_init__(self) -> None:
         if self.stop_loss_atr_multiplier is not None:
             raise ValueError("rsi-step-grid does not support stop_loss_atr_multiplier")
-        if not self.version:
-            raise ValueError("version must not be empty")
-        if self.rsi_period <= 0:
-            raise ValueError("rsi_period must be positive")
-        if self.atr_period <= 0:
-            raise ValueError("atr_period must be positive")
+        require_shared_preset_rules(
+            version=self.version,
+            rsi_period=self.rsi_period,
+            atr_period=self.atr_period,
+            take_profit_atr_multiplier=self.take_profit_atr_multiplier,
+            stop_loss_atr_multiplier=self.stop_loss_atr_multiplier,
+        )
         if not Decimal("0") <= self.rsi_reset_threshold < self.rsi_entry_threshold:
             raise ValueError("reset threshold must be below entry threshold")
         if self.rsi_entry_threshold > Decimal("100"):
@@ -47,7 +53,7 @@ class RsiStepGridPreset:
 
     @property
     def minimum_warm_up_candles(self) -> int:
-        return max(self.rsi_period + 1, self.atr_period)
+        return minimum_warm_up_candles(self.rsi_period, self.atr_period)
 
     @classmethod
     def v1(cls) -> "RsiStepGridPreset":

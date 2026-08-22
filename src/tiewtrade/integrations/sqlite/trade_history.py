@@ -11,6 +11,10 @@ from tiewtrade.application.trade_history import (
     TradeFillHistoryItem,
     TradeHistoryFilter,
 )
+from tiewtrade.integrations.sqlite.connection_cleanup import (
+    close_if_open,
+    rollback_if_open,
+)
 from tiewtrade.integrations.sqlite.database import SQLiteDatabase
 from tiewtrade.trading.session_config import MarketType, TradeMode
 from tiewtrade.trading.trade_history import (
@@ -180,6 +184,38 @@ class SQLiteTradeHistory:
     def get_basket(self, basket_id: UUID) -> BasketResult | None:
         return self._run_read(lambda connection: _find_basket(connection, basket_id))
 
+    def record_cooldown_waiver(
+        self, basket_id: UUID, waived_pair: int, waived_at: datetime
+    ) -> None:
+        def operation(connection: sqlite3.Connection) -> bool:
+            connection.execute(
+                """
+                INSERT INTO paper_cooldown_waivers
+                    (basket_id, waived_pair, waived_at_utc)
+                VALUES (?, ?, ?)
+                ON CONFLICT(basket_id) DO UPDATE SET
+                    waived_pair = excluded.waived_pair,
+                    waived_at_utc = excluded.waived_at_utc
+                """,
+                (str(basket_id), waived_pair, _utc_text(waived_at)),
+            )
+            return True
+
+        self._run_write(operation)
+
+    def find_cooldown_waiver(self, basket_id: UUID) -> int | None:
+        def operation(connection: sqlite3.Connection) -> int | None:
+            row = connection.execute(
+                """
+                SELECT waived_pair FROM paper_cooldown_waivers
+                WHERE basket_id = ?
+                """,
+                (str(basket_id),),
+            ).fetchone()
+            return None if row is None else int(row["waived_pair"])
+
+        return self._run_read(operation)
+
     def find_open_basket(self, session_id: UUID) -> BasketResult | None:
         def operation(connection: sqlite3.Connection) -> BasketResult | None:
             rows = connection.execute(
@@ -268,20 +304,45 @@ class SQLiteTradeHistory:
 
         return self._run_read(operation)
 
-    def list_session_fills(
+    def list_pair_fills(
         self,
-        session_id: UUID,
+        symbol: str,
+        trade_mode: TradeMode,
+        market_type: MarketType,
         start_utc: datetime,
         end_utc: datetime,
     ) -> tuple[TradeFill, ...]:
+        """Every fill this Pair has taken in a span, whichever Session took it.
+
+        A trade did not stop being true about BTCUSDT because the Session that
+        made it was replaced. Read by Session, the chart lost its marks the
+        moment a Start retired one — so a Pair is what they are read by, and
+        the Basket each fill belongs to is what says which Pair that is.
+
+        The mode and the market are part of the Pair here: paper marks have no
+        business on a live chart, nor spot marks on futures.
+        """
+
         def operation(connection: sqlite3.Connection) -> tuple[TradeFill, ...]:
             rows = connection.execute(
                 """
-                SELECT * FROM trade_fills
-                WHERE session_id = ? AND filled_at_utc >= ? AND filled_at_utc < ?
-                ORDER BY filled_at_utc, fill_id
+                SELECT trade_fills.* FROM trade_fills
+                JOIN basket_results
+                  ON basket_results.basket_id = trade_fills.basket_id
+                WHERE basket_results.symbol = ?
+                  AND basket_results.trade_mode = ?
+                  AND basket_results.market_type = ?
+                  AND trade_fills.filled_at_utc >= ?
+                  AND trade_fills.filled_at_utc < ?
+                ORDER BY trade_fills.filled_at_utc, trade_fills.fill_id
                 """,
-                (str(session_id), _utc_text(start_utc), _utc_text(end_utc)),
+                (
+                    symbol,
+                    trade_mode.value,
+                    market_type.value,
+                    _utc_text(start_utc),
+                    _utc_text(end_utc),
+                ),
             ).fetchall()
             return tuple(_fill_from_row(row) for row in rows)
 
@@ -296,12 +357,12 @@ class SQLiteTradeHistory:
             connection = self._database.connect()
             result = operation(connection)
         except sqlite3.Error as error:
-            _discard_close_error(connection)
+            close_if_open(connection)
             raise TradeHistoryUnavailableError(
                 "Trade History SQLite read failed"
             ) from error
         except BaseException:
-            _discard_close_error(connection)
+            close_if_open(connection)
             raise
         _close_or_raise(connection)
         return result
@@ -317,18 +378,18 @@ class SQLiteTradeHistory:
             result = operation(connection)
             connection.commit()
         except TradeHistoryError:
-            _discard_rollback_error(connection)
-            _discard_close_error(connection)
+            rollback_if_open(connection)
+            close_if_open(connection)
             raise
         except sqlite3.Error as error:
-            _discard_rollback_error(connection)
-            _discard_close_error(connection)
+            rollback_if_open(connection)
+            close_if_open(connection)
             raise TradeHistoryUnavailableError(
                 "Trade History SQLite write failed"
             ) from error
         except BaseException:
-            _discard_rollback_error(connection)
-            _discard_close_error(connection)
+            rollback_if_open(connection)
+            close_if_open(connection)
             raise
         _close_or_raise(connection)
         return result
@@ -423,24 +484,6 @@ def _exact_decimal_sum(values: Iterable[Decimal]) -> Decimal:
         return Decimal("0")
     digits = tuple(int(character) for character in str(abs(coefficient)))
     return Decimal((int(coefficient < 0), digits, exponent))
-
-
-def _discard_rollback_error(connection: sqlite3.Connection | None) -> None:
-    if connection is None:
-        return
-    try:
-        connection.rollback()
-    except sqlite3.Error:
-        pass
-
-
-def _discard_close_error(connection: sqlite3.Connection | None) -> None:
-    if connection is None:
-        return
-    try:
-        connection.close()
-    except sqlite3.Error:
-        pass
 
 
 def _close_or_raise(connection: sqlite3.Connection) -> None:
@@ -669,8 +712,8 @@ def _basket_values(basket: BasketResult) -> tuple[object, ...]:
         _utc_text(basket.opened_at_utc),
         _utc_text(basket.closed_at_utc) if basket.closed_at_utc is not None else None,
         basket.entry_count,
-        _decimal_text(basket.invested_notional),
-        _decimal_text(basket.realized_pnl),
+        _stored_decimal(basket.invested_notional),
+        _stored_decimal(basket.realized_pnl),
         basket.status.value,
     )
 
@@ -694,18 +737,23 @@ def _insert_fill(connection: sqlite3.Connection, fill: TradeFill) -> None:
             fill.side.value,
             fill.entry_number,
             _utc_text(fill.filled_at_utc),
-            _decimal_text(fill.price),
-            _decimal_text(fill.quantity),
-            _decimal_text(fill.notional),
-            _decimal_text(fill.realized_pnl),
+            _stored_decimal(fill.price),
+            _stored_decimal(fill.quantity),
+            _stored_decimal(fill.notional),
+            _stored_decimal(fill.realized_pnl),
             fill.source.value,
-            None if fill.entry_atr is None else _decimal_text(fill.entry_atr),
+            None if fill.entry_atr is None else _stored_decimal(fill.entry_atr),
             fill.closes_entry_number,
         ),
     )
 
 
-def _decimal_text(value: Decimal) -> str:
+def _stored_decimal(value: Decimal) -> str:
+    """A figure as the database keeps it, to every place it was given.
+
+    Nothing is normalized away here. What a Fill was priced at is the
+    record, and trimming it would change what the row says happened.
+    """
     return format(value, "f")
 
 

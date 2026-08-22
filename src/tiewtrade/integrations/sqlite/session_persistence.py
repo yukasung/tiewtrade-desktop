@@ -1,5 +1,6 @@
 from collections.abc import Callable
 from datetime import datetime
+from decimal import Decimal
 from typing import Protocol
 
 from tiewtrade.application.session_persistence import (
@@ -16,6 +17,7 @@ class _CandleProcessor[ProcessorSnapshotT](Protocol):
         candle: Candle,
         *,
         received_at: datetime,
+        backfilled: bool,
     ) -> ProcessorSnapshotT:
         pass
 
@@ -23,6 +25,22 @@ class _CandleProcessor[ProcessorSnapshotT](Protocol):
         self,
         candle: Candle,
         *,
+        observed_at: datetime,
+    ) -> ProcessorSnapshotT:
+        pass
+
+    def waive_cooldown(self, observed_at: datetime) -> ProcessorSnapshotT:
+        pass
+
+
+class _EntryClosingProcessor[ProcessorSnapshotT](
+    _CandleProcessor[ProcessorSnapshotT], Protocol
+):
+    def close_entry(
+        self,
+        entry_number: int,
+        *,
+        price: Decimal,
         observed_at: datetime,
     ) -> ProcessorSnapshotT:
         pass
@@ -43,11 +61,13 @@ class SQLiteSessionPersistenceCoordinator[CoordinatorSnapshotT]:
         candle: Candle,
         *,
         received_at: datetime,
+        backfilled: bool,
     ) -> PersistentSessionSnapshot[CoordinatorSnapshotT]:
         return self._recorded(
             lambda: self._session.process_completed_candle(
                 candle,
                 received_at=received_at,
+                backfilled=backfilled,
             )
         )
 
@@ -63,6 +83,11 @@ class SQLiteSessionPersistenceCoordinator[CoordinatorSnapshotT]:
                 observed_at=observed_at,
             )
         )
+
+    def waive_cooldown(
+        self, observed_at: datetime
+    ) -> PersistentSessionSnapshot[CoordinatorSnapshotT]:
+        return self._recorded(lambda: self._session.waive_cooldown(observed_at))
 
     def _recorded(
         self,
@@ -86,4 +111,37 @@ class SQLiteSessionPersistenceCoordinator[CoordinatorSnapshotT]:
         return PersistentSessionSnapshot(
             session=snapshot,
             persistence_state=self._state,
+        )
+
+
+class SQLiteEntryClosingCoordinator[CoordinatorSnapshotT](
+    SQLiteSessionPersistenceCoordinator[CoordinatorSnapshotT]
+):
+    """The same terms for a sale nobody's candle asked for.
+
+    An Entry sold on demand is durable the way every other exit here is:
+    recorded before it is published, or the Session is blocked.
+    """
+
+    def __init__(
+        self,
+        session: _EntryClosingProcessor[CoordinatorSnapshotT],
+        record_snapshot: Callable[[CoordinatorSnapshotT], None],
+    ) -> None:
+        super().__init__(session, record_snapshot)
+        self._entry_closer = session
+
+    def close_entry(
+        self,
+        entry_number: int,
+        *,
+        price: Decimal,
+        observed_at: datetime,
+    ) -> PersistentSessionSnapshot[CoordinatorSnapshotT]:
+        return self._recorded(
+            lambda: self._entry_closer.close_entry(
+                entry_number,
+                price=price,
+                observed_at=observed_at,
+            )
         )

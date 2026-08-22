@@ -1,4 +1,4 @@
-from datetime import UTC, date, datetime
+from datetime import UTC, datetime
 from decimal import Decimal
 
 import pytest
@@ -6,6 +6,7 @@ import pytest
 from tiewtrade.application.paper_basket_projection import (
     futures_basket_snapshot,
     position_after_snapshot,
+    position_without_entries,
     spot_basket_snapshot,
 )
 from tiewtrade.application.paper_futures_session import (
@@ -88,6 +89,8 @@ def spot_snapshot(
         basket_entry_count=basket_entry_count,
         take_profit_price=take_profit_price,
         entry_gate=entry_gate,
+        waived_pair=None,
+        waived_at=None,
     )
 
 
@@ -95,7 +98,6 @@ def futures_snapshot(
     *,
     basket_entry_count: int = 1,
     position_side: PositionSide | None = PositionSide.SHORT,
-    liquidation_price: Decimal | None = Decimal("150"),
 ) -> PaperFuturesSessionSnapshot:
     return PaperFuturesSessionSnapshot(
         accepted=True,
@@ -110,12 +112,8 @@ def futures_snapshot(
         basket_entry_count=basket_entry_count,
         position_side=position_side,
         take_profit_price=Decimal("90"),
-        liquidation_price=liquidation_price,
         account_equity=Decimal("200000"),
         capital_plan=FuturesCapitalPlan(
-            available_capital=Decimal("200000"),
-            trading_capital=Decimal("100000"),
-            collateral_buffer=Decimal("100000"),
             initial_margin_per_entry=Decimal("10000"),
             target_notional_per_entry=Decimal("30000"),
         ),
@@ -206,7 +204,6 @@ def test_spot_marks_every_entry_on_its_own_price() -> None:
 
     assert basket is not None
     assert basket.market_type == "spot"
-    assert basket.liquidation_price is None
     # Bought at 100 and at 120, marked at 110: one Entry up, the other down,
     # which the average alone reports as nothing happening at all.
     assert [entry.unrealized_pnl for entry in basket.entries] == [
@@ -214,13 +211,51 @@ def test_spot_marks_every_entry_on_its_own_price() -> None:
         Decimal("-10"),
     ]
     assert basket.unrealized_pnl == Decimal("0")
-    assert sum(entry.unrealized_pnl for entry in basket.entries) == (
-        basket.unrealized_pnl
-    )
+    marked = [
+        entry.unrealized_pnl
+        for entry in basket.entries
+        if entry.unrealized_pnl is not None
+    ]
+    assert len(marked) == len(basket.entries)
+    assert sum(marked, Decimal("0")) == basket.unrealized_pnl
     assert [entry.notional for entry in basket.entries] == [
         Decimal("100"),
         Decimal("120"),
     ]
+
+
+def test_a_basket_shows_the_entry_that_outlived_the_one_that_sold() -> None:
+    """Entry 1 sold at its target; Entry 2 is the whole open position now.
+
+    The Basket counts one Entry and calls it 2, because a number is not handed
+    back when an Entry leaves. A snapshot that could not say that took the
+    Position tab down every candle after a Take Profit.
+    """
+    position = position_without_entries(
+        position_after_snapshot(
+            position_after_snapshot(
+                None,
+                entry_fill=spot_fill("100", "1", minute=0),
+                basket_entry_count=1,
+                entry_number=1,
+                take_profit_price=Decimal("106"),
+            ),
+            entry_fill=spot_fill("120", "1", minute=5),
+            basket_entry_count=2,
+            entry_number=2,
+            take_profit_price=Decimal("126"),
+        ),
+        [1],
+    )
+
+    basket = spot_basket_snapshot(
+        spot_snapshot(basket_entry_count=1), position, candle("110"), OBSERVED_AT
+    )
+
+    assert basket is not None
+    assert basket.entry_count == 1
+    assert [entry.entry_number for entry in basket.entries] == [2]
+    assert basket.entries[0].unrealized_pnl == Decimal("-10")
 
 
 def test_a_short_basket_marks_its_entries_the_way_round_it_earns() -> None:
@@ -239,7 +274,6 @@ def test_a_short_basket_marks_its_entries_the_way_round_it_earns() -> None:
 
     assert basket is not None
     assert basket.market_type == "futures"
-    assert basket.liquidation_price == Decimal("150")
     assert basket.unrealized_pnl == Decimal("20")
     assert [entry.unrealized_pnl for entry in basket.entries] == [Decimal("20")]
 
@@ -280,12 +314,10 @@ def test_a_cooling_basket_carries_the_month_it_reopens() -> None:
         entry_number=1,
         take_profit_price=Decimal("999"),
     )
-    reopens_at = date(2026, 3, 1)
-
     basket = spot_basket_snapshot(
         spot_snapshot(
             basket_entry_count=1,
-            entry_gate=EntryGate(EntryGateState.COOLDOWN, reopens_at),
+            entry_gate=EntryGate(EntryGateState.COOLDOWN),
         ),
         position,
         candle("110"),
@@ -294,7 +326,6 @@ def test_a_cooling_basket_carries_the_month_it_reopens() -> None:
 
     assert basket is not None
     assert basket.entry_gate is BasketEntryGate.COOLDOWN
-    assert basket.cooldown_until == reopens_at
 
 
 @pytest.mark.parametrize(

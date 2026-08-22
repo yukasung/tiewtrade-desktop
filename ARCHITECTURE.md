@@ -11,23 +11,14 @@ Paper และ Live ใช้ implementation เดียวกันของ 
 - Session identity และ immutable Preset
 - Strategy และ Entry Intent
 - Capital allocation
-- Basket และ Entry Pair/Cooldown Month
-- Risk limits, PnL calculation และ post-Liquidation lifecycle rules
+- Basket และ Entry Pair/Cooldown
+- Risk limits และ PnL calculation
 
 `trading` เป็นเจ้าของ Futures side-aware PnL และ margin policy รวมถึง One-way Mode,
-Cross Margin, leverage, shared risk limits และ post-Liquidation lifecycle rules
+Cross Margin, leverage และ shared risk limits
 
-อำนาจตัดสิน Liquidation แยกตาม Mode:
-
-- Paper Futures ให้ `trading` คำนวณ deterministic `liquidation_price` และใช้
-  completed-Candle price-crossing predicate เพื่อให้ replay และ tests ทำซ้ำได้
-- Live Futures ใช้ Binance position/account facts เป็น authoritative state และ Binance
-  Liquidation Engine เป็นผู้ตัดสินและดำเนินการ Liquidation จริง สูตร Paper Futures
-  ไม่ใช่ Live verdict
-
-การใช้ implementation ร่วมกันทำให้ Strategy, capital, Basket, Entry Pair, risk limits
-และการเปลี่ยน lifecycle หลัง Liquidation สอดคล้องกัน แต่ไม่ทำให้ Paper simulation
-แทน authority ของ Exchange ใน Live Mode
+การใช้ implementation ร่วมกันทำให้ Strategy, capital, Basket, Entry Pair และ risk limits
+สอดคล้องกัน แต่ไม่ทำให้ Paper simulation แทน authority ของ Exchange ใน Live Mode
 
 ## Execution Adapters
 
@@ -60,7 +51,6 @@ Market identity ต้องเป็นข้อมูลจาก configuratio
 | `trade_mode`, `market_type` | `SessionConfig` | ใช้เลือก execution boundary |
 | `preset_version` | Strategy preset | กำหนด RSI, TP, entry และ lifecycle rules |
 | `max_entries` | `EntryPolicy` | ใช้ร่วมกันทุก Market Type และตรึงตลอด Session |
-| `trading_capital_ratio` | `SpotTradingPolicy` | ใช้เฉพาะ Spot, รับจาก form และตรึงตลอด Session |
 
 ค่าความเสี่ยง เช่น leverage, margin mode และ collateral buffer ต้องถูกแยกตาม market/execution policy และ validate ก่อนสร้าง runtime
 
@@ -70,10 +60,9 @@ Configuration นี้ไม่มี side effect และไม่เลื�
 
 Business rules ไม่ import Binance SDK, SQLite หรือ UI รายละเอียด integration ต้องอยู่ใน adapter ที่ implement interface ของ consumer Module
 
-Live Binance integration และ reconciliation เป็นเจ้าของการอ่าน `liquidationPrice`,
-`markPrice` และ maintenance-margin facts จาก Exchange แล้วสะท้อน authoritative state
-เข้า application boundary โดย `trading` ห้าม import Binance SDK หรือรู้จัก transport
-รายละเอียดนี้
+Live Binance integration และ reconciliation เป็นเจ้าของการอ่าน account facts จาก Exchange
+แล้วสะท้อน authoritative state เข้า application boundary โดย `trading` ห้าม import
+Binance SDK หรือรู้จัก transport รายละเอียดนี้
 
 `application` เป็นเจ้าของ completed-candle orchestration ที่จัดลำดับ `trading` policy
 และ `execution` adapter ห้ามมี reverse dependency จาก `trading` หรือ `execution` กลับไป
@@ -120,3 +109,30 @@ candle ถัดไปเมื่อยืนยัน durability ไม่ไ�
 ช่วงที่มี persistence adapter เพียงแบบเดียวให้ใช้ concrete coordinator ได้โดยไม่สร้าง
 generic interface ล่วงหน้า เมื่อมี consumer ของ persistence adapter อย่างน้อยสองแบบ
 จึงค่อยย้าย contract ไปไว้ที่ Module ผู้ใช้งาน
+
+## Backfilled Candle
+
+`market_data` เป็นผู้รู้ว่า candle ใดมาสดและ candle ใดถูกดึงย้อนหลังหลังการเชื่อมต่อขาด จึงส่ง
+ข้อเท็จจริงนี้ลงมาทาง `MarketDataCandleSink.process_completed(..., backfilled=...)` แต่
+**ไม่ตัดสินใจแทน** — กฎที่ว่า candle ย้อนหลังห้ามเปิด Entry เป็น business rule ที่ Session
+(`PaperSpotSession` / `PaperFuturesSession`) เป็นผู้บังคับ
+
+Session ที่ได้รับ candle ย้อนหลังจะคืน Entry Intent ที่ค้างอยู่ให้ Strategy แทนการ Fill แต่ยัง
+ประมวลผลทุกอย่างที่เหลือตามปกติ ทั้ง indicator, Take Profit และ Stop Loss
+รายละเอียดกฎอยู่ใน PRODUCT.md ข้อ 8.1
+
+## Cooldown Waiver
+
+`trading` เป็นเจ้าของกลไก waive Cooldown แบบ pure ใน `EntryPairLifecycle`
+(`waive_cooldown`/`restore_waiver`) โดยไม่รู้จัก persistence ผู้ใช้ waive ได้ครั้งเดียวต่อ
+Cooldown หนึ่งรอบ ผ่าน use case ที่ `application` เป็นเจ้าของ ซึ่งเดินตาม pattern
+เดียวกับ manual Close Entry คือถามที่ Runtime ก่อนถ้ากำลังถือ Session นั้นอยู่ ไม่งั้น fallback
+ไปที่ database ตรงๆ waiver ถูก persist คู่กับ Fills ของ Basket ใน `integrations/sqlite`
+และถูก apply กลับเข้า `EntryPairLifecycle` ทุกครั้งที่ Basket replay ผ่าน `reopen_basket`
+เพื่อให้อยู่รอด restart
+
+Paper Spot และ Paper Futures ต่าง waive Cooldown ได้ทั้งคู่ผ่าน coordinator เดียวกัน แต่
+ต่างกันที่ persistence: Paper Spot persist waiver ลง SQLite เพราะ replay Basket ที่เปิดอยู่
+กลับมาได้ ส่วน Paper Futures ไม่ persist เพราะไม่เคยรับ Basket ที่เปิดค้างกลับมาเลย waiver
+ของ Futures จึงมีอายุเท่ากับ Runtime ที่ถืออยู่ และมีเฉพาะเส้นทาง runtime เท่านั้น ไม่มี
+at-rest path

@@ -30,7 +30,6 @@ from tiewtrade.market_data.candle import Candle
 from tiewtrade.market_data.config import MarketDataConfig
 from tiewtrade.trading.entry_policy import EntryPolicy
 from tiewtrade.trading.session_config import MarketType, SessionConfig, TradeMode
-from tiewtrade.trading.spot_policy import SpotTradingPolicy
 from tiewtrade.trading.trade_history import FillSide, FillSource, TradeFill
 
 
@@ -380,14 +379,27 @@ def test_ready_snapshot_marks_a_fill_inside_the_forming_candle() -> None:
     assert [marker.fill_id for marker in snapshot.markers] == [fill.fill_id]
 
 
-def test_ready_snapshot_rejects_fill_from_another_session_or_outside_range() -> None:
-    other_session_fill = trade_fill(session_id=uuid4())
+def test_ready_snapshot_marks_a_fill_an_earlier_session_made() -> None:
+    """A trade of this Pair is a trade of this Pair, whoever ran at the time.
+
+    Refused here, every mark left the chart the moment a Start replaced the
+    Session that made it. Which Pair a fill belongs to is the query's to
+    answer — a TradeFill carries no symbol to check it by.
+    """
+    earlier_session_fill = trade_fill(session_id=uuid4())
+
+    snapshot = ready_chart_snapshot(fills=(earlier_session_fill,))
+
+    assert [marker.fill_id for marker in snapshot.markers] == [
+        earlier_session_fill.fill_id
+    ]
+
+
+def test_ready_snapshot_rejects_a_fill_outside_the_range_it_draws() -> None:
     out_of_range_fill = trade_fill(
         filled_at_utc=datetime(2026, 1, 1, 0, 30, tzinfo=UTC)
     )
 
-    with pytest.raises(ValueError, match="fill session must match Session"):
-        ready_chart_snapshot(fills=(other_session_fill,))
     with pytest.raises(ValueError, match="fill must be inside the visible range"):
         ready_chart_snapshot(fills=(out_of_range_fill,))
 
@@ -526,9 +538,8 @@ def session() -> ConfiguredPaperSession:
             preset_version="rsi-step-grid-v1",
             market_type=MarketType.SPOT,
             trade_mode=TradeMode.PAPER,
-            available_capital=Decimal("1000"),
+            capital_per_entry=Decimal("1000"),
             entry_policy=EntryPolicy(max_entries=10),
-            spot_policy=SpotTradingPolicy(trading_capital_ratio=Decimal("0.8")),
         ),
         market_data=MarketDataConfig(symbol="BTCUSDT", timeframe="5m"),
         created_at_utc=datetime(2026, 1, 1, tzinfo=UTC),

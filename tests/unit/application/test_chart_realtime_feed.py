@@ -136,7 +136,9 @@ class FakeRuntime:
         self._on_open_candle = on_open_candle
 
     async def run(self) -> None:
-        await self._sink.process_completed(candle(15), received_at=datetime.now(UTC))
+        await self._sink.process_completed(
+            candle(15), received_at=datetime.now(UTC), backfilled=False
+        )
         self._on_open_candle(candle(20))
 
     async def stop(self) -> None:

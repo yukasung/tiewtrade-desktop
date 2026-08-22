@@ -25,11 +25,15 @@ from tiewtrade.application.trading_workspace import (
     POSITION_BASKET_UNREADABLE_MESSAGE,
     empty_position_basket_tab,
     failed_position_basket_tab,
-    loading_position_basket_tab,
     ready_position_basket_tab,
 )
 from tiewtrade.ui.background_task import BackgroundTask
-from tiewtrade.ui.take_profit_confirmation import sells_on_start_message
+from tiewtrade.ui.take_profit_confirmation import (
+    leaves_entries_holding,
+    position_at_target_message,
+    position_held_message,
+    sells_on_start_message,
+)
 
 ReadOpenBasket = Callable[[ConfiguredPaperSession], ReopenedBasket | None]
 
@@ -38,6 +42,8 @@ class OpenPositionWorkflow(QObject):
     """Reads the Basket a Session is holding and says how it reads now."""
 
     snapshot_changed = Signal(object)
+    #: A read of the database has landed, so what is held is current again.
+    reading_landed = Signal()
 
     def __init__(
         self,
@@ -52,9 +58,16 @@ class OpenPositionWorkflow(QObject):
         self._thread_pool = thread_pool or QThreadPool.globalInstance()
         self._clock = clock
         self._basket: ReopenedBasket | None = None
+        # The Pair the Basket was read for. A Basket is shown before any
+        # candle has arrived to name one, so the Session it came from says
+        # what it is in.
+        self._symbol: str | None = None
         self._task: BackgroundTask | None = None
         self._reread: ConfiguredPaperSession | None = None
         self._candle: ChartCandle | None = None
+        # Nothing has been asked for yet, so nothing is held and nothing is
+        # unknown. Only a read that is out or that failed makes it unknown.
+        self._holding_is_unknown = False
 
     @property
     def basket(self) -> ReopenedBasket | None:
@@ -69,9 +82,16 @@ class OpenPositionWorkflow(QObject):
         the meantime: what was held may be what has just been sold.
         """
         self._basket = None
+        self._symbol = session.market_data.symbol
         read_open_basket = self._read_open_basket
         if read_open_basket is None:
+            # Nothing to read with, so nothing is on its way: whoever is
+            # waiting for a current reading has one, such as it is.
+            self.reading_landed.emit()
             return
+        # Between here and the answer, what is held is not known — which is
+        # not the same as knowing nothing is held.
+        self._holding_is_unknown = True
         if self._task is not None:
             # A read is already on its way, and the Basket it saw may be older
             # than the one being asked about now. It is asked again when that
@@ -94,14 +114,20 @@ class OpenPositionWorkflow(QObject):
     def held_by_runtime(self) -> None:
         """The Runtime owns the Basket now and publishes it every candle."""
         self._basket = None
+        self._holding_is_unknown = False
 
     def forget(self) -> None:
-        """Drop a Basket that has just been closed.
+        """Drop a Basket that has just been closed, and say so.
 
         Reading a new one takes a trip to the database, and until it lands the
-        copy kept here describes something that is no longer there.
+        copy kept here describes something that is no longer there. Dropping it
+        quietly left the tab showing it: reasserting cannot clear a tab — it
+        exists to keep a held Basket over a snapshot that says there is none —
+        so what has just been sold has to be said outright.
         """
         self._basket = None
+        self._holding_is_unknown = False
+        self.snapshot_changed.emit(empty_position_basket_tab())
 
     def sells_on_start_message(self) -> str | None:
         """What starting a Bot would sell at once, or nothing to say about it.
@@ -115,31 +141,81 @@ class OpenPositionWorkflow(QObject):
             return None
         return sells_on_start_message(basket, candle.close)
 
+    def position_at_target_message(self) -> str | None:
+        """What the held Position has reached, or nothing to say about it.
+
+        Answers as one with sells_on_start_message: the same Basket and the
+        same price decide both, so a question is never put about a Position
+        the other reads as holding.
+        """
+        basket = self._basket
+        candle = self._candle
+        if basket is None or candle is None:
+            return None
+        return position_at_target_message(basket, candle.close)
+
+    def position_held_message(self) -> str | None:
+        """How much is open, or nothing to say about it.
+
+        A count needs no price, so this one answers from the Basket alone. The
+        two beside it still need one: what a Start would sell is a question
+        about where the price stands, not about what is held.
+        """
+        basket = self._basket
+        if basket is None:
+            return None
+        return position_held_message(basket)
+
+    def leaves_entries_holding(self) -> bool:
+        """Whether a Start would leave part of the Position unsold.
+
+        Nothing to read it from answers the same way as a Basket a Start would
+        take whole: the question that follows is then the one that offers no
+        Start at all, which is the answer to be wrong towards.
+        """
+        basket = self._basket
+        candle = self._candle
+        if basket is None or candle is None:
+            return False
+        return leaves_entries_holding(basket, candle.close)
+
+    def what_a_start_sells_is_unknown(self) -> bool:
+        """Whether a Start could sell at a target without this saying so.
+
+        A Basket read that has not landed, one that failed, and a Basket with
+        no price to judge it by all answer the same way: nothing here can rule
+        the sale out. Reading that silence as "nothing to ask about" is what
+        let a Position go at its target with no question put.
+        """
+        if self._holding_is_unknown:
+            return True
+        return self._basket is not None and self._candle is None
+
     def reassert(self) -> None:
         """Say again what is held, over whatever has just painted the tab.
 
         A stopped Runtime holds no Basket, so its snapshot reads as an empty
         tab. Anything held is put back straight after, because "No open
         Position" over an open one is the single answer that is never true.
+
+        A price that has not arrived holds back one column, not the tab: what
+        was bought, when, how much and at what target are all answered by the
+        database alone. Waiting for the first candle to show any of it left a
+        trader looking at an empty table while a Position was open, and the
+        Start question that named it read as coming out of nowhere.
         """
         basket = self._basket
-        if basket is None:
-            return
         candle = self._candle
-        if candle is None:
-            # Held, but with no price to mark it on yet. Waiting is the true
-            # answer; an empty tab would be the untrue one.
-            self.snapshot_changed.emit(
-                loading_position_basket_tab(empty_position_basket_tab())
-            )
+        symbol = candle.symbol if candle is not None else self._symbol
+        if basket is None or symbol is None:
             return
         observed_at = self._clock()
         self.snapshot_changed.emit(
             ready_position_basket_tab(
                 reopened_basket_snapshot(
                     basket,
-                    symbol=candle.symbol,
-                    current_price=candle.close,
+                    symbol=symbol,
+                    current_price=None if candle is None else candle.close,
                     observed_at_utc=observed_at,
                 ),
                 observed_at_utc=observed_at,
@@ -148,9 +224,22 @@ class OpenPositionWorkflow(QObject):
 
     @Slot(object)
     def _read_landed(self, result: object) -> None:
+        """Take what the database says, including that it holds nothing.
+
+        Reasserting says again what is held and leaves the tab alone where
+        nothing is — it has to, because a stopped Runtime's snapshot says
+        "no Position" over one that is open. A read that came back empty is
+        not that: the database has just been asked, and answered. Left to the
+        rule above, the last Entry a trader sold stayed on the tab as though
+        it were still theirs.
+        """
         if result is not None and not isinstance(result, ReopenedBasket):
             return
         self._basket = result
+        self._holding_is_unknown = False
+        if result is None:
+            self.snapshot_changed.emit(empty_position_basket_tab())
+            return
         self.reassert()
 
     @Slot(object)
@@ -161,6 +250,7 @@ class OpenPositionWorkflow(QObject):
         is not true: it is open, and only closing it clears the way.
         """
         self._basket = None
+        self._holding_is_unknown = True
         self.snapshot_changed.emit(
             failed_position_basket_tab(
                 empty_position_basket_tab(),
@@ -174,3 +264,7 @@ class OpenPositionWorkflow(QObject):
         session = self._reread
         if session is not None:
             self.read_for(session)
+            return
+        # Said last, and only where nothing further is on its way: a reading
+        # that is about to be replaced is not the one to decide on.
+        self.reading_landed.emit()

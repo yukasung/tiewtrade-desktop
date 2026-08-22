@@ -28,9 +28,8 @@ def configured_spot_session(*, session_id: UUID = SESSION_ID) -> ConfiguredPaper
             market_type="spot",
             symbol="BTCUSDT",
             timeframe="5m",
-            available_capital="200000",
+            capital_per_entry="20000",
             max_entries="10",
-            spot_trading_capital_percent="80",
             futures_leverage=None,
         )
     )
@@ -47,9 +46,8 @@ def configured_futures_session(
             market_type="futures",
             symbol="BTCUSDT",
             timeframe="5m",
-            available_capital="200000",
+            capital_per_entry="10000",
             max_entries="10",
-            spot_trading_capital_percent=None,
             futures_leverage=str(leverage),
         )
     )

@@ -11,7 +11,8 @@ from tiewtrade.trading.position import PositionSide
 class BasketCloseReason(StrEnum):
     TAKE_PROFIT = "take_profit"
     STOP_LOSS = "stop_loss"
-    LIQUIDATION = "liquidation"
+    # The trader sold it, at the price the market was at when they asked.
+    MANUAL = "manual"
 
 
 def _require_utc(value: datetime, field: str) -> None:
@@ -83,13 +84,25 @@ class ClosedEntry:
 
 
 @dataclass(slots=True)
-class _SettledEntries:
-    """Running totals of the Entries a Basket has already sold out of."""
+class SettledEntries:
+    """Running totals of the Entries a Basket has already sold out of.
+
+    A Basket is one record in history however many times it was sold out of,
+    so what its sold Entries left has to outlive them — and outlive the
+    Runtime that held them, which is why a Basket taken back from the
+    database is handed this rather than starting it at nothing.
+    """
 
     count: int = 0
     quantity: Decimal = Decimal("0")
     notional: Decimal = Decimal("0")
     realized_pnl: Decimal = Decimal("0")
+
+    def __post_init__(self) -> None:
+        if self.count < 0:
+            raise ValueError("count must not be negative")
+        if self.count == 0 and (self.quantity or self.notional or self.realized_pnl):
+            raise ValueError("no settled Entry leaves figures behind")
 
     def record(self, entry: "BasketEntry", closed: "ClosedEntry") -> None:
         self.count += 1
@@ -118,6 +131,7 @@ class Basket:
         take_profit_atr_multiplier: Decimal,
         position_side: PositionSide = PositionSide.LONG,
         stop_loss_atr_multiplier: Decimal | None = None,
+        settled: SettledEntries | None = None,
     ) -> None:
         _require_positive(
             take_profit_atr_multiplier,
@@ -134,10 +148,18 @@ class Basket:
         self._is_closed = False
         self._entry_sequence = 0
         self._stop_loss_price: Decimal | None = None
-        # What Entries that already exited leave behind. A Basket is one
-        # record in history however many times it was sold out of, so its
-        # totals have to outlive the Entries they came from.
-        self._settled = _SettledEntries()
+        # What Entries that already exited leave behind, taken as a copy so
+        # what this Basket goes on to settle is its own.
+        self._settled = (
+            SettledEntries()
+            if settled is None
+            else SettledEntries(
+                count=settled.count,
+                quantity=settled.quantity,
+                notional=settled.notional,
+                realized_pnl=settled.realized_pnl,
+            )
+        )
 
     @property
     def basket_id(self) -> UUID:

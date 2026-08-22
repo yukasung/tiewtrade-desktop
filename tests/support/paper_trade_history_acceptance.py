@@ -35,7 +35,6 @@ from tiewtrade.strategies.rsi_step_grid.preset import RsiStepGridPreset
 from tiewtrade.trading.entry_policy import EntryPolicy
 from tiewtrade.trading.futures_policy import FuturesTradingPolicy
 from tiewtrade.trading.session_config import MarketType, SessionConfig, TradeMode
-from tiewtrade.trading.spot_policy import SpotTradingPolicy
 from tiewtrade.trading.symbol_rules import SymbolRules
 from tiewtrade.trading.trade_history import BasketResult, BasketStatus, TradeFill
 
@@ -61,9 +60,8 @@ def build_spot_session(session_id: UUID) -> PaperSpotSession:
             preset_version=_PRESET.version,
             market_type=MarketType.SPOT,
             trade_mode=TradeMode.PAPER,
-            available_capital=Decimal("1000"),
+            capital_per_entry=Decimal("250"),
             entry_policy=EntryPolicy(max_entries=4),
-            spot_policy=SpotTradingPolicy(trading_capital_ratio=Decimal("0.6")),
         ),
         _MARKET_DATA,
         SymbolRules(
@@ -83,9 +81,8 @@ def build_futures_session(session_id: UUID) -> PaperFuturesSession:
             preset_version=_PRESET.version,
             market_type=MarketType.FUTURES,
             trade_mode=TradeMode.PAPER,
-            available_capital=Decimal("200000"),
+            capital_per_entry=Decimal("10000"),
             entry_policy=EntryPolicy(max_entries=10),
-            spot_policy=None,
             futures_policy=FuturesTradingPolicy.v1(leverage=3),
         ),
         _MARKET_DATA,
@@ -155,6 +152,7 @@ def run_closed_spot(store: SQLiteTradeHistory) -> UUID:
         snapshot = persistent.process_completed_candle(
             candle,
             received_at=candle.close_time,
+            backfilled=False,
         )
         assert snapshot.persistence_state is PersistenceState.READY
         if snapshot.session.closed_basket is not None:
@@ -171,6 +169,7 @@ def run_spot_until_entry(store: SQLiteTradeHistory) -> OpenSpotHistory:
         snapshot = persistent.process_completed_candle(
             candle,
             received_at=candle.close_time,
+            backfilled=False,
         )
         assert snapshot.persistence_state is PersistenceState.READY
         if snapshot.session.entry_fill is None:
@@ -200,6 +199,7 @@ def run_closed_futures(store: SQLiteTradeHistory) -> UUID:
         snapshot = persistent.process_completed_candle(
             candle,
             received_at=candle.close_time,
+            backfilled=False,
         )
         assert snapshot.persistence_state is PersistenceState.READY
         if snapshot.session.closed_basket is not None:

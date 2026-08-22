@@ -13,7 +13,6 @@ from tiewtrade.trading.entry_policy import EntryPolicy
 from tiewtrade.trading.futures_policy import FuturesTradingPolicy
 from tiewtrade.trading.position import PositionSide
 from tiewtrade.trading.session_config import MarketType, SessionConfig, TradeMode
-from tiewtrade.trading.spot_policy import SpotTradingPolicy
 from tiewtrade.trading.symbol_rules import SymbolRules
 
 
@@ -153,144 +152,6 @@ def test_take_profit_rejects_a_padded_near_match() -> None:
     )
 
 
-def test_liquidation_wins_over_take_profit_and_uses_gap_aware_price() -> None:
-    executor = make_executor()
-    basket = long_basket(entry_price="100", take_profit="106")
-    current = candle(open="70", high="110", low="60")
-
-    liquidation = executor.fill_liquidation(
-        basket,
-        current,
-        liquidation_price=Decimal("80"),
-    )
-    take_profit = executor.fill_take_profit(basket, current)
-
-    assert liquidation is not None
-    assert liquidation.close_reason is BasketCloseReason.LIQUIDATION
-    assert liquidation.price == Decimal("70")
-    assert liquidation.quantity == Decimal("2")
-    assert liquidation.filled_at == current.close_time
-    assert liquidation.order_id == ("liquidation:00000000-0000-0000-0000-000000000108")
-    assert liquidation.fill_id == (
-        "paper:00000000-0000-0000-0000-000000000107:"
-        "liquidation:00000000-0000-0000-0000-000000000108:fill"
-    )
-    assert liquidation == executor.fill_liquidation(
-        basket,
-        current,
-        liquidation_price=Decimal("80"),
-    )
-    assert take_profit is not None
-
-
-def test_short_liquidation_uses_the_gap_aware_price() -> None:
-    executor = make_executor()
-    basket = short_basket(entry_price="100", take_profit="94")
-    current = candle(open="130", high="140", low="100")
-
-    fill = executor.fill_liquidation(
-        basket,
-        current,
-        liquidation_price=Decimal("120"),
-    )
-
-    assert fill is not None
-    assert fill.side is PositionSide.SHORT
-    assert fill.close_reason is BasketCloseReason.LIQUIDATION
-    assert fill.price == Decimal("130")
-    assert fill.quantity == Decimal("2")
-    assert fill.order_id == ("liquidation:00000000-0000-0000-0000-000000000108")
-    assert fill.fill_id == (
-        "paper:00000000-0000-0000-0000-000000000107:"
-        "liquidation:00000000-0000-0000-0000-000000000108:fill"
-    )
-    assert fill == executor.fill_liquidation(
-        basket,
-        current,
-        liquidation_price=Decimal("120"),
-    )
-
-
-def test_liquidation_rejects_a_candle_from_another_symbol() -> None:
-    current = replace(
-        candle(open="70", high="110", low="60"),
-        symbol="ETHUSDT",
-    )
-
-    with pytest.raises(ValueError) as error:
-        make_executor().fill_liquidation(
-            long_basket(entry_price="100", take_profit="106"),
-            current,
-            liquidation_price=Decimal("80"),
-        )
-
-    assert str(error.value) == (
-        "candle symbol must match SymbolRules.symbol: candle='ETHUSDT', rules='BTCUSDT'"
-    )
-
-
-@pytest.mark.parametrize(
-    "liquidation_price",
-    [
-        Decimal("0"),
-        Decimal("-1"),
-        Decimal("NaN"),
-        Decimal("Infinity"),
-        Decimal("-Infinity"),
-    ],
-)
-def test_liquidation_rejects_invalid_liquidation_price(
-    liquidation_price: Decimal,
-) -> None:
-    executor = make_executor()
-
-    with pytest.raises(ValueError, match="liquidation_price"):
-        executor.fill_liquidation(
-            long_basket(entry_price="100", take_profit="106"),
-            candle(open="100", high="110", low="90"),
-            liquidation_price=liquidation_price,
-        )
-
-
-def test_liquidation_returns_none_for_empty_basket() -> None:
-    executor = make_executor()
-    empty_basket = Basket(
-        basket_id=UUID("00000000-0000-0000-0000-000000000108"),
-        policy=EntryPolicy(max_entries=2),
-        take_profit_atr_multiplier=Decimal("3"),
-        position_side=PositionSide.LONG,
-    )
-
-    assert (
-        executor.fill_liquidation(
-            empty_basket,
-            candle(open="70", high="110", low="60"),
-            liquidation_price=Decimal("80"),
-        )
-        is None
-    )
-
-
-def test_liquidation_fill_construction_does_not_decide_price_crossing() -> None:
-    executor = make_executor()
-
-    long_fill = executor.fill_liquidation(
-        long_basket(entry_price="100", take_profit="106"),
-        candle(open="100", high="110", low="90"),
-        liquidation_price=Decimal("80"),
-    )
-    short_fill = executor.fill_liquidation(
-        short_basket(entry_price="100", take_profit="94"),
-        candle(open="100", high="110", low="90"),
-        liquidation_price=Decimal("120"),
-    )
-
-    assert long_fill is not None
-    assert long_fill.price == Decimal("80.0")
-    assert short_fill is not None
-    assert short_fill.price == Decimal("120.0")
-
-
 def test_executor_rejects_non_paper_or_non_futures_configuration() -> None:
     session = futures_session()
     rules = symbol_rules()
@@ -303,9 +164,8 @@ def test_executor_rejects_non_paper_or_non_futures_configuration() -> None:
         preset_version=session.preset_version,
         market_type=MarketType.SPOT,
         trade_mode=TradeMode.PAPER,
-        available_capital=session.available_capital,
+        capital_per_entry=session.capital_per_entry,
         entry_policy=session.entry_policy,
-        spot_policy=SpotTradingPolicy(trading_capital_ratio=Decimal("0.8")),
     )
     with pytest.raises(ValueError, match="Paper Futures"):
         PaperFuturesExecutor(spot_session, rules)
@@ -330,9 +190,8 @@ def futures_session(*, leverage: int = 1) -> SessionConfig:
         preset_version="rsi-step-grid-v1",
         market_type=MarketType.FUTURES,
         trade_mode=TradeMode.PAPER,
-        available_capital=Decimal("40000"),
+        capital_per_entry=Decimal("10000.0"),
         entry_policy=EntryPolicy(max_entries=2),
-        spot_policy=None,
         futures_policy=FuturesTradingPolicy.v1(leverage=leverage),
     )
 

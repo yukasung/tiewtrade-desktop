@@ -1,5 +1,5 @@
 from dataclasses import dataclass, replace
-from datetime import date, datetime, timedelta
+from datetime import datetime, timedelta
 from decimal import Decimal
 from enum import StrEnum
 
@@ -100,6 +100,11 @@ class BasketEntrySnapshot:
     A Basket averages its Entries away, so the average alone cannot say which
     price was bought when. Each Entry carries its own reading, already marked
     against the Basket's current price, so the view never recalculates.
+
+    What it is worth is the one reading that needs a price, and a Basket read
+    out of the database is known before any price has arrived for it. No
+    reading yet is None rather than zero: zero is a figure, and it would read
+    as an Entry standing exactly where it was bought.
     """
 
     entry_number: int
@@ -107,7 +112,7 @@ class BasketEntrySnapshot:
     price: Decimal
     quantity: Decimal
     notional: Decimal
-    unrealized_pnl: Decimal
+    unrealized_pnl: Decimal | None
     # The target this Entry alone is sold at, measured from the price it paid.
     take_profit_price: Decimal
 
@@ -119,7 +124,7 @@ class BasketEntrySnapshot:
         _require_decimal(self.price, "price")
         _require_non_negative_decimal(self.quantity, "quantity")
         _require_decimal(self.notional, "notional")
-        _require_decimal(self.unrealized_pnl, "unrealized_pnl")
+        _require_decimal(self.unrealized_pnl, "unrealized_pnl", allow_none=True)
 
 
 @dataclass(frozen=True, slots=True)
@@ -130,12 +135,12 @@ class BasketSnapshot:
     entries: tuple[BasketEntrySnapshot, ...]
     total_quantity: Decimal
     average_entry_price: Decimal
-    current_price: Decimal
+    # None until a price arrives to mark this Basket on, which is how a
+    # Basket read back out of the database stands before its first candle.
+    current_price: Decimal | None
     take_profit_price: Decimal
-    unrealized_pnl: Decimal
-    liquidation_price: Decimal | None
+    unrealized_pnl: Decimal | None
     entry_gate: BasketEntryGate
-    cooldown_until: date | None
     updated_at_utc: datetime
 
     def __post_init__(self) -> None:
@@ -146,16 +151,12 @@ class BasketSnapshot:
         _require_basket_entries(self.entries, self.entry_count)
         _require_non_negative_decimal(self.total_quantity, "total_quantity")
         _require_decimal(self.average_entry_price, "average_entry_price")
-        _require_decimal(self.current_price, "current_price")
+        _require_decimal(self.current_price, "current_price", allow_none=True)
         _require_decimal(self.take_profit_price, "take_profit_price")
-        _require_decimal(self.unrealized_pnl, "unrealized_pnl")
-        _require_decimal(self.liquidation_price, "liquidation_price", allow_none=True)
+        _require_decimal(self.unrealized_pnl, "unrealized_pnl", allow_none=True)
+        _require_one_marking(self.current_price, self.unrealized_pnl, self.entries)
         if not isinstance(self.entry_gate, BasketEntryGate):
             raise ValueError("entry_gate must be a BasketEntryGate")
-        if (self.entry_gate is BasketEntryGate.COOLDOWN) != (
-            self.cooldown_until is not None
-        ):
-            raise ValueError("cooldown_until belongs to a Cooldown Month and only one")
         _require_utc(self.updated_at_utc, "updated_at_utc")
 
 
@@ -444,6 +445,13 @@ def _require_basket_entries(
 
     Counting Entries one way and listing them another would let the table and
     its total disagree about the same Basket.
+
+    The numbers themselves are an audit trail: an Entry sold at its own target
+    leaves the Basket without handing its number back, so what is left over
+    can be Entry 2 alone. Demanding 1..entry_count read that ordinary Basket
+    as impossible and took the whole Position tab down with it. What still
+    holds is that no two rows claim one number and that they are listed in the
+    order they were taken.
     """
     if not isinstance(value, tuple) or not all(
         isinstance(entry, BasketEntrySnapshot) for entry in value
@@ -451,9 +459,27 @@ def _require_basket_entries(
         raise ValueError("entries must be a tuple of BasketEntrySnapshot")
     if len(value) != entry_count:
         raise ValueError("entries must hold one Entry per entry_count")
-    expected = tuple(range(1, entry_count + 1))
-    if tuple(entry.entry_number for entry in value) != expected:
-        raise ValueError("entries must be numbered 1..entry_count in order")
+    numbers = tuple(entry.entry_number for entry in value)
+    if numbers != tuple(sorted(set(numbers))):
+        raise ValueError("entries must be numbered without repeats, in order")
+
+
+def _require_one_marking(
+    current_price: Decimal | None,
+    unrealized_pnl: Decimal | None,
+    entries: tuple[BasketEntrySnapshot, ...],
+) -> None:
+    """A Basket is marked throughout or nowhere, never half of each.
+
+    Every figure that needs a price is read off the same price, so a Basket
+    with none of its own cannot carry a result that was somehow reached
+    without one. Half a marking is a reading no price could produce.
+    """
+    marked = current_price is not None
+    if marked != (unrealized_pnl is not None):
+        raise ValueError("unrealized_pnl belongs to a marked Basket and only one")
+    if any((entry.unrealized_pnl is not None) != marked for entry in entries):
+        raise ValueError("every Entry is marked with the Basket, or none is")
 
 
 def _require_position_basket_tab(value: object, name: str) -> None:

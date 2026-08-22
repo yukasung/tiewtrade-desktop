@@ -4,6 +4,10 @@ from datetime import datetime, timedelta
 from enum import StrEnum
 from uuid import UUID
 
+from tiewtrade.integrations.sqlite.connection_cleanup import (
+    close_if_open,
+    rollback_if_open,
+)
 from tiewtrade.integrations.sqlite.database import SQLiteDatabase
 
 
@@ -53,7 +57,7 @@ class SQLitePaperRuntimeLifecycle:
                 "Paper Runtime Lifecycle read failed"
             ) from error
         finally:
-            _close_if_open(connection)
+            close_if_open(connection)
 
     def mark_running(self, session_id: UUID, observed_at_utc: datetime) -> None:
         self._mark(session_id, PaperRuntimeLifecycleState.RUNNING, observed_at_utc)
@@ -105,15 +109,15 @@ class SQLitePaperRuntimeLifecycle:
             )
             connection.commit()
         except sqlite3.Error as error:
-            _rollback_if_open(connection)
+            rollback_if_open(connection)
             raise PaperRuntimeLifecycleUnavailableError(
                 "Paper Runtime Lifecycle write failed"
             ) from error
         except BaseException:
-            _rollback_if_open(connection)
+            rollback_if_open(connection)
             raise
         finally:
-            _close_if_open(connection)
+            close_if_open(connection)
 
 
 def _record_from_row(row: sqlite3.Row) -> PaperRuntimeLifecycleRecord:
@@ -122,19 +126,3 @@ def _record_from_row(row: sqlite3.Row) -> PaperRuntimeLifecycleRecord:
         state=PaperRuntimeLifecycleState(row["state"]),
         observed_at_utc=datetime.fromisoformat(row["observed_at_utc"]),
     )
-
-
-def _rollback_if_open(connection: sqlite3.Connection | None) -> None:
-    if connection is not None:
-        try:
-            connection.rollback()
-        except sqlite3.Error:
-            pass
-
-
-def _close_if_open(connection: sqlite3.Connection | None) -> None:
-    if connection is not None:
-        try:
-            connection.close()
-        except sqlite3.Error:
-            pass

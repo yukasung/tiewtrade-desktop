@@ -25,7 +25,7 @@ from tiewtrade.ui.blank_text import BLANK
 from tiewtrade.ui.display_time import display_today
 from tiewtrade.ui.table_column import CENTER, Column
 from tiewtrade.ui.theme import POSITIVE_COLOR
-from tiewtrade.ui.trade_history_page import TradeHistoryPage
+from tiewtrade.ui.trade_history_page import FilterBar, TradeHistoryPage
 from tiewtrade.ui.trade_history_presenter import (
     BASKET_COLUMNS,
     FILL_COLUMNS,
@@ -384,7 +384,14 @@ def test_keyboard_focus_skips_scroll_area_and_scrolls_to_lower_table(
 def test_the_filter_row_reads_left_to_right_in_the_order_it_is_used(
     qtbot: QtBot,
 ) -> None:
-    """Ranges, then the dates they fill, then the actions, then the table."""
+    """Ranges, then the dates they fill, then the actions, then the table.
+
+    The last step reads the order the page set rather than pressing Tab for
+    it. macOS keeps Tab away from buttons unless the trader has turned Full
+    Keyboard Access on, and that is the platform's call to make, not this
+    app's — so what is checked is the order the page asks for, which is the
+    part the page is answerable for on every desktop.
+    """
     page = TradeHistoryPage()
     qtbot.addWidget(page)
     page.setFixedSize(1200, 600)
@@ -398,9 +405,22 @@ def test_the_filter_row_reads_left_to_right_in_the_order_it_is_used(
     QTest.keyClick(last_chip, Qt.Key.Key_Tab)
     assert page.basket_filters.from_date.hasFocus()
 
-    page.basket_filters.search_button.setFocus()
-    QTest.keyClick(page.basket_filters.search_button, Qt.Key.Key_Tab)
-    assert page.basket_filters.reset_button.hasFocus()
+    assert _next_in_chain(page.basket_filters, page.basket_filters.search_button) is (
+        page.basket_filters.reset_button
+    )
+
+
+def _next_in_chain(bar: FilterBar, widget: QWidget) -> QWidget | None:
+    """The next widget of the bar's own reading order after this one."""
+    chain = bar.focus_chain()
+    current: QWidget | None = widget
+    for _ in range(len(chain) * 100):
+        if current is None:
+            return None
+        current = current.nextInFocusChain()
+        if current in chain:
+            return current
+    return None
 
 
 def test_apply_and_reset_emit_immutable_filter_values(qtbot: QtBot) -> None:

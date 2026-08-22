@@ -11,7 +11,6 @@ from tiewtrade.trading.session_config import (
     SessionConfig,
     TradeMode,
 )
-from tiewtrade.trading.spot_policy import SpotTradingPolicy
 
 SESSION_ID = UUID("00000000-0000-0000-0000-000000000010")
 
@@ -22,9 +21,8 @@ def make_config(**overrides: object) -> SessionConfig:
         "preset_version": "rsi-step-grid-v1",
         "market_type": MarketType.SPOT,
         "trade_mode": TradeMode.PAPER,
-        "available_capital": Decimal("1000"),
+        "capital_per_entry": Decimal("1000"),
         "entry_policy": EntryPolicy(max_entries=10),
-        "spot_policy": SpotTradingPolicy(trading_capital_ratio=Decimal("0.80")),
         "futures_policy": None,
     }
     values.update(overrides)
@@ -46,11 +44,6 @@ def test_session_configuration_supports_each_mode_and_market(
     config = make_config(
         trade_mode=trade_mode,
         market_type=market_type,
-        spot_policy=(
-            SpotTradingPolicy(trading_capital_ratio=Decimal("0.80"))
-            if market_type is MarketType.SPOT
-            else None
-        ),
         futures_policy=(
             FuturesTradingPolicy.v1(leverage=3)
             if market_type is MarketType.FUTURES
@@ -62,36 +55,19 @@ def test_session_configuration_supports_each_mode_and_market(
     assert config.market_type is market_type
 
 
-def test_spot_session_owns_form_policies() -> None:
+def test_spot_session_owns_only_the_entry_policy_it_was_given() -> None:
+    """Spot has no policy of its own; it trades the capital under its Entries."""
     entry_policy = EntryPolicy(max_entries=12)
-    spot_policy = SpotTradingPolicy(trading_capital_ratio=Decimal("0.75"))
 
-    config = make_config(
-        entry_policy=entry_policy,
-        spot_policy=spot_policy,
-    )
+    config = make_config(entry_policy=entry_policy)
 
     assert config.entry_policy is entry_policy
-    assert config.spot_policy is spot_policy
-
-
-def test_spot_session_requires_spot_policy() -> None:
-    with pytest.raises(ValueError, match="spot_policy"):
-        make_config(spot_policy=None)
+    assert "spot_policy" not in {field.name for field in fields(SessionConfig)}
 
 
 def test_futures_session_requires_futures_policy() -> None:
     with pytest.raises(ValueError, match="futures_policy"):
-        make_config(market_type=MarketType.FUTURES, spot_policy=None)
-
-
-def test_futures_session_rejects_spot_policy() -> None:
-    with pytest.raises(ValueError, match="spot_policy"):
-        make_config(
-            market_type=MarketType.FUTURES,
-            spot_policy=SpotTradingPolicy(trading_capital_ratio=Decimal("0.80")),
-            futures_policy=FuturesTradingPolicy.v1(leverage=3),
-        )
+        make_config(market_type=MarketType.FUTURES)
 
 
 def test_spot_session_rejects_futures_policy() -> None:
@@ -103,13 +79,13 @@ def test_session_configuration_is_immutable() -> None:
     config = make_config()
 
     with pytest.raises(FrozenInstanceError):
-        config.available_capital = Decimal("2000")  # type: ignore[misc]
+        config.capital_per_entry = Decimal("2000")  # type: ignore[misc]
 
 
 @pytest.mark.parametrize("capital", [Decimal("0"), Decimal("-1")])
 def test_session_requires_positive_capital(capital: Decimal) -> None:
-    with pytest.raises(ValueError, match="available_capital"):
-        make_config(available_capital=capital)
+    with pytest.raises(ValueError, match="capital_per_entry"):
+        make_config(capital_per_entry=capital)
 
 
 def test_live_configuration_is_only_data_and_does_not_start_execution() -> None:

@@ -77,6 +77,7 @@ def test_sqlite_failure_blocks_new_paper_entry_fail_closed(tmp_path: Path) -> No
             snapshot = persistent.process_completed_candle(
                 candle,
                 received_at=candle.close_time,
+                backfilled=False,
             )
         except TradeHistoryUnavailableError as raised:
             assert "SQLite write failed" in str(raised)
@@ -94,6 +95,7 @@ def test_sqlite_failure_blocks_new_paper_entry_fail_closed(tmp_path: Path) -> No
         persistent.process_completed_candle(
             next_candle,
             received_at=next_candle.close_time,
+            backfilled=False,
         )
 
     reopened_database = SQLiteDatabase(path)
@@ -158,7 +160,7 @@ def test_open_basket_duplicate_and_partial_fills_remain_deterministic(
         closed_basket_id,
         open_history.basket.basket_id,
     }
-    assert first_page.realized_pnl == Decimal("14.202")
+    assert first_page.realized_pnl == Decimal("23.679")
     assert first_open_page.items == (updated_open_basket,)
     assert first_open_page.realized_pnl == Decimal("0")
     assert len(first_fills) == 2
@@ -196,7 +198,7 @@ def test_paper_execution_history_survives_restart_and_reaches_desktop(
     }
 
     assert len(before_restart.items) == 2
-    assert before_restart.realized_pnl == Decimal("2370.222")
+    assert before_restart.realized_pnl == Decimal("2379.699")
     futures, spot = before_restart.items
     assert futures.basket_id == futures_basket_id
     assert futures.status is BasketStatus.CLOSED
@@ -204,7 +206,7 @@ def test_paper_execution_history_survives_restart_and_reaches_desktop(
     assert futures.leverage == 3
     assert spot.basket_id == spot_basket_id
     assert spot.status is BasketStatus.CLOSED
-    assert spot.realized_pnl == Decimal("14.202")
+    assert spot.realized_pnl == Decimal("23.679")
     for fills in before_fills.values():
         assert [fill.side for fill in fills] == [FillSide.BUY, FillSide.SELL]
         assert all(fill.source is FillSource.PAPER_EXECUTOR for fill in fills)
@@ -263,8 +265,8 @@ def test_paper_execution_history_survives_restart_and_reaches_desktop(
             "BTC/USDT",
             "Buy",
             "95",
-            "1.578",
-            "149.91 USDT",
+            "2.631",
+            "249.94 USDT",
             "—",
         ),
         (
@@ -272,9 +274,9 @@ def test_paper_execution_history_survives_restart_and_reaches_desktop(
             "BTC/USDT",
             "Sell",
             "104",
-            "1.578",
-            "164.11 USDT",
-            "14.20 USDT",
+            "2.631",
+            "273.62 USDT",
+            "23.68 USDT",
         ),
     }
 

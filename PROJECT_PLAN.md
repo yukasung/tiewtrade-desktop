@@ -16,9 +16,8 @@ production code
   risk policy และ PnL ใช้ implementation ร่วมกันทุก Trade Mode
 - Paper, Live Spot และ Live Futures ใช้ execution adapters แยกกัน
 - ค่าใน form ต้องผ่าน validation และกลายเป็น immutable Session configuration/policy
-- `trading_capital_ratio`, `max_entries`, symbol และ timeframe ห้าม hard-code ใน
-  business logic
-- 80% และ 10 Entries เป็นค่าเริ่มต้นของ form เท่านั้น
+- `max_entries`, symbol และ timeframe ห้าม hard-code ใน business logic
+- 10 Entries เป็นค่าเริ่มต้นของ form เท่านั้น
 - หนึ่ง installation ใช้ Binance Account เดียวและมี Active Bot Session ได้สูงสุดหนึ่ง Session
 - สร้าง Module หรือ seam เมื่อมีพฤติกรรมและ consumer จริง ไม่สร้างโครงว่างล่วงหน้า
 - ระหว่างพัฒนาใช้ Paper และ fake adapters เท่านั้น ห้ามส่ง Live order
@@ -45,7 +44,7 @@ Foundation ที่พร้อมใช้งานแล้วประกอ
 
 - shared immutable `SessionConfig` สำหรับ Paper และ Live
 - `MarketDataConfig`, immutable Candle และ completed-candle continuity
-- `EntryPolicy` และ `SpotTradingPolicy` ที่รับค่าจาก Session setup
+- `EntryPolicy` ที่รับค่าจาก Session setup
 - Spot capital allocation, symbol quantization และ minimum-notional check
 - Basket weighted average, Take Profit, realized PnL และ atomic state transitions
 - Entry Pair และ Cooldown Month lifecycle แบบ UTC
@@ -79,7 +78,7 @@ Recovery, Paper Futures, public market-data runtime และ Desktop UI
 1. บังคับ one Active Bot Session สำหรับ installation และ Session ownership โดยตรง
 2. เพิ่ม SQLite migrations, durable trade history, audit trail และ Recovery state
 3. Public Binance market-data adapter, reconnect, backfill และ stale-data fail closed
-4. Paper Futures Core: shared Futures PnL policy, immutable session policy, leverage, Cross Margin, Collateral Buffer, liquidation และ Funding Fee `0.00`
+4. Paper Futures Core: shared Futures PnL policy, immutable session policy, leverage, Cross Margin, Collateral Buffer และ Funding Fee `0.00`
 5. Paper Futures Execution: concrete executor และ deterministic Paper fills
 6. DEV-95 — เชื่อม Paper Futures เข้ากับ Trade History ด้วย normalized
    Basket/Fill schema, immutable leverage context, Funding Fee `0.00` และ
@@ -190,7 +189,7 @@ notification persistence, business/risk policy หรือ Live execution
 
 - ใช้ Futures adapter แยกจาก Spot
 - บังคับ Cross Margin, leverage cap, Futures capital policy และ Collateral Buffer
-- รองรับ funding และ liquidation-related account facts
+- รองรับ funding account facts
 - ผ่าน Preflight, idempotency, Reconciliation และ Recovery สำหรับ Futures semantics
 
 ## Module Ownership

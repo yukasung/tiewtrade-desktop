@@ -2,15 +2,16 @@ from decimal import Decimal
 
 from PySide6.QtWidgets import QFrame, QGridLayout, QLabel, QVBoxLayout, QWidget
 
-from tiewtrade.application.paper_session_setup import ConfiguredPaperSession
+from tiewtrade.application.paper_session_setup import (
+    ConfiguredPaperSession,
+    preset_display_name,
+)
 from tiewtrade.trading.futures_policy import FuturesTradingPolicy
 from tiewtrade.trading.session_config import MarketType
-from tiewtrade.trading.spot_policy import SpotTradingPolicy
+from tiewtrade.ui.blank_text import BLANK
 from tiewtrade.ui.display_time import display_timestamp
 from tiewtrade.ui.pair_text import pair_text
-from tiewtrade.ui.preset_display import preset_display_name
 
-_BLANK = "—"
 _UNAVAILABLE = "Unavailable"
 
 
@@ -23,10 +24,8 @@ class SessionOverviewWidget(QWidget):
         self.symbol_value = self._value_label()
         self.timeframe_value = self._value_label()
         self.preset_value = self._value_label()
-        self.available_capital_value = self._value_label()
+        self.capital_per_entry_value = self._value_label()
         self.max_entries_value = self._value_label()
-        self.spot_ratio_value = self._value_label()
-        self.spot_reserve_ratio_value = self._value_label()
         self.margin_mode_value = self._value_label()
         self.position_mode_value = self._value_label()
         self.created_at_value = self._value_label()
@@ -39,8 +38,8 @@ class SessionOverviewWidget(QWidget):
         self.symbol_value.setText(pair_text(session.market_data.symbol))
         self.timeframe_value.setText(session.market_data.timeframe)
         self.preset_value.setText(preset_display_name(config.preset_version))
-        self.available_capital_value.setText(
-            f"{_decimal_text(config.available_capital)} USDT"
+        self.capital_per_entry_value.setText(
+            f"{_amount_text(config.capital_per_entry)} USDT"
         )
         self.max_entries_value.setText(str(config.entry_policy.max_entries))
         self._show_market_policy(session)
@@ -62,10 +61,8 @@ class SessionOverviewWidget(QWidget):
             ("Pair", self.symbol_value),
             ("Timeframe", self.timeframe_value),
             ("Strategy Preset", self.preset_value),
-            ("Available Capital", self.available_capital_value),
+            ("Amount", self.capital_per_entry_value),
             ("Max Entries", self.max_entries_value),
-            ("Spot Trading Capital Ratio", self.spot_ratio_value),
-            ("Spot Reserve Ratio", self.spot_reserve_ratio_value),
             ("Margin Mode", self.margin_mode_value),
             ("Position Mode", self.position_mode_value),
             ("Created at", self.created_at_value),
@@ -84,34 +81,20 @@ class SessionOverviewWidget(QWidget):
         root.addStretch()
 
     def _show_market_policy(self, session: ConfiguredPaperSession) -> None:
-        """Fill the pair belonging to this market and blank the other one.
+        """Fill the Futures pair, and blank it for the market that has none.
 
-        A Session carries the policy for its own market and no other, so one
-        holding both is malformed: its pair reads Unavailable rather than
-        showing a policy the Session never chose.
+        Only Futures carries a policy of its own. A Spot Session trades the
+        capital it was given under nothing but its Entry count, so the two
+        rows read as blank — unless it holds a Futures policy, which is
+        malformed: then they read Unavailable rather than showing settings a
+        Spot Session never chose.
         """
         config = session.config
-        spot = config.spot_policy
-        futures = config.futures_policy
         if config.market_type is MarketType.SPOT:
-            self._show_spot_policy(spot if futures is None else None)
-            self._show_futures_policy(None, missing=_BLANK)
+            blank = config.futures_policy is None
+            self._show_futures_policy(None, missing=BLANK if blank else _UNAVAILABLE)
             return
-        self._show_spot_policy(None, missing=_BLANK)
-        self._show_futures_policy(futures if spot is None else None)
-
-    def _show_spot_policy(
-        self,
-        policy: SpotTradingPolicy | None,
-        *,
-        missing: str = _UNAVAILABLE,
-    ) -> None:
-        if policy is None:
-            self.spot_ratio_value.setText(missing)
-            self.spot_reserve_ratio_value.setText(missing)
-            return
-        self.spot_ratio_value.setText(_percent_text(policy.trading_capital_ratio))
-        self.spot_reserve_ratio_value.setText(_percent_text(policy.reserve_ratio))
+        self._show_futures_policy(config.futures_policy)
 
     def _show_futures_policy(
         self,
@@ -130,15 +113,17 @@ class SessionOverviewWidget(QWidget):
 
     @staticmethod
     def _value_label() -> QLabel:
-        label = QLabel("—")
+        label = QLabel(BLANK)
         label.setObjectName("detailValue")
         label.setTextInteractionFlags(label.textInteractionFlags())
         return label
 
 
-def _decimal_text(value: Decimal) -> str:
+def _amount_text(value: Decimal) -> str:
+    """A figure as it reads on screen, without the zeros it does not need.
+
+    `normalize` is what makes 1000.00 read as 1000. It is a reading, not a
+    value: the same figure is written to the database in full, because a
+    trailing zero there is precision the record was given.
+    """
     return format(value.normalize(), "f")
-
-
-def _percent_text(ratio: Decimal) -> str:
-    return f"{_decimal_text(ratio * Decimal('100'))}%"

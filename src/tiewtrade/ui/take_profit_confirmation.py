@@ -12,7 +12,20 @@ from decimal import Decimal
 
 from tiewtrade.application.open_basket import ReopenedBasket
 from tiewtrade.trading.basket import BasketEntry
-from tiewtrade.ui.money_text import price_text
+
+UNREADABLE_POSITION_MESSAGE = (
+    "What the open Position holds cannot be read yet, or no price has "
+    "arrived to judge it by. Starting the Bot sells every Entry the price "
+    "has already reached, at the target it was given rather than at the "
+    "price now."
+)
+"""Why a Start is worth confirming when nothing can be said about the sale.
+
+The question this feeds exists because a Start can sell at a target the price
+has left. Not knowing whether it would is not the same as knowing it would
+not — read as "nothing to ask about", it once let a Position go at its target
+with no question put at all.
+"""
 
 
 def entries_sold_on_start(
@@ -28,26 +41,72 @@ def entries_sold_on_start(
     return reopened.basket.entries_reaching_take_profit(current_price, current_price)
 
 
+def leaves_entries_holding(reopened: ReopenedBasket, current_price: Decimal) -> bool:
+    """Whether a Start would leave something in the Basket it did not sell.
+
+    Read from the same rule as the sale itself, so the two cannot disagree
+    about which Entries a Start would take.
+    """
+    return len(entries_sold_on_start(reopened, current_price)) < len(
+        reopened.basket.entries
+    )
+
+
+def _reached_their_target(entries: tuple[BasketEntry, ...]) -> str:
+    """How many Entries the price has carried to their target, said once."""
+    if len(entries) == 1:
+        return "1 Entry is already at its Take Profit"
+    return f"{len(entries)} Entries are already at their Take Profit"
+
+
 def sells_on_start_message(
     reopened: ReopenedBasket, current_price: Decimal
 ) -> str | None:
     """Why a Start is worth confirming, or None when it sells nothing.
 
-    The targets are named rather than summed: they are the prices the sale
-    books at, and the whole point of asking is that they are not the price on
-    screen.
+    The targets are counted rather than named. What makes this worth asking is
+    that the sale books at them and not at the price on screen — one sentence,
+    however many Entries are open — and every figure behind it is in the
+    Position tab, in columns, where a box of prose cannot beat it.
     """
     entries = entries_sold_on_start(reopened, current_price)
     if not entries:
         return None
-    targets = " and ".join(price_text(entry.take_profit_price) for entry in entries)
     if len(entries) == 1:
-        opening = "1 Entry is already at its Take Profit"
-        sale = f"sells it at once at {targets}, the target it was given"
+        sale = "sells it at once at the target it was given"
     else:
-        opening = f"{len(entries)} Entries are already at their Take Profit"
-        sale = f"sells them at once at {targets}, the targets they were given"
+        sale = "sells them at once at the targets they were given"
     return (
-        f"{opening}. Starting the Bot {sale}, "
-        f"not at the current {price_text(current_price)}."
+        f"{_reached_their_target(entries)}. "
+        f"Starting the Bot {sale}, not at the price now."
     )
+
+
+def position_at_target_message(
+    reopened: ReopenedBasket, current_price: Decimal
+) -> str | None:
+    """What is true of the Position, for a question that offers no Start.
+
+    Where the only way forward on offer is the market price, saying what a
+    Start would have booked describes a button that is not there. What is left
+    is the state, which is a count.
+    """
+    entries = entries_sold_on_start(reopened, current_price)
+    if not entries:
+        return None
+    return f"{_reached_their_target(entries)}."
+
+
+def position_held_message(reopened: ReopenedBasket) -> str:
+    """How much is open, for a Start that would run on with it.
+
+    Nothing is bought or sold by resuming, so there is nothing to warn about —
+    only the fact that a Position is there, which is a count. An open Basket
+    holds at least one Entry, so there is always that much to say. What it is
+    worth is read off the Position tab behind the dialog, where it is a row
+    rather than a clause that grows one longer with every Entry.
+    """
+    entries = reopened.basket.entries
+    if len(entries) == 1:
+        return "1 Entry is open."
+    return f"{len(entries)} Entries are open."

@@ -1,10 +1,11 @@
-from datetime import UTC, date, datetime
+from dataclasses import replace
+from datetime import UTC, datetime
 from decimal import Decimal
 
 import pytest
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QBrush, QColor
-from PySide6.QtWidgets import QTableWidgetItem
+from PySide6.QtWidgets import QPushButton, QTableWidgetItem
 from pytestqt.qtbot import QtBot
 
 from tests.support.workspace_snapshots import basket_entries, basket_snapshot
@@ -18,8 +19,9 @@ from tiewtrade.application.trading_workspace import (
     ready_position_basket_tab,
     stale_position_basket_tab,
 )
+from tiewtrade.ui.blank_text import BLANK
 from tiewtrade.ui.position_basket_table import PositionBasketTable
-from tiewtrade.ui.theme import NEGATIVE_COLOR, POSITIVE_COLOR
+from tiewtrade.ui.theme import DARK_THEME, NEGATIVE_COLOR, POSITIVE_COLOR
 
 OBSERVED_AT = datetime(2026, 8, 2, 1, 2, 4, tzinfo=UTC)
 
@@ -60,9 +62,7 @@ def _futures_basket() -> BasketSnapshot:
         current_price=Decimal("66321.1200"),
         take_profit_price=Decimal("67000.0000"),
         unrealized_pnl=Decimal("1.92600000"),
-        liquidation_price=Decimal("44000.5000"),
         entry_gate=BasketEntryGate.OPEN,
-        cooldown_until=None,
         updated_at_utc=OBSERVED_AT,
     )
 
@@ -72,6 +72,10 @@ def _row(widget: PositionBasketTable, row: int = 0) -> dict[str, str]:
     values: dict[str, str] = {}
     for column, header in enumerate(widget.headers):
         item = widget.table.item(row, column)
+        if item is None:
+            # The last column holds the order this row can send, not a value.
+            assert header == PositionBasketTable.CLOSE_HEADER
+            continue
         assert item is not None
         values[header] = item.text()
     return values
@@ -96,18 +100,17 @@ def test_each_entry_of_the_basket_is_its_own_row(qtbot: QtBot) -> None:
         "Date",
         "Entry Price",
         "Take Profit",
-        "Average",
         "Quantity",
         "Total",
         "Unrealized P/L",
         "Status",
+        "Close Position",
     )
     assert widget.table.rowCount() == 2
     assert _row(widget, 0) == {
         "Date": "2026-08-02 08:00:00",
         "Entry Price": "66,000.0000",
         "Take Profit": "67,000.0000",
-        "Average": "66,000.1250",
         "Quantity": "0.00300000",
         "Total": "198.00 USDT",
         "Unrealized P/L": "0.96 USDT",
@@ -153,13 +156,14 @@ def test_money_is_grouped_and_a_quantity_is_not(qtbot: QtBot) -> None:
     assert row["Quantity"] == "0.00300000"
 
 
-def test_every_row_restates_the_basket_average(qtbot: QtBot) -> None:
-    """The Basket's own price, beside the prices its Entries actually paid.
+def test_no_price_column_reads_at_the_basket_level(qtbot: QtBot) -> None:
+    """Only the prices the row itself paid and aims at.
 
-    It is the same figure on every row because it is the Basket's, not the
-    row's — and it is neither price paid, which is the whole reason to print
-    it. Nothing else frames the table: the symbol and market are named by the
-    chart and the session panel, so the table does not repeat them.
+    The Basket's average was once restated on every row, where it read as a
+    third price beside those two and invited the target to be read as measured
+    from it. The target is measured from the Entry's own price, so the average
+    is not printed here at all — and nothing takes its place, no summary label
+    and no total.
     """
     widget = PositionBasketTable()
     qtbot.addWidget(widget)
@@ -168,17 +172,17 @@ def test_every_row_restates_the_basket_average(qtbot: QtBot) -> None:
         ready_position_basket_tab(_futures_basket(), observed_at_utc=OBSERVED_AT)
     )
 
-    assert _cell(widget, "Average", 0).text() == "66,000.1250"
-    assert _cell(widget, "Average", 1).text() == "66,000.1250"
+    assert "Average" not in widget.headers
     assert _cell(widget, "Entry Price", 0).text() == "66,000.0000"
     assert _cell(widget, "Entry Price", 1).text() == "66,000.2500"
     assert not hasattr(widget, "total_label")
     assert not hasattr(widget, "basket_label")
 
 
-def test_a_single_entry_basket_averages_to_the_one_price_it_paid(
+def test_a_single_entry_basket_reads_the_one_price_it_paid(
     qtbot: QtBot,
 ) -> None:
+    """One Entry, one price and one target — no averaged figure to compare."""
     widget = PositionBasketTable()
     qtbot.addWidget(widget)
 
@@ -194,7 +198,8 @@ def test_a_single_entry_basket_averages_to_the_one_price_it_paid(
     )
 
     assert widget.table.rowCount() == 1
-    assert _cell(widget, "Average", 0).text() == _cell(widget, "Entry Price", 0).text()
+    assert _cell(widget, "Entry Price", 0).text() == "64,000"
+    assert "Average" not in widget.headers
 
 
 def test_a_moved_column_carries_its_own_reading(
@@ -240,7 +245,6 @@ def test_columns_align_numbers_right_and_text_left(qtbot: QtBot) -> None:
         right,
         right,
         right,
-        right,
         left,
     )
     for column, alignment in enumerate(widget.ALIGNMENTS):
@@ -251,6 +255,42 @@ def test_columns_align_numbers_right_and_text_left(qtbot: QtBot) -> None:
         # edge. The heading is centred over the column whatever that is.
         assert cell.textAlignment() == alignment
         assert header.textAlignment() == centre
+
+
+def test_an_unmarked_entry_shows_a_dash_where_its_result_will_be(
+    qtbot: QtBot,
+) -> None:
+    """A Basket read out of the database has no price to mark on yet.
+
+    Everything the database answered is a row already; only the result waits.
+    A dash says the question has no answer yet, where 0.00 USDT would say the
+    Entry stands exactly where it was bought.
+    """
+    widget = PositionBasketTable()
+    qtbot.addWidget(widget)
+
+    widget.show_snapshot(
+        ready_position_basket_tab(
+            basket_snapshot(
+                entry_count=1,
+                entries=(replace(_entry(1, "64000", "0"), unrealized_pnl=None),),
+                current_price=None,
+                unrealized_pnl=None,
+            ),
+            observed_at_utc=OBSERVED_AT,
+        )
+    )
+
+    row = _row(widget)
+    assert row["Unrealized P/L"] == BLANK
+    # What needed no price is there in full.
+    assert row["Entry Price"] == "64,000"
+    assert row["Take Profit"] == "65,000"
+    assert row["Total"] == "192.00 USDT"
+    # Unmarked is not a sign, so the figure keeps the table's own colour.
+    assert _cell(widget, "Unrealized P/L").foreground() == (
+        _cell(widget, "Date").foreground()
+    )
 
 
 @pytest.mark.parametrize(
@@ -296,10 +336,8 @@ def test_entry_pnl_reads_as_a_two_decimal_figure_coloured_by_its_sign(
     ("basket", "expected"),
     [
         pytest.param(
-            basket_snapshot(
-                entry_gate=BasketEntryGate.COOLDOWN, cooldown_until=date(2026, 3, 1)
-            ),
-            "Cooldown until Mar 2026",
+            basket_snapshot(entry_gate=BasketEntryGate.COOLDOWN),
+            "Cooldown — cancel to take another Entry",
             id="cooldown",
         ),
         pytest.param(
@@ -322,6 +360,87 @@ def test_blocked_entries_read_as_their_reason(
     # A blocked Basket says so on every Entry, not only on the row last taken.
     for row in range(widget.table.rowCount()):
         assert _cell(widget, "Status", row).text() == expected
+
+
+def test_cancel_cooldown_button_shows_only_during_a_cooldown(qtbot: QtBot) -> None:
+    widget = PositionBasketTable()
+    qtbot.addWidget(widget)
+    widget.show()
+
+    widget.show_snapshot(
+        ready_position_basket_tab(
+            basket_snapshot(entry_gate=BasketEntryGate.COOLDOWN),
+            observed_at_utc=OBSERVED_AT,
+        )
+    )
+    assert widget.cancel_cooldown_button.isVisible() is True
+
+    widget.show_snapshot(
+        ready_position_basket_tab(
+            basket_snapshot(entry_gate=BasketEntryGate.OPEN),
+            observed_at_utc=OBSERVED_AT,
+        )
+    )
+    assert widget.cancel_cooldown_button.isVisible() is False
+
+
+def test_cancel_cooldown_button_emits_a_signal_on_click(qtbot: QtBot) -> None:
+    widget = PositionBasketTable()
+    qtbot.addWidget(widget)
+    asked = 0
+
+    def on_clicked() -> None:
+        nonlocal asked
+        asked += 1
+
+    widget.cancel_cooldown_requested.connect(on_clicked)
+    widget.show_snapshot(
+        ready_position_basket_tab(
+            basket_snapshot(entry_gate=BasketEntryGate.COOLDOWN),
+            observed_at_utc=OBSERVED_AT,
+        )
+    )
+
+    widget.cancel_cooldown_button.click()
+
+    assert asked == 1
+
+
+def test_cancel_cooldown_button_is_taken_away_while_in_flight(qtbot: QtBot) -> None:
+    widget = PositionBasketTable()
+    qtbot.addWidget(widget)
+    widget.show()
+    widget.show_snapshot(
+        ready_position_basket_tab(
+            basket_snapshot(entry_gate=BasketEntryGate.COOLDOWN),
+            observed_at_utc=OBSERVED_AT,
+        )
+    )
+
+    widget.set_cancelling_enabled(False)
+    assert widget.cancel_cooldown_button.isEnabled() is False
+
+    widget.set_cancelling_enabled(True)
+    assert widget.cancel_cooldown_button.isEnabled() is True
+
+
+def test_a_cancel_that_failed_is_said_over_the_position_that_is_still_there(
+    qtbot: QtBot,
+) -> None:
+    widget = PositionBasketTable()
+    qtbot.addWidget(widget)
+    widget.show()
+    widget.show_snapshot(
+        ready_position_basket_tab(
+            basket_snapshot(entry_gate=BasketEntryGate.COOLDOWN),
+            observed_at_utc=OBSERVED_AT,
+        )
+    )
+
+    widget.show_cancel_error("Could not waive the Cooldown.")
+
+    assert widget.state_label.text() == "Could not waive the Cooldown."
+    assert not widget.state_label.isHidden()
 
 
 def test_position_basket_states_preserve_or_clear_application_facts(
@@ -386,3 +505,116 @@ def test_position_basket_ignores_wrong_snapshot_type(qtbot: QtBot) -> None:
 
     assert widget.table.rowCount() == 2
     assert widget.table.accessibleName() == "Position"
+
+
+def _close_button(widget: PositionBasketTable, row: int) -> QPushButton:
+    button = widget.close_button(row)
+    assert isinstance(button, QPushButton)
+    return button
+
+
+def test_every_entry_carries_the_order_that_closes_it(qtbot: QtBot) -> None:
+    """Binance puts the order on the row, not a tick box beside it.
+
+    A checkbox would have the trader select rows and then find the verb
+    elsewhere; the button is the order, and it says which one it sends.
+    """
+    widget = PositionBasketTable()
+    qtbot.addWidget(widget)
+    asked: list[int] = []
+    widget.close_entry_requested.connect(asked.append)
+
+    widget.show_snapshot(
+        ready_position_basket_tab(
+            basket_snapshot(entries=(_entry(1, "100", "1"), _entry(2, "110", "-2"))),
+            observed_at_utc=OBSERVED_AT,
+        )
+    )
+
+    assert _close_button(widget, 0).text() == "Market"
+    _close_button(widget, 1).click()
+
+    # The Entry's own number, not the row it happens to sit in: rows are
+    # rebuilt on every price, and one of them has already gone before now.
+    assert asked == [2]
+
+
+def test_the_order_is_taken_away_while_one_is_still_in_flight(
+    qtbot: QtBot,
+) -> None:
+    """A sale that has not landed must not be sent twice by an eager hand."""
+    widget = PositionBasketTable()
+    qtbot.addWidget(widget)
+    widget.show_snapshot(
+        ready_position_basket_tab(
+            basket_snapshot(entry_count=1, entries=(_entry(1, "100", "1"),)),
+            observed_at_utc=OBSERVED_AT,
+        )
+    )
+
+    widget.set_closing_enabled(False)
+
+    assert _close_button(widget, 0).isEnabled() is False
+    # A price arrives while the sale is still out, and the rows redraw.
+    widget.show_snapshot(
+        ready_position_basket_tab(
+            basket_snapshot(entry_count=1, entries=(_entry(1, "100", "2"),)),
+            observed_at_utc=OBSERVED_AT,
+        )
+    )
+    assert _close_button(widget, 0).isEnabled() is False
+
+    widget.set_closing_enabled(True)
+
+    assert _close_button(widget, 0).isEnabled() is True
+
+
+def test_a_sale_that_failed_is_said_over_the_position_that_is_still_there(
+    qtbot: QtBot,
+) -> None:
+    """The rows are what they were, so only the line above them changes."""
+    widget = PositionBasketTable()
+    qtbot.addWidget(widget)
+    widget.show()
+    widget.show_snapshot(
+        ready_position_basket_tab(
+            basket_snapshot(entry_count=1, entries=(_entry(1, "100", "1"),)),
+            observed_at_utc=OBSERVED_AT,
+        )
+    )
+
+    widget.show_close_error("Could not sell that Entry.")
+
+    qtbot.waitUntil(widget.state_label.isVisible)
+    assert widget.state_label.text() == "Could not sell that Entry."
+    assert widget.table.rowCount() == 1
+
+
+def test_the_order_button_fits_the_row_it_sits_in(qtbot: QtBot) -> None:
+    """A row's button is part of the row, not a button on a form.
+
+    Dressed as one it stood taller than the row that holds it and ran the
+    width of a column stretched across the table.
+    """
+    widget = PositionBasketTable()
+    qtbot.addWidget(widget)
+    widget.setStyleSheet(DARK_THEME)
+    widget.resize(1400, 300)
+    widget.show()
+    widget.show_snapshot(
+        ready_position_basket_tab(
+            basket_snapshot(entry_count=1, entries=(_entry(1, "100", "1"),)),
+            observed_at_utc=OBSERVED_AT,
+        )
+    )
+    qtbot.waitUntil(lambda: widget.close_button(0) is not None)
+    button = _close_button(widget, 0)
+    qtbot.waitUntil(lambda: button.width() > 0)
+
+    table = widget.table
+    assert button.height() <= table.rowHeight(0)
+    # The column holds a button, so the room left over goes to the last column
+    # of values instead of stretching this one across the table.
+    close_column = len(PositionBasketTable.COLUMNS)
+    assert table.columnWidth(close_column) < table.columnWidth(close_column - 1)
+    assert button.width() < table.viewport().width() // 4

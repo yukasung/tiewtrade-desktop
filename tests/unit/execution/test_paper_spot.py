@@ -17,7 +17,6 @@ from tiewtrade.trading.session_config import (
     SessionConfig,
     TradeMode,
 )
-from tiewtrade.trading.spot_policy import SpotTradingPolicy
 from tiewtrade.trading.symbol_rules import SymbolRules
 
 
@@ -27,9 +26,8 @@ def test_entry_fill_uses_session_capital_costs_and_symbol_rules() -> None:
         preset_version="rsi-step-grid-v1",
         market_type=MarketType.SPOT,
         trade_mode=TradeMode.PAPER,
-        available_capital=Decimal("1000"),
+        capital_per_entry=Decimal("250"),
         entry_policy=EntryPolicy(max_entries=4),
-        spot_policy=SpotTradingPolicy(trading_capital_ratio=Decimal("0.6")),
     )
     executor = PaperSpotExecutor(
         session,
@@ -47,7 +45,8 @@ def test_entry_fill_uses_session_capital_costs_and_symbol_rules() -> None:
 
     assert fill is not None
     assert fill.price == Decimal("101.23")
-    assert fill.quantity == Decimal("1.481")
+    # All 1000 split four ways, so one Entry is 250 and buys what that affords.
+    assert fill.quantity == Decimal("2.469")
     assert fill.filled_at == fill_candle.open_time
     entry_order_id = f"entry:{intent(session, signal_candle).intent_id}"
     assert fill.order_id == entry_order_id
@@ -60,9 +59,8 @@ def test_entry_fill_rejects_quantity_below_minimum_notional() -> None:
         preset_version="rsi-step-grid-v1",
         market_type=MarketType.SPOT,
         trade_mode=TradeMode.PAPER,
-        available_capital=Decimal("100"),
+        capital_per_entry=Decimal("15"),
         entry_policy=EntryPolicy(max_entries=4),
-        spot_policy=SpotTradingPolicy(trading_capital_ratio=Decimal("0.6")),
     )
     executor = PaperSpotExecutor(
         session,
@@ -90,9 +88,8 @@ def test_rejected_entry_warns_with_the_numbers_needed_to_fix_the_setup(
         preset_version="rsi-buy-only-v1",
         market_type=MarketType.SPOT,
         trade_mode=TradeMode.PAPER,
-        available_capital=Decimal("100"),
+        capital_per_entry=Decimal("10"),
         entry_policy=EntryPolicy(max_entries=10),
-        spot_policy=SpotTradingPolicy(trading_capital_ratio=Decimal("0.8")),
     )
     executor = PaperSpotExecutor(
         session,
@@ -121,7 +118,7 @@ def test_rejected_entry_warns_with_the_numbers_needed_to_fix_the_setup(
     assert len(records) == 1
     record = records[0]
     assert record.levelno == logging.WARNING
-    assert getattr(record, "entry_budget_notional") == "8.0"  # noqa: B009
+    assert getattr(record, "entry_budget_notional") == "10"  # noqa: B009
     assert getattr(record, "quantity_after_lot_rounding") == "0.000"  # noqa: B009
     assert getattr(record, "minimum_affordable_entry_notional") == "64.000"  # noqa: B009
 
@@ -159,9 +156,8 @@ def test_take_profit_target_touch_uses_sell_floor_price_and_exact_fee() -> None:
         preset_version="rsi-step-grid-v1",
         market_type=MarketType.SPOT,
         trade_mode=TradeMode.PAPER,
-        available_capital=Decimal("1000"),
+        capital_per_entry=Decimal("250"),
         entry_policy=EntryPolicy(max_entries=4),
-        spot_policy=SpotTradingPolicy(trading_capital_ratio=Decimal("0.6")),
     )
     rules = SymbolRules(
         symbol="BTCUSDT",
@@ -235,9 +231,8 @@ def test_stop_loss_target_touch_uses_sell_floor_price_and_exact_fee() -> None:
         preset_version="rsi-buy-only-v1",
         market_type=MarketType.SPOT,
         trade_mode=TradeMode.PAPER,
-        available_capital=Decimal("1000"),
+        capital_per_entry=Decimal("250"),
         entry_policy=EntryPolicy(max_entries=4),
-        spot_policy=SpotTradingPolicy(trading_capital_ratio=Decimal("0.6")),
     )
     rules = SymbolRules(
         symbol="BTCUSDT",
@@ -359,9 +354,8 @@ def spot_session() -> SessionConfig:
         preset_version="rsi-step-grid-v1",
         market_type=MarketType.SPOT,
         trade_mode=TradeMode.PAPER,
-        available_capital=Decimal("1000"),
+        capital_per_entry=Decimal("250"),
         entry_policy=EntryPolicy(max_entries=4),
-        spot_policy=SpotTradingPolicy(trading_capital_ratio=Decimal("0.6")),
     )
 
 

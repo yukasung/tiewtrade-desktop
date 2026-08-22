@@ -894,9 +894,7 @@ def open_basket(session: ConfiguredPaperSession, entry_count: int) -> BasketSnap
         current_price=Decimal("101"),
         take_profit_price=Decimal("110"),
         unrealized_pnl=Decimal("1"),
-        liquidation_price=None,
         entry_gate=BasketEntryGate.OPEN,
-        cooldown_until=None,
         updated_at_utc=datetime(2026, 1, 1, 0, 0, tzinfo=UTC),
     )
 
