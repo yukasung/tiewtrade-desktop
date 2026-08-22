@@ -41,6 +41,10 @@ from tiewtrade.ui.chart_workflow import (
     LoadChartFills,
     RefreshChart,
 )
+from tiewtrade.ui.connection_notice import (
+    ConnectionNotice,
+    ConnectionNoticeDialog,
+)
 from tiewtrade.ui.open_position_workflow import (
     OpenPositionWorkflow,
     ReadOpenBasket,
@@ -82,12 +86,16 @@ TakeProfitConfirmation = Callable[[str, Callable[[], None]], None]
 # time this is called. A plain callable, so a test can read what was said.
 BlockedNotice = Callable[[str], None]
 
-# What the one system notice says, worst first. The reader acts on a Bot that
-# has stopped and only waits on a connection coming back, so the two must not
-# read alike and must not take turns on the same line.
+# What the one system notice says, worst first. It carries only faults the
+# reader has to act on; a connection being retried is told in a dialog, which
+# a reader looking anywhere else on the screen still meets.
 CHART_FEED_STOPPED_NOTICE = "Chart feed stopped — prices are not current"
-BOT_RECONNECTING_NOTICE = "Paper Bot is reconnecting — waiting for market data"
-CHART_RECONNECTING_NOTICE = "Reconnecting — prices are not current"
+
+# How long a connection has to stay away before the trader is taken away from
+# what they were doing. The runtime retries for as long as it takes, climbing
+# from a second to a thirty-second ceiling, so a drop shorter than this is one
+# it was always going to ride out on its own.
+CONNECTION_NOTICE_DELAY_MILLISECONDS = 30_000
 
 
 @dataclass(frozen=True, slots=True)
@@ -154,12 +162,16 @@ class MainWindow(QMainWindow):
         thread_pool: QThreadPool | None = None,
         take_profit_confirmation: TakeProfitConfirmation | None = None,
         blocked_notice: BlockedNotice | None = None,
+        connection_notice: ConnectionNotice | None = None,
+        connection_notice_delay_ms: int = CONNECTION_NOTICE_DELAY_MILLISECONDS,
     ) -> None:
         super().__init__()
         self._take_profit_confirmation = (
             take_profit_confirmation or self._open_take_profit_confirmation
         )
         self._blocked_notice = blocked_notice or self._open_blocked_notice
+        self._connection_notice = connection_notice or ConnectionNoticeDialog(self)
+        self._connection_lost = False
         self._last_bot_state: BotRuntimeState | None = None
         self._take_profit_confirmation_pending = False
         self._take_profit_confirmation_dialog: QMessageBox | None = None
@@ -279,6 +291,11 @@ class MainWindow(QMainWindow):
             self._chart_workflow.check_price_silence
         )
         self._price_silence_timer.start()
+        # A drop worth telling is one that lasts, so the telling waits.
+        self._connection_notice_timer = QTimer(self)
+        self._connection_notice_timer.setSingleShot(True)
+        self._connection_notice_timer.setInterval(connection_notice_delay_ms)
+        self._connection_notice_timer.timeout.connect(self._announce_connection_lost)
         self.workspace.chart.range_requested.connect(self._chart_workflow.load_range)
         self.workspace.chart.latest_requested.connect(
             self._chart_workflow.follow_latest
@@ -753,6 +770,7 @@ class MainWindow(QMainWindow):
             self._bot_stopped_reason = ""
             self._bot_reconnecting = False
         self._show_system_notice()
+        self._update_connection_notice()
 
     def _announce_blocked_runtime(
         self,
@@ -817,19 +835,40 @@ class MainWindow(QMainWindow):
         self._chart_feed_state = state
         self.workspace.chart.show_feed_state(state)
         self._show_system_notice()
+        self._update_connection_notice()
 
     def _show_system_notice(self) -> None:
         self.workspace.chart.show_system_notice(self._system_notice_text())
+
+    def _update_connection_notice(self) -> None:
+        """Raise the connection notice on a drop that lasts, drop it on return.
+
+        Only the crossings matter. A drop keeps producing snapshots for as
+        long as it lasts, and a countdown restarted by each of them would
+        never reach the end of its wait.
+        """
+        lost = not self._bot_stopped_reason and (
+            self._bot_reconnecting
+            or self._chart_feed_state is ChartFeedState.RECONNECTING
+        )
+        if lost == self._connection_lost:
+            return
+        self._connection_lost = lost
+        if lost:
+            self._connection_notice_timer.start()
+            return
+        self._connection_notice_timer.stop()
+        self._connection_notice.hide()
+
+    @Slot()
+    def _announce_connection_lost(self) -> None:
+        self._connection_notice.show()
 
     def _system_notice_text(self) -> str:
         if self._bot_stopped_reason:
             return self._bot_stopped_reason
         if self._chart_feed_state is ChartFeedState.STOPPED:
             return CHART_FEED_STOPPED_NOTICE
-        if self._bot_reconnecting:
-            return BOT_RECONNECTING_NOTICE
-        if self._chart_feed_state is ChartFeedState.RECONNECTING:
-            return CHART_RECONNECTING_NOTICE
         return ""
 
     @Slot()
@@ -1035,6 +1074,8 @@ class MainWindow(QMainWindow):
         super().closeEvent(event)
 
     def _close_workflows(self) -> None:
+        self._connection_notice_timer.stop()
+        self._connection_notice.hide()
         if self._chart_fact_relay is not None:
             self._chart_fact_relay.invalidate()
         self._workflow.close()

@@ -89,9 +89,7 @@ from tiewtrade.ui.bot_lifecycle_workflow import RuntimeSnapshotRelay
 from tiewtrade.ui.chart_workflow import PRICE_SILENCE_CHECK_MILLISECONDS, ChartFactRelay
 from tiewtrade.ui.display_time import display_today
 from tiewtrade.ui.main_window import (
-    BOT_RECONNECTING_NOTICE,
     CHART_FEED_STOPPED_NOTICE,
-    CHART_RECONNECTING_NOTICE,
     BotActions,
     ChartSources,
     MainWindow,
@@ -1815,14 +1813,13 @@ def empty_chart_snapshot(
     )
 
 
-def test_the_chart_says_the_feed_dropped_and_reloads_when_it_returns(
+def test_the_chart_reloads_the_candles_a_dropped_feed_swallowed(
     qtbot: QtBot,
 ) -> None:
     """The connection the chart lives on before any Bot is started.
 
-    Nothing on this screen has ever reported it: the chart feed drops, the
-    candles stop arriving, and the chart goes on showing the last prices it
-    was handed as though the market had gone quiet.
+    A feed that drops and comes back leaves a hole: the candles of the
+    outage were never streamed, so the chart has to go and read them.
     """
     session = configured_spot_session()
     relay = ChartFactRelay()
@@ -1849,18 +1846,16 @@ def test_the_chart_says_the_feed_dropped_and_reloads_when_it_returns(
     )
     qtbot.addWidget(window)
     window.show()
-    chart = window.workspace.chart
     qtbot.waitUntil(lambda: len(loads) == 1)
     assert started_feeds == [session]
 
     publisher = relay.new_generation()
     publisher.feed_state(ChartFeedState.RECONNECTING)
 
-    qtbot.waitUntil(lambda: chart.system_notice.text() == CHART_RECONNECTING_NOTICE)
+    qtbot.waitUntil(lambda: window._chart_feed_state is ChartFeedState.RECONNECTING)
 
     publisher.feed_state(ChartFeedState.LIVE)
 
-    qtbot.waitUntil(lambda: chart.system_notice.text() == "")
     # The candles the outage swallowed are only in the history now.
     qtbot.waitUntil(lambda: len(loads) == 2)
 
@@ -1868,9 +1863,9 @@ def test_the_chart_says_the_feed_dropped_and_reloads_when_it_returns(
 def test_the_system_notice_says_the_worst_of_what_is_wrong(qtbot: QtBot) -> None:
     """One line, and the reader should meet the fault that matters most.
 
-    A Bot that stopped outranks a chart feed that stopped, which outranks
-    either of them merely reconnecting — the reader acts on the first and
-    only waits on the last.
+    A Bot that stopped outranks a chart feed that stopped. Reconnecting is
+    not on this line at all any more — waiting on a connection is told in a
+    dialog, so the line is left to the faults the reader has to act on.
     """
     session = configured_spot_session()
     relay = ChartFactRelay()
@@ -1910,10 +1905,8 @@ def test_the_system_notice_says_the_worst_of_what_is_wrong(qtbot: QtBot) -> None
     assert notice.text() == ""
 
     chart_feed = relay.new_generation()
-    chart_feed.feed_state(ChartFeedState.RECONNECTING)
-    qtbot.waitUntil(lambda: notice.text() == CHART_RECONNECTING_NOTICE)
-
     runtime_facts = runtime_snapshots.new_generation()
+    chart_feed.feed_state(ChartFeedState.RECONNECTING)
     runtime_facts(
         BotLifecycleResult(
             workspace=stale_workspace_snapshot(
@@ -1921,7 +1914,8 @@ def test_the_system_notice_says_the_worst_of_what_is_wrong(qtbot: QtBot) -> None
             )
         )
     )
-    qtbot.waitUntil(lambda: notice.text() == BOT_RECONNECTING_NOTICE)
+    qtbot.waitUntil(lambda: window._bot_reconnecting)
+    assert notice.text() == ""
 
     chart_feed.feed_state(ChartFeedState.STOPPED)
     qtbot.waitUntil(lambda: notice.text() == CHART_FEED_STOPPED_NOTICE)
@@ -1939,7 +1933,7 @@ def test_the_system_notice_says_the_worst_of_what_is_wrong(qtbot: QtBot) -> None
     )
 
 
-def test_the_system_notice_clears_when_the_prices_are_current_again(
+def test_the_system_notice_clears_when_the_chart_feed_comes_back(
     qtbot: QtBot,
 ) -> None:
     session = configured_spot_session()
@@ -1962,12 +1956,208 @@ def test_the_system_notice_clears_when_the_prices_are_current_again(
     window.show()
     notice = window.workspace.chart.system_notice
     publisher = relay.new_generation()
-    publisher.feed_state(ChartFeedState.RECONNECTING)
-    qtbot.waitUntil(lambda: notice.text() == CHART_RECONNECTING_NOTICE)
+    publisher.feed_state(ChartFeedState.STOPPED)
+    qtbot.waitUntil(lambda: notice.text() == CHART_FEED_STOPPED_NOTICE)
 
     publisher.feed_state(ChartFeedState.LIVE)
 
     qtbot.waitUntil(lambda: notice.text() == "")
+
+
+class _RecordingConnectionNotice:
+    """Stands in for the dialog, so a test reads what was said, not clicked."""
+
+    def __init__(self) -> None:
+        self.shown = 0
+        self.hidden = 0
+
+    def show(self) -> None:
+        self.shown += 1
+
+    def hide(self) -> None:
+        self.hidden += 1
+
+
+def _window_watching_a_chart_feed(
+    qtbot: QtBot,
+    notice: _RecordingConnectionNotice,
+    *,
+    delay_ms: int,
+) -> tuple[MainWindow, ChartFactRelay]:
+    session = configured_spot_session()
+    relay = ChartFactRelay()
+
+    async def load_chart(
+        loaded: ConfiguredPaperSession,
+        chart_range: ChartRange,
+    ) -> ChartSnapshot:
+        return empty_chart_snapshot(loaded, chart_range)
+
+    window = MainWindow(
+        create_session=unused_create,
+        load_active=lambda: session,
+        list_basket_history=empty_basket_history,
+        list_trade_fills=empty_trade_fills,
+        chart=ChartSources(facts=relay, load=load_chart, start_feed=lambda _s: None),
+        connection_notice=notice,
+        connection_notice_delay_ms=delay_ms,
+    )
+    qtbot.addWidget(window)
+    window.show()
+    return window, relay
+
+
+def test_a_connection_that_comes_back_quickly_is_never_announced(
+    qtbot: QtBot,
+) -> None:
+    """The runtime retries forever, so most drops are a blink.
+
+    Announcing every one of them would put a dialog over the chart each time
+    a phone hotspot wavered, and the trader would learn to dismiss it.
+    """
+    notice = _RecordingConnectionNotice()
+    window, relay = _window_watching_a_chart_feed(qtbot, notice, delay_ms=60_000)
+    publisher = relay.new_generation()
+
+    publisher.feed_state(ChartFeedState.RECONNECTING)
+    publisher.feed_state(ChartFeedState.LIVE)
+
+    qtbot.waitUntil(lambda: not window._connection_notice_timer.isActive())
+    assert notice.shown == 0
+
+
+def test_a_connection_still_away_after_the_wait_is_announced(qtbot: QtBot) -> None:
+    notice = _RecordingConnectionNotice()
+    _window, relay = _window_watching_a_chart_feed(qtbot, notice, delay_ms=0)
+
+    relay.new_generation().feed_state(ChartFeedState.RECONNECTING)
+
+    qtbot.waitUntil(lambda: notice.shown == 1)
+
+
+def test_more_reconnect_news_neither_delays_nor_repeats_the_announcement(
+    qtbot: QtBot,
+) -> None:
+    """Restarting the countdown on every update would defer it forever.
+
+    A drop keeps producing snapshots the whole time it lasts, so a timer
+    that started again on each one would never reach the end of its wait.
+    """
+    notice = _RecordingConnectionNotice()
+    window, relay = _window_watching_a_chart_feed(qtbot, notice, delay_ms=60_000)
+    publisher = relay.new_generation()
+    publisher.feed_state(ChartFeedState.RECONNECTING)
+    qtbot.waitUntil(window._connection_notice_timer.isActive)
+    remaining = window._connection_notice_timer.remainingTime()
+    qtbot.wait(20)
+
+    publisher.feed_state(ChartFeedState.RECONNECTING)
+    publisher.feed_state(ChartFeedState.RECONNECTING)
+
+    assert window._connection_notice_timer.remainingTime() < remaining
+    assert notice.shown == 0
+
+
+def test_the_announcement_is_taken_back_when_prices_are_current_again(
+    qtbot: QtBot,
+) -> None:
+    notice = _RecordingConnectionNotice()
+    _window, relay = _window_watching_a_chart_feed(qtbot, notice, delay_ms=0)
+    publisher = relay.new_generation()
+    publisher.feed_state(ChartFeedState.RECONNECTING)
+    qtbot.waitUntil(lambda: notice.shown == 1)
+
+    publisher.feed_state(ChartFeedState.LIVE)
+
+    qtbot.waitUntil(lambda: notice.hidden == 1)
+
+
+def test_closing_the_window_takes_the_announcement_down_with_it(
+    qtbot: QtBot,
+) -> None:
+    notice = _RecordingConnectionNotice()
+    window, relay = _window_watching_a_chart_feed(qtbot, notice, delay_ms=0)
+    relay.new_generation().feed_state(ChartFeedState.RECONNECTING)
+    qtbot.waitUntil(lambda: notice.shown == 1)
+
+    window.close()
+
+    qtbot.waitUntil(lambda: notice.hidden == 1)
+    assert not window._connection_notice_timer.isActive()
+
+
+def test_a_bot_that_stops_replaces_the_connection_notice_with_its_own(
+    qtbot: QtBot,
+) -> None:
+    """Two dialogs over one window say two different things about one fault.
+
+    A Bot that stopped is not waiting on anything, so the notice that says
+    it is has to go before the one that says the Bot is gone arrives — even
+    while the chart, which is a second connection, is still reaching for its
+    own feed and would otherwise keep the notice up.
+    """
+    session = configured_spot_session()
+    relay = ChartFactRelay()
+    runtime_snapshots = RuntimeSnapshotRelay()
+    notice = _RecordingConnectionNotice()
+    blocked: list[str] = []
+
+    def start(snapshot: BotControlSnapshot) -> BotLifecycleResult:
+        return BotLifecycleResult(
+            workspace=workspace_with_runtime_state(
+                snapshot.workspace,
+                BotRuntimeState.RUNNING,
+                data_freshness=DataFreshness.FRESH,
+            )
+        )
+
+    async def load_chart(
+        loaded: ConfiguredPaperSession,
+        chart_range: ChartRange,
+    ) -> ChartSnapshot:
+        return empty_chart_snapshot(loaded, chart_range)
+
+    window = MainWindow(
+        create_session=unused_create,
+        load_active=lambda: session,
+        list_basket_history=empty_basket_history,
+        list_trade_fills=empty_trade_fills,
+        bot=BotActions(start=start, runtime_snapshots=runtime_snapshots),
+        chart=ChartSources(facts=relay, load=load_chart, start_feed=lambda _s: None),
+        blocked_notice=blocked.append,
+        connection_notice=notice,
+        connection_notice_delay_ms=0,
+    )
+    qtbot.addWidget(window)
+    window.show()
+    control = window.workspace.bot_control_widget
+    qtbot.waitUntil(control.start_button.isEnabled)
+    click(control.start_button)
+    qtbot.waitUntil(lambda: _runtime_state(window) is BotRuntimeState.RUNNING)
+    relay.new_generation().feed_state(ChartFeedState.RECONNECTING)
+    runtime_facts = runtime_snapshots.new_generation()
+    runtime_facts(
+        BotLifecycleResult(
+            workspace=stale_workspace_snapshot(
+                window._lifecycle_workflow.snapshot.workspace
+            )
+        )
+    )
+    qtbot.waitUntil(lambda: notice.shown == 1)
+
+    runtime_facts(
+        BotLifecycleResult(
+            workspace=paper_runtime_blocked_workspace_snapshot(
+                window._lifecycle_workflow.snapshot.workspace
+            ),
+            blocked_reason="Paper Bot stopped: market data could not be recovered",
+        )
+    )
+
+    qtbot.waitUntil(lambda: notice.hidden == 1)
+    qtbot.waitUntil(
+        lambda: blocked == ["Paper Bot stopped: market data could not be recovered"]
+    )
 
 
 def test_the_window_keeps_asking_whether_prices_are_still_arriving(
