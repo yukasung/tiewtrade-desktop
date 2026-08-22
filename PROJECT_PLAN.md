@@ -78,7 +78,7 @@ Recovery, Paper Futures, public market-data runtime และ Desktop UI
 1. บังคับ one Active Bot Session สำหรับ installation และ Session ownership โดยตรง
 2. เพิ่ม SQLite migrations, durable trade history, audit trail และ Recovery state
 3. Public Binance market-data adapter, reconnect, backfill และ stale-data fail closed
-4. Paper Futures Core: shared Futures PnL policy, immutable session policy, leverage, Cross Margin, Collateral Buffer, liquidation และ Funding Fee `0.00`
+4. Paper Futures Core: shared Futures PnL policy, immutable session policy, leverage, Cross Margin, Collateral Buffer และ Funding Fee `0.00`
 5. Paper Futures Execution: concrete executor และ deterministic Paper fills
 6. DEV-95 — เชื่อม Paper Futures เข้ากับ Trade History ด้วย normalized
    Basket/Fill schema, immutable leverage context, Funding Fee `0.00` และ
@@ -189,7 +189,7 @@ notification persistence, business/risk policy หรือ Live execution
 
 - ใช้ Futures adapter แยกจาก Spot
 - บังคับ Cross Margin, leverage cap, Futures capital policy และ Collateral Buffer
-- รองรับ funding และ liquidation-related account facts
+- รองรับ funding account facts
 - ผ่าน Preflight, idempotency, Reconciliation และ Recovery สำหรับ Futures semantics
 
 ## Module Ownership

@@ -1068,11 +1068,6 @@ def _fake_running_workspace(
                 current_price=Decimal("66321.1200"),
                 take_profit_price=Decimal("67000.0000"),
                 unrealized_pnl=Decimal("1.92600000"),
-                liquidation_price=(
-                    None
-                    if session.config.market_type is MarketType.SPOT
-                    else Decimal("44000.5000")
-                ),
                 entry_gate=BasketEntryGate.OPEN,
                 updated_at_utc=observed_at,
             ),
@@ -1219,7 +1214,6 @@ def _assert_durable_session_matches_case(
     assert config.futures_policy.margin_mode is MarginMode.CROSS
     assert config.futures_policy.trading_capital_ratio == Decimal("0.5")
     assert config.futures_policy.collateral_buffer_ratio == Decimal("0.5")
-    assert config.futures_policy.maintenance_margin_rate == Decimal("0.005")
 
 
 def _assert_overview_matches_case(

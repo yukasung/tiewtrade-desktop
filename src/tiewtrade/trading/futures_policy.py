@@ -21,7 +21,6 @@ class FuturesTradingPolicy:
     leverage: int
     trading_capital_ratio: Decimal
     collateral_buffer_ratio: Decimal
-    maintenance_margin_rate: Decimal
     margin_mode: MarginMode
     position_mode: PositionMode
 
@@ -39,8 +38,6 @@ class FuturesTradingPolicy:
             raise ValueError("trading_capital_ratio must be 0.5")
         if self.collateral_buffer_ratio != Decimal("0.5"):
             raise ValueError("collateral_buffer_ratio must be 0.5")
-        if self.maintenance_margin_rate != Decimal("0.005"):
-            raise ValueError("maintenance_margin_rate must be 0.005")
         if self.margin_mode is not MarginMode.CROSS:
             raise ValueError("Paper Futures requires Cross Margin")
         if self.position_mode is not PositionMode.ONE_WAY:
@@ -53,7 +50,6 @@ class FuturesTradingPolicy:
             leverage=leverage,
             trading_capital_ratio=Decimal("0.5"),
             collateral_buffer_ratio=Decimal("0.5"),
-            maintenance_margin_rate=Decimal("0.005"),
             margin_mode=MarginMode.CROSS,
             position_mode=PositionMode.ONE_WAY,
         )

@@ -214,7 +214,6 @@ def _basket() -> BasketSnapshot:
         current_price=Decimal("66321"),
         take_profit_price=Decimal("67000"),
         unrealized_pnl=Decimal("1.926"),
-        liquidation_price=None,
         entry_gate=BasketEntryGate.OPEN,
         updated_at_utc=OBSERVED_AT,
     )

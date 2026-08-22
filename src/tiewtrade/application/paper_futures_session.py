@@ -25,15 +25,13 @@ from tiewtrade.strategies.registry import strategy_definition_for
 from tiewtrade.trading.basket import Basket, ClosedBasket
 from tiewtrade.trading.capital import FuturesCapitalPlan
 from tiewtrade.trading.entry_pair import EntryGate, EntryPairLifecycle
-from tiewtrade.trading.futures_margin import FuturesMarginModel
-from tiewtrade.trading.position import PositionSide
+from tiewtrade.trading.position import PositionSide, account_equity
 from tiewtrade.trading.session_config import MarketType, SessionConfig, TradeMode
 from tiewtrade.trading.symbol_rules import SymbolRules
 
 
 class PaperFuturesSessionState(StrEnum):
     ACTIVE = "active"
-    LIQUIDATED = "liquidated"
     FAILED_CLOSED = "failed_closed"
 
 
@@ -70,7 +68,6 @@ class PaperFuturesSessionSnapshot:
     basket_entry_count: int
     position_side: PositionSide | None
     take_profit_price: Decimal | None
-    liquidation_price: Decimal | None
     account_equity: Decimal
     capital_plan: FuturesCapitalPlan
     failure_reason: PaperFuturesFailureReason | None
@@ -117,7 +114,6 @@ class PaperFuturesSession:
         self._preset = preset
         self._candles = CompletedCandleStream(market_data)
         self._executor = PaperFuturesExecutor(session, symbol_rules)
-        self._margin = FuturesMarginModel(futures_policy)
         self._capital_plan = FuturesCapitalPlan.from_capital_per_entry(
             session.capital_per_entry,
             futures_policy,
@@ -131,13 +127,10 @@ class PaperFuturesSession:
         self._failure_reason: PaperFuturesFailureReason | None = None
         self._basket: Basket | None = None
         self._pending_intent: EntryIntent | None = None
-        self._liquidation_price: Decimal | None = None
         self._wallet_balance = session.session_capital
         self._account_equity = session.session_capital
         self._latest_mark_price: Decimal | None = None
         self._closed_basket_count = 0
-        self._terminal_exit_fill: PaperFuturesExitFill | None = None
-        self._terminal_closed_basket: ClosedBasket | None = None
 
     @property
     def identity(self) -> PaperFuturesSessionIdentity:
@@ -157,9 +150,9 @@ class PaperFuturesSession:
         """Act on one completed candle, live or recovered after a disconnect.
 
         A recovered candle counts for everything except opening an Entry: it
-        feeds the indicators, and it can still liquidate or take profit,
-        because those happened in the market whether the feed saw them or
-        not. Only buying at its open is refused, that price being gone.
+        feeds the indicators, and it can still take profit, because that
+        happened in the market whether the feed saw it or not. Only buying at
+        its open is refused, that price being gone.
         """
         if self._state is not PaperFuturesSessionState.ACTIVE:
             return self._snapshot(accepted=False)
@@ -177,20 +170,6 @@ class PaperFuturesSession:
                 entry_fill = None
             else:
                 entry_fill = self._fill_pending_intent(candle)
-            exit_fill = self._fill_liquidation(candle)
-            if exit_fill is not None:
-                closed = self._close_basket(exit_fill)
-                self._state = PaperFuturesSessionState.LIQUIDATED
-                self._pending_intent = None
-                self._terminal_exit_fill = exit_fill
-                self._terminal_closed_basket = closed
-                return self._snapshot(
-                    accepted=True,
-                    entry_fill=entry_fill,
-                    exit_fill=exit_fill,
-                    closed_basket=closed,
-                )
-
             take_profit_fill: PaperFuturesExitFill | None = None
             closed = None
             if basket_existed_at_open and entry_fill is None:
@@ -224,9 +203,9 @@ class PaperFuturesSession:
     ) -> PaperFuturesSessionSnapshot:
         """Paper Futures does not act between candles, and reports nothing here.
 
-        Taking Take Profit the moment price reaches it while Liquidation still
-        waits for the close would book every win early and every wipe-out late.
-        Futures moves intra-candle only once Liquidation moves with it.
+        Selling the moment a forming candle touches the target claims a price
+        the candle may never close near, which reads as a win the market did
+        not hand over. A completed candle is a price that stood.
         """
         del candle, observed_at
         return self._snapshot(accepted=False)
@@ -308,39 +287,21 @@ class PaperFuturesSession:
             tick_size=self._symbol_rules.tick_size,
             position_side=fill.side,
         )
-        margin_snapshot = self._margin.snapshot(
-            side=candidate_basket.position_side,
-            average_entry_price=candidate_basket.average_entry_price,
-            quantity=candidate_basket.total_quantity,
-            available_capital=self._wallet_balance,
-            current_price=candle.close,
-        )
         candidate_lifecycle.record_fill()
         candidate_strategy.on_entry_filled(intent.intent_id)
 
         self._basket = candidate_basket
         self._lifecycle = candidate_lifecycle
         self._strategy = candidate_strategy
-        self._liquidation_price = margin_snapshot.liquidation_price
-        self._account_equity = margin_snapshot.account_equity
+        self._account_equity = account_equity(
+            side=candidate_basket.position_side,
+            average_entry_price=candidate_basket.average_entry_price,
+            quantity=candidate_basket.total_quantity,
+            available_capital=self._wallet_balance,
+            current_price=candle.close,
+        )
         self._pending_intent = None
         return fill
-
-    def _fill_liquidation(self, candle: Candle) -> PaperFuturesExitFill | None:
-        if self._basket is None or self._liquidation_price is None:
-            return None
-        if not self._margin.is_liquidation_crossed(
-            side=self._basket.position_side,
-            liquidation_price=self._liquidation_price,
-            candle_low=candle.low,
-            candle_high=candle.high,
-        ):
-            return None
-        return self._executor.fill_liquidation(
-            self._basket,
-            candle,
-            liquidation_price=self._liquidation_price,
-        )
 
     def _fill_take_profit(self, candle: Candle) -> PaperFuturesExitFill | None:
         assert self._basket is not None
@@ -356,7 +317,6 @@ class PaperFuturesSession:
         self._wallet_balance += closed.realized_pnl
         self._account_equity = self._wallet_balance
         self._basket = None
-        self._liquidation_price = None
         self._closed_basket_count += 1
         return closed
 
@@ -394,15 +354,13 @@ class PaperFuturesSession:
             self._account_equity = self._wallet_balance
             return
         assert self._latest_mark_price is not None
-        margin_snapshot = self._margin.snapshot(
+        self._account_equity = account_equity(
             side=self._basket.position_side,
             average_entry_price=self._basket.average_entry_price,
             quantity=self._basket.total_quantity,
             available_capital=self._wallet_balance,
             current_price=self._latest_mark_price,
         )
-        self._liquidation_price = margin_snapshot.liquidation_price
-        self._account_equity = margin_snapshot.account_equity
 
     def _fail_closed(self) -> None:
         self._state = PaperFuturesSessionState.FAILED_CLOSED
@@ -430,11 +388,6 @@ class PaperFuturesSession:
         exit_fill: PaperFuturesExitFill | None = None,
         closed_basket: ClosedBasket | None = None,
     ) -> PaperFuturesSessionSnapshot:
-        if closed_basket is None:
-            closed_basket = self._terminal_closed_basket
-        if exit_fill is None:
-            exit_fill = self._terminal_exit_fill
-
         basket_id: UUID | None
         position_side: PositionSide | None
         if self._basket is not None:
@@ -472,7 +425,6 @@ class PaperFuturesSession:
             basket_entry_count=basket_entry_count,
             position_side=position_side,
             take_profit_price=take_profit_price,
-            liquidation_price=self._liquidation_price,
             account_equity=self._account_equity,
             capital_plan=self._capital_plan,
             failure_reason=self._failure_reason,

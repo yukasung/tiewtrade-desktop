@@ -173,7 +173,6 @@ def reopened_basket_snapshot(
         current_price=current_price,
         take_profit_price=reopened.basket.take_profit_price,
         position_side=reopened.basket.position_side,
-        liquidation_price=None,
         entry_gate=reopened.lifecycle.entry_gate(),
         observed_at_utc=observed_at_utc,
     )
@@ -195,7 +194,6 @@ def spot_basket_snapshot(
         current_price=candle.close,
         take_profit_price=snapshot.take_profit_price,
         position_side=PositionSide.LONG,
-        liquidation_price=None,
         entry_gate=snapshot.entry_gate,
         observed_at_utc=observed_at_utc,
     )
@@ -219,7 +217,6 @@ def futures_basket_snapshot(
         current_price=candle.close,
         take_profit_price=snapshot.take_profit_price,
         position_side=snapshot.position_side,
-        liquidation_price=snapshot.liquidation_price,
         entry_gate=snapshot.entry_gate,
         observed_at_utc=observed_at_utc,
     )
@@ -234,7 +231,6 @@ def _updated_basket_snapshot(
     current_price: Decimal | None,
     take_profit_price: Decimal | None,
     position_side: PositionSide,
-    liquidation_price: Decimal | None,
     entry_gate: EntryGate | None,
     observed_at_utc: datetime,
 ) -> BasketSnapshot:
@@ -270,7 +266,6 @@ def _updated_basket_snapshot(
         current_price=current_price,
         take_profit_price=take_profit_price,
         unrealized_pnl=marked_pnl,
-        liquidation_price=liquidation_price,
         entry_gate=BasketEntryGate(entry_gate.state),
         updated_at_utc=observed_at_utc,
     )

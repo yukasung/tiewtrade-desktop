@@ -370,9 +370,9 @@ def paper_session_sink(
             position=open_basket_position(spot_application.open_entries),
         )
 
-    # Paper Futures has no way back into a Basket it did not open — a
-    # Liquidation Price is not derived from the Entries alone — so rather
-    # than trade beside one, it says so and stops.
+    # Paper Futures has no way back into a Basket it did not open: what it
+    # was holding is margin and equity against a wallet, none of which the
+    # Entries alone say. Rather than trade beside one, it says so and stops.
     if trade_history.find_open_basket(session.config.session_id) is not None:
         raise PaperPositionRestoreError("Paper Futures cannot take back an open Basket")
     futures_application = PaperFuturesSession(

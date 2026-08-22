@@ -15,7 +15,7 @@ of truth, and if they conflict, stop and surface the conflict rather than guessi
 
 - `PRODUCT.md` — product scope and explicit non-goals
 - `CONTEXT.md` — domain vocabulary and business rules (Trade Mode, Market Type,
-  Futures Trading Policy, Liquidation rules, Session configuration boundaries)
+  Futures Trading Policy, Session configuration boundaries)
 - `ARCHITECTURE.md` — module ownership, interfaces, and dependency rules
 - `docs/superpowers/specs/` — rationale behind past architecture decisions
 - `PROJECT_PLAN.md` — delivery sequencing
@@ -70,7 +70,7 @@ exchange SDK details. Top-level modules: `application`, `trading`, `execution`,
 
 **Shared business rules, split execution.** Paper and Live share one implementation of
 session identity, strategy/entry intent, capital allocation, Basket/Entry Pair/Cooldown,
-risk limits, PnL, and post-Liquidation lifecycle rules (owned by `trading`).
+risk limits, and PnL (owned by `trading`).
 Execution is the seam that isolates side effects and is *not* shared — Paper and Live
 never use the same execution adapter:
 
@@ -79,18 +79,6 @@ never use the same execution adapter:
 | Paper | Spot/Futures | Simulate fills; no real orders, no trading costs |
 | Live | Spot | Send Spot orders after Preflight, idempotency, reconciliation |
 | Live | Futures | Manage Futures orders, margin, leverage, funding, reconciliation |
-
-**Liquidation authority differs by mode.** Paper Futures: `trading` computes a
-deterministic `liquidation_price` and decides Liquidation via a completed-candle
-price-crossing predicate (LONG: `candle.low <= liquidation_price`; SHORT:
-`candle.high >= liquidation_price`; a level touched then recovered before candle close
-still counts as Liquidation). Live Futures: Binance position/account facts
-(`liquidationPrice`, `markPrice`, maintenance-margin data) are authoritative and Binance's
-Liquidation Engine decides and executes — the Paper formula is never a Live verdict.
-`trading` must never import the Binance SDK or know transport details; only concrete
-Live integration/reconciliation code may read those facts and reflect them into the
-application boundary. On Liquidation, the Basket gets `close_reason = LIQUIDATION` and
-the Session becomes terminal `LIQUIDATED`.
 
 **Configuration boundary.** `SessionConfig` is immutable, shared config holding session
 id, preset version, Market Type, Trade Mode, capital, and execution costs. One
@@ -111,7 +99,7 @@ to trade.
 missed candles up to now and delivers them through the same sink call a live candle takes,
 so `market_data` reports *whether* a candle was backfilled and the Session enforces the
 rule. A backfilled candle still feeds indicators and still closes a Basket (take-profit,
-stop-loss, liquidation — those happened in the market whether the feed saw them or not),
+stop-loss — those happened in the market whether the feed saw them or not),
 but it may not fill an Entry, and a pending Entry Intent is handed back to the strategy
 rather than left to fill on the first live candle off a stale signal. Applies to Paper and
 Live alike; see PRODUCT.md 8.1.
@@ -147,7 +135,7 @@ consumes it and let integrations implement it; avoid catch-all files like `utils
 
 - **Trade Mode**: `PAPER` (simulated, no Binance orders) vs `LIVE` (real execution,
   gated by Preflight + explicit confirmation).
-- **Market Type**: `SPOT` vs `FUTURES` (margin/leverage/funding/liquidation facts).
+- **Market Type**: `SPOT` vs `FUTURES` (margin/leverage/funding facts).
 - **Position Side**: `LONG`/`SHORT` — Paper Futures execution supports both, but the
   RSI Step Grid Preset v1 only ever generates `LONG`.
 - **Futures Trading Policy**: immutable per session — 50% Trading Capital, 50%

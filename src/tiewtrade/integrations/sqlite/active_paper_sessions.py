@@ -30,9 +30,9 @@ INSERT INTO bot_sessions (
     capital_per_entry, max_entries,
     futures_policy_version, futures_leverage,
     futures_trading_capital_ratio, futures_collateral_buffer_ratio,
-    futures_maintenance_margin_rate, futures_margin_mode,
+    futures_margin_mode,
     futures_position_mode, created_at_utc, ended_at_utc
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 """
 
 
@@ -142,7 +142,6 @@ def _session_from_row(row: sqlite3.Row) -> ConfiguredPaperSession:
             leverage=row["futures_leverage"],
             trading_capital_ratio=Decimal(row["futures_trading_capital_ratio"]),
             collateral_buffer_ratio=Decimal(row["futures_collateral_buffer_ratio"]),
-            maintenance_margin_rate=Decimal(row["futures_maintenance_margin_rate"]),
             margin_mode=MarginMode(row["futures_margin_mode"]),
             position_mode=PositionMode(row["futures_position_mode"]),
         )
@@ -191,7 +190,6 @@ def _session_values(session: ConfiguredPaperSession) -> tuple[object, ...]:
         None if futures is None else futures.leverage,
         None if futures is None else str(futures.trading_capital_ratio),
         None if futures is None else str(futures.collateral_buffer_ratio),
-        None if futures is None else str(futures.maintenance_margin_rate),
         None if futures is None else futures.margin_mode.value,
         None if futures is None else futures.position_mode.value,
         session.created_at_utc.isoformat(),

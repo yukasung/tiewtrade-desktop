@@ -104,31 +104,6 @@ class PaperFuturesExecutor:
             filled_at=candle.close_time,
         )
 
-    def fill_liquidation(
-        self,
-        basket: Basket,
-        candle: Candle,
-        *,
-        liquidation_price: Decimal,
-    ) -> PaperFuturesExitFill | None:
-        require_matching_symbol(candle, self._symbol_rules)
-        if not liquidation_price.is_finite() or liquidation_price <= 0:
-            raise ValueError("liquidation_price must be finite and positive")
-
-        if basket.position_side is PositionSide.LONG:
-            # The gap is what makes a liquidation fill worse than its
-            # threshold, so the open still wins when it opened through it.
-            price = self._symbol_rules.floor_price(min(candle.open, liquidation_price))
-        else:
-            price = self._symbol_rules.ceil_price(max(candle.open, liquidation_price))
-
-        return self._exit_fill(
-            basket=basket,
-            price=price,
-            close_reason=BasketCloseReason.LIQUIDATION,
-            filled_at=candle.close_time,
-        )
-
     def _exit_fill(
         self,
         *,

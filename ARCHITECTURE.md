@@ -12,22 +12,13 @@ Paper และ Live ใช้ implementation เดียวกันของ 
 - Strategy และ Entry Intent
 - Capital allocation
 - Basket และ Entry Pair/Cooldown
-- Risk limits, PnL calculation และ post-Liquidation lifecycle rules
+- Risk limits และ PnL calculation
 
 `trading` เป็นเจ้าของ Futures side-aware PnL และ margin policy รวมถึง One-way Mode,
-Cross Margin, leverage, shared risk limits และ post-Liquidation lifecycle rules
+Cross Margin, leverage และ shared risk limits
 
-อำนาจตัดสิน Liquidation แยกตาม Mode:
-
-- Paper Futures ให้ `trading` คำนวณ deterministic `liquidation_price` และใช้
-  completed-Candle price-crossing predicate เพื่อให้ replay และ tests ทำซ้ำได้
-- Live Futures ใช้ Binance position/account facts เป็น authoritative state และ Binance
-  Liquidation Engine เป็นผู้ตัดสินและดำเนินการ Liquidation จริง สูตร Paper Futures
-  ไม่ใช่ Live verdict
-
-การใช้ implementation ร่วมกันทำให้ Strategy, capital, Basket, Entry Pair, risk limits
-และการเปลี่ยน lifecycle หลัง Liquidation สอดคล้องกัน แต่ไม่ทำให้ Paper simulation
-แทน authority ของ Exchange ใน Live Mode
+การใช้ implementation ร่วมกันทำให้ Strategy, capital, Basket, Entry Pair และ risk limits
+สอดคล้องกัน แต่ไม่ทำให้ Paper simulation แทน authority ของ Exchange ใน Live Mode
 
 ## Execution Adapters
 
@@ -69,10 +60,9 @@ Configuration นี้ไม่มี side effect และไม่เลื�
 
 Business rules ไม่ import Binance SDK, SQLite หรือ UI รายละเอียด integration ต้องอยู่ใน adapter ที่ implement interface ของ consumer Module
 
-Live Binance integration และ reconciliation เป็นเจ้าของการอ่าน `liquidationPrice`,
-`markPrice` และ maintenance-margin facts จาก Exchange แล้วสะท้อน authoritative state
-เข้า application boundary โดย `trading` ห้าม import Binance SDK หรือรู้จัก transport
-รายละเอียดนี้
+Live Binance integration และ reconciliation เป็นเจ้าของการอ่าน account facts จาก Exchange
+แล้วสะท้อน authoritative state เข้า application boundary โดย `trading` ห้าม import
+Binance SDK หรือรู้จัก transport รายละเอียดนี้
 
 `application` เป็นเจ้าของ completed-candle orchestration ที่จัดลำดับ `trading` policy
 และ `execution` adapter ห้ามมี reverse dependency จาก `trading` หรือ `execution` กลับไป
@@ -128,7 +118,7 @@ generic interface ล่วงหน้า เมื่อมี consumer ขอ
 (`PaperSpotSession` / `PaperFuturesSession`) เป็นผู้บังคับ
 
 Session ที่ได้รับ candle ย้อนหลังจะคืน Entry Intent ที่ค้างอยู่ให้ Strategy แทนการ Fill แต่ยัง
-ประมวลผลทุกอย่างที่เหลือตามปกติ ทั้ง indicator, Take Profit, Stop Loss และ Liquidation
+ประมวลผลทุกอย่างที่เหลือตามปกติ ทั้ง indicator, Take Profit และ Stop Loss
 รายละเอียดกฎอยู่ใน PRODUCT.md ข้อ 8.1
 
 ## Cooldown Waiver

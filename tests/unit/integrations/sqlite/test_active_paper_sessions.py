@@ -209,7 +209,7 @@ def test_migration_from_v2_preserves_trade_history_record(tmp_path: Path) -> Non
             """
         ).fetchone()
 
-    assert version == 14
+    assert version == 15
     assert basket_id == "basket-sentinel"
     assert bot_sessions_exists is not None
 
@@ -250,7 +250,7 @@ def test_migration_to_v11_takes_the_spot_ratio_out_of_a_session(
             )
         )
 
-    assert version == 14
+    assert version == 15
     assert "spot_trading_capital_ratio" not in columns
     # The one guarantee the rebuilt table has to keep carrying.
     assert "bot_sessions_single_active_idx" in indexes
@@ -301,6 +301,93 @@ def test_migration_to_v12_keeps_every_session_trading_the_size_it_was(
     assert active.config.entry_policy == session.config.entry_policy
 
 
+def test_migration_to_v15_drops_the_rate_and_keeps_the_session(
+    tmp_path: Path,
+) -> None:
+    """The Maintenance Margin Rate went with the Liquidation it was for.
+
+    Nothing computes a Liquidation Price any more, so the rate a Session was
+    started with is not a value to keep — and the Session it was started for
+    has to survive losing it.
+    """
+    path = tmp_path / "tiewtrade.sqlite3"
+    database = SQLiteDatabase(path)
+    database.migrate()
+    store = SQLiteActivePaperSessions(database)
+    session = configured_futures_session()
+    store.create(session)
+    with database.connect() as connection:
+        _restore_v14_bot_sessions(connection)
+        assert _has_column(connection, "futures_maintenance_margin_rate")
+
+    database.migrate()
+
+    with database.connect() as connection:
+        assert not _has_column(connection, "futures_maintenance_margin_rate")
+    active = store.get_active()
+    assert active is not None
+    assert active.config.session_id == session.config.session_id
+    assert active.config.capital_per_entry == session.config.capital_per_entry
+    assert active.config.futures_policy == session.config.futures_policy
+
+
+def test_migration_to_v15_ignores_a_half_built_table_left_behind(
+    tmp_path: Path,
+) -> None:
+    """A rebuild that was interrupted once must not be adopted the next time.
+
+    CREATE IF NOT EXISTS would take the abandoned table for its own and
+    rename a stale shape over the real Sessions, which is how a database
+    carrying one from an earlier interrupted migration lost the column drop.
+    """
+    path = tmp_path / "tiewtrade.sqlite3"
+    database = SQLiteDatabase(path)
+    database.migrate()
+    store = SQLiteActivePaperSessions(database)
+    session = configured_futures_session()
+    store.create(session)
+    with database.connect() as connection:
+        _restore_v14_bot_sessions(connection)
+        # Exactly what an interrupted rebuild leaves: the old shape, empty.
+        connection.execute(
+            "CREATE TABLE new_bot_sessions AS SELECT * FROM bot_sessions"
+        )
+        connection.execute("DELETE FROM new_bot_sessions")
+
+    database.migrate()
+
+    with database.connect() as connection:
+        assert not _has_column(connection, "futures_maintenance_margin_rate")
+    active = store.get_active()
+    assert active is not None
+    assert active.config.session_id == session.config.session_id
+
+
+def _has_column(connection: sqlite3.Connection, column: str) -> bool:
+    return any(
+        row["name"] == column
+        for row in connection.execute("PRAGMA table_info(bot_sessions)")
+    )
+
+
+def _restore_v14_bot_sessions(connection: sqlite3.Connection) -> None:
+    """Put the rate column back, in the shape v14 wrote it."""
+    connection.execute("PRAGMA foreign_keys = OFF")
+    connection.execute(
+        """
+        ALTER TABLE bot_sessions
+        ADD COLUMN futures_maintenance_margin_rate TEXT
+        """
+    )
+    connection.execute(
+        """
+        UPDATE bot_sessions SET futures_maintenance_margin_rate = '0.005'
+        WHERE futures_policy_version IS NOT NULL
+        """
+    )
+    connection.execute("PRAGMA user_version = 14")
+
+
 def _restore_v11_bot_sessions(connection: sqlite3.Connection, total: str) -> None:
     """Put the Session back in the shape v11 wrote it: a wallet total."""
     connection.execute("PRAGMA foreign_keys = OFF")
@@ -313,7 +400,8 @@ def _restore_v11_bot_sessions(connection: sqlite3.Connection, total: str) -> Non
             preset_version, '{total}', max_entries,
             futures_policy_version, futures_leverage,
             futures_trading_capital_ratio, futures_collateral_buffer_ratio,
-            futures_maintenance_margin_rate, futures_margin_mode,
+            CASE WHEN futures_policy_version IS NULL THEN NULL ELSE '0.005' END,
+            futures_margin_mode,
             futures_position_mode, created_at_utc, ended_at_utc
         FROM bot_sessions
         """
@@ -390,7 +478,8 @@ def _restore_v10_bot_sessions(connection: sqlite3.Connection) -> None:
             preset_version, capital_per_entry * max_entries, max_entries,
             '0.8', futures_policy_version, futures_leverage,
             futures_trading_capital_ratio, futures_collateral_buffer_ratio,
-            futures_maintenance_margin_rate, futures_margin_mode,
+            CASE WHEN futures_policy_version IS NULL THEN NULL ELSE '0.005' END,
+            futures_margin_mode,
             futures_position_mode, created_at_utc, ended_at_utc
         FROM bot_sessions
         """

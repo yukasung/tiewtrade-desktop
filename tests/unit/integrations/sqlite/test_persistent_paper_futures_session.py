@@ -122,7 +122,6 @@ def snapshot(
         basket_entry_count=1 if entry is not None else 0,
         position_side=PositionSide.LONG,
         take_profit_price=Decimal("105") if closed is None else None,
-        liquidation_price=Decimal("50") if closed is None else None,
         account_equity=Decimal("200000"),
         capital_plan=capital_plan(),
         failure_reason=None,
@@ -195,22 +194,14 @@ def test_waived_cooldown_goes_through_the_coordinator_writing_no_fill() -> None:
     assert result.persistence_state is PersistenceState.READY
 
 
-@pytest.mark.parametrize(
-    ("reason", "state"),
-    [
-        (BasketCloseReason.TAKE_PROFIT, PaperFuturesSessionState.ACTIVE),
-        (BasketCloseReason.LIQUIDATION, PaperFuturesSessionState.LIQUIDATED),
-    ],
-)
-def test_exit_is_durable_before_ready_snapshot_returns(
-    reason: BasketCloseReason,
-    state: PaperFuturesSessionState,
-) -> None:
+def test_exit_is_durable_before_ready_snapshot_returns() -> None:
     session = create_autospec(PaperFuturesSession, instance=True)
     history = create_autospec(PaperFuturesSQLiteHistory, instance=True)
-    fill = exit_fill(reason)
-    closed = closed_basket(reason)
-    core_snapshot = snapshot(exit=fill, closed=closed, state=state)
+    fill = exit_fill(BasketCloseReason.TAKE_PROFIT)
+    closed = closed_basket(BasketCloseReason.TAKE_PROFIT)
+    core_snapshot = snapshot(
+        exit=fill, closed=closed, state=PaperFuturesSessionState.ACTIVE
+    )
     session.process_completed_candle.return_value = core_snapshot
     history.record_close.return_value = True
     persistent = persistent_session(session, history)
@@ -231,18 +222,18 @@ def test_exit_is_durable_before_ready_snapshot_returns(
     assert result.persistence_state is PersistenceState.READY
 
 
-def test_same_candle_entry_and_liquidation_use_closed_entry_count() -> None:
+def test_same_candle_entry_and_exit_use_closed_entry_count() -> None:
     session = create_autospec(PaperFuturesSession, instance=True)
     history = create_autospec(PaperFuturesSQLiteHistory, instance=True)
     entry = entry_fill()
-    exit = exit_fill(BasketCloseReason.LIQUIDATION)
-    closed = closed_basket(BasketCloseReason.LIQUIDATION)
+    exit = exit_fill(BasketCloseReason.TAKE_PROFIT)
+    closed = closed_basket(BasketCloseReason.TAKE_PROFIT)
     core_snapshot = replace(
         snapshot(
             entry=entry,
             exit=exit,
             closed=closed,
-            state=PaperFuturesSessionState.LIQUIDATED,
+            state=PaperFuturesSessionState.ACTIVE,
         ),
         basket_entry_count=0,
     )

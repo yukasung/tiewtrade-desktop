@@ -140,7 +140,6 @@ class BasketSnapshot:
     current_price: Decimal | None
     take_profit_price: Decimal
     unrealized_pnl: Decimal | None
-    liquidation_price: Decimal | None
     entry_gate: BasketEntryGate
     updated_at_utc: datetime
 
@@ -156,7 +155,6 @@ class BasketSnapshot:
         _require_decimal(self.take_profit_price, "take_profit_price")
         _require_decimal(self.unrealized_pnl, "unrealized_pnl", allow_none=True)
         _require_one_marking(self.current_price, self.unrealized_pnl, self.entries)
-        _require_decimal(self.liquidation_price, "liquidation_price", allow_none=True)
         if not isinstance(self.entry_gate, BasketEntryGate):
             raise ValueError("entry_gate must be a BasketEntryGate")
         _require_utc(self.updated_at_utc, "updated_at_utc")

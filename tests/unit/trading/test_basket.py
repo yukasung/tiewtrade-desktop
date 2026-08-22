@@ -464,27 +464,6 @@ def test_short_basket_close_calculates_directional_pnl() -> None:
     assert closed.realized_pnl == Decimal("20")
 
 
-def test_close_records_explicit_liquidation_reason() -> None:
-    basket = Basket(
-        basket_id=basket_id(), policy=policy(), take_profit_atr_multiplier=Decimal("3")
-    )
-    basket.add_entry(
-        price=Decimal("100"),
-        quantity=Decimal("1"),
-        filled_at=datetime(2026, 1, 1, tzinfo=UTC),
-        atr=Decimal("2"),
-        tick_size=Decimal("0.1"),
-    )
-
-    closed = basket.close(
-        exit_price=Decimal("80"),
-        closed_at=datetime(2026, 1, 2, tzinfo=UTC),
-        close_reason=BasketCloseReason.LIQUIDATION,
-    )
-
-    assert closed.close_reason is BasketCloseReason.LIQUIDATION
-
-
 def test_basket_rejects_entries_beyond_configured_maximum() -> None:
     basket = Basket(
         basket_id=basket_id(), policy=policy(4), take_profit_atr_multiplier=Decimal("3")

@@ -98,8 +98,8 @@ Short = weighted_average_entry_price - (ATR(14) * 3)
 - Paper Spot ตรวจ Take Profit และ Stop Loss จากราคาที่วิ่งอยู่ระหว่าง candle และ Fill
   ทันทีที่ราคาถึงระดับ โดยไม่รอ candle ปิด ส่วน Entry ยังคงประเมินจาก completed candle
   เท่านั้นตามข้อ 4.2
-- Paper Futures ยังตรวจทั้ง Take Profit และ Liquidation ที่ candle ปิด เพราะการ Fill
-  Take Profit ทันทีขณะที่ Liquidation ยังรอ candle ปิด จะทำให้ผลการเทรดดูดีเกินจริง
+- Paper Futures ตรวจ Take Profit ที่ candle ปิดเท่านั้น เพราะราคาที่แตะระหว่าง candle
+  อาจไม่ใช่ราคาที่ candle ปิดใกล้เคียง การ Fill ทันทีจึงเป็นการนับกำไรที่ตลาดยังไม่ได้ให้
 - เมื่อ Basket ปิดสมบูรณ์ สามารถเริ่ม Basket ใหม่ในเดือน UTC เดียวกันได้ทันที
 
 ## 6. Entry Pair และ Cooldown
@@ -139,13 +139,11 @@ Paper Futures ยกเลิกได้เฉพาะขณะ Bot กำล�
 - Target notional ต่อ Entry: Initial margin budget ต่อ Entry คูณด้วย leverage ของ Session
 - Internal Alpha ใช้ One-way Mode และ Cross Margin เท่านั้น
 - Leverage เป็นจำนวนเต็ม 1x–5x และตรึงตลอด Session
-- Collateral Buffer ไม่ถูกใช้สร้าง Entry ใหม่ แต่ถือเป็นเงินที่ผู้ใช้ยอมเสี่ยงทั้งหมดเพื่อเลื่อน liquidation
+- Collateral Buffer ไม่ถูกใช้สร้าง Entry ใหม่ แต่ถือเป็นเงินที่ผู้ใช้ยอมเสี่ยงทั้งหมดในการถือ Position
 - Paper Futures Policy v1 ใช้ Maintenance Margin Rate 0.5% แบบ deterministic ไม่อ้างว่าเท่ากับ Binance Mark Price หรือ Maintenance Margin Tier จริง
-- Paper Futures ใช้ completed-Candle price crossing เป็น Liquidation verdict แบบ
-  deterministic: LONG ใช้ `candle.low <= liquidation_price` และ SHORT ใช้
-  `candle.high >= liquidation_price` หากราคาแตะระดับดังกล่าวระหว่าง Candle แล้วฟื้นกลับ
-  ก่อน Candle ปิด ให้ถือว่าเกิด Liquidation แล้ว
-- Liquidation ปิด Basket ด้วย `close_reason = LIQUIDATION`, เปลี่ยน Session เป็น terminal `LIQUIDATED` และห้ามสร้าง Entry ใหม่
+- Internal Alpha ไม่มี Liquidation: Paper Futures ไม่บังคับปิด Position ไม่ว่าราคาจะเสียหาย
+  เพียงใด Basket ปิดได้ทาง Take Profit หรือการที่ผู้ใช้สั่งปิดเองเท่านั้น ผลทดสอบกลยุทธ์จึง
+  ไม่สะท้อนความเสี่ยงที่บัญชีจริงจะถูกบังคับปิด และต้องอ่านโดยรู้ข้อจำกัดนี้
 
 ระบบต้องบังคับ immutable Session policy, capital allocation, leverage cap และ `max_entries` ใน Paper และ Live ด้วยกติกาชุดเดียวกัน
 
@@ -171,7 +169,7 @@ Paper Trading ใช้ conservative candle fill เพื่อให้ replay
 - **ห้ามเปิด Entry ใหม่จาก candle ที่ดึงย้อนหลัง** — Entry Intent ที่ค้างอยู่ต้องถูกคืนให้
   Strategy (ไม่ใช่ค้างรอ) เพื่อไม่ให้ไป Fill ที่ candle สดแท่งแรกด้วยสัญญาณที่อ่านจาก candle
   เก่าหลายแท่งก่อนหน้า Strategy ส่งสัญญาณใหม่ได้เมื่อตลาดสดยังบอกแบบเดิม
-- **ยังต้องปิด Position ตามปกติ** — Take Profit, Stop Loss และ Liquidation ยังทำงานเต็มรูปแบบ
+- **ยังต้องปิด Position ตามปกติ** — Take Profit และ Stop Loss ยังทำงานเต็มรูปแบบ
   เพราะเหตุการณ์เหล่านั้นเกิดขึ้นจริงในตลาดไม่ว่าระบบจะเห็นทันหรือไม่ การเมินจะรายงาน Position
   ที่ผู้ใช้ไม่ได้ถืออยู่จริง และทำให้ผลการเทรดดูดีเกินจริง
 - **ยังต้องคำนวณ Indicator ตามปกติ** — RSI และ ATR ต้องเห็น candle ครบทุกแท่ง มิฉะนั้นค่าจะผิด
@@ -335,7 +333,7 @@ SQLite เก็บข้อมูลที่ไม่ใช่ secret ได�
 - RSI Step Grid ทำงานตรงตาม Versioned Preset
 - Basket Take Profit, Entry Pair และ Cooldown ผ่าน automated tests
 - Paper Fill ไม่มี look-ahead bias และ replay ได้ผลเดิม
-- Paper Futures ใช้ Trading Capital และ Collateral Buffer อย่างละ 50%, One-way Mode, Cross Margin, leverage จำนวนเต็ม 1x–5x ที่ตรึงตลอด Session และ Liquidation แบบ deterministic
+- Paper Futures ใช้ Trading Capital และ Collateral Buffer อย่างละ 50%, One-way Mode, Cross Margin และ leverage จำนวนเต็ม 1x–5x ที่ตรึงตลอด Session
 - Restart แล้วกู้ Session และ Basket ได้โดยไม่สร้าง Entry หรือ Order ซ้ำ
 - ระบบบังคับหนึ่ง Active Bot Session สำหรับ installation
 - UI แสดง state, PnL, Drawdown, data freshness และเหตุการณ์สำคัญ
@@ -351,8 +349,8 @@ SQLite เก็บข้อมูลที่ไม่ใช่ secret ได�
 
 - Live Spot Gate และ acceptance ผ่าน
 - Cross Margin, leverage cap, Collateral Buffer และ funding ผ่านการตรวจสอบ
-- `liquidationPrice`, `markPrice` และ maintenance-margin facts จาก Binance เป็น
-  authoritative source สำหรับ Live Futures ส่วนสูตร Paper Futures ใช้ตัดสิน Live ไม่ได้
+- TiewTrade ไม่คำนวณการบังคับปิด Position เอง Live Futures ต้องอ่าน position/account
+  facts จาก Binance เป็น authoritative source และ Binance เป็นผู้ตัดสินและดำเนินการเอง
 - ผู้ใช้อนุมัติเริ่มทดสอบ Live Futures โดยชัดแจ้งในอนาคต
 
 ## 16. สิ่งที่ไม่อยู่ใน Internal Alpha

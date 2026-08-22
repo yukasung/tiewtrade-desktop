@@ -98,7 +98,6 @@ def futures_snapshot(
     *,
     basket_entry_count: int = 1,
     position_side: PositionSide | None = PositionSide.SHORT,
-    liquidation_price: Decimal | None = Decimal("150"),
 ) -> PaperFuturesSessionSnapshot:
     return PaperFuturesSessionSnapshot(
         accepted=True,
@@ -113,7 +112,6 @@ def futures_snapshot(
         basket_entry_count=basket_entry_count,
         position_side=position_side,
         take_profit_price=Decimal("90"),
-        liquidation_price=liquidation_price,
         account_equity=Decimal("200000"),
         capital_plan=FuturesCapitalPlan(
             initial_margin_per_entry=Decimal("10000"),
@@ -206,7 +204,6 @@ def test_spot_marks_every_entry_on_its_own_price() -> None:
 
     assert basket is not None
     assert basket.market_type == "spot"
-    assert basket.liquidation_price is None
     # Bought at 100 and at 120, marked at 110: one Entry up, the other down,
     # which the average alone reports as nothing happening at all.
     assert [entry.unrealized_pnl for entry in basket.entries] == [
@@ -277,7 +274,6 @@ def test_a_short_basket_marks_its_entries_the_way_round_it_earns() -> None:
 
     assert basket is not None
     assert basket.market_type == "futures"
-    assert basket.liquidation_price == Decimal("150")
     assert basket.unrealized_pnl == Decimal("20")
     assert [entry.unrealized_pnl for entry in basket.entries] == [Decimal("20")]
 

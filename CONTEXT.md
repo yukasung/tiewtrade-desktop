@@ -8,7 +8,7 @@
 ## Market Type
 
 - `SPOT` — ซื้อขาย Spot และใช้ Spot capital policy
-- `FUTURES` — ใช้ Futures margin, leverage, funding และ liquidation-related account facts
+- `FUTURES` — ใช้ Futures margin, leverage และ funding
 
 ## Position Side
 
@@ -69,28 +69,10 @@ Cooldown เกิดขึ้นเมื่อ Basket ทำ Entry Pair คร
 
 Candle ที่ระบบดึงย้อนหลังมาหลังการเชื่อมต่อขาด ห้ามใช้เปิด Entry ใหม่ เพราะราคาเปิดของมันเป็น
 ราคาที่ตลาดผ่านไปแล้ว แต่ยังใช้ปิด Position ได้เต็มรูปแบบ (Take Profit / Stop Loss /
-Liquidation) และยังใช้คำนวณ Indicator ตามปกติ กฎนี้ใช้กับทั้ง `PAPER` และ `LIVE` ทุก Market
+Stop Loss) และยังใช้คำนวณ Indicator ตามปกติ กฎนี้ใช้กับทั้ง `PAPER` และ `LIVE` ทุก Market
 Type — ดู PRODUCT.md ข้อ 8.1
-
-### Liquidation
-
-Liquidation เป็นผลลัพธ์แบบ deterministic ของ Paper Futures Policy v1 ที่ปิด Basket
-และห้ามสร้าง Entry ใหม่ โดยใช้ price-crossing เป็นเกณฑ์ตัดสินเพียงแบบเดียว:
-
-- LONG เกิด Liquidation เมื่อ `candle.low <= liquidation_price`
-- SHORT เกิด Liquidation เมื่อ `candle.high >= liquidation_price`
-- หากราคาแตะระดับ Liquidation ระหว่าง completed Candle แล้วฟื้นกลับก่อน Candle ปิด
-  ให้ถือว่าเกิด Liquidation แล้ว
-
-`account_equity` และ `liquidation_price` เป็นข้อมูล Paper ที่ใช้แสดงผลและตรวจสอบ
-ย้อนหลัง ส่วน Liquidation verdict ใช้ price-crossing rule ข้างต้นเพียงแบบเดียว
-
-สำหรับ Live Futures ค่า `liquidationPrice`, `markPrice` และ maintenance-margin facts
-จาก Binance เป็น authoritative source เพื่อแสดงผล เฝ้าระวัง และ reconciliation โดย
-Binance เป็นผู้ตัดสินและดำเนินการ Liquidation จริง ห้ามใช้สูตร Paper Futures เป็น
-authoritative Live verdict
 
 ### Basket Close Reason
 
-เมื่อเกิด Liquidation Basket ต้องมี `close_reason = LIQUIDATION` และ Session เปลี่ยนเป็น
-terminal `LIQUIDATED`
+Basket ปิดได้ด้วย `TAKE_PROFIT`, `STOP_LOSS` หรือ `MANUAL` เมื่อผู้ใช้สั่งปิดเอง
+Internal Alpha ไม่มี Liquidation: ไม่มีกลไกใดบังคับปิด Position ไม่ว่าราคาจะเสียหายเพียงใด

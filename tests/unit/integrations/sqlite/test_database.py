@@ -48,13 +48,13 @@ def test_reader_can_read_committed_snapshot_while_writer_is_active(
 def test_migrate_reports_newer_schema_with_version_facts(tmp_path: Path) -> None:
     database = SQLiteDatabase(tmp_path / "tiewtrade.sqlite3")
     with database.connect() as connection:
-        connection.execute("PRAGMA user_version = 15")
+        connection.execute("PRAGMA user_version = 16")
 
     with pytest.raises(UnsupportedDatabaseSchemaError) as caught:
         database.migrate()
 
-    assert caught.value.database_version == 15
-    assert caught.value.supported_version == 14
+    assert caught.value.database_version == 16
+    assert caught.value.supported_version == 15
 
 
 def test_migrate_creates_cooldown_waivers_table_on_a_fresh_database(

@@ -17,7 +17,6 @@ def test_v1_futures_policy_uses_approved_constants() -> None:
     assert policy.leverage == 3
     assert policy.trading_capital_ratio == Decimal("0.5")
     assert policy.collateral_buffer_ratio == Decimal("0.5")
-    assert policy.maintenance_margin_rate == Decimal("0.005")
     assert policy.margin_mode is MarginMode.CROSS
     assert policy.position_mode is PositionMode.ONE_WAY
 
@@ -54,7 +53,6 @@ def test_v1_futures_policy_rejects_invalid_leverage(leverage: object) -> None:
             },
             "trading_capital_ratio",
         ),
-        ({"maintenance_margin_rate": Decimal("0.006")}, "maintenance_margin_rate"),
     ],
 )
 def test_direct_constructor_rejects_altered_v1_system_policy(
@@ -65,7 +63,6 @@ def test_direct_constructor_rejects_altered_v1_system_policy(
         "leverage": 3,
         "trading_capital_ratio": Decimal("0.5"),
         "collateral_buffer_ratio": Decimal("0.5"),
-        "maintenance_margin_rate": Decimal("0.005"),
         "margin_mode": MarginMode.CROSS,
         "position_mode": PositionMode.ONE_WAY,
     }
@@ -86,7 +83,6 @@ def test_direct_constructor_rejects_altered_v1_system_policy(
             },
             "trading_capital_ratio",
         ),
-        ({"maintenance_margin_rate": Decimal("0.006")}, "maintenance_margin_rate"),
     ],
 )
 def test_replace_rejects_altered_v1_system_policy(

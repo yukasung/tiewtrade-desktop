@@ -511,7 +511,6 @@ def _running_control_with_workspace_facts() -> BotControlSnapshot:
                 current_price=Decimal("65000.123456789012345678"),
                 take_profit_price=Decimal("66000.123456789012345678"),
                 unrealized_pnl=Decimal("1000"),
-                liquidation_price=None,
                 entry_gate=BasketEntryGate.OPEN,
                 updated_at_utc=OBSERVED_AT,
             ),

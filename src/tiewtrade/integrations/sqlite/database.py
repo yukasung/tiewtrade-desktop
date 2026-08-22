@@ -24,7 +24,7 @@ class UnsupportedDatabaseSchemaError(ValueError):
 
 
 class SQLiteDatabase:
-    _SCHEMA_VERSION = 14
+    _SCHEMA_VERSION = 15
     _BUSY_TIMEOUT_MS = 5_000
 
     def __init__(self, path: Path) -> None:
@@ -61,10 +61,10 @@ class SQLiteDatabase:
                 return
             if 1 <= version <= 9:
                 _require_drop_column_support()
-            if 1 <= version <= 11:
+            if 1 <= version <= 14:
                 self._keep_a_copy(connection, version)
-                # v11 drops the table paper_runtime_lifecycle points at and
-                # puts an identical one back under the same name. Enforcement
+                # v11 and v15 both drop the table paper_runtime_lifecycle
+                # points at and put one back under the same name. Enforcement
                 # would read the moment in between as an orphaned lifecycle,
                 # so it is off for the migration and the connection is closed
                 # before anything else can use it. Only a transaction-free
@@ -120,6 +120,8 @@ class SQLiteDatabase:
                     connection.execute("DROP TABLE IF EXISTS paper_cooldown_waivers")
                 if 0 <= version <= 13:
                     _create_paper_cooldown_waiver_schema(connection)
+                if 1 <= version <= 14:
+                    _migrate_drop_maintenance_margin_rate_v15(connection)
                 connection.execute(f"PRAGMA user_version = {self._SCHEMA_VERSION}")
         finally:
             connection.close()
@@ -260,6 +262,38 @@ def _migrate_drop_spot_ratio_v11(connection: sqlite3.Connection) -> None:
         f"""
         INSERT INTO new_bot_sessions ({_V11_BOT_SESSIONS_COLUMNS})
         SELECT {_V11_BOT_SESSIONS_COLUMNS} FROM bot_sessions
+        """
+    )
+    connection.execute("DROP TABLE bot_sessions")
+    connection.execute("ALTER TABLE new_bot_sessions RENAME TO bot_sessions")
+    # The single-active index went with the table it indexed.
+    _create_bot_sessions_indexes(connection)
+
+
+def _migrate_drop_maintenance_margin_rate_v15(connection: sqlite3.Connection) -> None:
+    """Take the Maintenance Margin Rate out of a Session's configuration.
+
+    It existed to compute a Liquidation Price, and nothing computes one any
+    more, so a Session started with it is not carrying a smaller number to
+    keep — it is carrying a rule that no longer exists.
+
+    The table is rebuilt rather than altered, for the same reason v11 did:
+    a DROP COLUMN cannot leave the table's own CHECK dangling, and the new
+    table takes the name only once the old one is gone so that
+    paper_runtime_lifecycle's reference is not carried off with a rename.
+    """
+    if not _has_column(connection, "bot_sessions", "futures_maintenance_margin_rate"):
+        return
+    # A rebuild that was interrupted leaves its half-built table behind, and
+    # CREATE IF NOT EXISTS would take that one for its own — renaming a stale
+    # shape over the real Sessions. The scratch name is cleared first so the
+    # table raised here is always the one this migration wrote.
+    connection.execute("DROP TABLE IF EXISTS new_bot_sessions")
+    connection.execute(_BOT_SESSIONS_TABLE_SQL.format(table="new_bot_sessions"))
+    connection.execute(
+        f"""
+        INSERT INTO new_bot_sessions ({_BOT_SESSIONS_COLUMNS})
+        SELECT {_BOT_SESSIONS_COLUMNS} FROM bot_sessions
         """
     )
     connection.execute("DROP TABLE bot_sessions")
@@ -410,7 +444,6 @@ _BOT_SESSIONS_TABLE_SQL = """
             futures_leverage INTEGER,
             futures_trading_capital_ratio TEXT,
             futures_collateral_buffer_ratio TEXT,
-            futures_maintenance_margin_rate TEXT,
             futures_margin_mode TEXT,
             futures_position_mode TEXT,
             created_at_utc TEXT NOT NULL,
@@ -438,7 +471,6 @@ _BOT_SESSIONS_COLUMN_NAMES = (
     "futures_leverage",
     "futures_trading_capital_ratio",
     "futures_collateral_buffer_ratio",
-    "futures_maintenance_margin_rate",
     "futures_margin_mode",
     "futures_position_mode",
     "created_at_utc",
@@ -450,8 +482,8 @@ _BOT_SESSIONS_COLUMNS = """
             preset_version, capital_per_entry, max_entries,
             futures_policy_version, futures_leverage,
             futures_trading_capital_ratio, futures_collateral_buffer_ratio,
-            futures_maintenance_margin_rate, futures_margin_mode,
-            futures_position_mode, created_at_utc, ended_at_utc
+            futures_margin_mode, futures_position_mode,
+            created_at_utc, ended_at_utc
 """
 
 
