@@ -26,6 +26,8 @@ from tiewtrade.application.trading_workspace import (
     BasketEntryGate,
     BotRuntimeState,
     DataFreshness,
+    PositionBasketTabSnapshot,
+    TradingWorkspaceSnapshot,
 )
 from tiewtrade.ui.background_task import BackgroundTask
 from tiewtrade.ui.bot_lifecycle_workflow import (
@@ -245,6 +247,7 @@ class MainWindow(QMainWindow):
         self._open_position.snapshot_changed.connect(
             self.workspace.position_basket.show_snapshot
         )
+        self._open_position.snapshot_changed.connect(self._open_position_basket_changed)
         self.workspace.position_basket.close_entry_requested.connect(
             self._close_entry_requested
         )
@@ -327,6 +330,10 @@ class MainWindow(QMainWindow):
             )
 
         self._history_started = False
+        # Whether a Basket is open right now, read across whichever side is
+        # holding it — the running Runtime or the database. A close is the
+        # moment this goes from true to false, wherever it is seen.
+        self._position_open = False
         self._history_workflow = TradeHistoryWorkflow(
             list_basket_history=list_basket_history,
             list_trade_fills=list_trade_fills,
@@ -701,6 +708,32 @@ class MainWindow(QMainWindow):
         """
         self.workspace.show_workspace_snapshot(value)
         self._open_position.reassert()
+        # Only the running Runtime publishes the Basket here — a stopped
+        # one's copy is read through `_open_position` instead, so reading
+        # this snapshot while stopped would mistake the ownership hand-off
+        # for a close.
+        if (
+            isinstance(value, TradingWorkspaceSnapshot)
+            and self._last_bot_state is BotRuntimeState.RUNNING
+        ):
+            self._note_position_open(value.position_basket.basket is not None)
+
+    @Slot(object)
+    def _open_position_basket_changed(self, value: object) -> None:
+        if not isinstance(value, PositionBasketTabSnapshot):
+            return
+        self._note_position_open(value.basket is not None)
+
+    def _note_position_open(self, is_open: bool) -> None:
+        """Ask the Position History table to refresh the moment a Basket closes.
+
+        A closed Basket is a new row nothing else will surface until this
+        Session's tab is reopened, so the close itself is what refreshes it.
+        """
+        was_open = self._position_open
+        self._position_open = is_open
+        if was_open and not is_open and self._history_started:
+            self._history_workflow.start()
 
     @Slot(object)
     def _bot_control_changed(self, value: object) -> None:

@@ -350,6 +350,62 @@ def test_tab_activation_starts_history_query_only_once(qtbot: QtBot) -> None:
     assert calls == 1
 
 
+def test_position_history_refreshes_when_the_open_basket_closes(
+    qtbot: QtBot,
+) -> None:
+    """A closed Basket is a new row nothing else asks for again on its own.
+
+    The table is read once when the tab opens; from there it is the close
+    itself, not another visit to the tab, that has to ask for it again.
+    """
+    calls = 0
+
+    def count_baskets(filters: TradeHistoryFilter) -> BasketHistoryResult:
+        nonlocal calls
+        calls += 1
+        return empty_basket_history(filters)
+
+    session = configured_spot_session()
+    relay = ChartFactRelay()
+    sold: list[tuple[str, int]] = []
+    basket_open = True
+
+    def read_open_basket(_session: ConfiguredPaperSession) -> ReopenedBasket | None:
+        return _basket_of(session, "100") if basket_open else None
+
+    def close_entry(current_session: ConfiguredPaperSession, entry_number: int) -> bool:
+        nonlocal basket_open
+        sold.append((current_session.market_data.symbol, entry_number))
+        basket_open = False
+        return True
+
+    window = MainWindow(
+        create_session=unused_create,
+        load_active=lambda: session,
+        list_basket_history=count_baskets,
+        list_trade_fills=empty_trade_fills,
+        bot=BotActions(read_open_basket=read_open_basket, close_entry=close_entry),
+        chart=ChartSources(facts=relay),
+    )
+    qtbot.addWidget(window)
+    window.show()
+    qtbot.waitUntil(lambda: window._open_position.basket is not None)
+    relay.new_generation().in_progress_candle(
+        flat_candle(datetime(2026, 8, 1, 12, 5, tzinfo=UTC), 105)
+    )
+    qtbot.waitUntil(lambda: window.workspace.position_basket.table.rowCount() == 1)
+
+    open_trade_history(window)
+    qtbot.waitUntil(lambda: calls == 1)
+    window.workspace.show_tab(WorkspaceTab.POSITION_BASKET)
+
+    QTimer.singleShot(0, _answer_position_dialog("Market", []))
+    _click_close_entry(window, 0)
+
+    qtbot.waitUntil(lambda: sold == [("BTCUSDT", 1)])
+    qtbot.waitUntil(lambda: calls == 2)
+
+
 def test_session_load_finishing_does_not_navigate_away_from_history(
     qtbot: QtBot,
 ) -> None:
