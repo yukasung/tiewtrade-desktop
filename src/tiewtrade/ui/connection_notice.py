@@ -8,7 +8,7 @@ was clicked — and a test can read what it says without a window server.
 
 from typing import Protocol
 
-from PySide6.QtWidgets import QMessageBox, QWidget
+from PySide6.QtWidgets import QFrame, QHBoxLayout, QLabel, QMessageBox, QWidget
 
 CONNECTION_LOST_TITLE = "Connection Lost"
 CONNECTION_LOST_TEXT = "Reconnecting to Binance — prices are not current"
@@ -64,3 +64,25 @@ class ConnectionNoticeDialog:
 
     def _forget(self) -> None:
         self._dialog = None
+
+
+class ConnectionNoticeCard(QFrame):
+    """The notice as a card sitting in the workspace, not a window over it.
+
+    Built hidden and left out of the layout's space until shown, so the
+    column above the bot control panel does not hold room open for a
+    message that is not being said.
+    """
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.setObjectName("connectionNoticeCard")
+        self.label = QLabel(CONNECTION_LOST_TEXT)
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(16, 10, 16, 10)
+        layout.addWidget(self.label)
+        self.hide()
+
+    def show(self) -> None:
+        self.label.setText(CONNECTION_LOST_TEXT)
+        super().show()

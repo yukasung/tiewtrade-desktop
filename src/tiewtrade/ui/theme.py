@@ -65,6 +65,14 @@ QWidget[state="warning"] {
     color: #F0B90B;
     border-radius: 6px;
 }
+QFrame#connectionNoticeCard {
+    background: #2A2412;
+    border: 1px solid #6B5A1B;
+    border-radius: 8px;
+}
+QFrame#connectionNoticeCard QLabel {
+    color: #F0B90B;
+}
 QWidget[state="positive"] { color: #0ECB81; }
 QWidget[state="negative"] { color: #F6465D; }
 QLineEdit, QComboBox, QSpinBox, QDateEdit {

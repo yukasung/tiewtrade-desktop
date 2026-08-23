@@ -21,6 +21,7 @@ from tiewtrade.application.paper_session_setup import ConfiguredPaperSession
 from tiewtrade.application.trading_workspace import TradingWorkspaceSnapshot
 from tiewtrade.ui.bot_control import BotControlWidget
 from tiewtrade.ui.candlestick_chart import CandlestickChartWidget
+from tiewtrade.ui.connection_notice import ConnectionNoticeCard
 from tiewtrade.ui.position_basket_table import PositionBasketTable
 from tiewtrade.ui.session_setup import SessionSetupWidget
 from tiewtrade.ui.trade_history_page import TradeHistoryPage
@@ -65,6 +66,7 @@ class TradingWorkspace(QWidget):
         self.unavailable_retry_button.setProperty("retryButton", True)
 
         self.chart = CandlestickChartWidget()
+        self.connection_notice_card = ConnectionNoticeCard()
 
         self.workspace_header = QFrame()
         self.workspace_header.setObjectName("workspaceToolbar")
@@ -230,6 +232,7 @@ class TradingWorkspace(QWidget):
         side_layout.setContentsMargins(0, 0, 0, 0)
         side_layout.setSpacing(12)
         side_layout.addWidget(self.workspace_header)
+        side_layout.addWidget(self.connection_notice_card)
         side_layout.addWidget(self.bot_control, 1)
 
         self._body_layout.addWidget(primary, 1)

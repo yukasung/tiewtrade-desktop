@@ -43,10 +43,7 @@ from tiewtrade.ui.chart_workflow import (
     LoadChartFills,
     RefreshChart,
 )
-from tiewtrade.ui.connection_notice import (
-    ConnectionNotice,
-    ConnectionNoticeDialog,
-)
+from tiewtrade.ui.connection_notice import ConnectionNotice
 from tiewtrade.ui.open_position_workflow import (
     OpenPositionWorkflow,
     ReadOpenBasket,
@@ -173,7 +170,6 @@ class MainWindow(QMainWindow):
             take_profit_confirmation or self._open_take_profit_confirmation
         )
         self._blocked_notice = blocked_notice or self._open_blocked_notice
-        self._connection_notice = connection_notice or ConnectionNoticeDialog(self)
         self._connection_lost = False
         self._last_bot_state: BotRuntimeState | None = None
         self._take_profit_confirmation_pending = False
@@ -207,6 +203,9 @@ class MainWindow(QMainWindow):
         self._runtime_shutdown_pool = QThreadPool(self)
         self._runtime_shutdown_pool.setMaxThreadCount(1)
         self.workspace = TradingWorkspace()
+        self._connection_notice = (
+            connection_notice or self.workspace.connection_notice_card
+        )
         self.setup = self.workspace.setup
         self.overview = self.workspace.overview
         self.trade_history = self.workspace.trade_history

@@ -132,6 +132,26 @@ def test_bot_control_toolbar_is_a_separate_card_above_bot_control(
     assert header_rect.left() == bot_control_rect.left()
 
 
+def test_connection_notice_card_sits_below_the_topbar_and_starts_hidden(
+    qtbot: QtBot,
+) -> None:
+    workspace = TradingWorkspace()
+    qtbot.addWidget(workspace)
+    workspace.resize(1200, 700)
+    workspace.show()
+
+    assert not workspace.connection_notice_card.isVisible()
+
+    workspace.connection_notice_card.show()
+
+    header_rect = _widget_rect_in_viewport(workspace.workspace_header, workspace)
+    notice_rect = _widget_rect_in_viewport(workspace.connection_notice_card, workspace)
+    bot_control_rect = _widget_rect_in_viewport(workspace.bot_control, workspace)
+    assert header_rect.bottom() < notice_rect.top()
+    assert notice_rect.bottom() < bot_control_rect.top()
+    assert notice_rect.left() == header_rect.left()
+
+
 def test_settings_button_shows_a_placeholder_message(qtbot: QtBot) -> None:
     workspace = TradingWorkspace()
     qtbot.addWidget(workspace)
