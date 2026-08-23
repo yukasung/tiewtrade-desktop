@@ -76,7 +76,7 @@ class PaperFuturesSessionSnapshot:
     entry_gate: EntryGate | None
     # Entry Pairs the Basket has completed across its whole life, never back —
     # the same count that decides which Entry a standing Cooldown blocks.
-    entry_completed_pairs: int = 0
+    entry_completed_pairs: int
 
     @property
     def sold_entry_numbers(self) -> tuple[int, ...]:
