@@ -28,7 +28,7 @@ from tiewtrade.strategies.indicators import WilderIndicators
 from tiewtrade.strategies.rsi_buy_only.preset import RsiBuyOnlyPreset
 from tiewtrade.strategies.rsi_step_grid.preset import RsiStepGridPreset
 from tiewtrade.strategies.rsi_step_grid.strategy import RsiStepGridStrategy
-from tiewtrade.trading.basket import BasketCloseReason
+from tiewtrade.trading.basket import BasketCloseReason, SettledEntries
 from tiewtrade.trading.entry_pair import (
     EntryGate,
     EntryGateState,
@@ -749,6 +749,7 @@ def test_a_reopened_basket_counts_its_entries_against_the_pair_gate() -> None:
                 ),
             ),
             closed_basket_count=0,
+            settled=SettledEntries(count=2),
         )
     )
 
@@ -823,9 +824,12 @@ def test_one_entry_takes_profit_while_the_other_stays_open() -> None:
     assert sold.take_profit_price == first_target
 
 
-def test_an_entry_that_sold_at_target_does_not_lift_the_cooldown_it_left() -> None:
-    """A Cooldown does not lapse on its own — not even when the market itself
-    takes profit on one of the two Entries that closed it."""
+def test_an_entry_that_sold_at_target_lifts_the_cooldown_it_left() -> None:
+    """A Cooldown says the Basket is holding both Entries of a Pair at once.
+
+    The market taking profit on one of them ends that, so the gate the Pair
+    closed opens again without the trader having to say anything.
+    """
     application = fast_test_paper_session()
     first, next_minute = arm_and_fill_fast_test_entry(application)
     second, next_minute = fill_second_fast_test_entry(application, first, next_minute)
@@ -843,10 +847,8 @@ def test_an_entry_that_sold_at_target_does_not_lift_the_cooldown_it_left() -> No
     )
     sold = application.process_completed_candle(reached, received_at=reached.close_time)
 
-    # One Entry left, but the Pair it was part of is still what is cooling
-    # down — only Cancel Cooldown, never a sale, lifts it.
     assert sold.entry_gate is not None
-    assert sold.entry_gate.state is EntryGateState.COOLDOWN
+    assert sold.entry_gate.state is EntryGateState.OPEN
 
 
 def test_a_reopened_basket_leaves_out_the_entries_that_already_sold() -> None:
@@ -1326,25 +1328,22 @@ def test_an_entry_already_gone_sells_nothing_twice() -> None:
     assert [entry.entry_number for entry in session.open_entries] == [2]
 
 
-def test_manual_close_is_rejected_while_the_basket_is_in_cooldown() -> None:
-    """A trader cannot sell an Entry out from under a standing Cooldown.
+def test_manual_close_ends_the_cooldown_the_pair_it_sold_from_left() -> None:
+    """The trader can always sell their way out of a Cooldown.
 
-    Cooldown never lapses on its own — only "Cancel Cooldown" lifts it — so a
-    manual sale must not be the back door that quietly frees the gate the
-    completed Pair just closed.
+    A Cooldown holds while the Basket holds both Entries of a Pair, so selling
+    either of them ends it — refusing this sale left a trader with a Cooldown
+    they could only leave by waiving it.
     """
     session = buy_only_paper_session(open_basket=_two_entry_basket(waived_pair=None))
 
     snapshot = session.close_entry(
         1, price=Decimal("105"), observed_at=datetime(2026, 8, 3, tzinfo=UTC)
     )
-    second_attempt = session.close_entry(
-        2, price=Decimal("120"), observed_at=datetime(2026, 8, 4, tzinfo=UTC)
-    )
 
-    assert snapshot.accepted is False
-    assert second_attempt.accepted is False
-    assert [entry.entry_number for entry in session.open_entries] == [1, 2]
+    assert snapshot.accepted is True
+    assert session._lifecycle.entry_gate().state is EntryGateState.OPEN
+    assert [entry.entry_number for entry in session.open_entries] == [2]
 
 
 def test_manual_close_succeeds_once_a_cooldown_is_waived() -> None:
@@ -1359,25 +1358,29 @@ def test_manual_close_succeeds_once_a_cooldown_is_waived() -> None:
     assert [entry.entry_number for entry in session.open_entries] == [2]
 
 
-def test_manual_close_reads_the_pair_its_own_entry_belongs_to() -> None:
-    """A standing Cooldown from the second Pair must not swallow the first.
+def test_manual_close_from_an_earlier_pair_leaves_a_later_cooldown_standing() -> None:
+    """A sale ends the Cooldown of its own Pair, not of the one after it.
 
-    The Market button on an Entry from an already-resolved Pair has to work
-    even while the Basket's own gate reads Cooldown from the Pair after it —
-    matching the same Pair-aware reading the Position tab shows on screen.
+    Entries 1 and 2 are the first Pair, resolved long ago; 3 and 4 are the
+    Pair now cooling down. Selling Entry 1 does not free a gate the Pair after
+    it closed — the Basket is still holding both of Entries 3 and 4.
     """
     session = buy_only_paper_session(open_basket=_four_entry_basket())
 
     resolved_pair = session.close_entry(
         1, price=Decimal("105"), observed_at=datetime(2026, 8, 5, tzinfo=UTC)
     )
+
+    assert resolved_pair.accepted is True
+    assert session._lifecycle.entry_gate().state is EntryGateState.COOLDOWN
+    assert [entry.entry_number for entry in session.open_entries] == [2, 3, 4]
+
     cooling_pair = session.close_entry(
         3, price=Decimal("135"), observed_at=datetime(2026, 8, 5, tzinfo=UTC)
     )
 
-    assert resolved_pair.accepted is True
-    assert cooling_pair.accepted is False
-    assert [entry.entry_number for entry in session.open_entries] == [2, 3, 4]
+    assert cooling_pair.accepted is True
+    assert session._lifecycle.entry_gate().state is EntryGateState.OPEN
 
 
 def test_a_session_holding_nothing_has_no_entry_to_sell() -> None:

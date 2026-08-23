@@ -30,7 +30,7 @@ from tiewtrade.trading.basket import (
     ClosedBasket,
     ClosedEntry,
 )
-from tiewtrade.trading.entry_pair import EntryGate, EntryGateState, EntryPairLifecycle
+from tiewtrade.trading.entry_pair import EntryGate, EntryPairLifecycle
 from tiewtrade.trading.session_config import MarketType, SessionConfig, TradeMode
 from tiewtrade.trading.symbol_rules import SymbolRules
 
@@ -359,6 +359,11 @@ class PaperSpotSession:
         was using are free again, and the Basket closes only when its last
         Entry has gone. What differs is who asked and at what price.
 
+        A Cooldown does not stand in the way of this. It says the Basket is
+        holding both Entries of a Pair at once, and this sale is what stops
+        that being true — refusing it left the only Cooldown a trader could
+        not resolve by trading their way out of it.
+
         An unaccepted snapshot is the answer where there is nothing to sell —
         no Basket, or no Entry by that number — so a stale row on screen
         cannot sell an Entry the Session has already let go.
@@ -367,10 +372,6 @@ class PaperSpotSession:
             return self._snapshot(accepted=False)
         if all(entry.entry_number != entry_number for entry in self._basket.entries):
             return self._snapshot(accepted=False)
-        entry_gate = self._lifecycle.entry_gate_for(entry_number)
-        if entry_gate.state is EntryGateState.COOLDOWN:
-            return self._snapshot(accepted=False)
-
         try:
             transition = self._new_transition()
             basket = transition.basket
@@ -383,7 +384,7 @@ class PaperSpotSession:
                 exit_price=fill.price,
                 closed_at=fill.filled_at,
             )
-            transition.lifecycle.release_fill()
+            transition.lifecycle.release_fill(entry_number)
             closed_basket: ClosedBasket | None = None
             if basket.is_empty:
                 closed_basket = basket.settled_result(
@@ -549,7 +550,7 @@ class PaperSpotSession:
                 exit_price=fill.price,
                 closed_at=fill.filled_at,
             )
-            transition.lifecycle.release_fill()
+            transition.lifecycle.release_fill(fill.entry_number)
             exits.append(PaperSpotEntryExit(fill=fill, closed=closed_entry))
 
         # An Entry sold on this candle owns it: an Entry filling at the open

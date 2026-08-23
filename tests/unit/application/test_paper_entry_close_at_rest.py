@@ -45,12 +45,12 @@ def history(tmp_path: Path) -> SQLiteTradeHistory:
     return SQLiteTradeHistory(database)
 
 
-def _record_two_entries(history: SQLiteTradeHistory, *, waived: bool = True) -> None:
+def _record_two_entries(history: SQLiteTradeHistory, *, waived: bool = False) -> None:
     """A Basket left open with Entries at 100 and 110, targets 106 and 116.
 
-    The pair these two Entries complete is waived by default, so a manual
-    sale is not blocked by the Cooldown they leave behind — pass
-    `waived=False` to get the Basket exactly as its Cooldown stands.
+    The Cooldown these two Entries leave behind does not stand in the way of
+    selling one of them, so the Basket is left exactly as it stands — pass
+    `waived=True` for the Basket whose Cooldown the trader had already lifted.
     """
     session = configured_spot_session()
     spot = PaperSpotSQLiteHistory(
@@ -142,22 +142,24 @@ def test_selling_the_last_entry_closes_the_basket_on_the_running_total(
     assert Decimal(row["realized_pnl"]) == Decimal("31.34")
 
 
-def test_selling_an_entry_at_rest_is_rejected_while_the_basket_is_in_cooldown(
+def test_selling_an_entry_at_rest_ends_the_cooldown_it_sold_from(
     history: SQLiteTradeHistory,
 ) -> None:
-    """A stopped Bot's Basket is no exception to the Cooldown standing over it."""
+    """A stopped Bot's Basket ends its Cooldown the same way a running one does.
+
+    Nothing is written to say the Cooldown was lifted: the Entries the Basket
+    is still holding say the Pair is no longer whole, and the next Session
+    composed from the database reads it back off them.
+    """
     _record_two_entries(history, waived=False)
 
-    assert _sell(history, 1, "105.678") is False
+    assert _sell(history, 1, "105.678") is True
 
-    basket = history.find_open_basket(configured_spot_session().config.session_id)
-    fills = history.list_fills(BASKET_ID)
-    assert basket is not None
-    assert basket.realized_pnl == Decimal("0")
-    assert [(fill.side.value, fill.closes_entry_number) for fill in fills] == [
-        ("buy", None),
-        ("buy", None),
-    ]
+    session = configured_spot_session()
+    open_basket = read_open_basket_state(history, session.config.session_id)
+    assert open_basket is not None
+    assert open_basket.waived_pair is None
+    assert [entry.entry_number for entry in open_basket.entries] == [2]
 
 
 def test_an_entry_that_has_gone_is_not_sold_twice(

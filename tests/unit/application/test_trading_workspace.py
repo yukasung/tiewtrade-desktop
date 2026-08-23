@@ -4,10 +4,12 @@ from decimal import Decimal
 
 import pytest
 
+from tests.support.entry_pair_walk import reachable_lifecycles
 from tests.support.paper_session_setup import configured_spot_session
 from tests.support.workspace_snapshots import basket_entries, basket_snapshot
 from tiewtrade.application.trading_workspace import (
     BasketEntryGate,
+    BasketEntrySnapshot,
     BasketSnapshot,
     BotRuntimeState,
     DataFreshness,
@@ -29,6 +31,7 @@ from tiewtrade.application.trading_workspace import (
     stale_workspace_snapshot,
 )
 from tiewtrade.trading.entry_pair import EntryGateState
+from tiewtrade.trading.entry_policy import EntryPolicy
 
 OBSERVED_AT = datetime(2026, 8, 1, 12, tzinfo=UTC)
 
@@ -232,6 +235,46 @@ def test_a_single_pair_cooldown_blocks_both_of_its_own_entries() -> None:
 
     assert basket.entry_gate_for(1) is BasketEntryGate.COOLDOWN
     assert basket.entry_gate_for(2) is BasketEntryGate.COOLDOWN
+
+
+def test_a_snapshot_reads_every_entry_at_the_gate_the_lifecycle_holds_it_at() -> None:
+    """The screen and the rule answer alike, in every Basket a trader reaches.
+
+    A snapshot is handed the gate and the Pair count and works the rest out
+    for itself, so it states the Pair rule a second time. Walking the Baskets
+    that can actually happen is what keeps that restatement honest — the two
+    disagreeing would show a trader a row the Session would not act on.
+    """
+    policy = EntryPolicy(max_entries=10)
+    for reached in reachable_lifecycles(policy):
+        if not reached.open_entry_numbers:
+            continue
+        lifecycle = reached.lifecycle
+        basket = basket_snapshot(
+            entry_count=len(reached.open_entry_numbers),
+            entries=_entries_numbered(reached.open_entry_numbers),
+            entry_gate=BasketEntryGate(lifecycle.entry_gate().state),
+            completed_pairs=lifecycle.completed_pairs,
+        )
+
+        for number in reached.open_entry_numbers:
+            assert basket.entry_gate_for(number).value == (
+                lifecycle.entry_gate_for(number).state.value
+            ), f"Entry {number} of {reached.open_entry_numbers} reads two ways"
+
+
+def _entries_numbered(
+    entry_numbers: tuple[int, ...],
+) -> tuple[BasketEntrySnapshot, ...]:
+    """Entries as a Basket that has sold out of itself leaves them: with gaps."""
+    return tuple(
+        replace(entry, entry_number=number)
+        for entry, number in zip(
+            basket_entries(*("65000",) * len(entry_numbers)),
+            entry_numbers,
+            strict=True,
+        )
+    )
 
 
 def _basket() -> BasketSnapshot:

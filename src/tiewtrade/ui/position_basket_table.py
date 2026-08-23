@@ -283,10 +283,10 @@ class PositionBasketTable(QWidget):
         button = QPushButton(self.CLOSE_LABEL)
         button.setObjectName("positionEntryCloseButton")
         button.setAccessibleName(f"Close Entry {entry_number} at Market")
-        cooling_down = (
-            row.basket.entry_gate_for(entry_number) is BasketEntryGate.COOLDOWN
-        )
-        button.setEnabled(self._closing_enabled and not cooling_down)
+        # A Cooldown does not take this button away: selling one Entry of the
+        # cooling Pair is what ends the Cooldown, so the row it is standing on
+        # is the way out of it.
+        button.setEnabled(self._closing_enabled)
         button.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
         button.setCursor(Qt.CursorShape.PointingHandCursor)
         button.clicked.connect(
