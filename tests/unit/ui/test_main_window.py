@@ -2430,6 +2430,24 @@ def _record_close_entry(
     return close_entry
 
 
+def _close_position_fake(
+    replaceable: bool,
+    closes: list[str],
+    closed_all: list[str] | None,
+) -> Callable[[ConfiguredPaperSession], None] | None:
+    """Wired for the replace-session flow, the Close All button, or neither."""
+    if not replaceable and closed_all is None:
+        return None
+
+    def close_position(_session: ConfiguredPaperSession) -> None:
+        if replaceable:
+            closes.append("closed")
+        if closed_all is not None:
+            closed_all.append("closed")
+
+    return close_position
+
+
 def _open_position_window(
     qtbot: QtBot,
     *,
@@ -2440,6 +2458,7 @@ def _open_position_window(
     closed: list[str] | None = None,
     second_entry_price: int | None = None,
     closed_entries: list[tuple[str, int]] | None = None,
+    closed_all: list[str] | None = None,
 ) -> MainWindow:
     """A stopped Session holding one Entry, with the chart at a given price.
 
@@ -2515,9 +2534,7 @@ def _open_position_window(
             # What the setup form's Start needs before it offers to replace
             # the Session rather than run the one already there.
             has_open_position=(lambda _session: True) if replaceable else None,
-            close_position=(
-                (lambda _session: closes.append("closed")) if replaceable else None
-            ),
+            close_position=_close_position_fake(replaceable, closes, closed_all),
             close_entry=(
                 None if closed_entries is None else _record_close_entry(closed_entries)
             ),
@@ -2760,6 +2777,59 @@ def _click_close_entry(window: MainWindow, row: int) -> None:
     button = window.workspace.position_basket.close_button(row)
     assert isinstance(button, QPushButton)
     click(button)
+
+
+def _click_close_all(window: MainWindow) -> None:
+    click(window.workspace.position_basket.close_all_button)
+
+
+def test_close_all_sells_the_whole_position_once_the_trader_says_so(
+    qtbot: QtBot,
+) -> None:
+    started: list[BotControlSnapshot] = []
+    asked: list[tuple[str, Callable[[], None]]] = []
+    closed_all: list[str] = []
+    window = _open_position_window(
+        qtbot,
+        started=started,
+        asked=asked,
+        price=105,
+        closed_all=closed_all,
+    )
+    qtbot.waitUntil(lambda: window.workspace.position_basket.table.rowCount() == 1)
+    seen: list[QMessageBox] = []
+
+    QTimer.singleShot(0, _answer_position_dialog("Close All", seen))
+    _click_close_all(window)
+
+    qtbot.waitUntil(lambda: closed_all == ["closed"])
+    assert len(seen) == 1
+    assert seen[0].defaultButton() is not None
+    assert seen[0].defaultButton().text() == "Cancel"
+
+
+def test_cancelling_close_all_leaves_the_position_where_it_is(
+    qtbot: QtBot,
+) -> None:
+    started: list[BotControlSnapshot] = []
+    asked: list[tuple[str, Callable[[], None]]] = []
+    closed_all: list[str] = []
+    window = _open_position_window(
+        qtbot,
+        started=started,
+        asked=asked,
+        price=105,
+        closed_all=closed_all,
+    )
+    qtbot.waitUntil(lambda: window.workspace.position_basket.table.rowCount() == 1)
+    seen: list[QMessageBox] = []
+
+    QTimer.singleShot(0, _answer_position_dialog("Cancel", seen))
+    _click_close_all(window)
+
+    assert len(seen) == 1
+    assert closed_all == []
+    assert window._open_position.basket is not None
 
 
 def test_the_question_is_put_to_the_position_that_is_there_now(

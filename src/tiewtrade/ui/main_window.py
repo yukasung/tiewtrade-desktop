@@ -53,6 +53,7 @@ from tiewtrade.ui.open_position_workflow import (
 )
 from tiewtrade.ui.position_dialogs import (
     ask_about_cancelling_cooldown,
+    ask_about_closing_all_at_market,
     ask_about_selling_one_entry,
 )
 from tiewtrade.ui.session_workflow import (
@@ -182,6 +183,7 @@ class MainWindow(QMainWindow):
         self._close_position = bot.close_position
         self._close_entry = bot.close_entry
         self._close_entry_task: BackgroundTask | None = None
+        self._close_all_task: BackgroundTask | None = None
         self._cancel_cooldown = bot.cancel_cooldown
         self._cancel_cooldown_task: BackgroundTask | None = None
         self._waiting_on_a_reading: list[Callable[[], None]] = []
@@ -253,6 +255,9 @@ class MainWindow(QMainWindow):
         )
         self.workspace.position_basket.cancel_cooldown_requested.connect(
             self._cancel_cooldown_requested
+        )
+        self.workspace.position_basket.close_all_requested.connect(
+            self._close_all_requested
         )
         self._open_position.reading_landed.connect(self._position_reading_landed)
 
@@ -1041,6 +1046,61 @@ class MainWindow(QMainWindow):
     def _cancel_cooldown_finished(self) -> None:
         self._cancel_cooldown_task = None
         self.workspace.position_basket.set_cancelling_enabled(True)
+
+    @Slot()
+    def _close_all_requested(self) -> None:
+        """Sell the whole Position, once the trader has said so in as many words.
+
+        Which of the two is holding the Basket is not this window's to know:
+        the action is asked, and it goes to the Runtime that owns it or to the
+        database a stopped Bot left it in.
+        """
+        close_position = self._close_position
+        if close_position is None or self._close_all_task is not None:
+            return
+        try:
+            session = self._lifecycle_workflow.snapshot.session
+        except RuntimeError:
+            return
+        if not ask_about_closing_all_at_market(self):
+            return
+        self.workspace.position_basket.set_closing_enabled(False)
+        self.workspace.position_basket.set_closing_all_enabled(False)
+        task = BackgroundTask(lambda: close_position(session))
+        task.signals.succeeded.connect(self._all_closed)
+        task.signals.failed.connect(self._close_all_failed)
+        task.signals.finished.connect(self._close_all_finished)
+        self._close_all_task = task
+        self._thread_pool.start(task)
+
+    @Slot(object)
+    def _all_closed(self, _result: object) -> None:
+        """Read the Basket back, which is how a stopped Bot's tab hears of it.
+
+        A running Runtime publishes the sale itself; a stopped one leaves the
+        database as the only witness, and the tab is showing what it last read
+        from it — a Position that has just gone.
+        """
+        try:
+            session = self._lifecycle_workflow.snapshot.session
+        except RuntimeError:
+            return
+        if self._lifecycle_workflow.snapshot.state is not BotRuntimeState.RUNNING:
+            self._open_position.read_for(session)
+
+    @Slot(object)
+    def _close_all_failed(self, error: object) -> None:
+        if isinstance(error, BaseException):
+            _LOGGER.exception("Could not close the Position", exc_info=error)
+        self.workspace.position_basket.show_close_error(
+            "Could not close the Position. Check your connection, then try again."
+        )
+
+    @Slot()
+    def _close_all_finished(self) -> None:
+        self._close_all_task = None
+        self.workspace.position_basket.set_closing_enabled(True)
+        self.workspace.position_basket.set_closing_all_enabled(True)
 
     @Slot(object)
     def _chart_view_requested(self, value: object) -> None:

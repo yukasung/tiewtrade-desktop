@@ -132,6 +132,8 @@ class PositionBasketTable(QWidget):
     close_entry_requested = Signal(int)
     #: The Basket asked to lift the Cooldown blocking its next Entry.
     cancel_cooldown_requested = Signal()
+    #: The whole open Position asked to be sold at the price the market is at.
+    close_all_requested = Signal()
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -164,6 +166,21 @@ class PositionBasketTable(QWidget):
         self.cancel_cooldown_button.clicked.connect(
             lambda _checked=False: self.cancel_cooldown_requested.emit()
         )
+        # Owned here too, alongside the button it sits next to — shown
+        # whenever the open Basket has something left to sell, not only
+        # during a Cooldown, since it sells the whole Position at once.
+        self.close_all_button = QPushButton("Close All", self)
+        self.close_all_button.setObjectName("closeAllButton")
+        self.close_all_button.setAccessibleName("Close All at Market")
+        self.close_all_button.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.close_all_button.setSizePolicy(
+            QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed
+        )
+        self.close_all_button.setVisible(False)
+        self.close_all_button.clicked.connect(
+            lambda _checked=False: self.close_all_requested.emit()
+        )
+        self._closing_all_enabled = True
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -180,6 +197,7 @@ class PositionBasketTable(QWidget):
         self._show_basket(value.basket)
         self._show_state(value)
         self._show_cooldown(value.basket)
+        self._show_close_all(value.basket)
 
     def _show_basket(self, basket: BasketSnapshot | None) -> None:
         rows = (
@@ -215,6 +233,14 @@ class PositionBasketTable(QWidget):
         )
         self.cancel_cooldown_button.setVisible(in_cooldown)
         self.cancel_cooldown_button.setEnabled(in_cooldown and self._cancelling_enabled)
+
+    def _show_close_all(self, basket: BasketSnapshot | None) -> None:
+        """Offered whenever there is a Position, not only during a Cooldown."""
+        has_open_position = basket is not None and bool(basket.entries)
+        self.close_all_button.setVisible(has_open_position)
+        self.close_all_button.setEnabled(
+            has_open_position and self._closing_all_enabled
+        )
 
     @staticmethod
     def _state_text(snapshot: PositionBasketTabSnapshot) -> str:
@@ -296,6 +322,11 @@ class PositionBasketTable(QWidget):
         self.cancel_cooldown_button.setEnabled(
             enabled and self.cancel_cooldown_button.isVisible()
         )
+
+    def set_closing_all_enabled(self, enabled: bool) -> None:
+        """Take the button away while a sale of the whole Position is in flight."""
+        self._closing_all_enabled = enabled
+        self.close_all_button.setEnabled(enabled and self.close_all_button.isVisible())
 
     def close_button(self, row: int) -> QPushButton | None:
         """The order button of a row, wherever the cell keeps it."""

@@ -424,6 +424,72 @@ def test_cancel_cooldown_button_is_taken_away_while_in_flight(qtbot: QtBot) -> N
     assert widget.cancel_cooldown_button.isEnabled() is True
 
 
+def test_close_all_button_shows_only_when_a_position_is_open(qtbot: QtBot) -> None:
+    widget = PositionBasketTable()
+    qtbot.addWidget(widget)
+    widget.show()
+
+    widget.show_snapshot(
+        ready_position_basket_tab(
+            basket_snapshot(entry_gate=BasketEntryGate.OPEN),
+            observed_at_utc=OBSERVED_AT,
+        )
+    )
+    assert widget.close_all_button.isVisible() is True
+
+    # A Cooldown blocks a new Entry, not closing the ones already open.
+    widget.show_snapshot(
+        ready_position_basket_tab(
+            basket_snapshot(entry_gate=BasketEntryGate.COOLDOWN),
+            observed_at_utc=OBSERVED_AT,
+        )
+    )
+    assert widget.close_all_button.isVisible() is True
+
+    widget.show_snapshot(empty_position_basket_tab())
+    assert widget.close_all_button.isVisible() is False
+
+
+def test_close_all_button_emits_a_signal_on_click(qtbot: QtBot) -> None:
+    widget = PositionBasketTable()
+    qtbot.addWidget(widget)
+    asked = 0
+
+    def on_clicked() -> None:
+        nonlocal asked
+        asked += 1
+
+    widget.close_all_requested.connect(on_clicked)
+    widget.show_snapshot(
+        ready_position_basket_tab(
+            basket_snapshot(entry_gate=BasketEntryGate.OPEN),
+            observed_at_utc=OBSERVED_AT,
+        )
+    )
+
+    widget.close_all_button.click()
+
+    assert asked == 1
+
+
+def test_close_all_button_is_taken_away_while_in_flight(qtbot: QtBot) -> None:
+    widget = PositionBasketTable()
+    qtbot.addWidget(widget)
+    widget.show()
+    widget.show_snapshot(
+        ready_position_basket_tab(
+            basket_snapshot(entry_gate=BasketEntryGate.OPEN),
+            observed_at_utc=OBSERVED_AT,
+        )
+    )
+
+    widget.set_closing_all_enabled(False)
+    assert widget.close_all_button.isEnabled() is False
+
+    widget.set_closing_all_enabled(True)
+    assert widget.close_all_button.isEnabled() is True
+
+
 def test_a_cancel_that_failed_is_said_over_the_position_that_is_still_there(
     qtbot: QtBot,
 ) -> None:

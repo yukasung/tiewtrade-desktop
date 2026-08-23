@@ -33,6 +33,31 @@ def ask_about_selling_one_entry(parent: QWidget | None, entry_number: int) -> bo
     return dialog.clickedButton() is sell_button
 
 
+def ask_about_closing_all_at_market(parent: QWidget | None) -> bool:
+    """Ask before every remaining Entry goes at the price the market is at.
+
+    A Fill has no way back, and this closes the whole Position in one Fill —
+    not just the row under the hand — so the question says what it does
+    instead of what it is beside. The answer that trades nothing is what a
+    stray Enter finds.
+    """
+    dialog = QMessageBox(parent)
+    dialog.setWindowTitle("Close All at Market")
+    dialog.setIcon(QMessageBox.Icon.Warning)
+    dialog.setText("Sell the whole Position at the market price now?")
+    dialog.setInformativeText(
+        "Market sells every remaining Entry at the price now, not at the "
+        "Take Profit each was given, and closes the Basket.\n\n"
+        "Cancel leaves the Position open."
+    )
+    sell_button = dialog.addButton("Close All", QMessageBox.ButtonRole.DestructiveRole)
+    cancel_button = dialog.addButton("Cancel", QMessageBox.ButtonRole.RejectRole)
+    dialog.setDefaultButton(cancel_button)
+    dialog.setEscapeButton(cancel_button)
+    dialog.exec()
+    return dialog.clickedButton() is sell_button
+
+
 def ask_about_cancelling_cooldown(parent: QWidget | None) -> bool:
     """Ask before a Cooldown the strategy itself set is lifted.
 

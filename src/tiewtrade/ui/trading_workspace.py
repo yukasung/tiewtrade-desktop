@@ -182,6 +182,7 @@ class TradingWorkspace(QWidget):
         tabs_row.addWidget(self.tabs)
         tabs_row.addStretch(1)
         tabs_row.addWidget(self.position_basket.cancel_cooldown_button)
+        tabs_row.addWidget(self.position_basket.close_all_button)
         tabbed_layout.addLayout(tabs_row)
         tabbed_layout.addWidget(self.tab_pages, 1)
         primary_layout.addWidget(tabbed, 2)
