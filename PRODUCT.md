@@ -111,10 +111,16 @@ Lifecycle:
 
 1. ระหว่างที่ Pair มีเพียง Entry แรก ระบบยังเปิด Entry ที่สองได้เมื่อมีสัญญาณ
 2. เมื่อ Pair มีครบสอง Entries Basket เข้าสู่ Cooldown ทันที
-3. ระหว่าง Cooldown ห้ามเพิ่ม Entry แต่ Basket Take Profit ยังคงทำงาน
-4. Cooldown ไม่หมดอายุเองตามเวลา ผู้ใช้ต้องกด "Cancel Cooldown" เพื่อยกเลิกจึงจะเริ่ม Pair ถัดไปได้
-5. วน lifecycle นี้จน Basket ปิดหรือครบ `max_entries` ของ Session
-6. การปิด Basket จะ reset Entry Pair และ Cooldown state สำหรับ Basket ใหม่
+3. ระหว่าง Cooldown ห้ามเพิ่ม Entry แต่ Basket Take Profit ยังคงทำงาน และการปิด Entry
+   รายตัวยังทำได้เสมอ
+4. Cooldown คงอยู่ตราบที่ Basket ยังถือทั้งสอง Entries ของ Pair ล่าสุดพร้อมกัน เมื่อ Entry
+   ใด Entry หนึ่งของ Pair นั้นถูกปิด — ด้วย Take Profit หรือด้วยการปิดเอง — Cooldown จบลง
+   ทันทีและเริ่ม Pair ถัดไปได้ การปิด Entry ของ Pair ก่อนหน้าที่จบไปแล้วไม่ปลด Cooldown
+   ของ Pair ล่าสุด เพราะ Pair นั้นยังถือครบทั้งคู่อยู่
+5. Cooldown ไม่หมดอายุเองตามเวลา ถ้ายังถือครบทั้งคู่และต้องการเปิด Entry ต่อ ผู้ใช้กด
+   "Cancel Cooldown" เพื่อยกเลิกได้
+6. วน lifecycle นี้จน Basket ปิดหรือครบ `max_entries` ของ Session
+7. การปิด Basket จะ reset Entry Pair และ Cooldown state สำหรับ Basket ใหม่
 
 การกด Cancel Cooldown ยกเลิกได้เฉพาะ Cooldown รอบที่กำลังบล็อกอยู่ครั้งเดียว เมื่อ Pair
 ถัดไปครบสอง Entries Basket จะเข้า Cooldown อีกครั้งตามปกติ ใช้ได้ทั้ง Paper Spot และ

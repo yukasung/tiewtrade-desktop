@@ -93,7 +93,7 @@ def reopen_basket(
     # completed its Pair whether or not the Entry it opened is still here.
     lifecycle = EntryPairLifecycle.replayed(
         entry_policy,
-        open_entry_count=basket.entry_count,
+        open_entry_numbers=tuple(entry.entry_number for entry in basket.entries),
         settled_entry_count=state.settled.count,
         waived_pair=state.waived_pair,
     )

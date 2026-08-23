@@ -99,6 +99,7 @@ def entry_snapshot() -> PaperSpotSessionSnapshot:
         entry_gate=EntryGate(EntryGateState.OPEN),
         waived_pair=None,
         waived_at=None,
+        entry_completed_pairs=0,
     )
 
 
@@ -122,6 +123,7 @@ def close_snapshot() -> PaperSpotSessionSnapshot:
         entry_gate=EntryGate(EntryGateState.OPEN),
         waived_pair=None,
         waived_at=None,
+        entry_completed_pairs=0,
     )
 
 

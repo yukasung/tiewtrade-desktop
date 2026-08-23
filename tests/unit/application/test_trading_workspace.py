@@ -4,10 +4,12 @@ from decimal import Decimal
 
 import pytest
 
+from tests.support.entry_pair_walk import reachable_lifecycles
 from tests.support.paper_session_setup import configured_spot_session
-from tests.support.workspace_snapshots import basket_entries
+from tests.support.workspace_snapshots import basket_entries, basket_snapshot
 from tiewtrade.application.trading_workspace import (
     BasketEntryGate,
+    BasketEntrySnapshot,
     BasketSnapshot,
     BotRuntimeState,
     DataFreshness,
@@ -29,6 +31,7 @@ from tiewtrade.application.trading_workspace import (
     stale_workspace_snapshot,
 )
 from tiewtrade.trading.entry_pair import EntryGateState
+from tiewtrade.trading.entry_policy import EntryPolicy
 
 OBSERVED_AT = datetime(2026, 8, 1, 12, tzinfo=UTC)
 
@@ -199,6 +202,79 @@ def test_a_basket_is_marked_throughout_or_nowhere() -> None:
                 replace(entry, unrealized_pnl=None) for entry in _basket().entries
             ),
         )
+
+
+def test_an_open_basket_leaves_every_entry_at_its_own_gate() -> None:
+    basket = basket_snapshot(entry_gate=BasketEntryGate.OPEN, completed_pairs=1)
+
+    assert basket.entry_gate_for(1) is BasketEntryGate.OPEN
+    assert basket.entry_gate_for(2) is BasketEntryGate.OPEN
+
+
+def test_max_entries_reached_reads_the_same_for_every_entry() -> None:
+    basket = basket_snapshot(
+        entry_gate=BasketEntryGate.MAX_ENTRIES_REACHED, completed_pairs=2
+    )
+
+    assert basket.entry_gate_for(1) is BasketEntryGate.MAX_ENTRIES_REACHED
+    assert basket.entry_gate_for(4) is BasketEntryGate.MAX_ENTRIES_REACHED
+
+
+def test_a_cooldown_blocks_only_the_pair_that_just_completed() -> None:
+    """Entries 3 and 4 just closed Pair 2; Entries 1 and 2 already moved past it."""
+    basket = basket_snapshot(entry_gate=BasketEntryGate.COOLDOWN, completed_pairs=2)
+
+    assert basket.entry_gate_for(1) is BasketEntryGate.OPEN
+    assert basket.entry_gate_for(2) is BasketEntryGate.OPEN
+    assert basket.entry_gate_for(3) is BasketEntryGate.COOLDOWN
+    assert basket.entry_gate_for(4) is BasketEntryGate.COOLDOWN
+
+
+def test_a_single_pair_cooldown_blocks_both_of_its_own_entries() -> None:
+    basket = basket_snapshot(entry_gate=BasketEntryGate.COOLDOWN, completed_pairs=1)
+
+    assert basket.entry_gate_for(1) is BasketEntryGate.COOLDOWN
+    assert basket.entry_gate_for(2) is BasketEntryGate.COOLDOWN
+
+
+def test_a_snapshot_reads_every_entry_at_the_gate_the_lifecycle_holds_it_at() -> None:
+    """The screen and the rule answer alike, in every Basket a trader reaches.
+
+    A snapshot is handed the gate and the Pair count and works the rest out
+    for itself, so it states the Pair rule a second time. Walking the Baskets
+    that can actually happen is what keeps that restatement honest — the two
+    disagreeing would show a trader a row the Session would not act on.
+    """
+    policy = EntryPolicy(max_entries=10)
+    for reached in reachable_lifecycles(policy):
+        if not reached.open_entry_numbers:
+            continue
+        lifecycle = reached.lifecycle
+        basket = basket_snapshot(
+            entry_count=len(reached.open_entry_numbers),
+            entries=_entries_numbered(reached.open_entry_numbers),
+            entry_gate=BasketEntryGate(lifecycle.entry_gate().state),
+            completed_pairs=lifecycle.completed_pairs,
+        )
+
+        for number in reached.open_entry_numbers:
+            assert basket.entry_gate_for(number).value == (
+                lifecycle.entry_gate_for(number).state.value
+            ), f"Entry {number} of {reached.open_entry_numbers} reads two ways"
+
+
+def _entries_numbered(
+    entry_numbers: tuple[int, ...],
+) -> tuple[BasketEntrySnapshot, ...]:
+    """Entries as a Basket that has sold out of itself leaves them: with gaps."""
+    return tuple(
+        replace(entry, entry_number=number)
+        for entry, number in zip(
+            basket_entries(*("65000",) * len(entry_numbers)),
+            entry_numbers,
+            strict=True,
+        )
+    )
 
 
 def _basket() -> BasketSnapshot:

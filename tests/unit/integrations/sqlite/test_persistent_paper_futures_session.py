@@ -126,6 +126,7 @@ def snapshot(
         capital_plan=capital_plan(),
         failure_reason=None,
         entry_gate=EntryGate(EntryGateState.OPEN),
+        entry_completed_pairs=0,
     )
 
 

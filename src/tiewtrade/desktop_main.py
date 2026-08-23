@@ -58,6 +58,7 @@ from tiewtrade.integrations.sqlite.paper_runtime_lifecycle import (
 )
 from tiewtrade.integrations.sqlite.trade_history import SQLiteTradeHistory
 from tiewtrade.market_data.candle import Candle
+from tiewtrade.strategies.protocols import StrategyPreset
 from tiewtrade.strategies.registry import strategy_definition_for
 from tiewtrade.trading.session_config import MarketType
 from tiewtrade.trading.symbol_rules import SymbolRules
@@ -348,6 +349,11 @@ def _symbol_rules_for(session: ConfiguredPaperSession) -> SymbolRules:
     )
 
 
+def _preset_for(session: ConfiguredPaperSession) -> StrategyPreset:
+    """The Strategy Preset this Session was pinned to, built afresh."""
+    return strategy_definition_for(session.config.preset_version).build_preset()
+
+
 @asynccontextmanager
 async def _public_market_data(
     session: ConfiguredPaperSession,
@@ -435,17 +441,25 @@ def _bot_actions(
             raise RuntimeError("Paper Runtime worker is still active")
         stores.store.retire(session.config.session_id, datetime.now(UTC))
 
-    def close_entry_at_rest(
+    def close_one_entry(
         session: ConfiguredPaperSession, entry_number: int, *, price: Decimal
     ) -> bool:
+        """Sell one Entry, asking whichever of the two is holding the Basket.
+
+        A running Runtime owns it, and a sale written past it would be a
+        Basket sold twice — once here and once by the next candle to reach a
+        target it still thinks it holds. So the Runtime is asked first, and
+        only a Runtime that is not holding this Session declines, which leaves
+        the Basket where a stopped Bot leaves it: in the database.
+        """
+        if runtime_actions.close_entry(session, entry_number, price=price):
+            return True
         return close_one_entry_at_rest(
             session,
             entry_number,
             trade_history=history,
             symbol_rules=_symbol_rules_for(session),
-            preset=strategy_definition_for(
-                session.config.preset_version
-            ).build_preset(),
+            preset=_preset_for(session),
             price=price,
             observed_at=datetime.now(UTC),
         )
@@ -453,13 +467,11 @@ def _bot_actions(
     def close_position(session: ConfiguredPaperSession) -> None:
         """Sell every open Entry, asking whichever of the two holds the Basket.
 
-        A running Runtime owns it, and a sale written past it would be a
-        Basket sold twice — once here and once by the next candle to reach a
-        target it still thinks it holds. So the entries it is holding are
-        asked for one at a time, the way a single row already is, and only an
-        Entry the Runtime declines falls to the database directly. A Session
-        with no Runtime holding it at all closes straight from the database,
-        one Fill per Entry it finds still open.
+        The Entries a Runtime is holding are asked for one at a time, the same
+        way a single row already is, so a sale can never be written past the
+        Runtime that owns the Basket. A Session with no Runtime holding it at
+        all closes straight from the database, one Fill per Entry it finds
+        still open.
         """
         entry_numbers = runtime_actions.open_entry_numbers(session)
         if entry_numbers is None:
@@ -471,23 +483,12 @@ def _bot_actions(
             return
         price = manual_close_price.get(session)
         for entry_number in entry_numbers:
-            if runtime_actions.close_entry(session, entry_number, price=price):
-                continue
-            close_entry_at_rest(session, entry_number, price=price)
+            close_one_entry(session, entry_number, price=price)
 
     def close_entry(session: ConfiguredPaperSession, entry_number: int) -> bool:
-        """Sell one Entry, asking whichever of the two is holding the Basket.
-
-        A running Runtime owns it, and a sale written past it would be a
-        Basket sold twice — once here and once by the next candle to reach a
-        target it still thinks it holds. So the Runtime is asked first, and
-        only a Runtime that is not holding this Session declines, which leaves
-        the Basket where a stopped Bot leaves it: in the database.
-        """
-        price = manual_close_price.get(session)
-        if runtime_actions.close_entry(session, entry_number, price=price):
-            return True
-        return close_entry_at_rest(session, entry_number, price=price)
+        return close_one_entry(
+            session, entry_number, price=manual_close_price.get(session)
+        )
 
     def cancel_cooldown(session: ConfiguredPaperSession) -> bool:
         """Lift the Cooldown holding this Basket, wherever the Basket is held.
@@ -507,9 +508,7 @@ def _bot_actions(
             session,
             trade_history=history,
             symbol_rules=_symbol_rules_for(session),
-            preset=strategy_definition_for(
-                session.config.preset_version
-            ).build_preset(),
+            preset=_preset_for(session),
             observed_at=datetime.now(UTC),
         )
 
@@ -517,7 +516,7 @@ def _bot_actions(
         state = read_open_basket_state(history, session.config.session_id)
         if state is None or session.config.market_type is not MarketType.SPOT:
             return None
-        preset = strategy_definition_for(session.config.preset_version).build_preset()
+        preset = _preset_for(session)
         return reopen_basket(
             state,
             entry_policy=session.config.entry_policy,

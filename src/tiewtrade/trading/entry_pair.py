@@ -1,3 +1,4 @@
+from collections.abc import Sequence
 from dataclasses import dataclass
 from enum import StrEnum
 
@@ -26,6 +27,15 @@ class EntryGate:
         return self.state is EntryGateState.OPEN
 
 
+def entry_pair_index(entry_number: int) -> int:
+    """Which Entry Pair this Entry belongs to, counted across the Basket's life.
+
+    `entry_number` is a lifetime count of every Entry the Basket has ever
+    taken, so two Entries make a Pair the same way `_count_fill` counts one.
+    """
+    return (entry_number - 1) // 2 + 1
+
+
 class EntryPairLifecycle:
     def __init__(self, policy: EntryPolicy) -> None:
         self._policy = policy
@@ -40,13 +50,21 @@ class EntryPairLifecycle:
         # Pairs this Basket has completed, counted forward and never back.
         self._completed_pairs = 0
         self._waived_pair: int | None = None
+        # Every Entry this Basket has sold, by number. A Cooldown is the
+        # Basket holding both Entries of a Pair at once, so what ends one is
+        # either of them having gone — whether it went after the Pair formed
+        # or before its partner ever filled. Kept as the Entries themselves
+        # rather than as "the Pair that was broken up" because that is the
+        # same thing replay has to read back off the Entries still open, and
+        # a rule stated twice is a rule that drifts.
+        self._released_entries: set[int] = set()
 
     @classmethod
     def replayed(
         cls,
         policy: EntryPolicy,
         *,
-        open_entry_count: int,
+        open_entry_numbers: Sequence[int],
         settled_entry_count: int = 0,
         waived_pair: int | None,
     ) -> "EntryPairLifecycle":
@@ -66,11 +84,18 @@ class EntryPairLifecycle:
 
         The waiver takes effect only when it still names the Pair these Fills
         have just counted, never a Pair that has since replaced it.
+
+        Which Entries are open, rather than merely how many, because a Pair a
+        sale broke up is read back off exactly that — a Cooldown lifted that
+        way is not stored, it is restated by the Entries that are still here.
         """
         lifecycle = cls(policy)
-        lifecycle._entry_count = open_entry_count
-        lifecycle._filled_total = open_entry_count + settled_entry_count
+        lifecycle._entry_count = len(open_entry_numbers)
+        lifecycle._filled_total = lifecycle._entry_count + settled_entry_count
         lifecycle._completed_pairs = lifecycle._filled_total // 2
+        lifecycle._released_entries = set(range(1, lifecycle._filled_total + 1)) - set(
+            open_entry_numbers
+        )
         if waived_pair is not None:
             lifecycle._restore_waiver(waived_pair)
         return lifecycle
@@ -96,6 +121,8 @@ class EntryPairLifecycle:
             return EntryGate(EntryGateState.OPEN)
         if self._waived_pair == self._completed_pairs:
             return EntryGate(EntryGateState.OPEN)
+        if not self._holds_whole_pair(self._completed_pairs):
+            return EntryGate(EntryGateState.OPEN)
         return EntryGate(EntryGateState.COOLDOWN)
 
     def entry_gate_for(self, entry_number: int) -> EntryGate:
@@ -103,15 +130,12 @@ class EntryPairLifecycle:
 
         A Cooldown blocks the next Entry, not the ones an earlier,
         already-resolved Pair left open — those Entries were never blocked by
-        a Cooldown that only started after they filled. `entry_number` is a
-        lifetime count of every Entry the Basket has ever taken, so the Pair
-        it belongs to is read off it the same way `_count_fill` counts one.
+        a Cooldown that only started after they filled.
         """
         gate = self.entry_gate()
         if gate.state is not EntryGateState.COOLDOWN:
             return gate
-        pair_index = (entry_number - 1) // 2 + 1
-        if pair_index < self._completed_pairs:
+        if entry_pair_index(entry_number) < self._completed_pairs:
             return EntryGate(EntryGateState.OPEN)
         return gate
 
@@ -135,18 +159,24 @@ class EntryPairLifecycle:
         if self._filled_total % 2 == 0:
             self._completed_pairs += 1
 
-    def release_fill(self) -> None:
+    def release_fill(self, entry_number: int) -> None:
         """Hand back the place an Entry held when that Entry is sold.
 
         Only the open count gives up its place; the Fill still counts toward
-        whichever Pair it completed. A Cooldown does not lapse on its own, and
-        an Entry sold out of order — an earlier, already-resolved Pair's,
-        while a later one is still cooling down — must not lift a Cooldown it
-        was never part of.
+        whichever Pair it completed, so selling never unmakes or renames a Pair
+        that has formed.
+
+        What a sale does end is the Cooldown of the Pair it sold out of: that
+        Cooldown says the Basket is holding both Entries of the Pair at once,
+        which stops being true the moment either of them goes. Which is why the
+        Entry says which Pair it came from — one sold out of an earlier,
+        already-resolved Pair leaves a later Pair's Cooldown exactly where it
+        was, because that later Pair is still whole.
         """
         if self._entry_count == 0:
             raise ValueError("no Entry is open to release")
         self._entry_count -= 1
+        self._released_entries.add(entry_number)
 
     def waive_cooldown(self) -> None:
         """Let a trader open past the Cooldown blocking this Pair, on their say.
@@ -158,6 +188,15 @@ class EntryPairLifecycle:
         if self.entry_gate().state is not EntryGateState.COOLDOWN:
             raise ValueError("no Cooldown is blocking this Pair")
         self._waived_pair = self._completed_pairs
+
+    def _holds_whole_pair(self, pair: int) -> bool:
+        """Whether both Entries of a Pair are still open, which is what cools.
+
+        Asked of the Entries a Pair is made of rather than of when a sale
+        happened, so an Entry sold before its partner ever filled counts the
+        same as one sold after: either way the Basket never came to hold both.
+        """
+        return not {pair * 2 - 1, pair * 2} & self._released_entries
 
     def _restore_waiver(self, completed_pairs: int) -> None:
         """Put back a waiver replay read from storage, exactly as it stood.
@@ -174,3 +213,4 @@ class EntryPairLifecycle:
         self._filled_total = 0
         self._completed_pairs = 0
         self._waived_pair = None
+        self._released_entries = set()

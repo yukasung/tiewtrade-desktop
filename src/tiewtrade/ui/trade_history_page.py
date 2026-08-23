@@ -138,24 +138,24 @@ def fill_table[Record](
     table.setUpdatesEnabled(True)
 
 
-def _group(*widgets: QWidget, push_right: tuple[QWidget, ...] = ()) -> QWidget:
+def _group(*widgets: QWidget, stretch_before: QWidget | None = None) -> QWidget:
     """Controls that are read together and so wrap together.
 
-    A widget named in push_right is held at the group's own right edge: an
-    inner stretch sits just before it, and the group is given whatever room
-    is left on its line so that stretch has something to hold it against.
-    Without a push_right widget the group asks for no more than its
-    controls need, same as any other.
+    A stretch sits just before `stretch_before`, holding it and everything
+    after it at the group's own right edge, and the group is asked to expand
+    so that stretch has room to hold them against — the line it lands on is
+    what actually gives it that room, in `_arrange`. Without a
+    `stretch_before` the group asks for no more than its controls need.
     """
     group = QWidget()
     row = QHBoxLayout(group)
     row.setContentsMargins(0, 0, 0, 0)
     row.setSpacing(GROUP_SPACING)
     for widget in widgets:
-        if push_right and widget is push_right[0]:
+        if widget is stretch_before:
             row.addStretch()
         row.addWidget(widget)
-    if push_right:
+    if stretch_before is not None:
         group.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Minimum)
     return group
 
@@ -237,21 +237,27 @@ class FilterBar(QFrame):
             self.search_button,
             self.reset_button,
         )
-        push_right_widgets: tuple[QWidget, ...] = ()
+        total_caption: QLabel | None = None
         if show_total:
-            caption = QLabel("Total P/L")
-            caption.setObjectName("summaryLabel")
+            total_caption = QLabel("Total P/L")
+            total_caption.setObjectName("summaryLabel")
             self.total_label = QLabel()
             self.total_label.setObjectName("basketTotalPnl")
             self.total_label.setAccessibleName("Total P/L")
-            button_group_widgets = (*button_group_widgets, caption, self.total_label)
-            push_right_widgets = (caption, self.total_label)
+            button_group_widgets = (
+                *button_group_widgets,
+                total_caption,
+                self.total_label,
+            )
 
         self._groups = (
             _group(*self.range_chips.values()),
             _group(self.from_date, self.date_separator, self.to_date),
-            _group(*button_group_widgets, push_right=push_right_widgets),
+            _group(*button_group_widgets, stretch_before=total_caption),
         )
+        # How much of its line each group may take: only the one holding the
+        # total to the right edge asks for more than its own controls need.
+        self._group_stretches = (0, 0, 1 if show_total else 0)
         lines = tuple(_group_line() for _ in self._groups)
         self._lines = tuple(line for line, _ in lines)
         self._line_layouts = tuple(layout for _, layout in lines)
@@ -405,17 +411,11 @@ class FilterBar(QFrame):
             # Everything but the trailing stretch, which holds the groups left.
             while line_layout.count() > 1:
                 line_layout.takeAt(0)
-        for group, line_index in zip(self._groups, arrangement, strict=True):
+        for group, stretch, line_index in zip(
+            self._groups, self._group_stretches, arrangement, strict=True
+        ):
             line_layout = self._line_layouts[line_index]
-            # The one group asking to be pushed right takes whatever room is
-            # left on its line; the rest keep to the width their own controls
-            # need, same as before.
-            expands = (
-                group.sizePolicy().horizontalPolicy() == QSizePolicy.Policy.Expanding
-            )
-            line_layout.insertWidget(
-                line_layout.count() - 1, group, 1 if expands else 0
-            )
+            line_layout.insertWidget(line_layout.count() - 1, group, stretch)
         for index, line in enumerate(self._lines):
             line.setVisible(index in arrangement)
         self._arrangement = arrangement

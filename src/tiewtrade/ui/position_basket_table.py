@@ -22,7 +22,7 @@ from tiewtrade.application.trading_workspace import (
 )
 from tiewtrade.ui.blank_text import BLANK
 from tiewtrade.ui.display_time import display_timestamp
-from tiewtrade.ui.entry_gate_display import blocked_entry_reason, effective_entry_gate
+from tiewtrade.ui.entry_gate_display import blocked_entry_reason
 from tiewtrade.ui.money_text import money_text, price_text
 from tiewtrade.ui.sign_state import sign_colour
 from tiewtrade.ui.table_column import (
@@ -63,7 +63,7 @@ def _take_profit_price(row: _Row) -> str:
 
 def _entry_gate(row: _Row) -> str:
     """Whether this Entry's own Pair is what a Cooldown is blocking, and why."""
-    gate = effective_entry_gate(row.basket, row.entry.entry_number)
+    gate = row.basket.entry_gate_for(row.entry.entry_number)
     return blocked_entry_reason(gate) or "Active"
 
 
@@ -283,10 +283,10 @@ class PositionBasketTable(QWidget):
         button = QPushButton(self.CLOSE_LABEL)
         button.setObjectName("positionEntryCloseButton")
         button.setAccessibleName(f"Close Entry {entry_number} at Market")
-        cooling_down = (
-            effective_entry_gate(row.basket, entry_number) is BasketEntryGate.COOLDOWN
-        )
-        button.setEnabled(self._closing_enabled and not cooling_down)
+        # A Cooldown does not take this button away: selling one Entry of the
+        # cooling Pair is what ends the Cooldown, so the row it is standing on
+        # is the way out of it.
+        button.setEnabled(self._closing_enabled)
         button.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
         button.setCursor(Qt.CursorShape.PointingHandCursor)
         button.clicked.connect(
@@ -327,6 +327,16 @@ class PositionBasketTable(QWidget):
         """Take the button away while a sale of the whole Position is in flight."""
         self._closing_all_enabled = enabled
         self.close_all_button.setEnabled(enabled and self.close_all_button.isVisible())
+
+    def set_selling_enabled(self, enabled: bool) -> None:
+        """Every way out of the Position at once, for a sale that takes them all.
+
+        Close All sells what the per-row buttons sell, so leaving those live
+        while it is in flight would offer a second sale of an Entry already
+        being sold.
+        """
+        self.set_closing_enabled(enabled)
+        self.set_closing_all_enabled(enabled)
 
     def close_button(self, row: int) -> QPushButton | None:
         """The order button of a row, wherever the cell keeps it."""

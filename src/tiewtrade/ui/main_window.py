@@ -524,11 +524,43 @@ class MainWindow(QMainWindow):
         """
         if self._take_profit_confirmation_pending:
             return
+        self._once_the_position_is_read(
+            self._current_session(), self._ask_before_starting
+        )
+
+    def _current_session(self) -> ConfiguredPaperSession | None:
+        """The Session this window is on, or None before there is one.
+
+        The lifecycle workflow raises rather than answers when no Session has
+        been created yet, and every caller here treats that the same way it
+        treats any other reason there is nothing to act on.
+        """
         try:
-            session = self._lifecycle_workflow.snapshot.session
+            return self._lifecycle_workflow.snapshot.session
         except RuntimeError:
-            session = None
-        self._once_the_position_is_read(session, self._ask_before_starting)
+            return None
+
+    def _start_task(
+        self,
+        work: Callable[[], object],
+        *,
+        succeeded: Callable[[object], None],
+        failed: Callable[[object], None],
+        finished: Callable[[], None],
+    ) -> BackgroundTask:
+        """Run one piece of work off the UI thread, and hand back the handle.
+
+        The handle is what a caller holds to know its own work is still in
+        flight — the guard that keeps a second click from starting a second
+        one — so it is returned rather than kept here under a name this
+        window would have to invent.
+        """
+        task = BackgroundTask(work)
+        task.signals.succeeded.connect(succeeded)
+        task.signals.failed.connect(failed)
+        task.signals.finished.connect(finished)
+        self._thread_pool.start(task)
+        return task
 
     def _ask_before_starting(self) -> None:
         """Put the question the reading turned out to be worth, or none."""
@@ -951,9 +983,8 @@ class MainWindow(QMainWindow):
             or self._start_chart_feed is None
         ):
             return
-        try:
-            session = self._lifecycle_workflow.snapshot.session
-        except RuntimeError:
+        session = self._current_session()
+        if session is None:
             return
         self._start_chart_feed(session)
 
@@ -976,31 +1007,30 @@ class MainWindow(QMainWindow):
         close_entry = self._close_entry
         if close_entry is None or self._close_entry_task is not None:
             return
-        try:
-            session = self._lifecycle_workflow.snapshot.session
-        except RuntimeError:
+        session = self._current_session()
+        if session is None:
             return
         if not ask_about_selling_one_entry(self, entry_number):
             return
         self.workspace.position_basket.set_closing_enabled(False)
-        task = BackgroundTask(lambda: close_entry(session, entry_number))
-        task.signals.succeeded.connect(self._entry_closed)
-        task.signals.failed.connect(self._entry_close_failed)
-        task.signals.finished.connect(self._entry_close_finished)
-        self._close_entry_task = task
-        self._thread_pool.start(task)
+        self._close_entry_task = self._start_task(
+            lambda: close_entry(session, entry_number),
+            succeeded=self._position_action_landed,
+            failed=self._entry_close_failed,
+            finished=self._entry_close_finished,
+        )
 
     @Slot(object)
-    def _entry_closed(self, _result: object) -> None:
+    def _position_action_landed(self, _result: object) -> None:
         """Read the Basket back, which is how a stopped Bot's tab hears of it.
 
-        A running Runtime publishes the sale itself; a stopped one leaves the
-        database as the only witness, and the tab is showing what it last read
-        from it — an Entry that has just gone.
+        A running Runtime publishes what it did itself — the sale, the sold
+        Entry, the lifted gate. A stopped one leaves the database as the only
+        witness, and the tab is showing what it last read from it, which is
+        the state before the action landed.
         """
-        try:
-            session = self._lifecycle_workflow.snapshot.session
-        except RuntimeError:
+        session = self._current_session()
+        if session is None:
             return
         if self._lifecycle_workflow.snapshot.state is not BotRuntimeState.RUNNING:
             self._open_position.read_for(session)
@@ -1032,34 +1062,18 @@ class MainWindow(QMainWindow):
         basket = self.workspace.position_basket.basket
         if basket is None or basket.entry_gate is not BasketEntryGate.COOLDOWN:
             return
-        try:
-            session = self._lifecycle_workflow.snapshot.session
-        except RuntimeError:
+        session = self._current_session()
+        if session is None:
             return
         if not ask_about_cancelling_cooldown(self):
             return
         self.workspace.position_basket.set_cancelling_enabled(False)
-        task = BackgroundTask(lambda: cancel_cooldown(session))
-        task.signals.succeeded.connect(self._cooldown_cancelled)
-        task.signals.failed.connect(self._cancel_cooldown_failed)
-        task.signals.finished.connect(self._cancel_cooldown_finished)
-        self._cancel_cooldown_task = task
-        self._thread_pool.start(task)
-
-    @Slot(object)
-    def _cooldown_cancelled(self, _result: object) -> None:
-        """Read the Basket back, which is how a stopped Bot's tab hears of it.
-
-        A running Runtime publishes the waiver itself; a stopped one leaves
-        the database as the only witness, and the tab is showing what it last
-        read from it — a gate that has just opened.
-        """
-        try:
-            session = self._lifecycle_workflow.snapshot.session
-        except RuntimeError:
-            return
-        if self._lifecycle_workflow.snapshot.state is not BotRuntimeState.RUNNING:
-            self._open_position.read_for(session)
+        self._cancel_cooldown_task = self._start_task(
+            lambda: cancel_cooldown(session),
+            succeeded=self._position_action_landed,
+            failed=self._cancel_cooldown_failed,
+            finished=self._cancel_cooldown_finished,
+        )
 
     @Slot(object)
     def _cancel_cooldown_failed(self, error: object) -> None:
@@ -1085,35 +1099,18 @@ class MainWindow(QMainWindow):
         close_position = self._close_position
         if close_position is None or self._close_all_task is not None:
             return
-        try:
-            session = self._lifecycle_workflow.snapshot.session
-        except RuntimeError:
+        session = self._current_session()
+        if session is None:
             return
         if not ask_about_closing_all_at_market(self):
             return
-        self.workspace.position_basket.set_closing_enabled(False)
-        self.workspace.position_basket.set_closing_all_enabled(False)
-        task = BackgroundTask(lambda: close_position(session))
-        task.signals.succeeded.connect(self._all_closed)
-        task.signals.failed.connect(self._close_all_failed)
-        task.signals.finished.connect(self._close_all_finished)
-        self._close_all_task = task
-        self._thread_pool.start(task)
-
-    @Slot(object)
-    def _all_closed(self, _result: object) -> None:
-        """Read the Basket back, which is how a stopped Bot's tab hears of it.
-
-        A running Runtime publishes the sale itself; a stopped one leaves the
-        database as the only witness, and the tab is showing what it last read
-        from it — a Position that has just gone.
-        """
-        try:
-            session = self._lifecycle_workflow.snapshot.session
-        except RuntimeError:
-            return
-        if self._lifecycle_workflow.snapshot.state is not BotRuntimeState.RUNNING:
-            self._open_position.read_for(session)
+        self.workspace.position_basket.set_selling_enabled(False)
+        self._close_all_task = self._start_task(
+            lambda: close_position(session),
+            succeeded=self._position_action_landed,
+            failed=self._close_all_failed,
+            finished=self._close_all_finished,
+        )
 
     @Slot(object)
     def _close_all_failed(self, error: object) -> None:
@@ -1126,8 +1123,7 @@ class MainWindow(QMainWindow):
     @Slot()
     def _close_all_finished(self) -> None:
         self._close_all_task = None
-        self.workspace.position_basket.set_closing_enabled(True)
-        self.workspace.position_basket.set_closing_all_enabled(True)
+        self.workspace.position_basket.set_selling_enabled(True)
 
     @Slot()
     def _settings_requested(self) -> None:
@@ -1151,12 +1147,12 @@ class MainWindow(QMainWindow):
         if not ask_about_clearing_database(self.workspace.settings_panel):
             return
         self.workspace.settings_panel.set_busy(True)
-        task = BackgroundTask(clear_database)
-        task.signals.succeeded.connect(self._database_cleared)
-        task.signals.failed.connect(self._clear_database_failed)
-        task.signals.finished.connect(self._clear_database_finished)
-        self._clear_database_task = task
-        self._thread_pool.start(task)
+        self._clear_database_task = self._start_task(
+            clear_database,
+            succeeded=self._database_cleared,
+            failed=self._clear_database_failed,
+            finished=self._clear_database_finished,
+        )
 
     @Slot(object)
     def _database_cleared(self, _result: object) -> None:
@@ -1169,10 +1165,7 @@ class MainWindow(QMainWindow):
         an actual sale.
         """
         self._history_workflow.start()
-        try:
-            session = self._lifecycle_workflow.snapshot.session
-        except RuntimeError:
-            session = None
+        session = self._current_session()
         if session is not None:
             self._open_position.read_for(session)
         self.workspace.hide_settings()
@@ -1196,10 +1189,8 @@ class MainWindow(QMainWindow):
     def _chart_view_requested(self, value: object) -> None:
         if not isinstance(value, ChartViewSelection):
             return
-        session: ConfiguredPaperSession | None
-        try:
-            session = self._lifecycle_workflow.snapshot.session
-        except RuntimeError:
+        session = self._current_session()
+        if session is None:
             session = self._default_chart_session
         if session is None:
             return

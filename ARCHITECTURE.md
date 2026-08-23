@@ -131,6 +131,12 @@ Cooldown หนึ่งรอบ ผ่าน use case ที่ `application` 
 และถูก apply กลับเข้า `EntryPairLifecycle` ทุกครั้งที่ Basket replay ผ่าน `reopen_basket`
 เพื่อให้อยู่รอด restart
 
+การจบ Cooldown เพราะ Pair ล่าสุดถูกปิดไปหนึ่ง Entry เป็นคนละเรื่องกับ waiver และไม่ถูก
+persist: `EntryPairLifecycle.release_fill` รับเลข Entry ที่ขายเข้ามาเพื่อรู้ว่าเป็น Pair ไหน
+ส่วน `replayed` อ่านข้อเท็จจริงเดียวกันนี้กลับจากเลข Entry ที่ยังเปิดค้าง จึงไม่มี schema หรือ
+migration เพิ่ม — waiver คือคำสั่งของผู้ใช้ที่ไม่มี Fill ใดบันทึกไว้ จึงต้องเก็บ ส่วนการที่ Pair
+ไม่ครบแล้วเป็นสิ่งที่ Entries ที่เหลือบอกได้เอง
+
 Paper Spot และ Paper Futures ต่าง waive Cooldown ได้ทั้งคู่ผ่าน coordinator เดียวกัน แต่
 ต่างกันที่ persistence: Paper Spot persist waiver ลง SQLite เพราะ replay Basket ที่เปิดอยู่
 กลับมาได้ ส่วน Paper Futures ไม่ persist เพราะไม่เคยรับ Basket ที่เปิดค้างกลับมาเลย waiver

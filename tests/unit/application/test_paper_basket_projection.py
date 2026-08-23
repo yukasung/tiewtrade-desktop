@@ -121,6 +121,7 @@ def futures_snapshot(
         ),
         failure_reason=None,
         entry_gate=OPEN_GATE,
+        entry_completed_pairs=0,
     )
 
 
