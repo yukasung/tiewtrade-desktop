@@ -6,6 +6,7 @@ from PySide6.QtWidgets import (
     QFrame,
     QHBoxLayout,
     QLabel,
+    QMessageBox,
     QPushButton,
     QScrollArea,
     QSizePolicy,
@@ -64,6 +65,19 @@ class TradingWorkspace(QWidget):
         self.unavailable_retry_button.setProperty("retryButton", True)
 
         self.chart = CandlestickChartWidget()
+
+        self.workspace_header = QFrame()
+        self.workspace_header.setObjectName("workspaceToolbar")
+        self.toolbar_title = QLabel("TiewTrade")
+        self.toolbar_title.setObjectName("toolbarTitle")
+        self.settings_button = QPushButton("Settings")
+        self.settings_button.setObjectName("secondaryButton")
+        self.settings_button.clicked.connect(self._show_settings_placeholder)
+        header_layout = QHBoxLayout(self.workspace_header)
+        header_layout.setContentsMargins(16, 10, 16, 10)
+        header_layout.addWidget(self.toolbar_title)
+        header_layout.addStretch()
+        header_layout.addWidget(self.settings_button)
 
         self._bot_pages = QStackedWidget()
         self._bot_pages.setObjectName("botControlPages")
@@ -147,6 +161,10 @@ class TradingWorkspace(QWidget):
         self.setup.set_loading(busy)
         self.unavailable_retry_button.setDisabled(busy)
 
+    @Slot()
+    def _show_settings_placeholder(self) -> None:
+        QMessageBox.information(self, "Settings", "Coming soon.")
+
     def _build_layout(self) -> None:
         root = QVBoxLayout(self)
         root.setContentsMargins(16, 16, 16, 16)
@@ -206,8 +224,16 @@ class TradingWorkspace(QWidget):
         self.bot_control_scroll.setWidget(self._bot_pages)
         bot_layout.addWidget(self.bot_control_scroll, 1)
 
+        self.workspace_header.setFixedWidth(BOT_CONTROL_WIDTH)
+        side_column = QWidget()
+        side_layout = QVBoxLayout(side_column)
+        side_layout.setContentsMargins(0, 0, 0, 0)
+        side_layout.setSpacing(12)
+        side_layout.addWidget(self.workspace_header)
+        side_layout.addWidget(self.bot_control, 1)
+
         self._body_layout.addWidget(primary, 1)
-        self._body_layout.addWidget(self.bot_control)
+        self._body_layout.addWidget(side_column)
         root.addWidget(self._body, 1)
 
     def show_tab(self, tab: WorkspaceTab) -> None:

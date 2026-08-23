@@ -2,9 +2,10 @@ from dataclasses import replace
 from datetime import UTC, datetime
 from decimal import Decimal
 from pathlib import Path
+from unittest.mock import patch
 
 from PySide6.QtCore import QPoint, QRect
-from PySide6.QtWidgets import QWidget
+from PySide6.QtWidgets import QMessageBox, QWidget
 from pytestqt.qtbot import QtBot
 
 from tests.support.paper_session_setup import configured_spot_session
@@ -112,6 +113,33 @@ def test_workspace_tabs_render_independent_scoped_states(qtbot: QtBot) -> None:
 
     assert workspace.position_basket.state_label.text() == ""
     assert workspace.position_basket.table.rowCount() == 1
+
+
+def test_bot_control_toolbar_is_a_separate_card_above_bot_control(
+    qtbot: QtBot,
+) -> None:
+    workspace = TradingWorkspace()
+    qtbot.addWidget(workspace)
+    workspace.resize(1200, 700)
+    workspace.show()
+
+    assert workspace.toolbar_title.text() == "TiewTrade"
+    assert workspace.settings_button.text() == "Settings"
+    assert workspace.workspace_header.parent() is not workspace.bot_control
+    header_rect = _widget_rect_in_viewport(workspace.workspace_header, workspace)
+    bot_control_rect = _widget_rect_in_viewport(workspace.bot_control, workspace)
+    assert header_rect.bottom() < bot_control_rect.top()
+    assert header_rect.left() == bot_control_rect.left()
+
+
+def test_settings_button_shows_a_placeholder_message(qtbot: QtBot) -> None:
+    workspace = TradingWorkspace()
+    qtbot.addWidget(workspace)
+
+    with patch.object(QMessageBox, "information") as information:
+        workspace.settings_button.click()
+
+    information.assert_called_once()
 
 
 def test_ui_modules_do_not_import_prohibited_adapters() -> None:

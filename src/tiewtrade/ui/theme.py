@@ -11,7 +11,8 @@ QMainWindow, QWidget#workspace, QWidget#workspaceContent {
     font-size: 14px;
 }
 QFrame#botControl, QFrame#card,
-QFrame#statusCard, QFrame#filterCard, QFrame#emptyPanel {
+QFrame#statusCard, QFrame#filterCard, QFrame#emptyPanel,
+QFrame#workspaceToolbar {
     background: #141A22;
     border: 1px solid #2B3441;
     border-radius: 8px;
@@ -20,6 +21,11 @@ QFrame#historyFilterBar {
     background: #10151C;
     border-top: 1px solid #2B3441;
     border-bottom: 1px solid #2B3441;
+}
+QLabel#toolbarTitle {
+    color: #F1F5F9;
+    font-size: 16px;
+    font-weight: 700;
 }
 QWidget#candlestickChart {
     background: #10151C;
