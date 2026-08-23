@@ -159,6 +159,81 @@ def test_settings_button_emits_settings_requested(qtbot: QtBot) -> None:
         workspace.settings_button.click()
 
 
+def test_show_settings_replaces_setup_in_place(qtbot: QtBot) -> None:
+    workspace = TradingWorkspace()
+    qtbot.addWidget(workspace)
+    workspace.show()
+    assert workspace.setup.isVisible()
+
+    workspace.show_settings()
+
+    assert workspace.is_showing_settings
+    assert workspace.settings_panel.isVisible()
+    assert workspace.settings_panel.clear_database_button.isEnabled()
+
+
+def test_hide_settings_returns_to_setup_by_default(qtbot: QtBot) -> None:
+    workspace = TradingWorkspace()
+    qtbot.addWidget(workspace)
+    workspace.show()
+
+    workspace.show_settings()
+    workspace.hide_settings()
+
+    assert not workspace.is_showing_settings
+    assert workspace.setup.isVisible()
+
+
+def test_hide_settings_returns_to_bot_control_after_a_session_was_shown(
+    qtbot: QtBot,
+) -> None:
+    workspace = TradingWorkspace()
+    qtbot.addWidget(workspace)
+    workspace.show()
+    workspace.show_configured_session(configured_spot_session())
+    assert workspace.bot_control_widget.isVisible()
+
+    workspace.show_settings()
+    assert workspace.is_showing_settings
+
+    workspace.hide_settings()
+
+    assert not workspace.is_showing_settings
+    assert workspace.bot_control_widget.isVisible()
+
+
+def test_back_button_hides_settings(qtbot: QtBot) -> None:
+    workspace = TradingWorkspace()
+    qtbot.addWidget(workspace)
+    workspace.show()
+
+    workspace.show_settings()
+    workspace.settings_panel.back_button.click()
+
+    assert not workspace.is_showing_settings
+    assert workspace.setup.isVisible()
+
+
+def test_a_state_update_while_settings_is_open_does_not_switch_pages(
+    qtbot: QtBot,
+) -> None:
+    """A running Bot's own snapshots must not sweep Settings off screen."""
+    workspace = TradingWorkspace()
+    qtbot.addWidget(workspace)
+    workspace.show()
+    workspace.show_configured_session(configured_spot_session())
+    workspace.show_settings()
+
+    workspace.show_configured_session(configured_spot_session())
+
+    assert workspace.is_showing_settings
+    assert workspace.settings_panel.isVisible()
+
+    workspace.hide_settings()
+
+    assert workspace.bot_control_widget.isVisible()
+
+
 def test_ui_modules_do_not_import_prohibited_adapters() -> None:
     ui_paths = Path("src/tiewtrade/ui").glob("*.py")
     ui_source = "\n".join(path.read_text() for path in ui_paths)

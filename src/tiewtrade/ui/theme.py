@@ -357,10 +357,6 @@ QLabel#systemNotice {
     color: #F2C86B;
     padding: 4px 10px;
 }
-QDialog {
-    background: #141A22;
-    color: #F1F5F9;
-}
 QMessageBox {
     background: #141A22;
     color: #F1F5F9;

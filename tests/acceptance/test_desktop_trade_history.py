@@ -465,6 +465,10 @@ def _composed_window(
 
     monkeypatch.setattr(ui_desktop, "QApplication", NonBlockingApplication)
     monkeypatch.setattr(ui_desktop, "MainWindow", CapturedMainWindow)
+    # This suite is about Trade History over a real composition, offline —
+    # not the Setup screen's own chart preview, which reaches Binance's
+    # public endpoint on its own as soon as the Setup screen shows.
+    monkeypatch.setattr(desktop_main, "_default_chart_session", lambda: None)
     assert desktop_main.run_desktop(path) == 0
     assert captured_window is not None
     return captured_window

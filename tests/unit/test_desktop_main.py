@@ -9,6 +9,7 @@ from pathlib import Path
 from threading import Barrier, BrokenBarrierError, Event, Thread
 from types import TracebackType
 from typing import cast
+from uuid import UUID
 
 import pytest
 from pytest import MonkeyPatch
@@ -57,6 +58,7 @@ from tiewtrade.integrations.sqlite.paper_runtime_lifecycle import (
     SQLitePaperRuntimeLifecycle,
 )
 from tiewtrade.integrations.sqlite.trade_history import SQLiteTradeHistory
+from tiewtrade.trading.session_config import MarketType
 from tiewtrade.trading.symbol_rules import SymbolRules
 from tiewtrade.ui.bot_lifecycle_workflow import LifecycleAction, RuntimeSnapshotRelay
 from tiewtrade.ui.main_window import BotActions, ChartSources
@@ -313,6 +315,34 @@ def test_desktop_composition_supplies_chart_loader_without_ui_adapter_imports(
         "src/tiewtrade/application/chart_history.py"
     ).read_text()
     assert "tiewtrade.integrations" not in chart_history_source
+
+
+def test_desktop_composition_supplies_a_chart_preview_session_for_setup(
+    tmp_path: Path,
+    monkeypatch: MonkeyPatch,
+) -> None:
+    """The Setup screen needs something to chart before a Session exists.
+
+    Built the same way a real Session is, so nothing downstream has to know
+    it stands in for one that was never created — and never persisted, so
+    it never reaches `create_active` for real.
+    """
+    captured: dict[str, object] = {}
+
+    def capture_desktop(**dependencies: object) -> int:
+        captured.update(dependencies)
+        return 0
+
+    monkeypatch.setattr(desktop_main, "run_desktop_ui", capture_desktop)
+
+    assert desktop_main.run_desktop(tmp_path / "tiewtrade.sqlite3") == 0
+
+    default_session = cast(ChartSources, captured["chart"]).default_session
+    assert isinstance(default_session, ConfiguredPaperSession)
+    assert default_session.market_data.symbol == "BTCUSDT"
+    assert default_session.market_data.timeframe == "5m"
+    assert default_session.config.market_type is MarketType.SPOT
+    assert default_session.config.session_id == UUID(int=0)
 
 
 def test_desktop_composition_supplies_migrated_trade_history_queries(

@@ -6,6 +6,7 @@ from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
 from threading import Event, Lock
+from uuid import UUID
 
 from tiewtrade.application.bot_control import (
     BotControlSnapshot,
@@ -30,13 +31,15 @@ from tiewtrade.application.paper_runtime import (
 from tiewtrade.application.paper_session_setup import (
     ConfiguredPaperSession,
     CreatePaperSession,
+    PaperSessionCreateOutcome,
+    PaperSessionSetupValues,
     validate_paper_session,
 )
 from tiewtrade.application.paper_session_sink import (
     close_one_entry_at_rest,
     waive_cooldown_at_rest,
 )
-from tiewtrade.application.paper_symbols import paper_symbol_rules
+from tiewtrade.application.paper_symbols import PAPER_SYMBOLS, paper_symbol_rules
 from tiewtrade.application.trading_workspace import BotRuntimeState
 from tiewtrade.decimal_context import configure_decimal_context
 from tiewtrade.desktop_logging import configure_desktop_logging
@@ -541,6 +544,34 @@ def _bot_actions(
     )
 
 
+# Never persisted, and reserved rather than random, so it can never collide
+# with a real Session's id.
+_CHART_PREVIEW_SESSION_ID = UUID(int=0)
+
+
+def _default_chart_session() -> ConfiguredPaperSession:
+    """A throwaway Session standing in for 'no Bot Session yet'.
+
+    Built the same way a real one is, so every invariant a Session carries
+    already holds — but `create_active` never touches SQLite, so this is
+    never written down and never trades.
+    """
+    create = CreatePaperSession(
+        create_active=lambda session: PaperSessionCreateOutcome(session, True),
+        session_ids=lambda: _CHART_PREVIEW_SESSION_ID,
+    )
+    return create.execute(
+        PaperSessionSetupValues(
+            market_type="spot",
+            symbol=PAPER_SYMBOLS[0],
+            timeframe="5m",
+            capital_per_entry="1",
+            max_entries="2",
+            futures_leverage=None,
+        )
+    ).session
+
+
 def _chart_sources(
     stores: _DesktopStores,
     *,
@@ -614,6 +645,7 @@ def _chart_sources(
         facts=chart_fact_relay,
         start_feed=start_feed,
         select_view=select_view,
+        default_session=_default_chart_session(),
     )
 
 

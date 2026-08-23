@@ -58,7 +58,6 @@ from tiewtrade.ui.session_workflow import (
     LoadActiveSession,
     SessionWorkflow,
 )
-from tiewtrade.ui.settings_dialog import SettingsDialog
 from tiewtrade.ui.settings_dialogs import ask_about_clearing_database
 from tiewtrade.ui.start_decision import StartCourse, course_before_start
 from tiewtrade.ui.start_dialogs import (
@@ -156,6 +155,9 @@ class ChartSources:
         None
     )
     clock: Callable[[], datetime] = lambda: datetime.now(UTC)
+    # Stands in for "no Bot Session yet," so the chart has something to show
+    # on the Setup screen instead of staying blank until one is created.
+    default_session: ConfiguredPaperSession | None = None
 
 
 # Frozen and empty, so one instance can stand for "none of this is wired".
@@ -211,6 +213,7 @@ class MainWindow(QMainWindow):
         self._start_chart_feed = chart.start_feed
         self._select_chart_view = chart.select_view
         self._stop_chart_feed = chart.stop_feed
+        self._default_chart_session = chart.default_session
         self._chart_feed_state: ChartFeedState | None = None
         self._bot_stopped_reason = ""
         self._bot_reconnecting = False
@@ -277,6 +280,9 @@ class MainWindow(QMainWindow):
             self._close_all_requested
         )
         self.workspace.settings_requested.connect(self._settings_requested)
+        self.workspace.settings_panel.clear_database_requested.connect(
+            self._clear_database_requested
+        )
         self._open_position.reading_landed.connect(self._position_reading_landed)
 
         self._lifecycle_workflow = BotLifecycleWorkflow(
@@ -715,6 +721,9 @@ class MainWindow(QMainWindow):
             inspect_startup=not start_after_create,
         )
         self._open_position.read_for(session)
+        self._start_chart_for(session)
+
+    def _start_chart_for(self, session: ConfiguredPaperSession) -> None:
         if self._load_chart is not None:
             self._chart_workflow.start(session)
         if self._start_chart_feed is not None:
@@ -1122,56 +1131,78 @@ class MainWindow(QMainWindow):
 
     @Slot()
     def _settings_requested(self) -> None:
-        can_clear_database = self._last_bot_state not in _CLEAR_DATABASE_BLOCKED_STATES
-        dialog = SettingsDialog(self, can_clear_database=can_clear_database)
-        dialog.clear_database_requested.connect(
-            lambda: self._clear_database_requested(dialog)
-        )
-        dialog.exec()
+        if self.workspace.is_showing_settings:
+            self.workspace.hide_settings()
+            return
+        self.workspace.show_settings()
 
-    def _clear_database_requested(self, dialog: SettingsDialog) -> None:
+    @Slot()
+    def _clear_database_requested(self) -> None:
         clear_database = self._clear_database
         if clear_database is None or self._clear_database_task is not None:
             return
-        if not ask_about_clearing_database(dialog):
+        if self._last_bot_state in _CLEAR_DATABASE_BLOCKED_STATES:
+            QMessageBox.warning(
+                self.workspace.settings_panel,
+                "Settings",
+                "Stop the bot before clearing the database.",
+            )
             return
-        dialog.set_busy(True)
+        if not ask_about_clearing_database(self.workspace.settings_panel):
+            return
+        self.workspace.settings_panel.set_busy(True)
         task = BackgroundTask(clear_database)
-        task.signals.succeeded.connect(lambda _: self._database_cleared(dialog))
-        task.signals.failed.connect(
-            lambda error: self._clear_database_failed(dialog, error)
-        )
-        task.signals.finished.connect(lambda: self._clear_database_finished(dialog))
+        task.signals.succeeded.connect(self._database_cleared)
+        task.signals.failed.connect(self._clear_database_failed)
+        task.signals.finished.connect(self._clear_database_finished)
         self._clear_database_task = task
         self._thread_pool.start(task)
 
-    def _database_cleared(self, dialog: SettingsDialog) -> None:
-        self._history_workflow.start()
-        dialog.accept()
-        QMessageBox.information(self, "Settings", "The database has been cleared.")
+    @Slot(object)
+    def _database_cleared(self, _result: object) -> None:
+        """Read the Position tab back, the same way a Close All does.
 
-    def _clear_database_failed(self, dialog: SettingsDialog, error: object) -> None:
+        Whatever Basket the tab was showing had its row wiped along with
+        everything else. Left alone, a stopped Session's Close All would
+        still read as available and, pressed, find nothing left to sell —
+        so the tab is asked again, the way `_all_closed` already does after
+        an actual sale.
+        """
+        self._history_workflow.start()
+        try:
+            session = self._lifecycle_workflow.snapshot.session
+        except RuntimeError:
+            session = None
+        if session is not None:
+            self._open_position.read_for(session)
+        self.workspace.hide_settings()
+
+    @Slot(object)
+    def _clear_database_failed(self, error: object) -> None:
         if isinstance(error, BaseException):
             _LOGGER.exception("Could not clear the database", exc_info=error)
         QMessageBox.warning(
-            dialog,
+            self.workspace.settings_panel,
             "Settings",
             "Could not clear the database. Check your connection, then try again.",
         )
 
-    def _clear_database_finished(self, dialog: SettingsDialog) -> None:
+    @Slot()
+    def _clear_database_finished(self) -> None:
         self._clear_database_task = None
-        dialog.set_busy(False)
+        self.workspace.settings_panel.set_busy(False)
 
     @Slot(object)
     def _chart_view_requested(self, value: object) -> None:
         if not isinstance(value, ChartViewSelection):
             return
+        session: ConfiguredPaperSession | None
         try:
-            snapshot = self._lifecycle_workflow.snapshot
+            session = self._lifecycle_workflow.snapshot.session
         except RuntimeError:
+            session = self._default_chart_session
+        if session is None:
             return
-        session = snapshot.session
         self._chart_workflow.select_view(value)
         if self._select_chart_view is not None:
             self._select_chart_view(session, value)
@@ -1204,6 +1235,8 @@ class MainWindow(QMainWindow):
     @Slot()
     def _show_setup(self) -> None:
         self.workspace.show_setup()
+        if self._default_chart_session is not None:
+            self._start_chart_for(self._default_chart_session)
 
     @Slot()
     def _start_trade_history_once(self) -> None:
