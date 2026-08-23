@@ -1,7 +1,8 @@
 from decimal import Decimal
 
-from PySide6.QtWidgets import QWidget
+from PySide6.QtWidgets import QLabel, QWidget
 
+from tiewtrade.ui.money_text import money_text
 from tiewtrade.ui.theme import NEGATIVE_COLOR, POSITIVE_COLOR
 
 
@@ -30,3 +31,18 @@ def paint_by_sign(widget: QWidget, value: Decimal) -> None:
     """
     colour = sign_colour(value)
     widget.setStyleSheet("" if colour is None else f"color: {colour};")
+
+
+def render_realized_total(label: QLabel, value: Decimal | None) -> None:
+    """A realised total on a label, or nothing before one has been read.
+
+    Zero is a real break-even result across whatever was totalled, not the
+    "hasn't closed yet" case a per-row dash guards against, so it reads as an
+    amount rather than a blank.
+    """
+    if value is None:
+        label.clear()
+        label.setStyleSheet("")
+        return
+    label.setText(money_text(value))
+    paint_by_sign(label, value)

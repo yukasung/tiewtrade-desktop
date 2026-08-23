@@ -1,5 +1,6 @@
 from collections.abc import Sequence
 from datetime import date
+from decimal import Decimal
 
 from PySide6.QtCore import QDate, QEvent, QObject, QSignalBlocker, Qt, Signal, Slot
 from PySide6.QtGui import QKeyEvent, QResizeEvent
@@ -25,6 +26,7 @@ from tiewtrade.application.trade_history import (
 )
 from tiewtrade.ui.display_time import display_today
 from tiewtrade.ui.history_section import HistorySection
+from tiewtrade.ui.sign_state import render_realized_total
 from tiewtrade.ui.table_column import Column, headers, table_item
 from tiewtrade.ui.trade_history_presenter import (
     BASKET_COLUMNS,
@@ -136,14 +138,25 @@ def fill_table[Record](
     table.setUpdatesEnabled(True)
 
 
-def _group(*widgets: QWidget) -> QWidget:
-    """Controls that are read together and so wrap together."""
+def _group(*widgets: QWidget, push_right: tuple[QWidget, ...] = ()) -> QWidget:
+    """Controls that are read together and so wrap together.
+
+    A widget named in push_right is held at the group's own right edge: an
+    inner stretch sits just before it, and the group is given whatever room
+    is left on its line so that stretch has something to hold it against.
+    Without a push_right widget the group asks for no more than its
+    controls need, same as any other.
+    """
     group = QWidget()
     row = QHBoxLayout(group)
     row.setContentsMargins(0, 0, 0, 0)
     row.setSpacing(GROUP_SPACING)
     for widget in widgets:
+        if push_right and widget is push_right[0]:
+            row.addStretch()
         row.addWidget(widget)
+    if push_right:
+        group.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Minimum)
     return group
 
 
@@ -176,7 +189,9 @@ class FilterBar(QFrame):
     apply_filters_requested = Signal(object)
     reset_requested = Signal()
 
-    def __init__(self, parent: QWidget | None = None) -> None:
+    def __init__(
+        self, *, show_total: bool = False, parent: QWidget | None = None
+    ) -> None:
         super().__init__(parent)
         self.setObjectName("historyFilterBar")
 
@@ -215,10 +230,27 @@ class FilterBar(QFrame):
         self.reset_button.clicked.connect(self._reset_filters)
         self.search_button.clicked.connect(self._apply_filters)
 
+        # Read against the same range Search and Reset just picked, so it
+        # sits right after them rather than off on its own.
+        self.total_label: QLabel | None = None
+        button_group_widgets: tuple[QWidget, ...] = (
+            self.search_button,
+            self.reset_button,
+        )
+        push_right_widgets: tuple[QWidget, ...] = ()
+        if show_total:
+            caption = QLabel("Total P/L")
+            caption.setObjectName("summaryLabel")
+            self.total_label = QLabel()
+            self.total_label.setObjectName("basketTotalPnl")
+            self.total_label.setAccessibleName("Total P/L")
+            button_group_widgets = (*button_group_widgets, caption, self.total_label)
+            push_right_widgets = (caption, self.total_label)
+
         self._groups = (
             _group(*self.range_chips.values()),
             _group(self.from_date, self.date_separator, self.to_date),
-            _group(self.search_button, self.reset_button),
+            _group(*button_group_widgets, push_right=push_right_widgets),
         )
         lines = tuple(_group_line() for _ in self._groups)
         self._lines = tuple(line for line, _ in lines)
@@ -239,6 +271,14 @@ class FilterBar(QFrame):
             from_date=self.from_date.optional_date(),
             to_date=self.to_date.optional_date(),
         )
+
+    def set_total(self, value: Decimal | None) -> None:
+        """The realised total for the range currently filtered to, or
+        nothing before a result for it has come back.
+        """
+        if self.total_label is None:
+            return
+        render_realized_total(self.total_label, value)
 
     def set_controls_enabled(self, enabled: bool) -> None:
         for widget in (
@@ -367,7 +407,15 @@ class FilterBar(QFrame):
                 line_layout.takeAt(0)
         for group, line_index in zip(self._groups, arrangement, strict=True):
             line_layout = self._line_layouts[line_index]
-            line_layout.insertWidget(line_layout.count() - 1, group)
+            # The one group asking to be pushed right takes whatever room is
+            # left on its line; the rest keep to the width their own controls
+            # need, same as before.
+            expands = (
+                group.sizePolicy().horizontalPolicy() == QSizePolicy.Policy.Expanding
+            )
+            line_layout.insertWidget(
+                line_layout.count() - 1, group, 1 if expands else 0
+            )
         for index, line in enumerate(self._lines):
             line.setVisible(index in arrangement)
         self._arrangement = arrangement
@@ -396,7 +444,7 @@ class TradeHistoryPage(QWidget):
         # range it is read over. Only the visible bar can be clicked, and the
         # visible bar is always the active half, so the workflow can apply
         # what it is handed to the half it is already showing.
-        self.basket_filters = FilterBar()
+        self.basket_filters = FilterBar(show_total=True)
         self.trade_filters = FilterBar()
         for bar in (self.basket_filters, self.trade_filters):
             bar.apply_filters_requested.connect(self.apply_filters_requested)
@@ -431,6 +479,9 @@ class TradeHistoryPage(QWidget):
         self.basket_empty_state = self.baskets.empty_state
         self.basket_state = self.baskets.state
         self.retry_baskets_button = self.baskets.retry_button
+        # Always built: basket_filters above is constructed with show_total.
+        assert self.basket_filters.total_label is not None
+        self.basket_total = self.basket_filters.total_label
         self.fill_table = self.fills.table
         self.fill_empty_state = self.fills.empty_state
         self.fill_state = self.fills.state
@@ -463,6 +514,7 @@ class TradeHistoryPage(QWidget):
     @Slot(object)
     def show_baskets(self, result: BasketHistoryResult) -> None:
         fill_table(self.basket_table, BASKET_COLUMNS, result.items)
+        self.basket_filters.set_total(result.realized_pnl)
 
         self._has_basket_result = True
         self.retry_baskets_button.setVisible(False)
@@ -591,3 +643,4 @@ class TradeHistoryPage(QWidget):
     def _clear_basket_result(self) -> None:
         self._has_basket_result = False
         self.baskets.clear_rows()
+        self.basket_filters.set_total(None)

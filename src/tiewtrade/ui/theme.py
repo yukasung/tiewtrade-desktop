@@ -51,6 +51,9 @@ QLabel#summaryValue {
     color: #F1F5F9;
     font-weight: 700;
 }
+QLabel#basketTotalPnl {
+    font-weight: 700;
+}
 QWidget[state="warning"] {
     background: #2A2412;
     color: #F0B90B;

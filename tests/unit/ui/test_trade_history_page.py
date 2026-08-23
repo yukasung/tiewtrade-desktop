@@ -24,7 +24,7 @@ from tiewtrade.trading.session_config import MarketType, TradeMode
 from tiewtrade.ui.blank_text import BLANK
 from tiewtrade.ui.display_time import display_today
 from tiewtrade.ui.table_column import CENTER, Column
-from tiewtrade.ui.theme import POSITIVE_COLOR
+from tiewtrade.ui.theme import NEGATIVE_COLOR, POSITIVE_COLOR
 from tiewtrade.ui.trade_history_page import FilterBar, TradeHistoryPage
 from tiewtrade.ui.trade_history_presenter import (
     BASKET_COLUMNS,
@@ -576,6 +576,7 @@ def test_empty_basket_result_still_carries_its_summary_to_the_screen(
 
     assert page.basket_state.text() == "No Position history"
     assert page.basket_table.rowCount() == 0
+    assert page.basket_total.text() == "0.01 USDT"
 
 
 def test_empty_basket_history_state_is_centered_in_table_body(qtbot: QtBot) -> None:
@@ -610,6 +611,7 @@ def test_initial_basket_failure_clears_only_trade_history_scope(qtbot: QtBot) ->
     assert page.basket_state.text() == "Trade History unavailable"
     assert page.retry_baskets_button.isVisible()
     assert not page.retry_fills_button.isVisible()
+    assert page.basket_total.text() == ""
 
 
 def test_basket_refresh_failure_keeps_last_known_durable_result(
@@ -619,7 +621,7 @@ def test_basket_refresh_failure_keeps_last_known_durable_result(
     qtbot.addWidget(page)
     page.show()
     basket = basket_result()
-    page.show_baskets(history_result(basket))
+    page.show_baskets(history_result(basket, realized_pnl=Decimal("20")))
 
     page.set_baskets_loading(True)
     page.show_baskets_unavailable("Trade History unavailable")
@@ -628,6 +630,60 @@ def test_basket_refresh_failure_keeps_last_known_durable_result(
     assert page.basket_state.text() == "Stale · Trade History unavailable"
     assert page.retry_baskets_button.isVisible()
     assert not page.retry_fills_button.isVisible()
+    # A stale result is still the last one read, so its total stays too.
+    assert page.basket_total.text() == "20.00 USDT"
+
+
+def test_basket_total_sits_in_the_filter_bar_after_search_and_reset(
+    qtbot: QtBot,
+) -> None:
+    """Read against the range Search/Reset just picked, not off on its own."""
+    page = TradeHistoryPage()
+    qtbot.addWidget(page)
+    filters = page.basket_filters
+
+    group = filters.search_button.parentWidget()
+    assert group is not None
+    assert group is filters.reset_button.parentWidget()
+    assert group is page.basket_total.parentWidget()
+    group_layout = group.layout()
+    assert group_layout is not None
+    # The stretch that holds the total at the group's own right edge is an
+    # item with no widget of its own, so it is read past rather than as one
+    # of the controls in the reading order.
+    order: list[QWidget] = []
+    for i in range(group_layout.count()):
+        item = group_layout.itemAt(i)
+        assert item is not None
+        widget = item.widget()
+        if widget is not None:
+            order.append(widget)
+    assert order.index(filters.search_button) < order.index(page.basket_total)
+    assert order.index(filters.reset_button) < order.index(page.basket_total)
+
+    # Trade Fills asks a different question and has no total of its own.
+    assert page.trade_filters.total_label is None
+
+
+def test_basket_total_reads_the_filtered_range_and_colours_by_its_sign(
+    qtbot: QtBot,
+) -> None:
+    page = TradeHistoryPage()
+    qtbot.addWidget(page)
+
+    page.show_baskets(history_result(basket_result(), realized_pnl=Decimal("123.45")))
+    assert page.basket_total.text() == "123.45 USDT"
+    assert page.basket_total.styleSheet() == f"color: {POSITIVE_COLOR};"
+
+    page.show_baskets(history_result(basket_result(), realized_pnl=Decimal("-5")))
+    assert page.basket_total.text() == "-5.00 USDT"
+    assert page.basket_total.styleSheet() == f"color: {NEGATIVE_COLOR};"
+
+    # A break-even range across closed trades is a real result, not the
+    # "nothing has closed yet" case a per-row dash guards against.
+    page.show_baskets(history_result(basket_result(), realized_pnl=Decimal("0")))
+    assert page.basket_total.text() == "0.00 USDT"
+    assert page.basket_total.styleSheet() == ""
 
 
 def test_empty_trade_fills_state_is_centered_in_table_body(qtbot: QtBot) -> None:
@@ -767,3 +823,29 @@ def test_each_half_keeps_its_own_range(qtbot: QtBot) -> None:
     assert page.basket_filters.range_chips[QuickRange.ONE_DAY].isChecked()
     assert page.trade_filters.filter_values() != opened_on
     assert page.trade_filters.range_chips[QuickRange.ONE_MONTH].isChecked()
+
+
+def test_the_total_sits_at_the_filter_bar_s_own_right_edge(qtbot: QtBot) -> None:
+    """The total is read last and stands apart, at the edge of the row itself.
+
+    Search and Reset stay where the rest of the controls are, packed from the
+    left; only the total is held to the right, at the outer edge of the bar
+    rather than trailing straight off whichever control happens to be beside
+    it.
+    """
+    page = TradeHistoryPage()
+    qtbot.addWidget(page)
+    filters = page.basket_filters
+    # Wide enough that every group lands on the bar's one line.
+    page.setFixedWidth(1400)
+    page.show()
+
+    assert filters.line_count() == 1
+    layout = filters.layout()
+    assert layout is not None
+    bar_right_edge = filters.width() - layout.contentsMargins().right()
+    total_right_edge = page.basket_total.mapTo(
+        filters, page.basket_total.rect().bottomRight()
+    ).x()
+
+    assert bar_right_edge - total_right_edge < 4
