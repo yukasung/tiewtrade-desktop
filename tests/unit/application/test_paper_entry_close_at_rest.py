@@ -194,6 +194,7 @@ def test_closing_at_market_after_a_row_sale_sells_only_what_is_left(
         find_open_basket=history.find_open_basket,
         list_fills=history.list_fills,
         record_closed=history.record_closed_basket,
+        record_entry_exit=history.record_entry_exit_fill,
         clock=lambda: datetime(2026, 8, 4, tzinfo=UTC),
     ).execute(
         configured_spot_session(),

@@ -6,7 +6,6 @@ from PySide6.QtWidgets import (
     QFrame,
     QHBoxLayout,
     QLabel,
-    QMessageBox,
     QPushButton,
     QScrollArea,
     QSizePolicy,
@@ -47,6 +46,7 @@ class TradingWorkspace(QWidget):
     trade_history_activated = Signal()
     start_bot_requested = Signal()
     stop_bot_requested = Signal()
+    settings_requested = Signal()
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -74,7 +74,7 @@ class TradingWorkspace(QWidget):
         self.toolbar_title.setObjectName("toolbarTitle")
         self.settings_button = QPushButton("Settings")
         self.settings_button.setObjectName("secondaryButton")
-        self.settings_button.clicked.connect(self._show_settings_placeholder)
+        self.settings_button.clicked.connect(self.settings_requested)
         header_layout = QHBoxLayout(self.workspace_header)
         header_layout.setContentsMargins(16, 10, 16, 10)
         header_layout.addWidget(self.toolbar_title)
@@ -162,10 +162,6 @@ class TradingWorkspace(QWidget):
     def set_bot_busy(self, busy: bool) -> None:
         self.setup.set_loading(busy)
         self.unavailable_retry_button.setDisabled(busy)
-
-    @Slot()
-    def _show_settings_placeholder(self) -> None:
-        QMessageBox.information(self, "Settings", "Coming soon.")
 
     def _build_layout(self) -> None:
         root = QVBoxLayout(self)

@@ -96,6 +96,7 @@ from tiewtrade.ui.main_window import (
 )
 from tiewtrade.ui.pair_text import pair_text
 from tiewtrade.ui.session_overview import SessionOverviewWidget
+from tiewtrade.ui.settings_dialog import SettingsDialog
 from tiewtrade.ui.trade_history_presenter import (
     default_filter_values,
     trade_history_filter,
@@ -2830,6 +2831,209 @@ def test_cancelling_close_all_leaves_the_position_where_it_is(
     assert len(seen) == 1
     assert closed_all == []
     assert window._open_position.basket is not None
+
+
+def _click_settings(window: MainWindow) -> None:
+    click(window.workspace.settings_button)
+
+
+def test_settings_clear_database_is_enabled_with_no_session_loaded(
+    qtbot: QtBot,
+) -> None:
+    window = MainWindow(
+        create_session=unused_create,
+        load_active=no_active_session,
+        list_basket_history=empty_basket_history,
+        list_trade_fills=empty_trade_fills,
+        clear_database=lambda: None,
+    )
+    qtbot.addWidget(window)
+    window.show()
+    qtbot.waitUntil(window.setup.isVisible)
+
+    def check_and_close() -> None:
+        dialog = QApplication.activeModalWidget()
+        assert isinstance(dialog, SettingsDialog)
+        assert dialog.clear_database_button.isEnabled()
+        dialog.close()
+
+    QTimer.singleShot(0, check_and_close)
+    _click_settings(window)
+
+
+def test_settings_clear_database_is_enabled_with_a_stopped_session_loaded(
+    qtbot: QtBot,
+) -> None:
+    """A Session that is merely loaded, not trading, must not block clearing.
+
+    Stopping the Bot always lands back on the editable Setup form, whose only
+    way onward retires the Session and creates a fresh one — so this state is
+    exactly as safe to clear from as no Session at all.
+    """
+    session = configured_spot_session()
+    window = MainWindow(
+        create_session=unused_create,
+        load_active=lambda: session,
+        list_basket_history=empty_basket_history,
+        list_trade_fills=empty_trade_fills,
+        clear_database=lambda: None,
+    )
+    qtbot.addWidget(window)
+    window.show()
+    qtbot.waitUntil(lambda: window._last_bot_state is not None)
+
+    def check_and_close() -> None:
+        dialog = QApplication.activeModalWidget()
+        assert isinstance(dialog, SettingsDialog)
+        assert dialog.clear_database_button.isEnabled()
+        dialog.close()
+
+    QTimer.singleShot(0, check_and_close)
+    _click_settings(window)
+
+
+def test_settings_clear_database_is_disabled_while_the_bot_is_running(
+    qtbot: QtBot,
+) -> None:
+    started: list[BotControlSnapshot] = []
+    asked: list[tuple[str, Callable[[], None]]] = []
+    window = _open_position_window(qtbot, started=started, asked=asked, price=105)
+    qtbot.waitUntil(lambda: window.workspace.position_basket.table.rowCount() == 1)
+
+    configured = window._lifecycle_workflow.snapshot
+    window._bot_control_changed(
+        replace(
+            configured,
+            state=BotRuntimeState.RUNNING,
+            available_actions=frozenset({BotControlAction.STOP}),
+            workspace=workspace_with_runtime_state(
+                configured.workspace,
+                BotRuntimeState.RUNNING,
+                data_freshness=DataFreshness.FRESH,
+            ),
+        )
+    )
+
+    def check_and_close() -> None:
+        dialog = QApplication.activeModalWidget()
+        assert isinstance(dialog, SettingsDialog)
+        assert not dialog.clear_database_button.isEnabled()
+        dialog.close()
+
+    QTimer.singleShot(0, check_and_close)
+    _click_settings(window)
+
+
+def test_settings_clear_database_is_enabled_again_once_the_bot_is_stopped(
+    qtbot: QtBot,
+) -> None:
+    """Stopping the Bot must hand the button back, not leave it stuck off."""
+    started: list[BotControlSnapshot] = []
+    asked: list[tuple[str, Callable[[], None]]] = []
+    window = _open_position_window(qtbot, started=started, asked=asked, price=105)
+    qtbot.waitUntil(lambda: window.workspace.position_basket.table.rowCount() == 1)
+
+    running = replace(
+        window._lifecycle_workflow.snapshot,
+        state=BotRuntimeState.RUNNING,
+        available_actions=frozenset({BotControlAction.STOP}),
+        workspace=workspace_with_runtime_state(
+            window._lifecycle_workflow.snapshot.workspace,
+            BotRuntimeState.RUNNING,
+            data_freshness=DataFreshness.FRESH,
+        ),
+    )
+    window._bot_control_changed(running)
+    window._bot_control_changed(
+        replace(
+            running,
+            state=BotRuntimeState.STOPPED,
+            available_actions=frozenset({BotControlAction.START}),
+            workspace=workspace_with_runtime_state(
+                running.workspace,
+                BotRuntimeState.STOPPED,
+                data_freshness=DataFreshness.FRESH,
+            ),
+        )
+    )
+
+    def check_and_close() -> None:
+        dialog = QApplication.activeModalWidget()
+        assert isinstance(dialog, SettingsDialog)
+        assert dialog.clear_database_button.isEnabled()
+        dialog.close()
+
+    QTimer.singleShot(0, check_and_close)
+    _click_settings(window)
+
+
+def test_confirming_clear_database_runs_it_and_refreshes_history(
+    qtbot: QtBot, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A cleared database has nothing left for the History tabs to hold.
+
+    The success notice is its own modal, not part of what this test checks,
+    so it is silenced rather than clicked through.
+    """
+    monkeypatch.setattr(QMessageBox, "information", lambda *args, **kwargs: None)
+    cleared: list[str] = []
+    window = MainWindow(
+        create_session=unused_create,
+        load_active=no_active_session,
+        list_basket_history=empty_basket_history,
+        list_trade_fills=empty_trade_fills,
+        clear_database=lambda: cleared.append("cleared"),
+    )
+    qtbot.addWidget(window)
+    window.show()
+    qtbot.waitUntil(window.setup.isVisible)
+
+    def confirm_clear() -> None:
+        confirm_dialog = QApplication.activeModalWidget()
+        assert isinstance(confirm_dialog, QMessageBox)
+        click(next(b for b in confirm_dialog.buttons() if b.text() == "Clear All"))
+
+    def click_clear_database_button() -> None:
+        dialog = QApplication.activeModalWidget()
+        assert isinstance(dialog, SettingsDialog)
+        QTimer.singleShot(0, confirm_clear)
+        click(dialog.clear_database_button)
+
+    QTimer.singleShot(0, click_clear_database_button)
+    _click_settings(window)
+
+    assert cleared == ["cleared"]
+
+
+def test_cancelling_clear_database_does_not_run_it(qtbot: QtBot) -> None:
+    cleared: list[str] = []
+    window = MainWindow(
+        create_session=unused_create,
+        load_active=no_active_session,
+        list_basket_history=empty_basket_history,
+        list_trade_fills=empty_trade_fills,
+        clear_database=lambda: cleared.append("cleared"),
+    )
+    qtbot.addWidget(window)
+    window.show()
+    qtbot.waitUntil(window.setup.isVisible)
+
+    def cancel_and_close(dialog: SettingsDialog) -> None:
+        confirm_dialog = QApplication.activeModalWidget()
+        assert isinstance(confirm_dialog, QMessageBox)
+        click(next(b for b in confirm_dialog.buttons() if b.text() == "Cancel"))
+        dialog.close()
+
+    def click_clear_database_button() -> None:
+        dialog = QApplication.activeModalWidget()
+        assert isinstance(dialog, SettingsDialog)
+        QTimer.singleShot(0, lambda: cancel_and_close(dialog))
+        click(dialog.clear_database_button)
+
+    QTimer.singleShot(0, click_clear_database_button)
+    _click_settings(window)
+
+    assert cleared == []
 
 
 def test_the_question_is_put_to_the_position_that_is_there_now(

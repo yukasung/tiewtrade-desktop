@@ -2,10 +2,9 @@ from dataclasses import replace
 from datetime import UTC, datetime
 from decimal import Decimal
 from pathlib import Path
-from unittest.mock import patch
 
 from PySide6.QtCore import QPoint, QRect
-from PySide6.QtWidgets import QMessageBox, QWidget
+from PySide6.QtWidgets import QWidget
 from pytestqt.qtbot import QtBot
 
 from tests.support.paper_session_setup import configured_spot_session
@@ -152,14 +151,12 @@ def test_connection_notice_card_sits_below_the_topbar_and_starts_hidden(
     assert notice_rect.left() == header_rect.left()
 
 
-def test_settings_button_shows_a_placeholder_message(qtbot: QtBot) -> None:
+def test_settings_button_emits_settings_requested(qtbot: QtBot) -> None:
     workspace = TradingWorkspace()
     qtbot.addWidget(workspace)
 
-    with patch.object(QMessageBox, "information") as information:
+    with qtbot.waitSignal(workspace.settings_requested, timeout=1000):
         workspace.settings_button.click()
-
-    information.assert_called_once()
 
 
 def test_ui_modules_do_not_import_prohibited_adapters() -> None:

@@ -159,3 +159,86 @@ def test_migrate_v5_rebuilds_lifecycle_constraint_for_blocked_state(
         )
 
     assert states == ["stopped"]
+
+
+def test_clear_all_data_empties_every_table_and_keeps_the_schema_version(
+    tmp_path: Path,
+) -> None:
+    database = SQLiteDatabase(tmp_path / "tiewtrade.sqlite3")
+    database.migrate()
+
+    with database.connect() as connection:
+        connection.execute(
+            """
+            INSERT INTO bot_sessions (
+                session_id, trade_mode, market_type, symbol, timeframe,
+                preset_version, capital_per_entry, max_entries,
+                created_at_utc
+            ) VALUES (
+                'session', 'paper', 'spot', 'BTCUSDT', '5m',
+                'v1', '250', 4,
+                '2026-01-01T00:00:00+00:00'
+            )
+            """
+        )
+        connection.execute(
+            """
+            INSERT INTO basket_results (
+                basket_id, session_id, trade_mode, market_type, symbol,
+                timeframe, strategy_preset_version, opened_at_utc,
+                entry_count, invested_notional, realized_pnl, status
+            ) VALUES (
+                'basket', 'session', 'paper', 'spot', 'BTCUSDT', '5m',
+                'v1', '2026-01-01T00:00:00+00:00', 1, '250', '0', 'open'
+            )
+            """
+        )
+        connection.execute(
+            """
+            INSERT INTO trade_fills (
+                fill_id, basket_id, session_id, order_id, side,
+                entry_number, filled_at_utc, price, quantity, notional,
+                realized_pnl, source
+            ) VALUES (
+                'fill', 'basket', 'session', 'order', 'buy',
+                1, '2026-01-01T00:00:00+00:00', '100', '1', '100',
+                '0', 'paper_executor'
+            )
+            """
+        )
+        connection.execute(
+            """
+            INSERT INTO paper_runtime_lifecycle (session_id, state, observed_at_utc)
+            VALUES ('session', 'running', '2026-01-01T00:00:00+00:00')
+            """
+        )
+        connection.execute(
+            """
+            INSERT INTO paper_cooldown_waivers (basket_id, waived_pair, waived_at_utc)
+            VALUES ('basket', 1, '2026-01-01T00:00:00+00:00')
+            """
+        )
+
+    database.clear_all_data()
+
+    with database.connect() as connection:
+        version = connection.execute("PRAGMA user_version").fetchone()[0]
+        counts = {
+            table: connection.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
+            for table in (
+                "bot_sessions",
+                "basket_results",
+                "trade_fills",
+                "paper_runtime_lifecycle",
+                "paper_cooldown_waivers",
+            )
+        }
+
+    assert version == SQLiteDatabase._SCHEMA_VERSION
+    assert counts == {
+        "bot_sessions": 0,
+        "basket_results": 0,
+        "trade_fills": 0,
+        "paper_runtime_lifecycle": 0,
+        "paper_cooldown_waivers": 0,
+    }

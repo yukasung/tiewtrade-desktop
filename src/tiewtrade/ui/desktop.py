@@ -28,6 +28,7 @@ def run_desktop(
     validate_session: Callable[[PaperSessionSetupValues], None] | None = None,
     bot: BotActions = NO_BOT,
     chart: ChartSources = NO_CHART,
+    clear_database: Callable[[], None] | None = None,
 ) -> int:
     app = QApplication.instance()
     if app is None:
@@ -41,6 +42,7 @@ def run_desktop(
         validate_session=validate_session,
         bot=bot,
         chart=chart,
+        clear_database=clear_database,
     )
     window.setStyleSheet(DARK_THEME)
     window.show()

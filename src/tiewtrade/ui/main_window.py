@@ -58,6 +58,8 @@ from tiewtrade.ui.session_workflow import (
     LoadActiveSession,
     SessionWorkflow,
 )
+from tiewtrade.ui.settings_dialog import SettingsDialog
+from tiewtrade.ui.settings_dialogs import ask_about_clearing_database
 from tiewtrade.ui.start_decision import StartCourse, course_before_start
 from tiewtrade.ui.start_dialogs import (
     PositionAtTarget,
@@ -96,6 +98,19 @@ CHART_FEED_STOPPED_NOTICE = "Chart feed stopped — prices are not current"
 # from a second to a thirty-second ceiling, so a drop shorter than this is one
 # it was always going to ride out on its own.
 CONNECTION_NOTICE_DELAY_MILLISECONDS = 30_000
+
+# The database may be cleared whenever the Bot is not actually trading or
+# moving between states. Stopped, Blocked, and a freshly Configured Session
+# all resolve through the same editable Setup form, whose only way onward
+# retires whatever Session was there and creates a fresh one — so a cleared
+# database never leaves that form pointed at a row that just went.
+_CLEAR_DATABASE_BLOCKED_STATES = frozenset(
+    {
+        BotRuntimeState.STARTING,
+        BotRuntimeState.RUNNING,
+        BotRuntimeState.STOPPING,
+    }
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -164,6 +179,7 @@ class MainWindow(QMainWindow):
         blocked_notice: BlockedNotice | None = None,
         connection_notice: ConnectionNotice | None = None,
         connection_notice_delay_ms: int = CONNECTION_NOTICE_DELAY_MILLISECONDS,
+        clear_database: Callable[[], None] | None = None,
     ) -> None:
         super().__init__()
         self._take_profit_confirmation = (
@@ -189,6 +205,8 @@ class MainWindow(QMainWindow):
         self._stop_for_replacement = bot.stop_for_replacement
         self._validate_session = validate_session or validate_paper_session
         self._shutdown_runtime = bot.shutdown_runtime
+        self._clear_database = clear_database
+        self._clear_database_task: BackgroundTask | None = None
         self._chart_fact_relay = chart.facts
         self._start_chart_feed = chart.start_feed
         self._select_chart_view = chart.select_view
@@ -258,6 +276,7 @@ class MainWindow(QMainWindow):
         self.workspace.position_basket.close_all_requested.connect(
             self._close_all_requested
         )
+        self.workspace.settings_requested.connect(self._settings_requested)
         self._open_position.reading_landed.connect(self._position_reading_landed)
 
         self._lifecycle_workflow = BotLifecycleWorkflow(
@@ -1100,6 +1119,49 @@ class MainWindow(QMainWindow):
         self._close_all_task = None
         self.workspace.position_basket.set_closing_enabled(True)
         self.workspace.position_basket.set_closing_all_enabled(True)
+
+    @Slot()
+    def _settings_requested(self) -> None:
+        can_clear_database = self._last_bot_state not in _CLEAR_DATABASE_BLOCKED_STATES
+        dialog = SettingsDialog(self, can_clear_database=can_clear_database)
+        dialog.clear_database_requested.connect(
+            lambda: self._clear_database_requested(dialog)
+        )
+        dialog.exec()
+
+    def _clear_database_requested(self, dialog: SettingsDialog) -> None:
+        clear_database = self._clear_database
+        if clear_database is None or self._clear_database_task is not None:
+            return
+        if not ask_about_clearing_database(dialog):
+            return
+        dialog.set_busy(True)
+        task = BackgroundTask(clear_database)
+        task.signals.succeeded.connect(lambda _: self._database_cleared(dialog))
+        task.signals.failed.connect(
+            lambda error: self._clear_database_failed(dialog, error)
+        )
+        task.signals.finished.connect(lambda: self._clear_database_finished(dialog))
+        self._clear_database_task = task
+        self._thread_pool.start(task)
+
+    def _database_cleared(self, dialog: SettingsDialog) -> None:
+        self._history_workflow.start()
+        dialog.accept()
+        QMessageBox.information(self, "Settings", "The database has been cleared.")
+
+    def _clear_database_failed(self, dialog: SettingsDialog, error: object) -> None:
+        if isinstance(error, BaseException):
+            _LOGGER.exception("Could not clear the database", exc_info=error)
+        QMessageBox.warning(
+            dialog,
+            "Settings",
+            "Could not clear the database. Check your connection, then try again.",
+        )
+
+    def _clear_database_finished(self, dialog: SettingsDialog) -> None:
+        self._clear_database_task = None
+        dialog.set_busy(False)
 
     @Slot(object)
     def _chart_view_requested(self, value: object) -> None:

@@ -232,30 +232,6 @@ QPushButton#positionEntryCloseButton:disabled {
     border-color: #2B3441;
     color: #6F7D93;
 }
-/* Sits on the tab row rather than in the form of buttons beside it, so it
-   is sized to its own words, at the tab strip's own height, not the taller
-   minimum a form button reads against. */
-QPushButton#cancelCooldownButton {
-    background: transparent;
-    border: 1px solid #3A4656;
-    border-radius: 4px;
-    color: #E2E8F0;
-    font-size: 12px;
-    font-weight: 600;
-    min-height: 28px;
-    padding: 0 12px;
-}
-QPushButton#cancelCooldownButton:hover {
-    border-color: #F6465D;
-    color: #F6465D;
-}
-QPushButton#cancelCooldownButton:focus {
-    border: 2px solid #4C7DFF;
-}
-QPushButton#cancelCooldownButton:disabled {
-    border-color: #2B3441;
-    color: #6F7D93;
-}
 QPushButton#destructiveButton {
     background: #F6465D;
     border: 0;
@@ -380,6 +356,10 @@ QLabel#unavailableMessage {
 QLabel#systemNotice {
     color: #F2C86B;
     padding: 4px 10px;
+}
+QDialog {
+    background: #141A22;
+    color: #F1F5F9;
 }
 QMessageBox {
     background: #141A22;

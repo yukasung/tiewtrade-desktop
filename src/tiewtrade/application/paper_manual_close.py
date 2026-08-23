@@ -17,6 +17,7 @@ from tiewtrade.trading.trade_history import (
 FindOpenBasket = Callable[[UUID], BasketResult | None]
 ListFills = Callable[[UUID], tuple[TradeFill, ...]]
 RecordClosedBasket = Callable[[BasketResult, TradeFill], object]
+RecordEntryExit = Callable[[BasketResult, TradeFill], object]
 
 
 class ClosePaperPosition:
@@ -26,11 +27,13 @@ class ClosePaperPosition:
         find_open_basket: FindOpenBasket,
         list_fills: ListFills,
         record_closed: RecordClosedBasket,
+        record_entry_exit: RecordEntryExit,
         clock: Callable[[], datetime] = lambda: datetime.now(UTC),
     ) -> None:
         self._find_open_basket = find_open_basket
         self._list_fills = list_fills
         self._record_closed = record_closed
+        self._record_entry_exit = record_entry_exit
         self._clock = clock
 
     def execute(
@@ -60,9 +63,14 @@ class ClosePaperPosition:
             if fill.closes_entry_number is not None
         }
         entries = tuple(
-            fill
-            for fill in fills
-            if fill.entry_number is not None and fill.entry_number not in sold
+            sorted(
+                (
+                    fill
+                    for fill in fills
+                    if fill.entry_number is not None and fill.entry_number not in sold
+                ),
+                key=lambda fill: fill.entry_number,  # type: ignore[arg-type,return-value]
+            )
         )
         if not entries:
             raise ValueError("open Basket requires Entry Fills")
@@ -75,42 +83,49 @@ class ClosePaperPosition:
         exit_price = (execution_price / tick_size).to_integral_value(
             rounding=ROUND_DOWN if long_position else ROUND_CEILING
         ) * tick_size
-        quantity = sum((fill.quantity for fill in entries), Decimal("0"))
-        realized_pnl = sum(
-            (
-                (exit_price - fill.price) * fill.quantity
-                if long_position
-                else (fill.price - exit_price) * fill.quantity
-                for fill in entries
-            ),
-            start=Decimal("0"),
-        )
         closed_at = self._clock()
         order_id = f"manual-close:{basket.basket_id}"
-        fill = TradeFill(
-            fill_id=f"paper:{session.config.session_id}:{order_id}:fill",
-            basket_id=basket.basket_id,
-            session_id=session.config.session_id,
-            order_id=order_id,
-            exchange_trade_id=None,
-            side=FillSide.SELL if long_position else FillSide.BUY,
-            entry_number=None,
-            filled_at_utc=closed_at,
-            price=exit_price,
-            quantity=quantity,
-            notional=exit_price * quantity,
-            realized_pnl=realized_pnl,
-            source=FillSource.PAPER_EXECUTOR,
-        )
-        closed = replace(
-            basket,
-            closed_at_utc=closed_at,
-            # What the store has been counting, grown by this sale. The Basket
-            # keeps one result however many times it was sold out of, and the
-            # Entries that went before this are part of it.
-            realized_pnl=basket.realized_pnl + realized_pnl,
-            status=BasketStatus.CLOSED,
-        )
-        recorded = self._record_closed(closed, fill)
-        if recorded is False:
-            raise RuntimeError("Paper position close was not recorded")
+        # Every Entry is sold at the same price, but sold as its own trade —
+        # the way the position table already shows an Entry as its own row,
+        # not one averaged across every Entry the Basket holds.
+        running_basket = basket
+        for index, entry in enumerate(entries):
+            entry_pnl = (
+                (exit_price - entry.price) * entry.quantity
+                if long_position
+                else (entry.price - exit_price) * entry.quantity
+            )
+            exit_fill = TradeFill(
+                fill_id=(
+                    f"paper:{session.config.session_id}:{order_id}:"
+                    f"{entry.entry_number}:fill"
+                ),
+                basket_id=basket.basket_id,
+                session_id=session.config.session_id,
+                order_id=order_id,
+                exchange_trade_id=None,
+                side=FillSide.SELL if long_position else FillSide.BUY,
+                entry_number=None,
+                filled_at_utc=closed_at,
+                price=exit_price,
+                quantity=entry.quantity,
+                notional=exit_price * entry.quantity,
+                realized_pnl=entry_pnl,
+                source=FillSource.PAPER_EXECUTOR,
+                closes_entry_number=entry.entry_number,
+            )
+            running_basket = replace(
+                running_basket,
+                realized_pnl=running_basket.realized_pnl + entry_pnl,
+            )
+            if index == len(entries) - 1:
+                closed = replace(
+                    running_basket,
+                    closed_at_utc=closed_at,
+                    status=BasketStatus.CLOSED,
+                )
+                recorded = self._record_closed(closed, exit_fill)
+            else:
+                recorded = self._record_entry_exit(running_basket, exit_fill)
+            if recorded is False:
+                raise RuntimeError("Paper position close was not recorded")

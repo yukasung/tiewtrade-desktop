@@ -19,6 +19,7 @@ from tests.support.paper_session_setup import (
     configured_futures_session,
     configured_spot_session,
 )
+from tests.support.workspace_snapshots import OBSERVED_AT, basket_snapshot
 from tiewtrade.application.bot_control import (
     BotControlAction,
     BotControlSnapshot,
@@ -37,7 +38,14 @@ from tiewtrade.application.trade_history import (
     BasketHistoryResult,
     TradeHistoryFilter,
 )
-from tiewtrade.application.trading_workspace import BotRuntimeState, DataFreshness
+from tiewtrade.application.trading_workspace import (
+    BasketSnapshot,
+    BotRuntimeState,
+    DataFreshness,
+    PositionBasketTabSnapshot,
+    TradingWorkspaceSnapshot,
+    WorkspaceTabState,
+)
 from tiewtrade.desktop_logging import LOG_FILE_NAME
 from tiewtrade.integrations.binance.public_endpoints import BinancePublicEndpoints
 from tiewtrade.integrations.binance.public_market_data import BinancePublicMarketData
@@ -652,6 +660,115 @@ def test_runtime_symbol_rules_derive_symbol_from_session_market_data() -> None:
 
     assert rules.symbol == "ETHUSDT"
     assert rules.tick_size == Decimal("0.01")
+
+
+def _fake_running_controller(
+    workspace: TradingWorkspaceSnapshot,
+) -> type[object]:
+    class FakePaperRuntimeController:
+        def __init__(self, **dependencies: object) -> None:
+            del dependencies
+
+        @property
+        def current_workspace(self) -> TradingWorkspaceSnapshot:
+            return workspace
+
+        def start(self, session: ConfiguredPaperSession) -> BotLifecycleResult:
+            return BotLifecycleResult(
+                workspace=workspace_with_runtime_state(
+                    configured_bot_control(
+                        session,
+                        observed_at_utc=datetime(2026, 8, 2, tzinfo=UTC),
+                    ).workspace,
+                    BotRuntimeState.RUNNING,
+                    data_freshness=DataFreshness.FRESH,
+                )
+            )
+
+    return FakePaperRuntimeController
+
+
+def _workspace_with_basket(
+    session: ConfiguredPaperSession, basket: BasketSnapshot | None
+) -> TradingWorkspaceSnapshot:
+    base = configured_bot_control(
+        session, observed_at_utc=datetime(2026, 8, 2, tzinfo=UTC)
+    ).workspace
+    position_basket = PositionBasketTabSnapshot(
+        state=(
+            WorkspaceTabState.READY if basket is not None else WorkspaceTabState.EMPTY
+        ),
+        basket=basket,
+        data_as_of_utc=OBSERVED_AT if basket is not None else None,
+    )
+    return replace(base, position_basket=position_basket)
+
+
+def test_open_entry_numbers_reads_the_running_runtime_basket(
+    tmp_path: Path,
+    monkeypatch: MonkeyPatch,
+) -> None:
+    session = configured_spot_session()
+    workspace = _workspace_with_basket(session, basket_snapshot())
+    monkeypatch.setattr(
+        desktop_main, "PaperRuntimeController", _fake_running_controller(workspace)
+    )
+    database = SQLiteDatabase(tmp_path / "tiewtrade.sqlite3")
+    actions = desktop_main._PaperRuntimeActions(
+        lifecycle=SQLitePaperRuntimeLifecycle(database),
+        trade_history=SQLiteTradeHistory(database),
+        runtime_snapshots=RuntimeSnapshotRelay(),
+        prepare_database=lambda: None,
+    )
+
+    actions.start(
+        configured_bot_control(
+            session, observed_at_utc=datetime(2026, 8, 2, tzinfo=UTC)
+        )
+    )
+
+    assert actions.open_entry_numbers(session) == (1, 2)
+
+
+def test_open_entry_numbers_is_empty_when_the_runtime_holds_no_basket(
+    tmp_path: Path,
+    monkeypatch: MonkeyPatch,
+) -> None:
+    session = configured_spot_session()
+    workspace = _workspace_with_basket(session, None)
+    monkeypatch.setattr(
+        desktop_main, "PaperRuntimeController", _fake_running_controller(workspace)
+    )
+    database = SQLiteDatabase(tmp_path / "tiewtrade.sqlite3")
+    actions = desktop_main._PaperRuntimeActions(
+        lifecycle=SQLitePaperRuntimeLifecycle(database),
+        trade_history=SQLiteTradeHistory(database),
+        runtime_snapshots=RuntimeSnapshotRelay(),
+        prepare_database=lambda: None,
+    )
+
+    actions.start(
+        configured_bot_control(
+            session, observed_at_utc=datetime(2026, 8, 2, tzinfo=UTC)
+        )
+    )
+
+    assert actions.open_entry_numbers(session) == ()
+
+
+def test_open_entry_numbers_is_none_when_no_runtime_holds_the_session(
+    tmp_path: Path,
+) -> None:
+    session = configured_spot_session()
+    database = SQLiteDatabase(tmp_path / "tiewtrade.sqlite3")
+    actions = desktop_main._PaperRuntimeActions(
+        lifecycle=SQLitePaperRuntimeLifecycle(database),
+        trade_history=SQLiteTradeHistory(database),
+        runtime_snapshots=RuntimeSnapshotRelay(),
+        prepare_database=lambda: None,
+    )
+
+    assert actions.open_entry_numbers(session) is None
 
 
 def test_concurrent_session_load_and_history_query_serialize_v1_migration(

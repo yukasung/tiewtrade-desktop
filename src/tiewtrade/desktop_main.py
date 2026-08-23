@@ -154,6 +154,25 @@ class _PaperRuntimeActions:
             return False
         return controller.close_entry(session, entry_number, price=price)
 
+    def open_entry_numbers(
+        self, session: ConfiguredPaperSession
+    ) -> tuple[int, ...] | None:
+        """Entry numbers the running Runtime currently holds, if it holds this one.
+
+        None where no Runtime holds this Session — Close All then falls back
+        to whatever the database has, the way a single row's close already
+        does. A Runtime that holds it but has nothing open answers with an
+        empty tuple, not None: there is a position, it is just closed.
+        """
+        with self._lock:
+            controller = self._controller if self._session == session else None
+        if controller is None:
+            return None
+        basket = controller.current_workspace.position_basket.basket
+        if basket is None:
+            return ()
+        return tuple(entry.entry_number for entry in basket.entries)
+
     def waive_cooldown(self, session: ConfiguredPaperSession) -> bool:
         """Ask the running Runtime to lift a Cooldown it is holding."""
         with self._lock:
@@ -403,6 +422,7 @@ def _bot_actions(
         find_open_basket=history.find_open_basket,
         list_fills=history.list_fills,
         record_closed=history.record_closed_basket,
+        record_entry_exit=history.record_entry_exit_fill,
     )
 
     def retire_session(session: ConfiguredPaperSession) -> None:
@@ -412,12 +432,45 @@ def _bot_actions(
             raise RuntimeError("Paper Runtime worker is still active")
         stores.store.retire(session.config.session_id, datetime.now(UTC))
 
-    def close_position(session: ConfiguredPaperSession) -> None:
-        close_paper_position.execute(
+    def close_entry_at_rest(
+        session: ConfiguredPaperSession, entry_number: int, *, price: Decimal
+    ) -> bool:
+        return close_one_entry_at_rest(
             session,
-            market_price=lambda: manual_close_price.get(session),
-            tick_size=_symbol_rules_for(session).tick_size,
+            entry_number,
+            trade_history=history,
+            symbol_rules=_symbol_rules_for(session),
+            preset=strategy_definition_for(
+                session.config.preset_version
+            ).build_preset(),
+            price=price,
+            observed_at=datetime.now(UTC),
         )
+
+    def close_position(session: ConfiguredPaperSession) -> None:
+        """Sell every open Entry, asking whichever of the two holds the Basket.
+
+        A running Runtime owns it, and a sale written past it would be a
+        Basket sold twice — once here and once by the next candle to reach a
+        target it still thinks it holds. So the entries it is holding are
+        asked for one at a time, the way a single row already is, and only an
+        Entry the Runtime declines falls to the database directly. A Session
+        with no Runtime holding it at all closes straight from the database,
+        one Fill per Entry it finds still open.
+        """
+        entry_numbers = runtime_actions.open_entry_numbers(session)
+        if entry_numbers is None:
+            close_paper_position.execute(
+                session,
+                market_price=lambda: manual_close_price.get(session),
+                tick_size=_symbol_rules_for(session).tick_size,
+            )
+            return
+        price = manual_close_price.get(session)
+        for entry_number in entry_numbers:
+            if runtime_actions.close_entry(session, entry_number, price=price):
+                continue
+            close_entry_at_rest(session, entry_number, price=price)
 
     def close_entry(session: ConfiguredPaperSession, entry_number: int) -> bool:
         """Sell one Entry, asking whichever of the two is holding the Basket.
@@ -431,17 +484,7 @@ def _bot_actions(
         price = manual_close_price.get(session)
         if runtime_actions.close_entry(session, entry_number, price=price):
             return True
-        return close_one_entry_at_rest(
-            session,
-            entry_number,
-            trade_history=history,
-            symbol_rules=_symbol_rules_for(session),
-            preset=strategy_definition_for(
-                session.config.preset_version
-            ).build_preset(),
-            price=price,
-            observed_at=datetime.now(UTC),
-        )
+        return close_entry_at_rest(session, entry_number, price=price)
 
     def cancel_cooldown(session: ConfiguredPaperSession) -> bool:
         """Lift the Cooldown holding this Basket, wherever the Basket is held.
@@ -644,6 +687,7 @@ def run_desktop(database_path: Path | None = None) -> int:
             chart_fact_relay=chart_fact_relay,
             chart_feed=chart_feed,
         ),
+        clear_database=_migrate_first(prepare_database, database.clear_all_data),
     )
 
 

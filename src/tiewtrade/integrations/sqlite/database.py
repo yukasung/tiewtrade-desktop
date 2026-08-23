@@ -126,6 +126,23 @@ class SQLiteDatabase:
         finally:
             connection.close()
 
+    def clear_all_data(self) -> None:
+        """Empty every table, keeping the file and its schema version.
+
+        Deletes child rows before the parents they reference, so foreign
+        keys never see a dangling row mid-transaction.
+        """
+        connection = self.connect()
+        try:
+            with connection:
+                connection.execute("DELETE FROM trade_fills")
+                connection.execute("DELETE FROM paper_cooldown_waivers")
+                connection.execute("DELETE FROM paper_runtime_lifecycle")
+                connection.execute("DELETE FROM basket_results")
+                connection.execute("DELETE FROM bot_sessions")
+        finally:
+            connection.close()
+
 
 def _create_schema(connection: sqlite3.Connection) -> None:
     connection.execute(
