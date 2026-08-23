@@ -4,6 +4,7 @@ from decimal import Decimal
 from enum import StrEnum
 
 from tiewtrade.application.paper_session_setup import ConfiguredPaperSession
+from tiewtrade.trading.entry_pair import entry_pair_index
 from tiewtrade.trading.session_config import MarketType, TradeMode
 
 
@@ -166,6 +167,26 @@ class BasketSnapshot:
         if type(self.completed_pairs) is not int or self.completed_pairs < 0:
             raise ValueError("completed_pairs must be a non-negative integer")
         _require_utc(self.updated_at_utc, "updated_at_utc")
+
+    def entry_gate_for(self, entry_number: int) -> BasketEntryGate:
+        """The gate as it stands for one Entry, not the Basket read as a whole.
+
+        A Cooldown blocks the next Entry, not the ones an earlier,
+        already-resolved Pair left open — those were waived past their own
+        Cooldown long before this one started, or they would not be here for a
+        later Pair to have formed. So an Entry from a Pair before the one that
+        just completed reads Open even while the Basket itself is cooling down.
+
+        The same reading `EntryPairLifecycle.entry_gate_for` makes of the live
+        lifecycle, made here of what a screen was handed — which is why the
+        Pair an Entry belongs to is counted by the rule's own module rather
+        than again here.
+        """
+        if self.entry_gate is not BasketEntryGate.COOLDOWN:
+            return self.entry_gate
+        if entry_pair_index(entry_number) < self.completed_pairs:
+            return BasketEntryGate.OPEN
+        return self.entry_gate
 
 
 @dataclass(frozen=True, slots=True)

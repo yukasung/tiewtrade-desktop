@@ -26,6 +26,15 @@ class EntryGate:
         return self.state is EntryGateState.OPEN
 
 
+def entry_pair_index(entry_number: int) -> int:
+    """Which Entry Pair this Entry belongs to, counted across the Basket's life.
+
+    `entry_number` is a lifetime count of every Entry the Basket has ever
+    taken, so two Entries make a Pair the same way `_count_fill` counts one.
+    """
+    return (entry_number - 1) // 2 + 1
+
+
 class EntryPairLifecycle:
     def __init__(self, policy: EntryPolicy) -> None:
         self._policy = policy
@@ -103,15 +112,12 @@ class EntryPairLifecycle:
 
         A Cooldown blocks the next Entry, not the ones an earlier,
         already-resolved Pair left open — those Entries were never blocked by
-        a Cooldown that only started after they filled. `entry_number` is a
-        lifetime count of every Entry the Basket has ever taken, so the Pair
-        it belongs to is read off it the same way `_count_fill` counts one.
+        a Cooldown that only started after they filled.
         """
         gate = self.entry_gate()
         if gate.state is not EntryGateState.COOLDOWN:
             return gate
-        pair_index = (entry_number - 1) // 2 + 1
-        if pair_index < self._completed_pairs:
+        if entry_pair_index(entry_number) < self._completed_pairs:
             return EntryGate(EntryGateState.OPEN)
         return gate
 

@@ -5,7 +5,7 @@ from decimal import Decimal
 import pytest
 
 from tests.support.paper_session_setup import configured_spot_session
-from tests.support.workspace_snapshots import basket_entries
+from tests.support.workspace_snapshots import basket_entries, basket_snapshot
 from tiewtrade.application.trading_workspace import (
     BasketEntryGate,
     BasketSnapshot,
@@ -199,6 +199,39 @@ def test_a_basket_is_marked_throughout_or_nowhere() -> None:
                 replace(entry, unrealized_pnl=None) for entry in _basket().entries
             ),
         )
+
+
+def test_an_open_basket_leaves_every_entry_at_its_own_gate() -> None:
+    basket = basket_snapshot(entry_gate=BasketEntryGate.OPEN, completed_pairs=1)
+
+    assert basket.entry_gate_for(1) is BasketEntryGate.OPEN
+    assert basket.entry_gate_for(2) is BasketEntryGate.OPEN
+
+
+def test_max_entries_reached_reads_the_same_for_every_entry() -> None:
+    basket = basket_snapshot(
+        entry_gate=BasketEntryGate.MAX_ENTRIES_REACHED, completed_pairs=2
+    )
+
+    assert basket.entry_gate_for(1) is BasketEntryGate.MAX_ENTRIES_REACHED
+    assert basket.entry_gate_for(4) is BasketEntryGate.MAX_ENTRIES_REACHED
+
+
+def test_a_cooldown_blocks_only_the_pair_that_just_completed() -> None:
+    """Entries 3 and 4 just closed Pair 2; Entries 1 and 2 already moved past it."""
+    basket = basket_snapshot(entry_gate=BasketEntryGate.COOLDOWN, completed_pairs=2)
+
+    assert basket.entry_gate_for(1) is BasketEntryGate.OPEN
+    assert basket.entry_gate_for(2) is BasketEntryGate.OPEN
+    assert basket.entry_gate_for(3) is BasketEntryGate.COOLDOWN
+    assert basket.entry_gate_for(4) is BasketEntryGate.COOLDOWN
+
+
+def test_a_single_pair_cooldown_blocks_both_of_its_own_entries() -> None:
+    basket = basket_snapshot(entry_gate=BasketEntryGate.COOLDOWN, completed_pairs=1)
+
+    assert basket.entry_gate_for(1) is BasketEntryGate.COOLDOWN
+    assert basket.entry_gate_for(2) is BasketEntryGate.COOLDOWN
 
 
 def _basket() -> BasketSnapshot:

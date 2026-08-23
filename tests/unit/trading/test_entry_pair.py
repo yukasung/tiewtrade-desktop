@@ -4,6 +4,7 @@ from tiewtrade.trading.entry_pair import (
     EntryGate,
     EntryGateState,
     EntryPairLifecycle,
+    entry_pair_index,
 )
 from tiewtrade.trading.entry_policy import EntryPolicy
 
@@ -39,6 +40,13 @@ def test_completed_pair_holds_its_cooldown_with_no_time_limit() -> None:
 
     assert lifecycle.entry_gate() == EntryGate(EntryGateState.COOLDOWN)
     assert not lifecycle.can_enter()
+
+
+def test_entry_pair_index_counts_two_entries_to_a_pair() -> None:
+    assert entry_pair_index(1) == 1
+    assert entry_pair_index(2) == 1
+    assert entry_pair_index(3) == 2
+    assert entry_pair_index(4) == 2
 
 
 def test_entry_gate_for_reads_the_same_as_entry_gate_when_open() -> None:
