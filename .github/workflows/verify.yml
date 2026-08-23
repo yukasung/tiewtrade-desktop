@@ -24,15 +24,10 @@ jobs:
         with:
           fetch-depth: 0
 
-      # The theme tests grab a widget and read the pixels back, so the runner
-      # has to be able to draw text at all. The theme asks for Inter, then two
-      # macOS faces, then sans-serif; none of the first three exist here, and
-      # without a font behind sans-serif the glyphs are simply not painted —
-      # the surface renders and its label does not.
-      - name: Install Qt runtime libraries and a font to draw with
+      - name: Install Qt runtime libraries
         run: |
           sudo apt-get update
-          sudo apt-get install --yes libegl1 fonts-dejavu-core
+          sudo apt-get install --yes libegl1
 
       - name: Set up Python
         uses: actions/setup-python@v6

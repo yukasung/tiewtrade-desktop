@@ -104,19 +104,14 @@ def test_verify_workflow_uses_bounded_least_privilege_environment() -> None:
     ) in workflow
 
 
-def test_verify_workflow_installs_the_qt_egl_runtime_and_a_font() -> None:
-    """Qt needs a library to draw with, and a font to draw text with.
-
-    The theme tests read pixels back off a widget, so a runner with no font
-    behind the theme's `sans-serif` renders a surface and no label on it.
-    """
+def test_verify_workflow_installs_the_qt_egl_runtime() -> None:
     workflow = _workflow_text()
 
     assert (
-        "      - name: Install Qt runtime libraries and a font to draw with\n"
+        "      - name: Install Qt runtime libraries\n"
         "        run: |\n"
         "          sudo apt-get update\n"
-        "          sudo apt-get install --yes libegl1 fonts-dejavu-core"
+        "          sudo apt-get install --yes libegl1"
     ) in workflow
 
 
