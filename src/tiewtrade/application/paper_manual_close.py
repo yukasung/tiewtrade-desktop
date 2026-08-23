@@ -53,25 +53,7 @@ class ClosePaperPosition:
         if basket.session_id != session.config.session_id:
             raise ValueError("open Basket belongs to a different Session")
 
-        fills = self._list_fills(basket.basket_id)
-        # An Entry that has already sold is not part of the position any
-        # more: counted again here, its quantity went into the exit Fill a
-        # second time and its result was written over rather than added to.
-        sold = {
-            fill.closes_entry_number
-            for fill in fills
-            if fill.closes_entry_number is not None
-        }
-        entries = tuple(
-            sorted(
-                (
-                    fill
-                    for fill in fills
-                    if fill.entry_number is not None and fill.entry_number not in sold
-                ),
-                key=lambda fill: fill.entry_number,  # type: ignore[arg-type,return-value]
-            )
-        )
+        entries = _open_entries(self._list_fills(basket.basket_id))
         if not entries:
             raise ValueError("open Basket requires Entry Fills")
         execution_price = market_price()
@@ -85,47 +67,96 @@ class ClosePaperPosition:
         ) * tick_size
         closed_at = self._clock()
         order_id = f"manual-close:{basket.basket_id}"
-        # Every Entry is sold at the same price, but sold as its own trade —
-        # the way the position table already shows an Entry as its own row,
-        # not one averaged across every Entry the Basket holds.
-        running_basket = basket
-        for index, entry in enumerate(entries):
+
+        def sell(
+            running: BasketResult, entry: TradeFill
+        ) -> tuple[BasketResult, TradeFill]:
+            """The Basket as this Entry's sale leaves it, and the Fill that sold it."""
             entry_pnl = (
                 (exit_price - entry.price) * entry.quantity
                 if long_position
                 else (entry.price - exit_price) * entry.quantity
             )
-            exit_fill = TradeFill(
-                fill_id=(
-                    f"paper:{session.config.session_id}:{order_id}:"
-                    f"{entry.entry_number}:fill"
-                ),
-                basket_id=basket.basket_id,
-                session_id=session.config.session_id,
+            sold = replace(running, realized_pnl=running.realized_pnl + entry_pnl)
+            return sold, _exit_fill(
+                basket,
+                entry,
                 order_id=order_id,
-                exchange_trade_id=None,
                 side=FillSide.SELL if long_position else FillSide.BUY,
-                entry_number=None,
-                filled_at_utc=closed_at,
                 price=exit_price,
-                quantity=entry.quantity,
-                notional=exit_price * entry.quantity,
                 realized_pnl=entry_pnl,
-                source=FillSource.PAPER_EXECUTOR,
-                closes_entry_number=entry.entry_number,
+                filled_at=closed_at,
             )
-            running_basket = replace(
-                running_basket,
-                realized_pnl=running_basket.realized_pnl + entry_pnl,
-            )
-            if index == len(entries) - 1:
-                closed = replace(
-                    running_basket,
-                    closed_at_utc=closed_at,
-                    status=BasketStatus.CLOSED,
-                )
-                recorded = self._record_closed(closed, exit_fill)
-            else:
-                recorded = self._record_entry_exit(running_basket, exit_fill)
-            if recorded is False:
-                raise RuntimeError("Paper position close was not recorded")
+
+        # Every Entry is sold at the same price, but sold as its own trade —
+        # the way the position table already shows an Entry as its own row,
+        # not one averaged across every Entry the Basket holds. The last of
+        # them is the sale that leaves nothing open, so it is the one that
+        # closes the Basket.
+        running_basket = basket
+        for entry in entries[:-1]:
+            running_basket, exit_fill = sell(running_basket, entry)
+            _require_recorded(self._record_entry_exit(running_basket, exit_fill))
+        running_basket, exit_fill = sell(running_basket, entries[-1])
+        closed = replace(
+            running_basket,
+            closed_at_utc=closed_at,
+            status=BasketStatus.CLOSED,
+        )
+        _require_recorded(self._record_closed(closed, exit_fill))
+
+
+def _open_entries(fills: tuple[TradeFill, ...]) -> tuple[TradeFill, ...]:
+    """The Entry Fills still holding a place in the position, in Entry order.
+
+    An Entry that has already sold is not part of the position any more:
+    counted again here, its quantity went into the exit Fill a second time and
+    its result was written over rather than added to.
+    """
+    sold = {
+        fill.closes_entry_number
+        for fill in fills
+        if fill.closes_entry_number is not None
+    }
+    numbered = []
+    for fill in fills:
+        entry_number = fill.entry_number
+        if entry_number is None or entry_number in sold:
+            continue
+        numbered.append((entry_number, fill))
+    return tuple(fill for _, fill in sorted(numbered, key=lambda pair: pair[0]))
+
+
+def _exit_fill(
+    basket: BasketResult,
+    entry: TradeFill,
+    *,
+    order_id: str,
+    side: FillSide,
+    price: Decimal,
+    realized_pnl: Decimal,
+    filled_at: datetime,
+) -> TradeFill:
+    """The Fill that sells one Entry out of the Basket, named after that Entry."""
+    return TradeFill(
+        fill_id=f"paper:{basket.session_id}:{order_id}:{entry.entry_number}:fill",
+        basket_id=basket.basket_id,
+        session_id=basket.session_id,
+        order_id=order_id,
+        exchange_trade_id=None,
+        side=side,
+        entry_number=None,
+        filled_at_utc=filled_at,
+        price=price,
+        quantity=entry.quantity,
+        notional=price * entry.quantity,
+        realized_pnl=realized_pnl,
+        source=FillSource.PAPER_EXECUTOR,
+        closes_entry_number=entry.entry_number,
+    )
+
+
+def _require_recorded(recorded: object) -> None:
+    """A write the store declined leaves the Basket where it was, and says so."""
+    if recorded is False:
+        raise RuntimeError("Paper position close was not recorded")
