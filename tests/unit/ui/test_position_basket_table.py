@@ -180,6 +180,41 @@ def test_the_average_is_a_column_and_not_a_label_beside_the_table(
     assert not hasattr(widget, "basket_label")
 
 
+def test_an_average_that_does_not_divide_evenly_reads_at_the_quoted_scale(
+    qtbot: QtBot,
+) -> None:
+    """Three Entries divide into a figure with no end to its decimals.
+
+    79,636.456666... is a true answer and an unreadable one, and it grew the
+    column wide enough to push the rest of the row off. An average of prices
+    is a price, so it reads at the scale those prices were quoted at.
+    """
+    widget = PositionBasketTable()
+    qtbot.addWidget(widget)
+    entries = (
+        _entry(1, "79901.99", "-9.89"),
+        _entry(2, "79961.39", "-10.60"),
+        _entry(3, "79045.99", "0.38"),
+    )
+
+    widget.show_snapshot(
+        ready_position_basket_tab(
+            basket_snapshot(
+                entry_count=3,
+                entries=entries,
+                average_entry_price=Decimal("238909.37") / Decimal("3"),
+                take_profit_price=Decimal("79943.49"),
+            ),
+            observed_at_utc=OBSERVED_AT,
+        )
+    )
+
+    # It is the Basket's figure, so it has to read identically down the column
+    # — a scale taken per row could not promise that.
+    for row in range(3):
+        assert _cell(widget, "Average", row).text() == "79,636.46"
+
+
 def test_a_single_entry_basket_reads_the_one_price_it_paid(
     qtbot: QtBot,
 ) -> None:

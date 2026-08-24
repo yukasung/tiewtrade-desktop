@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+from decimal import ROUND_HALF_EVEN, Decimal
 
 from PySide6.QtCore import QSignalBlocker, Qt, Signal
 from PySide6.QtWidgets import (
@@ -86,8 +87,31 @@ def _average_entry_price(row: _Row) -> str:
     The figure Take Profit is measured from. Without it on screen the target
     reads as coming from nowhere — or worse, as measured from the price on the
     row beside it, which is exactly what it is not.
+
+    Shown at the scale the Entries were quoted at. The average is a division,
+    so three Entries can leave it with no last decimal place at all, and the
+    exact answer read as a wall of digits wide enough to push the rest of the
+    row off. The Basket keeps every place — the target is measured from the
+    exact figure, not from this one.
     """
-    return price_text(row.basket.average_entry_price)
+    return price_text(
+        row.basket.average_entry_price.quantize(
+            _quoted_scale(row.basket), rounding=ROUND_HALF_EVEN
+        )
+    )
+
+
+def _quoted_scale(basket: BasketSnapshot) -> Decimal:
+    """The finest scale any of the Basket's Entries was quoted at.
+
+    Read off the Basket rather than off the row, so a derived figure reads the
+    same all the way down the column — which is what makes it legible as the
+    Basket's rather than the row's. Every Fill is rounded to the Symbol's tick
+    before it is recorded, so their scale is the tick's.
+    """
+    exponent = min(entry.price.as_tuple().exponent for entry in basket.entries)
+    assert isinstance(exponent, int)
+    return Decimal(1).scaleb(exponent)
 
 
 def _pnl(row: _Row) -> str:
