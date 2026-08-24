@@ -11,6 +11,7 @@ from tiewtrade.market_data.candle import Candle
 from tiewtrade.strategies.entry_intent import EntryIntent
 from tiewtrade.trading.basket import Basket
 from tiewtrade.trading.capital import SpotCapitalPlan
+from tiewtrade.trading.position import PositionSide
 from tiewtrade.trading.session_config import SessionConfig
 from tiewtrade.trading.symbol_rules import SymbolRules
 
@@ -36,7 +37,8 @@ class PaperSpotExitFill:
     quantity: Decimal
     filled_at: datetime
     # The Entry this Fill closed, when it closed one rather than the Basket.
-    # A stop loss and a manual close take the whole position and leave it None.
+    # Only a trader selling one Entry sets it: take profit, stop loss and a
+    # manual close of the Position all take everything and leave it None.
     entry_number: int | None = None
 
 
@@ -73,29 +75,34 @@ class PaperSpotExecutor:
 
     def fill_take_profit(
         self, basket: Basket, candle: Candle, *, filled_at: datetime
-    ) -> tuple[PaperSpotExitFill, ...]:
-        """A Fill for every Entry whose own target this candle reached.
+    ) -> PaperSpotExitFill | None:
+        """One Fill for the whole Basket when this candle reached its target.
 
-        Each Entry is sold on its own, so a candle that runs past two targets
-        books two Fills rather than one averaged sale.
+        The Basket has a single target measured from what it paid on average,
+        so the sale is a single one covering everything it holds — an Entry
+        still under water leaves with the rest rather than being left behind.
         """
         require_matching_symbol(candle, self._symbol_rules)
 
-        fills: list[PaperSpotExitFill] = []
-        for entry in basket.entries_reaching_take_profit(candle.high, candle.low):
-            price = self._symbol_rules.floor_price(entry.take_profit_price)
-            order_id = f"take-profit:{basket.basket_id}:{entry.entry_number}"
-            fills.append(
-                PaperSpotExitFill(
-                    order_id=order_id,
-                    fill_id=paper_fill_id(self._session.session_id, order_id),
-                    price=price,
-                    quantity=entry.quantity,
-                    filled_at=filled_at,
-                    entry_number=entry.entry_number,
-                )
-            )
-        return tuple(fills)
+        take_profit_price = basket.take_profit_price
+        if take_profit_price is None:
+            return None
+        if not basket.reaches_take_profit(candle.high, candle.low):
+            return None
+
+        if basket.position_side is PositionSide.LONG:
+            price = self._symbol_rules.floor_price(take_profit_price)
+        else:
+            price = self._symbol_rules.ceil_price(take_profit_price)
+
+        order_id = f"take-profit:{basket.basket_id}"
+        return PaperSpotExitFill(
+            order_id=order_id,
+            fill_id=paper_fill_id(self._session.session_id, order_id),
+            price=price,
+            quantity=basket.total_quantity,
+            filled_at=filled_at,
+        )
 
     def fill_entry_close(
         self,

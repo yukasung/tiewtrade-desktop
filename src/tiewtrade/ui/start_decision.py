@@ -30,7 +30,6 @@ def course_before_start(
     *,
     position_open: bool,
     sells_on_start: bool,
-    leaves_entries_holding: bool,
     sale_is_unknown: bool,
 ) -> StartCourse:
     """Which of the three a Start is, in the order the answers rule each other.
@@ -41,24 +40,23 @@ def course_before_start(
     Position back under a Bot, and saying nothing about that read as the
     window having missed it.
 
-    Only a Start that sells the *whole* Position at targets the price has left
-    takes the course that will not offer to run the Session on. Where one
-    Entry has reached its target and another has not, refusing to start made
-    closing at the market price the one way forward — and that sells the Entry
-    still holding along with it.
+    A Start that sells takes the course that will not offer to run the Session
+    on. There is no half-answer to guard against any more: the Basket has one
+    target and leaves at it whole, so a sale on Start is never a sale of some
+    Entries while others stay.
 
     Withholding Start needs positive knowledge, which is why not knowing does
-    not do it. A window that had simply not been handed a price yet answered
-    "something sells" and "nothing is left holding" at once, landing on the
-    course that offers no Start — so opening the app and pressing Start on a
-    Position losing on every Entry had no answer that ran the Bot, and the
-    only way forward was to sell the lot at the market price.
+    not do it. A window that had simply not been handed a price yet once
+    answered as though a sale were certain, landing on the course that offers
+    no Start — so opening the app and pressing Start on a Position losing on
+    every Entry had no answer that ran the Bot, and the only way forward was
+    to sell the lot at the market price.
 
     What the form says decides nothing here. With a question put either way,
     an edited form changes only which answer discards it.
     """
     if not position_open:
         return StartCourse.REPLACE_SESSION
-    if sells_on_start and not leaves_entries_holding and not sale_is_unknown:
+    if sells_on_start and not sale_is_unknown:
         return StartCourse.ASK_ABOUT_THE_SALE
     return StartCourse.ASK_ABOUT_THE_POSITION

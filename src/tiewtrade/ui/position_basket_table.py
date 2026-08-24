@@ -57,8 +57,13 @@ def _price(row: _Row) -> str:
 
 
 def _take_profit_price(row: _Row) -> str:
-    """The target this Entry alone is sold at."""
-    return price_text(row.entry.take_profit_price)
+    """The one price the whole Basket leaves at, repeated on every row.
+
+    Every Entry is sold there together, so the column says the same figure all
+    the way down — which is the point: the Entry bought high does not have a
+    target of its own to wait for, it leaves when the Basket does.
+    """
+    return price_text(row.basket.take_profit_price)
 
 
 def _entry_gate(row: _Row) -> str:
@@ -73,6 +78,16 @@ def _quantity(row: _Row) -> str:
 
 def _notional(row: _Row) -> str:
     return money_text(row.entry.notional)
+
+
+def _average_entry_price(row: _Row) -> str:
+    """What the Basket paid on average, repeated on every row.
+
+    The figure Take Profit is measured from. Without it on screen the target
+    reads as coming from nowhere — or worse, as measured from the price on the
+    row beside it, which is exactly what it is not.
+    """
+    return price_text(row.basket.average_entry_price)
 
 
 def _pnl(row: _Row) -> str:
@@ -96,14 +111,15 @@ class PositionBasketTable(QWidget):
 
     A trader enters the same Basket more than once, so an averaged single row
     hides the prices actually paid. The rows are the Entries, each with the
-    price it paid and the target it is sold at.
+    price it paid.
 
-    Every column reads at the same level — the Entry's own. The Basket's
-    average used to be restated on every row, which read as a third price
-    beside the two the row paid and aimed at, and invited the target to be
-    read as measured from it. It is measured from the Entry's own price, so
-    the average is no longer printed here. Only the lifecycle, one gate for
-    every Entry, is still the Basket's.
+    Some columns are the Basket's rather than the row's, and repeat all the
+    way down: what every Entry is sold at, the average that target is measured
+    from, and the lifecycle gate. The average was once left off for reading as
+    a third price among the row's own — but the target comes from it, and a
+    target whose measure is not on screen is a number the trader has to take
+    on trust. Repeated in its own column it is plainly the Basket's, which is
+    what the old summary label beside the table could never say.
     """
 
     # Measured numbers hang on the right so their digits line up and a minus
@@ -114,6 +130,10 @@ class PositionBasketTable(QWidget):
         Column("Entry Price", RIGHT, _price),
         # Beside the price paid, so the distance left to run reads at a glance.
         Column("Take Profit", RIGHT, _take_profit_price),
+        # Straight after the target, because it is what the target is measured
+        # from: the two Basket figures read together rather than with the row's
+        # own quantity between them.
+        Column("Average", RIGHT, _average_entry_price),
         Column("Quantity", RIGHT, _quantity),
         Column("Total", RIGHT, _notional),
         Column("Unrealized P/L", RIGHT, _pnl, _pnl_colour),

@@ -103,7 +103,7 @@ def test_a_basket_held_before_any_price_shows_everything_but_the_marking(
     assert held.basket.symbol == configured_spot_session().market_data.symbol
     assert held.basket.entry_count == 1
     assert held.basket.entries[0].price == Decimal("100")
-    assert held.basket.entries[0].take_profit_price == Decimal("106")
+    assert held.basket.take_profit_price == Decimal("106")
     # The one reading a price answers, and there is no price yet.
     assert held.basket.current_price is None
     assert held.basket.unrealized_pnl is None
@@ -290,29 +290,6 @@ def test_what_is_held_is_answered_without_waiting_for_a_price(
     workflow.forget()
 
     assert workflow.position_held_message() is None
-
-
-def test_a_start_that_would_take_the_whole_basket_leaves_nothing_holding(
-    qtbot: QtBot,
-) -> None:
-    """Read from the same Basket and price as what a Start would sell.
-
-    Nothing to read it from answers as a Basket taken whole, which is the
-    answer to be wrong towards: it is the question that offers no Start.
-    """
-    workflow, _shown = _workflow(lambda _session: _reopened())
-    assert workflow.leaves_entries_holding() is False
-
-    workflow.read_for(configured_spot_session())
-    qtbot.waitUntil(lambda: workflow.basket is not None)
-    # Held, but with no price to judge the target by.
-    assert workflow.leaves_entries_holding() is False
-
-    workflow.mark_price(flat_candle(OBSERVED_AT, 105))
-    assert workflow.leaves_entries_holding() is True
-
-    workflow.mark_price(flat_candle(OBSERVED_AT, 110))
-    assert workflow.leaves_entries_holding() is False
 
 
 def test_a_read_that_comes_back_empty_clears_the_tab(qtbot: QtBot) -> None:

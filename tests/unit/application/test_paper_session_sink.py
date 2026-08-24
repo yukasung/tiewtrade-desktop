@@ -29,7 +29,6 @@ class FakeSnapshot:
     entry_fill: None = None
     basket_entry_count: int = 0
     entry_number: int | None = None
-    entry_take_profit_price: Decimal | None = None
     sold_entry_numbers: tuple[int, ...] = ()
 
 

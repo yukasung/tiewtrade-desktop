@@ -120,12 +120,16 @@ class PaperSpotSQLiteHistory:
         if existing is None:
             raise ValueError("Basket does not exist")
 
+        # The Fill is worth what this sale sold, not what the Basket made over
+        # its life: an Entry the trader sold earlier already has a Fill of its
+        # own carrying its result, and repeating it here would show the same
+        # money twice in the Fills table. The Basket row keeps the whole round.
         normalized_fill = paper_fill_record(
             fill,
             basket_id=basket_id,
             session_id=self._context.session_id,
             side=FillSide.SELL,
-            realized_pnl=closed.realized_pnl,
+            realized_pnl=closed.exit_realized_pnl,
         )
         basket = replace(
             existing,

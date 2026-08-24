@@ -75,6 +75,7 @@ def closed_basket() -> ClosedBasket:
         average_entry_price=Decimal("100"),
         exit_price=Decimal("110"),
         realized_pnl=Decimal("20"),
+        exit_realized_pnl=Decimal("20"),
         closed_at=FILLED_AT,
     )
 
@@ -88,7 +89,6 @@ def entry_snapshot() -> PaperSpotSessionSnapshot:
         entry_fill=entry_fill(),
         entry_atr=Decimal("2.5"),
         entry_number=1,
-        entry_take_profit_price=Decimal("105"),
         entry_exits=(),
         exit_fill=None,
         closed_basket=None,
@@ -112,7 +112,6 @@ def close_snapshot() -> PaperSpotSessionSnapshot:
         entry_fill=None,
         entry_atr=None,
         entry_number=None,
-        entry_take_profit_price=None,
         entry_exits=(),
         exit_fill=exit_fill(),
         closed_basket=closed_basket(),
@@ -268,7 +267,6 @@ def test_exit_fill_without_closed_basket_blocks_persistence() -> None:
         entry_fill=None,
         entry_atr=None,
         entry_number=None,
-        entry_take_profit_price=None,
         entry_exits=(),
         exit_fill=exit_fill(),
         closed_basket=None,

@@ -114,14 +114,11 @@ class BasketEntrySnapshot:
     quantity: Decimal
     notional: Decimal
     unrealized_pnl: Decimal | None
-    # The target this Entry alone is sold at, measured from the price it paid.
-    take_profit_price: Decimal
 
     def __post_init__(self) -> None:
         if type(self.entry_number) is not int or self.entry_number < 1:
             raise ValueError("entry_number must be a positive integer")
         _require_utc(self.filled_at_utc, "filled_at_utc")
-        _require_decimal(self.take_profit_price, "take_profit_price")
         _require_decimal(self.price, "price")
         _require_non_negative_decimal(self.quantity, "quantity")
         _require_decimal(self.notional, "notional")

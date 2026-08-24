@@ -85,17 +85,16 @@ class PaperFuturesExecutor:
         self, basket: Basket, candle: Candle
     ) -> PaperFuturesExitFill | None:
         require_matching_symbol(candle, self._symbol_rules)
-        if basket.take_profit_price is None:
+        take_profit_price = basket.take_profit_price
+        if take_profit_price is None:
+            return None
+        if not basket.reaches_take_profit(candle.high, candle.low):
             return None
 
         if basket.position_side is PositionSide.LONG:
-            if candle.high < basket.take_profit_price:
-                return None
-            price = self._symbol_rules.floor_price(basket.take_profit_price)
+            price = self._symbol_rules.floor_price(take_profit_price)
         else:
-            if candle.low > basket.take_profit_price:
-                return None
-            price = self._symbol_rules.ceil_price(basket.take_profit_price)
+            price = self._symbol_rules.ceil_price(take_profit_price)
 
         return self._exit_fill(
             basket=basket,

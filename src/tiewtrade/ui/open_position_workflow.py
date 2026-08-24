@@ -29,7 +29,6 @@ from tiewtrade.application.trading_workspace import (
 )
 from tiewtrade.ui.background_task import BackgroundTask
 from tiewtrade.ui.take_profit_confirmation import (
-    leaves_entries_holding,
     position_at_target_message,
     position_held_message,
     sells_on_start_message,
@@ -165,20 +164,6 @@ class OpenPositionWorkflow(QObject):
         if basket is None:
             return None
         return position_held_message(basket)
-
-    def leaves_entries_holding(self) -> bool:
-        """Whether a Start would leave part of the Position unsold.
-
-        Nothing to read it from answers the same way as a Basket a Start would
-        take whole, and that answer alone is not acted on: what_a_start_sells_
-        is_unknown says the reading is missing, and the course a Start takes
-        asks it before it withholds anything.
-        """
-        basket = self._basket
-        candle = self._candle
-        if basket is None or candle is None:
-            return False
-        return leaves_entries_holding(basket, candle.close)
 
     def what_a_start_sells_is_unknown(self) -> bool:
         """Whether a Start could sell at a target without this saying so.

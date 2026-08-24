@@ -55,7 +55,7 @@ Paper และ Live ใช้ business rules ชุดเดียวกัน�
 
 ค่าจาก form ต้องผ่าน validation แล้วสร้างเป็น immutable Session policy ห้ามเปลี่ยนระหว่าง Session โดย `max_entries` ต้องเป็นเลขคู่ตั้งแต่ 2–20
 
-RSI parameters, take-profit rule และ Entry Pair ยังคงอยู่ใน Strategy Preset หรือ product policy และไม่ใช่ค่าที่ผู้ใช้เปลี่ยนระหว่าง Session
+RSI parameters, take-profit rule และ Entry Pair ยังคงอยู่ใน Strategy Preset หรือ product policy และไม่ใช่ค่าที่ผู้ใช้เปลี่ยนระหว่าง Session โดยรูปของ take-profit rule เป็น product policy กลาง ส่วน ATR multiplier ที่ป้อนให้สูตรมาจาก Preset
 
 Cooldown เกิดขึ้นเมื่อ Basket ทำ Entry Pair ครบสอง Entries และไม่หมดอายุเองตามเวลา — ไม่มีการนับเดือนอีกต่อไป Cooldown ระบุว่า Basket กำลังถือทั้งสอง Entries ของ Pair ล่าสุดพร้อมกัน จึงจบลงทันทีที่ Entry ใด Entry หนึ่งของ Pair นั้นถูกปิด ไม่ว่าจะด้วย Take Profit หรือการปิดเอง (การปิด Entry ของ Pair ก่อนหน้าที่จบไปแล้วไม่นับ เพราะ Pair ล่าสุดยังถือครบอยู่) ข้อเท็จจริงนี้ไม่ต้องเก็บลงฐานข้อมูล เพราะ replay อ่านกลับได้จากเลข Entry ที่ยังเปิดค้างอยู่ ถ้ายังถือครบทั้งคู่ Basket จะถูกบล็อกจนกว่าผู้ใช้กดปุ่ม "Cancel Cooldown" พร้อม confirmation dialog เพราะเป็นการข้าม risk policy ที่ตั้งใจไว้ การกดหนึ่งครั้งยกเลิกได้เฉพาะ Cooldown รอบที่กำลังบล็อกอยู่ Pair ถัดไปที่ Basket เดียวกันทำครบยังเข้า Cooldown ตามปกติ waiver ผูกกับ Basket และ persist คู่กับ Fills ของมัน จึงอยู่รอดแม้ restart หรือ replay กลับ ปุ่มนี้ใช้ได้ทั้ง Paper Spot และ Paper Futures โดย Paper Spot เก็บ waiver ลงฐานข้อมูลจึงอยู่รอดข้าม restart ส่วน Paper Futures ไม่เก็บ เพราะไม่รับ Basket ที่เปิดค้างกลับมาอยู่แล้ว waiver จึงมีอายุเท่ากับ Runtime ที่ถืออยู่
 
@@ -71,6 +71,14 @@ Candle ที่ระบบดึงย้อนหลังมาหลัง�
 ราคาที่ตลาดผ่านไปแล้ว แต่ยังใช้ปิด Position ได้เต็มรูปแบบ (Take Profit / Stop Loss /
 Stop Loss) และยังใช้คำนวณ Indicator ตามปกติ กฎนี้ใช้กับทั้ง `PAPER` และ `LIVE` ทุก Market
 Type — ดู PRODUCT.md ข้อ 8.1
+
+### Basket Take Profit
+
+Basket มีระดับ Take Profit เดียวสำหรับทั้งใบ วัดจากราคาเฉลี่ยถ่วงน้ำหนักของ Entries ที่ยังเปิดอยู่
+บวก/ลบ ATR ตาม Position Side ไม่มีเป้ารายตัวของแต่ละ Entry ATR ที่ใช้คือของ Entry ที่ยังเปิดอยู่
+และ Fill ล่าสุด ระดับนี้คำนวณใหม่ทุกครั้งที่ Basket เปลี่ยนองค์ประกอบ ทั้งเมื่อมี Entry Fill และเมื่อ
+Entry ถูกปิดรายตัว เมื่อราคาแตะระดับนี้ Basket ปิดทุก Entry พร้อมกันด้วย `TAKE_PROFIT` ดังนั้น
+Entry ที่ยังขาดทุนจึงถูกปิดรวบไปพร้อม Entry ที่กำไร — ดู PRODUCT.md ข้อ 5
 
 ### Basket Close Reason
 

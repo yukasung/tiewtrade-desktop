@@ -115,6 +115,7 @@ def closed_basket(
         average_entry_price=Decimal("100"),
         exit_price=Decimal("110") if side is PositionSide.LONG else Decimal("90"),
         realized_pnl=gross_pnl,
+        exit_realized_pnl=gross_pnl,
         closed_at=CLOSED_AT,
         position_side=side,
         close_reason=BasketCloseReason.TAKE_PROFIT,

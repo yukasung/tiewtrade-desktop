@@ -58,10 +58,9 @@ class PaperFuturesSessionSnapshot:
     state: PaperFuturesSessionState
     pending_intent: EntryIntent | None
     entry_fill: PaperFuturesEntryFill | None
-    # The number and the target of the Entry just filled, which the tab reads
-    # per Entry. Futures sells its Basket whole, so it never sells one alone.
+    # The number of the Entry just filled, which the tab reads per Entry.
+    # Futures sells its Basket whole, so it never sells one alone.
     entry_number: int | None
-    entry_take_profit_price: Decimal | None
     exit_fill: PaperFuturesExitFill | None
     closed_basket: ClosedBasket | None
     basket_id: UUID | None
@@ -411,8 +410,7 @@ class PaperFuturesSession:
             )
             take_profit_price = None
 
-        # The Entry just filled is the newest the Basket holds, and it carries
-        # the target it alone would be sold at.
+        # The Entry just filled is the newest the Basket holds.
         filled_entry = (
             self._basket.entries[-1]
             if entry_fill is not None and self._basket is not None
@@ -424,9 +422,6 @@ class PaperFuturesSession:
             pending_intent=self._pending_intent,
             entry_fill=entry_fill,
             entry_number=None if filled_entry is None else filled_entry.entry_number,
-            entry_take_profit_price=(
-                None if filled_entry is None else filled_entry.take_profit_price
-            ),
             exit_fill=exit_fill,
             closed_basket=closed_basket,
             basket_id=basket_id,

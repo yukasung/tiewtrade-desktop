@@ -35,7 +35,7 @@ def test_take_profit_price_is_read_only() -> None:
     assert basket.take_profit_price is None
 
 
-def test_each_entry_carries_the_target_measured_from_its_own_price() -> None:
+def test_the_basket_carries_one_target_measured_from_its_average() -> None:
     basket = Basket(
         basket_id=basket_id(), policy=policy(), take_profit_atr_multiplier=Decimal("3")
     )
@@ -46,7 +46,7 @@ def test_each_entry_carries_the_target_measured_from_its_own_price() -> None:
         atr=Decimal("2.03"),
         tick_size=Decimal("0.1"),
     )
-    # 100 + 3 x 2.03, floored to the tick.
+    # One Entry, so its price is the average: 100 + 3 x 2.03, floored to tick.
     assert basket.take_profit_price == Decimal("106.0")
 
     basket.add_entry(
@@ -58,14 +58,127 @@ def test_each_entry_carries_the_target_measured_from_its_own_price() -> None:
     )
 
     assert basket.average_entry_price == Decimal("97.5")
-    # The cheaper Entry has its own target, 90 + 3 x 3.03, and the Basket
-    # reports the nearest of the two rather than one averaged across them.
-    assert [entry.take_profit_price for entry in basket.entries] == [
-        Decimal("106.0"),
-        Decimal("99.0"),
-    ]
-    assert basket.take_profit_price == Decimal("99.0")
+    # 97.5 + 3 x 3.03, floored to the tick. One target for the whole Basket,
+    # measured from what it paid on average and from the ATR of its latest
+    # Fill — the Entry bought at 100 leaves at this price too.
+    assert basket.take_profit_price == Decimal("106.5")
     assert [entry.entry_number for entry in basket.entries] == [1, 2]
+
+
+def test_the_target_is_remeasured_when_an_entry_is_sold_out_of_the_basket() -> None:
+    """Selling an Entry moves the average, so it has to move the target.
+
+    A target left where a departed Entry put it is measured against a Basket
+    that no longer exists.
+    """
+    basket = Basket(
+        basket_id=basket_id(),
+        policy=policy(),
+        take_profit_atr_multiplier=Decimal("3"),
+        stop_loss_atr_multiplier=Decimal("3"),
+    )
+    basket.add_entry(
+        price=Decimal("100"),
+        quantity=Decimal("3"),
+        filled_at=datetime(2026, 1, 1, tzinfo=UTC),
+        atr=Decimal("2"),
+        tick_size=Decimal("0.1"),
+    )
+    basket.add_entry(
+        price=Decimal("90"),
+        quantity=Decimal("1"),
+        filled_at=datetime(2026, 1, 2, tzinfo=UTC),
+        atr=Decimal("4"),
+        tick_size=Decimal("0.1"),
+    )
+    # 97.5 +/- 3 x 4, on the latest Fill's ATR.
+    assert basket.take_profit_price == Decimal("109.5")
+    assert basket.stop_loss_price == Decimal("85.5")
+
+    basket.close_entry(
+        2,
+        exit_price=Decimal("95"),
+        closed_at=datetime(2026, 1, 3, tzinfo=UTC),
+    )
+
+    # Only the Entry bought at 100 is left, and the ATR falls back to the one
+    # it was itself read against.
+    assert basket.average_entry_price == Decimal("100")
+    assert basket.take_profit_price == Decimal("106.0")
+    assert basket.stop_loss_price == Decimal("94.0")
+
+
+def test_a_short_basket_takes_profit_below_its_average_and_rounds_up() -> None:
+    basket = Basket(
+        basket_id=basket_id(),
+        policy=policy(),
+        take_profit_atr_multiplier=Decimal("3"),
+        position_side=PositionSide.SHORT,
+    )
+
+    basket.add_entry(
+        position_side=PositionSide.SHORT,
+        price=Decimal("100"),
+        quantity=Decimal("1"),
+        filled_at=datetime(2026, 1, 1, tzinfo=UTC),
+        atr=Decimal("1.03"),
+        tick_size=Decimal("0.1"),
+    )
+
+    assert basket.position_side is PositionSide.SHORT
+    assert basket.take_profit_price == Decimal("97.0")
+
+    basket.add_entry(
+        position_side=PositionSide.SHORT,
+        price=Decimal("90"),
+        quantity=Decimal("3"),
+        filled_at=datetime(2026, 1, 2, tzinfo=UTC),
+        atr=Decimal("1.03"),
+        tick_size=Decimal("0.1"),
+    )
+
+    assert basket.average_entry_price == Decimal("92.5")
+    # 92.5 - 3 x 1.03 = 89.41, rounded up against the seller.
+    assert basket.take_profit_price == Decimal("89.5")
+
+
+@pytest.mark.parametrize(
+    ("side", "high", "low", "expected"),
+    [
+        (PositionSide.LONG, Decimal("106.0"), Decimal("99"), True),
+        (PositionSide.LONG, Decimal("105.9"), Decimal("99"), False),
+        (PositionSide.SHORT, Decimal("101"), Decimal("94.0"), True),
+        (PositionSide.SHORT, Decimal("101"), Decimal("94.1"), False),
+    ],
+)
+def test_reaching_the_target_is_read_off_the_basket_not_off_the_candle(
+    side: PositionSide, high: Decimal, low: Decimal, expected: bool
+) -> None:
+    """One rule, so an executor and a confirmation cannot answer differently."""
+    basket = Basket(
+        basket_id=basket_id(),
+        policy=policy(),
+        take_profit_atr_multiplier=Decimal("3"),
+        position_side=side,
+    )
+    basket.add_entry(
+        position_side=side,
+        price=Decimal("100"),
+        quantity=Decimal("1"),
+        filled_at=datetime(2026, 1, 1, tzinfo=UTC),
+        atr=Decimal("2"),
+        tick_size=Decimal("0.1"),
+    )
+
+    assert basket.reaches_take_profit(high, low) is expected
+
+
+def test_an_empty_basket_reaches_no_target() -> None:
+    basket = Basket(
+        basket_id=basket_id(), policy=policy(), take_profit_atr_multiplier=Decimal("3")
+    )
+
+    assert basket.reaches_take_profit(Decimal("999"), Decimal("1")) is False
 
 
 def test_closing_one_entry_leaves_the_others_where_they_are() -> None:
@@ -225,45 +338,6 @@ def test_average_entry_price_after_fill_uses_domain_weighting() -> None:
         fill_price=Decimal("90"),
         fill_quantity=Decimal("1"),
     ) == Decimal("97.5")
-
-
-def test_short_entries_take_profit_below_their_own_price_and_round_up() -> None:
-    basket = Basket(
-        basket_id=basket_id(),
-        policy=policy(),
-        take_profit_atr_multiplier=Decimal("3"),
-        position_side=PositionSide.SHORT,
-    )
-
-    basket.add_entry(
-        position_side=PositionSide.SHORT,
-        price=Decimal("100"),
-        quantity=Decimal("1"),
-        filled_at=datetime(2026, 1, 1, tzinfo=UTC),
-        atr=Decimal("1.03"),
-        tick_size=Decimal("0.1"),
-    )
-
-    assert basket.position_side is PositionSide.SHORT
-    assert basket.take_profit_price == Decimal("97.0")
-
-    basket.add_entry(
-        position_side=PositionSide.SHORT,
-        price=Decimal("90"),
-        quantity=Decimal("3"),
-        filled_at=datetime(2026, 1, 2, tzinfo=UTC),
-        atr=Decimal("1.03"),
-        tick_size=Decimal("0.1"),
-    )
-
-    assert basket.average_entry_price == Decimal("92.5")
-    # 90 - 3 x 1.03 rounded up, and a SHORT reads the highest target as the
-    # nearest one the market has to fall to.
-    assert [entry.take_profit_price for entry in basket.entries] == [
-        Decimal("97.0"),
-        Decimal("87.0"),
-    ]
-    assert basket.take_profit_price == Decimal("97.0")
 
 
 def test_one_way_basket_rejects_opposite_side_without_mutation() -> None:

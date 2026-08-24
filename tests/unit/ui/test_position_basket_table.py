@@ -30,7 +30,6 @@ def _entry(
     number: int,
     price: str,
     unrealized_pnl: str,
-    take_profit_price: str | None = None,
 ) -> BasketEntrySnapshot:
     return BasketEntrySnapshot(
         entry_number=number,
@@ -39,11 +38,6 @@ def _entry(
         quantity=Decimal("0.00300000"),
         notional=Decimal(price) * Decimal("0.00300000"),
         unrealized_pnl=Decimal(unrealized_pnl),
-        take_profit_price=(
-            Decimal(price) + Decimal("1000")
-            if take_profit_price is None
-            else Decimal(take_profit_price)
-        ),
     )
 
 
@@ -54,8 +48,8 @@ def _futures_basket() -> BasketSnapshot:
         market_type="futures",
         entry_count=2,
         entries=(
-            _entry(1, "66000.0000", "0.96336", take_profit_price="67000.0000"),
-            _entry(2, "66000.2500", "0.96264", take_profit_price="67000.2500"),
+            _entry(1, "66000.0000", "0.96336"),
+            _entry(2, "66000.2500", "0.96264"),
         ),
         total_quantity=Decimal("0.00600000"),
         average_entry_price=Decimal("66000.1250"),
@@ -100,6 +94,7 @@ def test_each_entry_of_the_basket_is_its_own_row(qtbot: QtBot) -> None:
         "Date",
         "Entry Price",
         "Take Profit",
+        "Average",
         "Quantity",
         "Total",
         "Unrealized P/L",
@@ -113,6 +108,7 @@ def test_each_entry_of_the_basket_is_its_own_row(qtbot: QtBot) -> None:
         "Take Profit": "67,000.0000",
         "Quantity": "0.00300000",
         "Total": "198.00 USDT",
+        "Average": "66,000.1250",
         "Unrealized P/L": "0.96 USDT",
         "Status": "Active",
     }
@@ -122,8 +118,12 @@ def test_each_entry_of_the_basket_is_its_own_row(qtbot: QtBot) -> None:
     assert widget.state_label.accessibleName() == "Position status"
 
 
-def test_every_entry_reads_the_target_it_is_sold_at(qtbot: QtBot) -> None:
-    """Entries bought at different prices are sold at different targets."""
+def test_every_entry_reads_the_one_target_the_basket_leaves_at(qtbot: QtBot) -> None:
+    """Entries bought at different prices are all sold at the same target.
+
+    The column repeats rather than varying by row, which is the fact: the
+    Entry bought high has no target of its own to wait for.
+    """
     widget = PositionBasketTable()
     qtbot.addWidget(widget)
 
@@ -132,7 +132,7 @@ def test_every_entry_reads_the_target_it_is_sold_at(qtbot: QtBot) -> None:
     )
 
     assert _cell(widget, "Take Profit", 0).text() == "67,000.0000"
-    assert _cell(widget, "Take Profit", 1).text() == "67,000.2500"
+    assert _cell(widget, "Take Profit", 1).text() == "67,000.0000"
     for row in (0, 1):
         # The lifecycle is the Basket's, so it does read the same on both.
         assert _cell(widget, "Status", row).text() == "Active"
@@ -156,14 +156,14 @@ def test_money_is_grouped_and_a_quantity_is_not(qtbot: QtBot) -> None:
     assert row["Quantity"] == "0.00300000"
 
 
-def test_no_price_column_reads_at_the_basket_level(qtbot: QtBot) -> None:
-    """Only the prices the row itself paid and aims at.
+def test_the_average_is_a_column_and_not_a_label_beside_the_table(
+    qtbot: QtBot,
+) -> None:
+    """The average reads on every row because the target is measured from it.
 
-    The Basket's average was once restated on every row, where it read as a
-    third price beside those two and invited the target to be read as measured
-    from it. The target is measured from the Entry's own price, so the average
-    is not printed here at all — and nothing takes its place, no summary label
-    and no total.
+    It is the Basket's, so it repeats down the table the way Take Profit does.
+    Nothing summarises it beside the rows — no label and no total — because a
+    figure printed twice is a figure that can disagree with itself.
     """
     widget = PositionBasketTable()
     qtbot.addWidget(widget)
@@ -172,7 +172,8 @@ def test_no_price_column_reads_at_the_basket_level(qtbot: QtBot) -> None:
         ready_position_basket_tab(_futures_basket(), observed_at_utc=OBSERVED_AT)
     )
 
-    assert "Average" not in widget.headers
+    assert _cell(widget, "Average", 0).text() == "66,000.1250"
+    assert _cell(widget, "Average", 1).text() == "66,000.1250"
     assert _cell(widget, "Entry Price", 0).text() == "66,000.0000"
     assert _cell(widget, "Entry Price", 1).text() == "66,000.2500"
     assert not hasattr(widget, "total_label")
@@ -182,7 +183,7 @@ def test_no_price_column_reads_at_the_basket_level(qtbot: QtBot) -> None:
 def test_a_single_entry_basket_reads_the_one_price_it_paid(
     qtbot: QtBot,
 ) -> None:
-    """One Entry, one price and one target — no averaged figure to compare."""
+    """One Entry and the price it paid — no averaged figure beside it."""
     widget = PositionBasketTable()
     qtbot.addWidget(widget)
 
@@ -199,7 +200,8 @@ def test_a_single_entry_basket_reads_the_one_price_it_paid(
 
     assert widget.table.rowCount() == 1
     assert _cell(widget, "Entry Price", 0).text() == "64,000"
-    assert "Average" not in widget.headers
+    # One Entry, so the average is the price it paid and says nothing new.
+    assert _cell(widget, "Average", 0).text() == "64,000"
 
 
 def test_a_moved_column_carries_its_own_reading(
@@ -245,6 +247,7 @@ def test_columns_align_numbers_right_and_text_left(qtbot: QtBot) -> None:
         right,
         right,
         right,
+        right,
         left,
     )
     for column, alignment in enumerate(widget.ALIGNMENTS):
@@ -285,7 +288,9 @@ def test_an_unmarked_entry_shows_a_dash_where_its_result_will_be(
     assert row["Unrealized P/L"] == BLANK
     # What needed no price is there in full.
     assert row["Entry Price"] == "64,000"
-    assert row["Take Profit"] == "65,000"
+    assert row["Average"] == "64,000"
+    # The Basket's own target, which needs no price to mark against either.
+    assert row["Take Profit"] == "66,000"
     assert row["Total"] == "192.00 USDT"
     # Unmarked is not a sign, so the figure keeps the table's own colour.
     assert _cell(widget, "Unrealized P/L").foreground() == (

@@ -81,7 +81,6 @@ def spot_snapshot(
         entry_fill=None,
         entry_atr=None,
         entry_number=None,
-        entry_take_profit_price=None,
         entry_exits=(),
         exit_fill=None,
         closed_basket=None,
@@ -107,7 +106,6 @@ def futures_snapshot(
         pending_intent=None,
         entry_fill=None,
         entry_number=None,
-        entry_take_profit_price=None,
         exit_fill=None,
         closed_basket=None,
         basket_id=None,
@@ -132,14 +130,12 @@ def test_each_entry_is_kept_beside_the_average_it_feeds() -> None:
         entry_fill=spot_fill("100", "1", minute=0),
         basket_entry_count=1,
         entry_number=1,
-        take_profit_price=Decimal("150"),
     )
     second = position_after_snapshot(
         first,
         entry_fill=spot_fill("120", "1", minute=5),
         basket_entry_count=2,
         entry_number=2,
-        take_profit_price=Decimal("170"),
     )
 
     assert second is not None
@@ -158,7 +154,6 @@ def test_a_candle_without_a_fill_leaves_the_position_untouched() -> None:
         entry_fill=spot_fill("100", "1"),
         basket_entry_count=1,
         entry_number=1,
-        take_profit_price=Decimal("150"),
     )
 
     unchanged = position_after_snapshot(opened, entry_fill=None, basket_entry_count=1)
@@ -172,7 +167,6 @@ def test_a_closed_basket_leaves_no_position() -> None:
         entry_fill=spot_fill("100", "1"),
         basket_entry_count=1,
         entry_number=1,
-        take_profit_price=Decimal("150"),
     )
 
     assert (
@@ -193,12 +187,10 @@ def test_spot_marks_every_entry_on_its_own_price() -> None:
             entry_fill=spot_fill("100", "1", minute=0),
             basket_entry_count=1,
             entry_number=1,
-            take_profit_price=Decimal("999"),
         ),
         entry_fill=spot_fill("120", "1", minute=5),
         basket_entry_count=2,
         entry_number=2,
-        take_profit_price=Decimal("999"),
     )
 
     basket = spot_basket_snapshot(
@@ -241,12 +233,10 @@ def test_a_basket_shows_the_entry_that_outlived_the_one_that_sold() -> None:
                 entry_fill=spot_fill("100", "1", minute=0),
                 basket_entry_count=1,
                 entry_number=1,
-                take_profit_price=Decimal("106"),
             ),
             entry_fill=spot_fill("120", "1", minute=5),
             basket_entry_count=2,
             entry_number=2,
-            take_profit_price=Decimal("126"),
         ),
         [1],
     )
@@ -268,7 +258,6 @@ def test_a_short_basket_marks_its_entries_the_way_round_it_earns() -> None:
         entry_fill=futures_fill("100", "2"),
         basket_entry_count=1,
         entry_number=1,
-        take_profit_price=Decimal("999"),
     )
 
     basket = futures_basket_snapshot(
@@ -297,7 +286,6 @@ def test_a_futures_basket_without_a_side_fails_closed() -> None:
         entry_fill=futures_fill("100", "2"),
         basket_entry_count=1,
         entry_number=1,
-        take_profit_price=Decimal("999"),
     )
 
     with pytest.raises(ValueError, match="position_side"):
@@ -315,7 +303,6 @@ def test_a_cooling_basket_carries_the_month_it_reopens() -> None:
         entry_fill=spot_fill("100", "1"),
         basket_entry_count=1,
         entry_number=1,
-        take_profit_price=Decimal("999"),
     )
     basket = spot_basket_snapshot(
         spot_snapshot(
@@ -338,7 +325,6 @@ def test_a_basket_snapshot_carries_the_pairs_it_has_completed() -> None:
         entry_fill=spot_fill("100", "1"),
         basket_entry_count=1,
         entry_number=1,
-        take_profit_price=Decimal("999"),
     )
     basket = spot_basket_snapshot(
         spot_snapshot(basket_entry_count=1, entry_completed_pairs=2),
@@ -370,7 +356,6 @@ def test_an_open_basket_missing_a_required_fact_fails_closed(
         entry_fill=spot_fill("100", "1"),
         basket_entry_count=1,
         entry_number=1,
-        take_profit_price=Decimal("999"),
     )
 
     with pytest.raises(ValueError, match=expected):

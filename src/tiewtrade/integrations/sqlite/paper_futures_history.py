@@ -128,7 +128,11 @@ class PaperFuturesSQLiteHistory:
             basket_id=basket_id,
             session_id=self._context.session_id,
             side=_exit_fill_side(fill.side),
-            realized_pnl=closed.realized_pnl,
+            # What this sale sold, which for Futures — where nothing is ever
+            # sold out of a Basket on its own — is the whole round. Read from
+            # the same field Spot reads so the two cannot mean different
+            # things by the number on a Fill.
+            realized_pnl=closed.exit_realized_pnl,
         )
         basket = replace(
             existing,

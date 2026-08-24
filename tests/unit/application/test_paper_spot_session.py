@@ -373,12 +373,12 @@ def test_take_profit_skips_entry_fill_candle_and_closes_on_following_candle() ->
     assert target_snapshot.closed_basket is not None
     assert target_snapshot.basket_id == target_snapshot.closed_basket.basket_id
     assert target_snapshot.closed_basket.entry_count == 1
-    # A take profit sells the Entry, and the Basket closes because it was
-    # the only one left.
-    assert len(target_snapshot.entry_exits) == 1
-    assert target_snapshot.exit_fill is None
-    assert target_snapshot.entry_exits[0].fill.filled_at == target_candle.close_time
-    assert target_snapshot.entry_exits[0].closed.entry_number == 1
+    # A take profit takes the whole Basket at once, so the Fill names no one
+    # Entry — it is the Position that was sold.
+    assert target_snapshot.entry_exits == ()
+    assert target_snapshot.exit_fill is not None
+    assert target_snapshot.exit_fill.filled_at == target_candle.close_time
+    assert target_snapshot.exit_fill.entry_number is None
     assert target_snapshot.closed_basket_count == 1
     assert target_snapshot.basket_entry_count == 0
     assert target_snapshot.take_profit_price is None
@@ -429,9 +429,9 @@ def test_take_profit_fills_the_moment_the_forming_candle_reaches_it() -> None:
     assert snapshot.accepted is True
     assert snapshot.closed_basket is not None
     assert snapshot.closed_basket.close_reason is BasketCloseReason.TAKE_PROFIT
-    assert len(snapshot.entry_exits) == 1
+    assert snapshot.exit_fill is not None
     # Stamped when it happened, not at a close that has not come.
-    assert snapshot.entry_exits[0].fill.filled_at == observed_at
+    assert snapshot.exit_fill.filled_at == observed_at
     assert snapshot.basket_entry_count == 0
 
 
@@ -555,7 +555,7 @@ def test_sell_candle_cannot_signal_the_next_entry() -> None:
         sell_candle, received_at=sell_candle.close_time
     )
 
-    assert sell_snapshot.entry_exits
+    assert sell_snapshot.exit_fill is not None
     assert sell_snapshot.pending_intent is None
 
     following_candle = candle(
@@ -791,62 +791,72 @@ def fill_second_fast_test_entry(
     return snapshot, minute + 5
 
 
-def test_one_entry_takes_profit_while_the_other_stays_open() -> None:
-    """Each Entry is sold at its own target, not at one averaged over both."""
+def test_take_profit_sweeps_the_entry_still_under_water_out_with_the_rest() -> None:
+    """One target for the Basket, so the Entry bought high leaves with it.
+
+    Measured per Entry, the cheap one sold on its own and lifted the average
+    the target was next read from, so the Entry bought high was left holding a
+    target that climbed away from it every time it was nearly reached.
+    """
     application = fast_test_paper_session()
     first, next_minute = arm_and_fill_fast_test_entry(application)
     first_target = first.take_profit_price
     assert first_target is not None
 
     second, next_minute = fill_second_fast_test_entry(application, first, next_minute)
-    second_target = second.entry_take_profit_price
+    swept_target = second.take_profit_price
 
     assert second.basket_entry_count == 2
     assert second.entry_number == 2
-    assert second_target is not None
-    assert second_target < first_target
-    # The Basket reports the nearest of the two, which is the cheap Entry's.
-    assert second.take_profit_price == second_target
+    assert swept_target is not None
+    # The second Entry was cheaper, so the average fell and the one target the
+    # Basket now leaves at fell with it.
+    assert swept_target < first_target
 
     reached = candle(
         next_minute,
-        open_price=str(second_target - Decimal("2")),
-        close_price=str(second_target - Decimal("1")),
-        high=str(second_target),
-        low=str(second_target - Decimal("2")),
+        open_price=str(swept_target - Decimal("2")),
+        close_price=str(swept_target - Decimal("1")),
+        high=str(swept_target),
+        low=str(swept_target - Decimal("2")),
     )
     sold = application.process_completed_candle(reached, received_at=reached.close_time)
 
-    assert [item.closed.entry_number for item in sold.entry_exits] == [2]
-    assert sold.closed_basket is None
-    assert sold.basket_entry_count == 1
-    # The Entry that stayed keeps the target it was measured for.
-    assert sold.take_profit_price == first_target
+    assert sold.entry_exits == ()
+    assert sold.exit_fill is not None
+    assert sold.closed_basket is not None
+    assert sold.closed_basket.close_reason is BasketCloseReason.TAKE_PROFIT
+    # Both Entries left together, including the one bought above this price.
+    assert sold.closed_basket.entry_count == 2
+    assert sold.exit_fill.entry_number is None
+    assert sold.basket_entry_count == 0
+    assert sold.take_profit_price is None
 
 
-def test_an_entry_that_sold_at_target_lifts_the_cooldown_it_left() -> None:
-    """A Cooldown says the Basket is holding both Entries of a Pair at once.
+def test_a_basket_swept_out_at_its_target_leaves_no_cooldown_behind() -> None:
+    """A Cooldown belongs to a Basket, so closing the Basket ends it.
 
-    The market taking profit on one of them ends that, so the gate the Pair
-    closed opens again without the trader having to say anything.
+    A Pair holding both its Entries is what cools; take profit takes both at
+    once, and the Session that starts the next Basket starts it uncooled.
     """
     application = fast_test_paper_session()
     first, next_minute = arm_and_fill_fast_test_entry(application)
     second, next_minute = fill_second_fast_test_entry(application, first, next_minute)
-    second_target = second.entry_take_profit_price
-    assert second_target is not None
+    target = second.take_profit_price
+    assert target is not None
     assert second.entry_gate is not None
     assert second.entry_gate.state is EntryGateState.COOLDOWN
 
     reached = candle(
         next_minute,
-        open_price=str(second_target - Decimal("2")),
-        close_price=str(second_target - Decimal("1")),
-        high=str(second_target),
-        low=str(second_target - Decimal("2")),
+        open_price=str(target - Decimal("2")),
+        close_price=str(target - Decimal("1")),
+        high=str(target),
+        low=str(target - Decimal("2")),
     )
     sold = application.process_completed_candle(reached, received_at=reached.close_time)
 
+    assert sold.closed_basket is not None
     assert sold.entry_gate is not None
     assert sold.entry_gate.state is EntryGateState.OPEN
 
@@ -1152,10 +1162,11 @@ def test_closed_two_entry_basket_resets_lifecycle_for_a_new_basket() -> None:
     )
     assert closed.closed_basket is not None
     assert closed.closed_basket.entry_count == 2
-    # One candle ran past both targets, so both Entries sold on it — the
-    # cheaper Entry first, because the market reaches its target first — and
-    # the Basket closed with the last of them.
-    assert [item.closed.entry_number for item in closed.entry_exits] == [2, 1]
+    # The candle ran past the Basket's one target, so both Entries went in a
+    # single sale and the Basket closed on it.
+    assert closed.entry_exits == ()
+    assert closed.exit_fill is not None
+    assert closed.exit_fill.entry_number is None
     assert closed.closed_basket_count == 1
 
     new_intent = arm_entry_intent(
@@ -1187,7 +1198,7 @@ def test_closed_two_entry_basket_resets_lifecycle_for_a_new_basket() -> None:
     )
 
     assert second_closed.closed_basket is not None
-    assert second_closed.entry_exits
+    assert second_closed.exit_fill is not None
     assert second_closed.closed_basket_count == 2
 
 

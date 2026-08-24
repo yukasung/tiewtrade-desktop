@@ -50,7 +50,7 @@ class PaperSpotSessionError(RuntimeError):
 
 @dataclass(frozen=True, slots=True)
 class PaperSpotEntryExit:
-    """One Entry sold at its own target, and what it left behind."""
+    """One Entry the trader sold on its own, and what it left behind."""
 
     fill: PaperSpotExitFill
     closed: ClosedEntry
@@ -68,11 +68,10 @@ class PaperSpotSessionSnapshot:
     entry_atr: Decimal | None
     # The number this Entry took in its Basket, which outlives the Entry.
     entry_number: int | None
-    # The target this Entry alone is sold at. Present exactly when entry_fill is.
-    entry_take_profit_price: Decimal | None
-    # Entries sold at their own target. A candle can reach more than one.
+    # Entries the trader sold one at a time, rather than with the Basket.
     entry_exits: tuple[PaperSpotEntryExit, ...]
-    # A Fill that took the whole position at once, which a stop loss does.
+    # A Fill that took the whole position at once, which take profit, a stop
+    # loss and a manual close of the Position all do.
     exit_fill: PaperSpotExitFill | None
     closed_basket: ClosedBasket | None
     closed_basket_count: int
@@ -119,7 +118,6 @@ class _PaperSpotTransition:
     closed_basket_count: int
     exited_candle_open_time: datetime | None
     entry_number_filled: int | None = None
-    entry_take_profit_filled: Decimal | None = None
 
 
 class PaperSpotSession:
@@ -183,7 +181,7 @@ class PaperSpotSession:
 
     @property
     def open_entries(self) -> tuple[BasketEntry, ...]:
-        """The Entries the Basket holds now, each with the target it is sold at."""
+        """The Entries the Basket holds now, each as it was filled."""
         return () if self._basket is None else self._basket.entries
 
     @property
@@ -227,11 +225,7 @@ class PaperSpotSession:
             entry_number = (
                 None if entry_fill is None else transition.entry_number_filled
             )
-            entry_target = (
-                None if entry_fill is None else transition.entry_take_profit_filled
-            )
             exit_fill: PaperSpotExitFill | None = None
-            entry_exits: tuple[PaperSpotEntryExit, ...] = ()
             closed_basket: ClosedBasket | None = None
 
             if basket_existed_at_candle_open and not entry_filled_on_current_candle:
@@ -244,18 +238,24 @@ class PaperSpotSession:
                         transition, candle, exit_fill, BasketCloseReason.STOP_LOSS
                     )
                 else:
-                    entry_exits, closed_basket = self._take_profit_entries(
+                    take_profit_fill = self._fill_take_profit(
                         transition, candle, candle.close_time
                     )
+                    if take_profit_fill is not None:
+                        exit_fill = take_profit_fill
+                        closed_basket = self._close_basket(
+                            transition,
+                            candle,
+                            exit_fill,
+                            BasketCloseReason.TAKE_PROFIT,
+                        )
 
             indicators = transition.indicators.update(candle)
             self._evaluate_strategy(
                 transition,
                 candle,
                 indicators,
-                exited_on_this_candle=(
-                    exit_fill is not None or bool(entry_exits) or sold_between_ticks
-                ),
+                exited_on_this_candle=(exit_fill is not None or sold_between_ticks),
             )
             self._commit_transition(transition)
 
@@ -264,8 +264,6 @@ class PaperSpotSession:
                 entry_fill=entry_fill,
                 entry_atr=None if entry_fill is None else pending_atr,
                 entry_number=entry_number,
-                entry_take_profit_price=entry_target,
-                entry_exits=entry_exits,
                 exit_fill=exit_fill,
                 closed_basket=closed_basket,
             )
@@ -305,16 +303,17 @@ class PaperSpotSession:
                     closed_basket=stopped_basket,
                 )
 
-            entry_exits, closed_basket = self._take_profit_entries(
-                transition, candle, observed_at
-            )
-            if not entry_exits:
+            exit_fill = self._fill_take_profit(transition, candle, observed_at)
+            if exit_fill is None:
                 return self._snapshot(accepted=False)
 
+            closed_basket = self._close_basket(
+                transition, candle, exit_fill, BasketCloseReason.TAKE_PROFIT
+            )
             self._commit_transition(transition)
             return self._snapshot(
                 accepted=True,
-                entry_exits=entry_exits,
+                exit_fill=exit_fill,
                 closed_basket=closed_basket,
             )
         except PaperSpotSessionError:
@@ -500,7 +499,6 @@ class PaperSpotSession:
         transition.lifecycle.record_fill()
         filled_entry = transition.basket.entries[-1]
         transition.entry_number_filled = filled_entry.entry_number
-        transition.entry_take_profit_filled = filled_entry.take_profit_price
         transition.strategy.on_entry_filled(intent.intent_id)
         transition.pending_intent = None
         return fill
@@ -524,48 +522,16 @@ class PaperSpotSession:
             transition.basket, candle, filled_at=filled_at
         )
 
-    def _take_profit_entries(
+    def _fill_take_profit(
         self,
         transition: _PaperSpotTransition,
         candle: Candle,
         filled_at: datetime,
-    ) -> tuple[tuple[PaperSpotEntryExit, ...], ClosedBasket | None]:
-        """Sell every Entry this candle reached the target of.
-
-        Each sale hands its place in the Basket back, so an Entry that took
-        profit frees the quota and the Entry Pair count it was using. The
-        Basket itself closes only when its last Entry has gone.
-        """
-        basket = transition.basket
-        assert basket is not None
-        fills = self._executor.fill_take_profit(basket, candle, filled_at=filled_at)
-        if not fills:
-            return (), None
-
-        exits: list[PaperSpotEntryExit] = []
-        for fill in fills:
-            assert fill.entry_number is not None
-            closed_entry = basket.close_entry(
-                fill.entry_number,
-                exit_price=fill.price,
-                closed_at=fill.filled_at,
-            )
-            transition.lifecycle.release_fill(fill.entry_number)
-            exits.append(PaperSpotEntryExit(fill=fill, closed=closed_entry))
-
-        # An Entry sold on this candle owns it: an Entry filling at the open
-        # would predate a sale the market has already made.
-        transition.exited_candle_open_time = candle.open_time
-        closed_basket: ClosedBasket | None = None
-        if basket.is_empty:
-            closed_basket = basket.settled_result(
-                exit_price=fills[-1].price,
-                closed_at=filled_at,
-            )
-            transition.basket = None
-            transition.lifecycle.reset()
-            transition.closed_basket_count += 1
-        return tuple(exits), closed_basket
+    ) -> PaperSpotExitFill | None:
+        assert transition.basket is not None
+        return self._executor.fill_take_profit(
+            transition.basket, candle, filled_at=filled_at
+        )
 
     def _close_basket(
         self,
@@ -639,7 +605,6 @@ class PaperSpotSession:
         entry_fill: PaperSpotEntryFill | None = None,
         entry_atr: Decimal | None = None,
         entry_number: int | None = None,
-        entry_take_profit_price: Decimal | None = None,
         entry_exits: tuple[PaperSpotEntryExit, ...] = (),
         exit_fill: PaperSpotExitFill | None = None,
         closed_basket: ClosedBasket | None = None,
@@ -660,7 +625,6 @@ class PaperSpotSession:
             entry_fill=entry_fill,
             entry_atr=entry_atr,
             entry_number=entry_number,
-            entry_take_profit_price=entry_take_profit_price,
             entry_exits=entry_exits,
             exit_fill=exit_fill,
             closed_basket=closed_basket,

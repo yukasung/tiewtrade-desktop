@@ -118,6 +118,7 @@ def closed_basket() -> ClosedBasket:
         average_entry_price=Decimal("100"),
         exit_price=Decimal("110"),
         realized_pnl=Decimal("20"),
+        exit_realized_pnl=Decimal("20"),
         closed_at=CLOSED_AT,
     )
 
@@ -416,6 +417,9 @@ def test_the_last_entry_closes_the_basket_on_the_totals_the_store_kept(
             average_entry_price=Decimal("110"),
             exit_price=Decimal("120"),
             realized_pnl=Decimal("20"),
+            # The sale was booked by the Entry exit beside this record, so the
+            # record itself sold nothing and claims nothing.
+            exit_realized_pnl=Decimal("0"),
             closed_at=OPENED_AT + timedelta(hours=2),
             close_reason=BasketCloseReason.TAKE_PROFIT,
         ),

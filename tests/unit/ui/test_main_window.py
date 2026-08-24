@@ -2790,10 +2790,10 @@ def test_starting_into_a_reached_take_profit_asks_before_it_sells(
 
     qtbot.waitUntil(lambda: len(asked) == 1)
     message, confirm = asked[0]
-    # That the sale books at a target rather than at the price on screen —
-    # counted, not priced: the figures are columns in the tab behind it.
-    assert message.startswith("1 Entry is already at its Take Profit.")
-    assert "at the target it was given, not at the price now" in message
+    # That the sale books at the target rather than at the price on screen —
+    # stated, not priced: the figures are columns in the tab behind it.
+    assert message.startswith("The Position is already at its Take Profit.")
+    assert "at once at that target, not at the price now" in message
     assert "106" not in message
     assert "110" not in message
     assert started == []
@@ -3450,8 +3450,10 @@ def test_a_position_at_its_target_is_asked_about_as_a_sale_not_a_replacement(
     qtbot.waitUntil(lambda: closed == ["closed"])
     assert len(seen) == 1
     dialog = seen[0]
-    # The state it is in, said once however many Entries reached a target.
-    assert dialog.informativeText().startswith("1 Entry is already at its Take Profit.")
+    # The state it is in, said once however many Entries the Basket holds.
+    assert dialog.informativeText().startswith(
+        "The Position is already at its Take Profit."
+    )
     assert "106" not in dialog.informativeText()
     assert "110" not in dialog.informativeText()
     # The price-now sale is named rather than hidden behind a "Yes", and the
@@ -3499,54 +3501,6 @@ def test_selling_at_a_target_the_price_has_left_is_not_offered(
     assert not any("Take Profit" in label for label in labels)
     # Nothing on offer resumes the Session onto the Position it holds.
     assert started == []
-
-
-def test_a_start_that_sells_only_part_of_the_position_still_offers_to_start(
-    qtbot: QtBot,
-) -> None:
-    """One Entry at its target must not close the ones still holding.
-
-    Entry 1 is at 100 with a target of 106, Entry 2 at 110 with a target of
-    116, and the price is 112. Only the sale course was reached before, whose
-    one way forward — closing at the market price — sold Entry 2 as well.
-    """
-    started: list[BotControlSnapshot] = []
-    asked: list[tuple[str, Callable[[], None]]] = []
-    closed: list[str] = []
-    window = _open_position_window(
-        qtbot,
-        started=started,
-        asked=asked,
-        price=112,
-        replaceable=True,
-        closed=closed,
-        second_entry_price=110,
-    )
-    qtbot.waitUntil(window.setup.isVisible)
-    qtbot.waitUntil(window.setup.create_button.isEnabled)
-    seen: list[QMessageBox] = []
-
-    QTimer.singleShot(0, _answer_position_dialog("Start Bot", seen))
-    click(window.setup.create_button)
-
-    qtbot.waitUntil(lambda: _runtime_state(window) is BotRuntimeState.RUNNING)
-    assert len(seen) == 1
-    dialog = seen[0]
-    assert {button.text() for button in dialog.buttons()} == {
-        "Start Bot",
-        "Close at Market",
-        "Cancel",
-    }
-    assert dialog.defaultButton() is not None
-    assert dialog.defaultButton().text() == "Cancel"
-    # What is held, and the part of it a Start is not free to run on with.
-    assert dialog.informativeText().startswith(
-        "2 Entries are open. 1 Entry is already at its Take Profit."
-    )
-    assert "sold at once at the target it was given" in dialog.informativeText()
-    # The Entry short of its target is not closed to get the Bot started.
-    assert closed == []
-    assert len(started) == 1
 
 
 def test_a_start_before_any_price_is_still_offered_a_start(qtbot: QtBot) -> None:
@@ -3655,7 +3609,7 @@ def test_a_position_wholly_at_its_target_is_still_offered_no_start(
     assert (
         seen[0]
         .informativeText()
-        .startswith("2 Entries are already at their Take Profit.")
+        .startswith("The Position is already at its Take Profit.")
     )
     assert started == []
     assert closed == []
@@ -3747,7 +3701,7 @@ def test_the_default_take_profit_confirmation_defaults_to_cancel(
     cancel = next(button for button in dialog.buttons() if button.text() == "Cancel")
     assert dialog.defaultButton() is cancel
     assert dialog.escapeButton() is cancel
-    assert "1 Entry is already at its Take Profit." in dialog.informativeText()
+    assert "The Position is already at its Take Profit." in dialog.informativeText()
     assert started == []
 
     click(cancel)

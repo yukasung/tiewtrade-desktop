@@ -9,7 +9,6 @@ def test_nothing_open_makes_the_session_the_form_describes() -> None:
         course_before_start(
             position_open=False,
             sells_on_start=True,
-            leaves_entries_holding=False,
             sale_is_unknown=False,
         )
         is StartCourse.REPLACE_SESSION
@@ -22,7 +21,6 @@ def test_a_position_wholly_at_its_target_is_asked_about_as_a_sale() -> None:
         course_before_start(
             position_open=True,
             sells_on_start=True,
-            leaves_entries_holding=False,
             sale_is_unknown=False,
         )
         is StartCourse.ASK_ABOUT_THE_SALE
@@ -40,25 +38,6 @@ def test_a_position_short_of_its_target_is_still_asked_about() -> None:
         course_before_start(
             position_open=True,
             sells_on_start=False,
-            leaves_entries_holding=True,
-            sale_is_unknown=False,
-        )
-        is StartCourse.ASK_ABOUT_THE_POSITION
-    )
-
-
-def test_a_start_that_sells_only_part_of_it_still_offers_to_start() -> None:
-    """One Entry at its target must not decide for the ones still holding.
-
-    On the sale course the only answer that goes forward closes at the market
-    price, which sells the Entries that had reached nothing along with the one
-    that had. Leaving something behind is what keeps Start Bot on offer.
-    """
-    assert (
-        course_before_start(
-            position_open=True,
-            sells_on_start=True,
-            leaves_entries_holding=True,
             sale_is_unknown=False,
         )
         is StartCourse.ASK_ABOUT_THE_POSITION
@@ -77,7 +56,6 @@ def test_a_sale_that_cannot_be_read_is_not_read_as_a_sale_of_everything() -> Non
         course_before_start(
             position_open=True,
             sells_on_start=True,
-            leaves_entries_holding=False,
             sale_is_unknown=True,
         )
         is StartCourse.ASK_ABOUT_THE_POSITION
@@ -85,11 +63,9 @@ def test_a_sale_that_cannot_be_read_is_not_read_as_a_sale_of_everything() -> Non
 
 
 @pytest.mark.parametrize("sells_on_start", [True, False])
-@pytest.mark.parametrize("leaves_entries_holding", [True, False])
 @pytest.mark.parametrize("sale_is_unknown", [True, False])
 def test_a_question_is_put_for_every_position_and_no_other_start(
     sells_on_start: bool,
-    leaves_entries_holding: bool,
     sale_is_unknown: bool,
 ) -> None:
     """Every Start that meets a Position asks, and no other Start does.
@@ -103,7 +79,6 @@ def test_a_question_is_put_for_every_position_and_no_other_start(
         course = course_before_start(
             position_open=position_open,
             sells_on_start=sells_on_start,
-            leaves_entries_holding=leaves_entries_holding,
             sale_is_unknown=sale_is_unknown,
         )
         assert (course in asking) is position_open

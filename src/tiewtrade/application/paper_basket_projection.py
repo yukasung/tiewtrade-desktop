@@ -36,7 +36,6 @@ class FilledEntry:
     filled_at_utc: datetime
     price: Decimal
     quantity: Decimal
-    take_profit_price: Decimal
 
 
 @dataclass(frozen=True, slots=True)
@@ -66,7 +65,6 @@ def position_after_snapshot(
     entry_fill: PaperSpotEntryFill | PaperFuturesEntryFill | None,
     basket_entry_count: int,
     entry_number: int | None = None,
-    take_profit_price: Decimal | None = None,
 ) -> OpenBasketPosition | None:
     if basket_entry_count == 0:
         return None
@@ -74,8 +72,8 @@ def position_after_snapshot(
         if current is None:
             raise ValueError("open Basket requires authoritative position facts")
         return current
-    if entry_number is None or take_profit_price is None:
-        raise ValueError("an Entry Fill carries its number and its target")
+    if entry_number is None:
+        raise ValueError("an Entry Fill carries the number it was given")
     current_entries = () if current is None else current.entries
     current_quantity = Decimal("0") if current is None else current.total_quantity
     return OpenBasketPosition(
@@ -96,7 +94,6 @@ def position_after_snapshot(
                 filled_at_utc=entry_fill.filled_at,
                 price=entry_fill.price,
                 quantity=entry_fill.quantity,
-                take_profit_price=take_profit_price,
             ),
         ),
     )
@@ -129,10 +126,11 @@ def reopened_position(entries: tuple[FilledEntry, ...]) -> OpenBasketPosition | 
 def open_basket_position(
     entries: tuple[BasketEntry, ...],
 ) -> OpenBasketPosition | None:
-    """The position a Basket's open Entries stand at, target by target.
+    """The position a Basket's open Entries stand at, Entry by Entry.
 
-    The Basket is the authority on what each Entry is sold at, so the targets
-    are read back off it rather than recomputed beside it.
+    The Basket is the authority on what it holds, so the Entries are read back
+    off it rather than tracked beside it. What they are sold at is one figure
+    for the Basket, not one per Entry, and is carried on the snapshot.
     """
     return reopened_position(
         tuple(
@@ -141,7 +139,6 @@ def open_basket_position(
                 filled_at_utc=entry.filled_at,
                 price=entry.price,
                 quantity=entry.quantity,
-                take_profit_price=entry.take_profit_price,
             )
             for entry in entries
         )
@@ -293,7 +290,6 @@ def _marked_entries(
             filled_at_utc=entry.filled_at_utc,
             price=entry.price,
             quantity=entry.quantity,
-            take_profit_price=entry.take_profit_price,
             notional=entry.price * entry.quantity,
             unrealized_pnl=(
                 None

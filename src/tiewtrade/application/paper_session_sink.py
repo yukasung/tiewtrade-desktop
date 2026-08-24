@@ -89,9 +89,6 @@ class _CandleSnapshot(Protocol):
     def entry_number(self) -> int | None: ...
 
     @property
-    def entry_take_profit_price(self) -> Decimal | None: ...
-
-    @property
     def sold_entry_numbers(self) -> tuple[int, ...]: ...
 
     @property
@@ -310,7 +307,6 @@ class PaperRuntimeSink[Snapshot: _CandleSnapshot]:
             entry_fill=snapshot.entry_fill,
             basket_entry_count=snapshot.basket_entry_count,
             entry_number=snapshot.entry_number,
-            take_profit_price=snapshot.entry_take_profit_price,
         )
         if self._entries_enabled():
             self._publish(

@@ -177,20 +177,28 @@ def test_take_profit_target_touch_uses_sell_floor_price_and_exact_fee() -> None:
         atr=Decimal("1"),
         tick_size=rules.tick_size,
     )
-    touch_candle = candle_at(5, open_price="100", high="101", low="99", close="100")
+    basket.add_entry(
+        price=Decimal("90"),
+        quantity=Decimal("2"),
+        filled_at=datetime(2026, 1, 2, tzinfo=UTC),
+        atr=Decimal("1"),
+        tick_size=rules.tick_size,
+    )
+    # 95 + 1 x 1, so the Entry bought at 100 is still under water here and
+    # leaves anyway.
+    touch_candle = candle_at(5, open_price="95", high="96", low="94", close="95")
 
-    fills = PaperSpotExecutor(session, rules).fill_take_profit(
+    fill = PaperSpotExecutor(session, rules).fill_take_profit(
         basket, touch_candle, filled_at=touch_candle.close_time
     )
 
-    assert len(fills) == 1
-    fill = fills[0]
-    assert fill.price == Decimal("101")
-    assert fill.quantity == Decimal("2")
+    assert fill is not None
+    assert fill.price == Decimal("96")
+    assert fill.quantity == Decimal("4")
     assert fill.filled_at == touch_candle.close_time
-    # The Fill names the Entry it sold, which is what lets the others stay.
-    assert fill.entry_number == 1
-    exit_order_id = f"take-profit:{basket.basket_id}:1"
+    # The whole Basket leaves at once, so no one Entry is named.
+    assert fill.entry_number is None
+    exit_order_id = f"take-profit:{basket.basket_id}"
     assert fill.order_id == exit_order_id
     assert fill.fill_id == f"paper:{session.session_id}:{exit_order_id}:fill"
 

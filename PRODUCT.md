@@ -90,11 +90,19 @@ Short = weighted_average_entry_price - (ATR(14) * 3)
 กติกา:
 
 - ใช้ ATR จาก completed candle ล่าสุดของ Timeframe ที่ Session เลือก ณ เวลาที่ Entry ถูก Fill
-- คำนวณราคา Take Profit ใหม่หลังทุก Entry Fill
+  โดยยึด ATR ของ Entry ที่ยังเปิดอยู่และ Fill ล่าสุด หาก Entry นั้นถูกปิดรายตัวไป ให้ตกไปใช้
+  ATR ของ Entry ที่เปิดอยู่และ Fill ล่าสุดถัดลงมา
+- คำนวณราคา Take Profit ใหม่หลังทุก Entry Fill และหลังการปิด Entry รายตัว เพราะทั้งสอง
+  เหตุการณ์เปลี่ยนราคาเฉลี่ยถ่วงน้ำหนักของ Basket
 - Long Take Profit ปัดลง และ Short Take Profit ปัดขึ้นตาม tick size ของ Symbol และ Market Type ที่ตรึงใน Session
 - RSI Step Grid Preset v1 ยังสร้างเฉพาะ Long Entry Intent
 - Take Profit ครอบคลุมขนาด Position ที่ Bot เป็นเจ้าของทั้งหมดใน Basket
 - เมื่อ Take Profit ถูก Fill ให้ปิด Entries ทั้งหมดใน Basket พร้อมกัน
+- Take Profit อัตโนมัติมีระดับเดียวต่อ Basket ไม่มีเป้ารายตัว Entry ที่ยังขาดทุนจึงถูกปิดรวบ
+  ไปพร้อม Entry ที่กำไรในการ Fill ครั้งเดียว การปิด Entry รายตัวเกิดจากคำสั่งของผู้ใช้เท่านั้น
+  ตามข้อ 6.3
+- กติกานี้เป็น Basket rule กลางที่ใช้กับทุก Preset ไม่ผูกกับ Preset version ส่วนค่า Take Profit
+  ATR multiplier ยังมาจาก Preset ตามข้อ 3
 - Paper Spot ตรวจ Take Profit และ Stop Loss จากราคาที่วิ่งอยู่ระหว่าง candle และ Fill
   ทันทีที่ราคาถึงระดับ โดยไม่รอ candle ปิด ส่วน Entry ยังคงประเมินจาก completed candle
   เท่านั้นตามข้อ 4.2
