@@ -21,6 +21,7 @@ from tiewtrade.integrations.sqlite.trade_history import (
 from tiewtrade.trading.basket import (
     BasketCloseReason,
     ClosedBasket,
+    ClosedEntry,
 )
 from tiewtrade.trading.position import PositionSide
 from tiewtrade.trading.session_config import MarketType, TradeMode
@@ -91,8 +92,9 @@ def entry_fill(
 def exit_fill(
     *,
     side: PositionSide = PositionSide.LONG,
+    entry_number: int = 1,
 ) -> PaperFuturesExitFill:
-    order_id = f"take_profit:{BASKET_ID}"
+    order_id = f"take_profit:{BASKET_ID}:{entry_number}"
     return PaperFuturesExitFill(
         order_id=order_id,
         fill_id=f"paper:{SESSION_ID}:{order_id}:fill",
@@ -101,6 +103,20 @@ def exit_fill(
         price=Decimal("110") if side is PositionSide.LONG else Decimal("90"),
         quantity=Decimal("2"),
         filled_at=CLOSED_AT,
+        entry_number=entry_number,
+    )
+
+
+def closed_entry(*, side: PositionSide = PositionSide.LONG) -> ClosedEntry:
+    """What the Entry the exit Fill sold left behind, on a quantity of 2."""
+    exit_price = Decimal("110") if side is PositionSide.LONG else Decimal("90")
+    return ClosedEntry(
+        entry_number=1,
+        quantity=Decimal("2"),
+        entry_price=Decimal("100"),
+        exit_price=exit_price,
+        realized_pnl=Decimal("20"),
+        closed_at=CLOSED_AT,
     )
 
 
@@ -267,10 +283,11 @@ def test_close_uses_shared_pnl_and_opposite_fill_side(
     )
     closed = closed_basket(side=position_side)
 
-    assert history.record_close(
+    assert history.record_entry_exit(
         basket_id=BASKET_ID,
         fill=exit_fill(side=position_side),
-        closed=closed,
+        closed=closed_entry(side=position_side),
+        closed_basket=closed,
     )
 
     basket = store.get_basket(BASKET_ID)
@@ -283,6 +300,47 @@ def test_close_uses_shared_pnl_and_opposite_fill_side(
     assert fills[-1].realized_pnl == closed.realized_pnl
 
 
+def test_one_entry_sold_leaves_the_basket_open_with_its_result_counted(
+    history: PaperFuturesSQLiteHistory,
+    store: SQLiteTradeHistory,
+) -> None:
+    """A Pair that reached its target goes, and the rest keeps trading."""
+    history.record_entry(basket_id=BASKET_ID, entry_number=1, fill=entry_fill())
+    history.record_entry(
+        basket_id=BASKET_ID, entry_number=2, fill=entry_fill(sequence=2)
+    )
+
+    assert history.record_entry_exit(
+        basket_id=BASKET_ID,
+        fill=exit_fill(),
+        closed=closed_entry(),
+        closed_basket=None,
+    )
+
+    basket = store.get_basket(BASKET_ID)
+    assert basket is not None
+    assert basket.status is BasketStatus.OPEN
+    assert basket.realized_pnl == Decimal("20")
+    sold = store.list_fills(BASKET_ID)[-1]
+    assert sold.side is FillSide.SELL
+    assert sold.closes_entry_number == 1
+    assert sold.realized_pnl == Decimal("20")
+
+
+def test_an_exit_fill_and_the_entry_it_closed_must_name_the_same_entry(
+    history: PaperFuturesSQLiteHistory,
+) -> None:
+    history.record_entry(basket_id=BASKET_ID, entry_number=1, fill=entry_fill())
+
+    with pytest.raises(ValueError, match="different Entries"):
+        history.record_entry_exit(
+            basket_id=BASKET_ID,
+            fill=exit_fill(entry_number=2),
+            closed=closed_entry(),
+            closed_basket=None,
+        )
+
+
 def test_duplicate_entry_and_close_are_idempotent(
     history: PaperFuturesSQLiteHistory,
     store: SQLiteTradeHistory,
@@ -290,6 +348,7 @@ def test_duplicate_entry_and_close_are_idempotent(
     entry = entry_fill()
     exit = exit_fill()
     closed = closed_basket()
+    sold = closed_entry()
 
     assert history.record_entry(
         basket_id=BASKET_ID,
@@ -301,16 +360,18 @@ def test_duplicate_entry_and_close_are_idempotent(
         entry_number=1,
         fill=entry,
     )
-    assert history.record_close(
+    assert history.record_entry_exit(
         basket_id=BASKET_ID,
         fill=exit,
-        closed=closed,
+        closed=sold,
+        closed_basket=closed,
     )
     persisted = store.get_basket(BASKET_ID)
-    assert not history.record_close(
+    assert not history.record_entry_exit(
         basket_id=BASKET_ID,
         fill=exit,
-        closed=closed,
+        closed=sold,
+        closed_basket=closed,
     )
 
     assert store.get_basket(BASKET_ID) == persisted
@@ -341,8 +402,9 @@ def test_mapper_rejects_inconsistent_close_ownership(
     )
 
     with pytest.raises(ValueError, match=message):
-        history.record_close(
+        history.record_entry_exit(
             basket_id=basket_id,
             fill=exit_fill(side=fill_side),
-            closed=closed_basket(),
+            closed=closed_entry(),
+            closed_basket=closed_basket(),
         )

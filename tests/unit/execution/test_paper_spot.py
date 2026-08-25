@@ -184,23 +184,23 @@ def test_take_profit_target_touch_uses_sell_floor_price_and_exact_fee() -> None:
         atr=Decimal("1"),
         tick_size=rules.tick_size,
     )
-    # 95 + 1 x 1, so the Entry bought at 100 is still under water here and
-    # leaves anyway.
+    # Entries 1 and 2 make one Pair, which paid 95 and leaves at 95 + 1 x 1.
+    # The Entry bought at 100 is still under water there and goes anyway.
     touch_candle = candle_at(5, open_price="95", high="96", low="94", close="95")
 
-    fill = PaperSpotExecutor(session, rules).fill_take_profit(
+    fills = PaperSpotExecutor(session, rules).fill_take_profit(
         basket, touch_candle, filled_at=touch_candle.close_time
     )
 
-    assert fill is not None
-    assert fill.price == Decimal("96")
-    assert fill.quantity == Decimal("4")
-    assert fill.filled_at == touch_candle.close_time
-    # The whole Basket leaves at once, so no one Entry is named.
-    assert fill.entry_number is None
-    exit_order_id = f"take-profit:{basket.basket_id}"
-    assert fill.order_id == exit_order_id
-    assert fill.fill_id == f"paper:{session.session_id}:{exit_order_id}:fill"
+    assert len(fills) == 2
+    assert [fill.price for fill in fills] == [Decimal("96"), Decimal("96")]
+    assert [fill.quantity for fill in fills] == [Decimal("2"), Decimal("2")]
+    assert [fill.filled_at for fill in fills] == [touch_candle.close_time] * 2
+    # Each Fill names the Entry it sold, so a Pair reads as the sales it made.
+    assert [fill.entry_number for fill in fills] == [1, 2]
+    exit_order_id = f"take-profit:{basket.basket_id}:1"
+    assert fills[0].order_id == exit_order_id
+    assert fills[0].fill_id == f"paper:{session.session_id}:{exit_order_id}:fill"
 
 
 def test_take_profit_rejects_a_padded_near_match() -> None:

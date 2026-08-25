@@ -311,3 +311,39 @@ def test_list_trade_fills_filters_joined_baskets_and_orders_newest_first(
         f"{HIGH_ID}-buy",
     )
     assert {item.symbol for item in result} == {"BTCUSDT"}
+
+
+def test_list_trade_fills_reads_a_fill_by_the_day_it_landed_on(
+    history: SQLiteTradeHistory,
+) -> None:
+    """A Basket opened yesterday goes on filling today.
+
+    Those Fills are today's trading, so a range covering today has to
+    answer with them — reading them by the day their Basket opened would
+    hide a whole day of trading behind an older Basket.
+    """
+    midnight = datetime(2026, 2, 2, tzinfo=UTC)
+    opened = basket(HIGH_ID, opened_at_utc=midnight - timedelta(hours=2))
+    opened = replace(opened, closed_at_utc=None, status=BasketStatus.OPEN)
+    first = fill(
+        opened,
+        fill_id=f"{HIGH_ID}-buy",
+        side=FillSide.BUY,
+        filled_at_utc=opened.opened_at_utc,
+    )
+    history.record_open_basket(opened, first)
+    grown = replace(opened, entry_count=2, invested_notional=Decimal("200"))
+    second = replace(
+        fill(
+            grown,
+            fill_id=f"{HIGH_ID}-buy-2",
+            side=FillSide.BUY,
+            filled_at_utc=midnight + timedelta(hours=3),
+        ),
+        entry_number=2,
+    )
+    history.record_entry_fill(grown, second)
+
+    result = history.list_trade_fills(TradeHistoryFilter(opened_from_utc=midnight))
+
+    assert tuple(item.fill.fill_id for item in result) == (f"{HIGH_ID}-buy-2",)

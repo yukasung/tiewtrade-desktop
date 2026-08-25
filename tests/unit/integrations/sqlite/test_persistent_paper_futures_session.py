@@ -7,6 +7,7 @@ from uuid import UUID
 import pytest
 
 from tiewtrade.application.paper_futures_session import (
+    PaperFuturesEntryExit,
     PaperFuturesSession,
     PaperFuturesSessionIdentity,
     PaperFuturesSessionSnapshot,
@@ -32,7 +33,7 @@ from tiewtrade.integrations.sqlite.trade_history import (
     TradeHistoryUnavailableError,
 )
 from tiewtrade.market_data.candle import Candle
-from tiewtrade.trading.basket import BasketCloseReason, ClosedBasket
+from tiewtrade.trading.basket import BasketCloseReason, ClosedBasket, ClosedEntry
 from tiewtrade.trading.capital import FuturesCapitalPlan
 from tiewtrade.trading.entry_pair import EntryGate, EntryGateState
 from tiewtrade.trading.position import PositionSide
@@ -75,15 +76,36 @@ def entry_fill() -> PaperFuturesEntryFill:
 
 def exit_fill(
     reason: BasketCloseReason = BasketCloseReason.TAKE_PROFIT,
+    *,
+    entry_number: int = 1,
 ) -> PaperFuturesExitFill:
     return PaperFuturesExitFill(
-        order_id=f"{reason.value}:{BASKET_ID}",
-        fill_id=f"paper:{SESSION_ID}:{reason.value}:{BASKET_ID}:fill",
+        order_id=f"{reason.value}:{BASKET_ID}:{entry_number}",
+        fill_id=f"paper:{SESSION_ID}:{reason.value}:{BASKET_ID}:{entry_number}:fill",
         side=PositionSide.LONG,
         close_reason=reason,
         price=Decimal("110"),
         quantity=Decimal("2"),
         filled_at=FILLED_AT,
+        entry_number=entry_number,
+    )
+
+
+def entry_exit(
+    reason: BasketCloseReason = BasketCloseReason.TAKE_PROFIT,
+    *,
+    entry_number: int = 1,
+) -> PaperFuturesEntryExit:
+    return PaperFuturesEntryExit(
+        fill=exit_fill(reason, entry_number=entry_number),
+        closed=ClosedEntry(
+            entry_number=entry_number,
+            quantity=Decimal("2"),
+            entry_price=Decimal("100"),
+            exit_price=Decimal("110"),
+            realized_pnl=Decimal("20"),
+            closed_at=FILLED_AT,
+        ),
     )
 
 
@@ -106,7 +128,7 @@ def closed_basket(
 def snapshot(
     *,
     entry: PaperFuturesEntryFill | None = None,
-    exit: PaperFuturesExitFill | None = None,
+    exits: tuple[PaperFuturesEntryExit, ...] = (),
     closed: ClosedBasket | None = None,
     state: PaperFuturesSessionState = PaperFuturesSessionState.ACTIVE,
 ) -> PaperFuturesSessionSnapshot:
@@ -116,12 +138,13 @@ def snapshot(
         pending_intent=None,
         entry_fill=entry,
         entry_number=1 if entry is not None else None,
-        exit_fill=exit,
+        entry_exits=exits,
         closed_basket=closed,
         basket_id=BASKET_ID if entry is not None or closed is not None else None,
         basket_entry_count=1 if entry is not None else 0,
         position_side=PositionSide.LONG,
         take_profit_price=Decimal("105") if closed is None else None,
+        entry_pairs=(),
         account_equity=Decimal("200000"),
         capital_plan=capital_plan(),
         failure_reason=None,
@@ -190,7 +213,7 @@ def test_waived_cooldown_goes_through_the_coordinator_writing_no_fill() -> None:
 
     session.waive_cooldown.assert_called_once_with(observed_at)
     history.record_entry.assert_not_called()
-    history.record_close.assert_not_called()
+    history.record_entry_exit.assert_not_called()
     assert result.session == core_snapshot
     assert result.persistence_state is PersistenceState.READY
 
@@ -198,13 +221,13 @@ def test_waived_cooldown_goes_through_the_coordinator_writing_no_fill() -> None:
 def test_exit_is_durable_before_ready_snapshot_returns() -> None:
     session = create_autospec(PaperFuturesSession, instance=True)
     history = create_autospec(PaperFuturesSQLiteHistory, instance=True)
-    fill = exit_fill(BasketCloseReason.TAKE_PROFIT)
+    sold = entry_exit()
     closed = closed_basket(BasketCloseReason.TAKE_PROFIT)
     core_snapshot = snapshot(
-        exit=fill, closed=closed, state=PaperFuturesSessionState.ACTIVE
+        exits=(sold,), closed=closed, state=PaperFuturesSessionState.ACTIVE
     )
     session.process_completed_candle.return_value = core_snapshot
-    history.record_close.return_value = True
+    history.record_entry_exit.return_value = True
     persistent = persistent_session(session, history)
     candle = completed_candle()
 
@@ -214,25 +237,52 @@ def test_exit_is_durable_before_ready_snapshot_returns() -> None:
         backfilled=False,
     )
 
-    history.record_close.assert_called_once_with(
+    history.record_entry_exit.assert_called_once_with(
         basket_id=BASKET_ID,
-        fill=fill,
-        closed=closed,
+        fill=sold.fill,
+        closed=sold.closed,
+        closed_basket=closed,
     )
     assert result.session == core_snapshot
     assert result.persistence_state is PersistenceState.READY
+
+
+def test_only_the_sale_that_emptied_the_basket_carries_the_closed_basket() -> None:
+    """Two Entries sold on one candle, and one round ending between them."""
+    session = create_autospec(PaperFuturesSession, instance=True)
+    history = create_autospec(PaperFuturesSQLiteHistory, instance=True)
+    first = entry_exit(entry_number=1)
+    second = entry_exit(entry_number=2)
+    closed = closed_basket(BasketCloseReason.TAKE_PROFIT)
+    session.process_completed_candle.return_value = snapshot(
+        exits=(first, second), closed=closed
+    )
+    history.record_entry_exit.return_value = True
+    persistent = persistent_session(session, history)
+    candle = completed_candle()
+
+    persistent.process_completed_candle(
+        candle,
+        received_at=candle.close_time,
+        backfilled=False,
+    )
+
+    assert [
+        (call.kwargs["fill"], call.kwargs["closed_basket"])
+        for call in history.record_entry_exit.call_args_list
+    ] == [(first.fill, None), (second.fill, closed)]
 
 
 def test_same_candle_entry_and_exit_use_closed_entry_count() -> None:
     session = create_autospec(PaperFuturesSession, instance=True)
     history = create_autospec(PaperFuturesSQLiteHistory, instance=True)
     entry = entry_fill()
-    exit = exit_fill(BasketCloseReason.TAKE_PROFIT)
+    sold = entry_exit()
     closed = closed_basket(BasketCloseReason.TAKE_PROFIT)
     core_snapshot = replace(
         snapshot(
             entry=entry,
-            exit=exit,
+            exits=(sold,),
             closed=closed,
             state=PaperFuturesSessionState.ACTIVE,
         ),
@@ -240,7 +290,7 @@ def test_same_candle_entry_and_exit_use_closed_entry_count() -> None:
     )
     session.process_completed_candle.return_value = core_snapshot
     history.record_entry.return_value = True
-    history.record_close.return_value = True
+    history.record_entry_exit.return_value = True
     persistent = persistent_session(session, history)
     candle = completed_candle()
 
@@ -255,10 +305,11 @@ def test_same_candle_entry_and_exit_use_closed_entry_count() -> None:
         entry_number=closed.entry_count,
         fill=entry,
     )
-    history.record_close.assert_called_once_with(
+    history.record_entry_exit.assert_called_once_with(
         basket_id=BASKET_ID,
-        fill=exit,
-        closed=closed,
+        fill=sold.fill,
+        closed=sold.closed,
+        closed_basket=closed,
     )
 
 
@@ -320,21 +371,22 @@ def test_invalid_snapshot_invariant_fails_closed() -> None:
     history.record_entry.assert_not_called()
 
 
-def test_exit_without_closed_basket_fails_closed() -> None:
+def test_a_closed_basket_without_the_sale_that_emptied_it_fails_closed() -> None:
+    """A round cannot end with no Entry having been sold out of it."""
     session = create_autospec(PaperFuturesSession, instance=True)
     history = create_autospec(PaperFuturesSQLiteHistory, instance=True)
-    session.process_completed_candle.return_value = snapshot(exit=exit_fill())
+    session.process_completed_candle.return_value = snapshot(closed=closed_basket())
     persistent = persistent_session(session, history)
     candle = completed_candle()
 
-    with pytest.raises(ValueError, match="present together"):
+    with pytest.raises(ValueError, match="requires the Exits"):
         persistent.process_completed_candle(
             candle,
             received_at=candle.close_time,
             backfilled=False,
         )
 
-    history.record_close.assert_not_called()
+    history.record_entry_exit.assert_not_called()
 
 
 def test_factory_rejects_mismatched_session_and_history_identity() -> None:

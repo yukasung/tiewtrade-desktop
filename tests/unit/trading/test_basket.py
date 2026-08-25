@@ -65,6 +65,125 @@ def test_the_basket_carries_one_target_measured_from_its_average() -> None:
     assert [entry.entry_number for entry in basket.entries] == [1, 2]
 
 
+def test_each_pair_is_measured_from_what_that_pair_paid() -> None:
+    """A Pair is the unit that leaves, so a Pair is the unit that is measured.
+
+    Entries 1 and 2 make Pair 1 and Entry 3 opens Pair 2, so the Basket
+    carries two targets at once — and one more of its own, further down,
+    that both Pairs would leave at together.
+    """
+    basket = _long_basket()
+    _fill(basket, 1, price="100", atr="2")
+    _fill(basket, 2, price="90", atr="2")
+    _fill(basket, 3, price="80", atr="2")
+
+    # Pair 1 paid 95 on average, Pair 2 paid 80 and is on its own so far.
+    assert basket.pair_take_profit_price(1) == Decimal("101.0")
+    assert basket.pair_take_profit_price(2) == Decimal("86.0")
+    # The whole Basket paid 90, which sits between the two Pair targets.
+    assert basket.average_entry_price == Decimal("90")
+    assert basket.take_profit_price == Decimal("96.0")
+
+
+def test_a_pair_that_reaches_its_own_target_leaves_at_that_target() -> None:
+    """The cheaper Pair goes first, at the price it was aiming at."""
+    basket = _long_basket()
+    _fill(basket, 1, price="100", atr="2")
+    _fill(basket, 2, price="90", atr="2")
+    _fill(basket, 3, price="80", atr="2")
+
+    exits = basket.take_profit_exits(Decimal("86.0"), Decimal("80"))
+
+    assert [(exit.entry.entry_number, exit.price) for exit in exits] == [
+        (3, Decimal("86.0"))
+    ]
+
+
+def test_a_candle_reaching_the_basket_target_sweeps_the_pair_left_behind() -> None:
+    """The net: the Pair still under water leaves with the ones in profit.
+
+    Pair 2 reached 86 and sells there, because a limit order at 86 would have
+    filled before the price ever came to 96. Pair 1 never reached 101 — it is
+    swept at the Basket's 96, which is below its own target and above what it
+    paid, which is the trade the net exists to make.
+    """
+    basket = _long_basket()
+    _fill(basket, 1, price="100", atr="2")
+    _fill(basket, 2, price="90", atr="2")
+    _fill(basket, 3, price="80", atr="2")
+
+    exits = basket.take_profit_exits(Decimal("96.0"), Decimal("80"))
+
+    assert [(exit.entry.entry_number, exit.price) for exit in exits] == [
+        (3, Decimal("86.0")),
+        (1, Decimal("96.0")),
+        (2, Decimal("96.0")),
+    ]
+
+
+def test_a_pair_target_is_remeasured_when_one_of_its_entries_is_sold() -> None:
+    """Half a Pair left is still a Pair, measured on what is still in it."""
+    basket = _long_basket()
+    _fill(basket, 1, price="100", atr="2")
+    _fill(basket, 2, price="90", atr="2")
+    assert basket.pair_take_profit_price(1) == Decimal("101.0")
+
+    basket.close_entry(
+        2, exit_price=Decimal("95"), closed_at=datetime(2026, 1, 9, tzinfo=UTC)
+    )
+
+    assert basket.pair_take_profit_price(1) == Decimal("106.0")
+
+
+def test_a_pair_holding_nothing_has_no_target_to_state() -> None:
+    basket = _long_basket()
+    _fill(basket, 1, price="100", atr="2")
+
+    assert basket.pair_take_profit_price(2) is None
+
+
+def test_a_short_pair_is_measured_below_what_it_paid() -> None:
+    basket = Basket(
+        basket_id=basket_id(),
+        policy=policy(),
+        take_profit_atr_multiplier=Decimal("3"),
+        position_side=PositionSide.SHORT,
+    )
+    _fill(basket, 1, price="100", atr="2", side=PositionSide.SHORT)
+    _fill(basket, 2, price="110", atr="2", side=PositionSide.SHORT)
+
+    # Pair 1 sold at 105 on average, so it buys back 6 lower.
+    assert basket.pair_take_profit_price(1) == Decimal("99.0")
+
+    exits = basket.take_profit_exits(Decimal("110"), Decimal("99.0"))
+
+    assert [exit.entry.entry_number for exit in exits] == [1, 2]
+
+
+def _long_basket() -> Basket:
+    return Basket(
+        basket_id=basket_id(), policy=policy(), take_profit_atr_multiplier=Decimal("3")
+    )
+
+
+def _fill(
+    basket: Basket,
+    number: int,
+    *,
+    price: str,
+    atr: str,
+    side: PositionSide = PositionSide.LONG,
+) -> None:
+    basket.add_entry(
+        position_side=side,
+        price=Decimal(price),
+        quantity=Decimal("1"),
+        filled_at=datetime(2026, 1, number, tzinfo=UTC),
+        atr=Decimal(atr),
+        tick_size=Decimal("0.1"),
+    )
+
+
 def test_the_target_is_remeasured_when_an_entry_is_sold_out_of_the_basket() -> None:
     """Selling an Entry moves the average, so it has to move the target.
 

@@ -580,9 +580,11 @@ class TradeHistoryPage(QWidget):
         This is the only way the shown half changes. A result arriving from a
         query must never switch it: the reader chose the half, and a reply
         that lands a second later has no business taking the wheel back.
+
+        Asking for the half already shown is a reopening, not a no-op: the
+        reader came back to see what has landed since, so it is announced
+        again and read again.
         """
-        if tab is self._active_history_tab:
-            return
         self.history_stack.setCurrentIndex(0 if tab is HistoryTab.BASKETS else 1)
         self._active_history_tab = tab
         self._refresh_filter_controls()

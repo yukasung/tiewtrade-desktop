@@ -132,6 +132,14 @@ def test_pnl_colour_is_read_from_the_figure_not_from_its_label(
     assert colour_of(BASKET_COLUMNS, "Profit / Loss", basket) == expected
 
 
+def test_a_closed_baskets_break_even_reads_as_zero_not_a_dash() -> None:
+    """A Basket row only exists once it has closed, so a zero here is a
+    result the round actually produced, not one still to come."""
+    basket = basket_result(realized_pnl=Decimal("0"))
+
+    assert read(BASKET_COLUMNS, basket)[-1] == "0.00 USDT"
+
+
 @pytest.mark.parametrize(
     ("side", "expected"),
     [

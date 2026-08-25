@@ -5,6 +5,7 @@ from uuid import UUID
 
 from tiewtrade.application.paper_spot_session import PaperSpotSessionIdentity
 from tiewtrade.execution.paper_spot import PaperSpotEntryFill, PaperSpotExitFill
+from tiewtrade.integrations.sqlite.paper_entry_exit import record_paper_entry_exit
 from tiewtrade.integrations.sqlite.paper_fill_record import paper_fill_record
 from tiewtrade.integrations.sqlite.trade_history import SQLiteTradeHistory
 from tiewtrade.trading.basket import ClosedBasket, ClosedEntry
@@ -74,40 +75,19 @@ class PaperSpotSQLiteHistory:
     ) -> bool:
         """Record one Entry sold at its own target.
 
-        The Basket's running total grows by what this Entry realised, and the
-        Basket itself closes only when the sale was of its last Entry.
+        Spot Baskets carry no leverage, so None is what its row has always
+        held and what this write leaves it holding.
         """
-        existing = self._store.get_basket(basket_id)
-        if existing is None:
-            raise ValueError("Basket does not exist")
-
-        normalized_fill = paper_fill_record(
-            fill,
+        return record_paper_entry_exit(
+            self._store,
             basket_id=basket_id,
             session_id=self._context.session_id,
+            fill=fill,
             side=FillSide.SELL,
-            realized_pnl=closed.realized_pnl,
-            closes_entry_number=closed.entry_number,
+            leverage=None,
+            closed=closed,
+            closed_basket=closed_basket,
         )
-        if closed_basket is not None:
-            # The store's own totals, grown by this last sale, rather than the
-            # Basket's. A Basket taken back from the database counts only what
-            # it has sold since it was taken back: closing the last Entry after
-            # a restart wrote a total and a count that left out every Entry
-            # sold before it.
-            basket = replace(
-                existing,
-                closed_at_utc=closed_basket.closed_at,
-                realized_pnl=existing.realized_pnl + closed.realized_pnl,
-                status=BasketStatus.CLOSED,
-            )
-            return self._store.record_closed_basket(basket, normalized_fill)
-
-        basket = replace(
-            existing,
-            realized_pnl=existing.realized_pnl + closed.realized_pnl,
-        )
-        return self._store.record_entry_exit_fill(basket, normalized_fill)
 
     def record_close(
         self,

@@ -27,6 +27,7 @@ from tiewtrade.trading.basket import (
     Basket,
     BasketCloseReason,
     BasketEntry,
+    BasketPair,
     ClosedBasket,
     ClosedEntry,
 )
@@ -78,6 +79,10 @@ class PaperSpotSessionSnapshot:
     basket_id: UUID | None
     basket_entry_count: int
     take_profit_price: Decimal | None
+    # What each open Entry Pair paid and leaves at. A row on screen reads its
+    # own Pair's figures off this rather than the Basket-wide ones, which are
+    # the net under every Pair rather than the price any one of them awaits.
+    entry_pairs: tuple[BasketPair, ...]
     # Read against the last candle the Session accepted, so it answers for the
     # same moment the Session used to decide entries. None until one arrives.
     entry_gate: EntryGate | None
@@ -226,6 +231,7 @@ class PaperSpotSession:
                 None if entry_fill is None else transition.entry_number_filled
             )
             exit_fill: PaperSpotExitFill | None = None
+            entry_exits: tuple[PaperSpotEntryExit, ...] = ()
             closed_basket: ClosedBasket | None = None
 
             if basket_existed_at_candle_open and not entry_filled_on_current_candle:
@@ -238,24 +244,18 @@ class PaperSpotSession:
                         transition, candle, exit_fill, BasketCloseReason.STOP_LOSS
                     )
                 else:
-                    take_profit_fill = self._fill_take_profit(
+                    entry_exits, closed_basket = self._take_profit_entries(
                         transition, candle, candle.close_time
                     )
-                    if take_profit_fill is not None:
-                        exit_fill = take_profit_fill
-                        closed_basket = self._close_basket(
-                            transition,
-                            candle,
-                            exit_fill,
-                            BasketCloseReason.TAKE_PROFIT,
-                        )
 
             indicators = transition.indicators.update(candle)
             self._evaluate_strategy(
                 transition,
                 candle,
                 indicators,
-                exited_on_this_candle=(exit_fill is not None or sold_between_ticks),
+                exited_on_this_candle=(
+                    exit_fill is not None or bool(entry_exits) or sold_between_ticks
+                ),
             )
             self._commit_transition(transition)
 
@@ -264,6 +264,7 @@ class PaperSpotSession:
                 entry_fill=entry_fill,
                 entry_atr=None if entry_fill is None else pending_atr,
                 entry_number=entry_number,
+                entry_exits=entry_exits,
                 exit_fill=exit_fill,
                 closed_basket=closed_basket,
             )
@@ -303,17 +304,16 @@ class PaperSpotSession:
                     closed_basket=stopped_basket,
                 )
 
-            exit_fill = self._fill_take_profit(transition, candle, observed_at)
-            if exit_fill is None:
+            entry_exits, closed_basket = self._take_profit_entries(
+                transition, candle, observed_at
+            )
+            if not entry_exits:
                 return self._snapshot(accepted=False)
 
-            closed_basket = self._close_basket(
-                transition, candle, exit_fill, BasketCloseReason.TAKE_PROFIT
-            )
             self._commit_transition(transition)
             return self._snapshot(
                 accepted=True,
-                exit_fill=exit_fill,
+                entry_exits=entry_exits,
                 closed_basket=closed_basket,
             )
         except PaperSpotSessionError:
@@ -522,16 +522,50 @@ class PaperSpotSession:
             transition.basket, candle, filled_at=filled_at
         )
 
-    def _fill_take_profit(
+    def _take_profit_entries(
         self,
         transition: _PaperSpotTransition,
         candle: Candle,
         filled_at: datetime,
-    ) -> PaperSpotExitFill | None:
-        assert transition.basket is not None
-        return self._executor.fill_take_profit(
-            transition.basket, candle, filled_at=filled_at
-        )
+    ) -> tuple[tuple[PaperSpotEntryExit, ...], ClosedBasket | None]:
+        """Sell every Entry this candle carried to a target.
+
+        Each sale hands its place in the Basket back, so an Entry that took
+        profit frees the quota and the Entry Pair count it was using. The
+        Basket itself closes only when its last Entry has gone — which a candle
+        reaching the Basket's own target always does, since nothing is left
+        behind it.
+        """
+        basket = transition.basket
+        assert basket is not None
+        fills = self._executor.fill_take_profit(basket, candle, filled_at=filled_at)
+        if not fills:
+            return (), None
+
+        exits: list[PaperSpotEntryExit] = []
+        for fill in fills:
+            assert fill.entry_number is not None
+            closed_entry = basket.close_entry(
+                fill.entry_number,
+                exit_price=fill.price,
+                closed_at=fill.filled_at,
+            )
+            transition.lifecycle.release_fill(fill.entry_number)
+            exits.append(PaperSpotEntryExit(fill=fill, closed=closed_entry))
+
+        # An Entry sold on this candle owns it: an Entry filling at the open
+        # would predate a sale the market has already made.
+        transition.exited_candle_open_time = candle.open_time
+        closed_basket: ClosedBasket | None = None
+        if basket.is_empty:
+            closed_basket = basket.settled_result(
+                exit_price=fills[-1].price,
+                closed_at=filled_at,
+            )
+            transition.basket = None
+            transition.lifecycle.reset()
+            transition.closed_basket_count += 1
+        return tuple(exits), closed_basket
 
     def _close_basket(
         self,
@@ -633,6 +667,9 @@ class PaperSpotSession:
             basket_entry_count=0 if self._basket is None else self._basket.entry_count,
             take_profit_price=(
                 None if self._basket is None else self._basket.take_profit_price
+            ),
+            entry_pairs=(
+                () if self._basket is None else self._basket.open_pair_views()
             ),
             entry_gate=self._entry_gate(),
             waived_pair=waived_pair,

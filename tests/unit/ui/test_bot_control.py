@@ -8,7 +8,11 @@ from pytestqt.qtbot import QtBot
 
 from tests.support.paper_session_setup import configured_spot_session
 from tests.support.qt_interactions import click
-from tests.support.workspace_snapshots import OBSERVED_AT, basket_entries
+from tests.support.workspace_snapshots import (
+    OBSERVED_AT,
+    basket_entries,
+    basket_pairs,
+)
 from tiewtrade.application.bot_control import (
     BotControlAction,
     BotControlSnapshot,
@@ -87,6 +91,7 @@ def test_running_shows_runtime_and_basket_facts_without_manual_order_controls(
                 average_entry_price=Decimal("64000"),
                 current_price=Decimal("65000"),
                 take_profit_price=Decimal("66000"),
+                pairs=basket_pairs(basket_entries("63000", "65000")),
                 unrealized_pnl=Decimal("1000"),
                 entry_gate=BasketEntryGate.OPEN,
                 updated_at_utc=datetime(2026, 8, 1, 12, tzinfo=UTC),

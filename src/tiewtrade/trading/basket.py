@@ -4,6 +4,7 @@ from decimal import ROUND_CEILING, ROUND_DOWN, Decimal
 from enum import StrEnum
 from uuid import UUID
 
+from tiewtrade.trading.entry_pair import entry_pair_index
 from tiewtrade.trading.entry_policy import EntryPolicy
 from tiewtrade.trading.position import PositionSide
 
@@ -60,11 +61,12 @@ def average_entry_price_after_fill(
 class BasketEntry:
     """One Entry of a Basket, carrying the ATR it was measured against.
 
-    The target belongs to the Basket, not to the Entry — but the measurement
-    it is made with arrived with a Fill, and the Basket has to be able to
-    state it again after any Entry leaves. Keeping the ATR here rather than as
-    one number on the Basket is what lets a Basket rebuilt from its open
-    Entries alone reach the same target the Runtime had.
+    No target belongs to an Entry — the Pair it is part of has one and the
+    Basket has one — but the measurement they are made with arrived with a
+    Fill, and both have to be stated again whenever any Entry joins or leaves.
+    Keeping the ATR here rather than as one number on the Basket is what lets
+    a Basket rebuilt from its open Entries alone reach the targets the Runtime
+    had.
     """
 
     entry_number: int
@@ -72,6 +74,34 @@ class BasketEntry:
     quantity: Decimal
     filled_at: datetime
     atr: Decimal
+
+
+@dataclass(frozen=True, slots=True)
+class TakeProfitExit:
+    """One Entry a candle carried to a target, and the target it leaves at.
+
+    Which target that is depends on why it is leaving: its own Pair reached
+    the price that Pair was aiming at, or the Basket reached the price it
+    would take everything at. The two differ, so the Entry carries the answer
+    rather than leaving the executor to work it out a second time.
+    """
+
+    entry: "BasketEntry"
+    price: Decimal
+
+
+@dataclass(frozen=True, slots=True)
+class BasketPair:
+    """What one Entry Pair paid and what it leaves at, as it stands now.
+
+    Stated by the Basket rather than worked out again by whatever shows it,
+    so a screen and the Session that sells cannot disagree about the price a
+    Pair is waiting for.
+    """
+
+    pair: int
+    average_entry_price: Decimal
+    take_profit_price: Decimal
 
 
 @dataclass(frozen=True, slots=True)
@@ -216,11 +246,12 @@ class Basket:
 
     @property
     def take_profit_price(self) -> Decimal | None:
-        """The one price the whole Basket leaves at.
+        """The price the whole Basket leaves at, whatever its Pairs are doing.
 
-        Measured from what the Basket paid on average rather than from any one
-        Entry's price, which is what makes an Entry bought high leave with the
-        rest instead of being left behind by the Entries that were cheaper.
+        Measured from what the Basket paid across every open Entry, so it sits
+        between the targets of the Pairs that averaged down furthest and those
+        of the Pairs that did not. Reaching it takes everything still held —
+        the net under a Pair the market has left behind.
         """
         return self._take_profit_price
 
@@ -236,6 +267,122 @@ class Basket:
         if self.position_side is PositionSide.LONG:
             return high >= self._take_profit_price
         return low <= self._take_profit_price
+
+    def open_pairs(self) -> tuple[int, ...]:
+        """The Entry Pairs this Basket still holds something of, in order."""
+        return tuple(
+            sorted({entry_pair_index(entry.entry_number) for entry in self._entries})
+        )
+
+    def pair_entries(self, pair: int) -> tuple[BasketEntry, ...]:
+        return tuple(
+            entry
+            for entry in self._entries
+            if entry_pair_index(entry.entry_number) == pair
+        )
+
+    def pair_average_entry_price(self, pair: int) -> Decimal | None:
+        """What one Pair paid, over the Entries of it still open."""
+        entries = self.pair_entries(pair)
+        if not entries:
+            return None
+        quantity = sum((entry.quantity for entry in entries), Decimal("0"))
+        notional = sum(
+            (entry.price * entry.quantity for entry in entries), Decimal("0")
+        )
+        return notional / quantity
+
+    def pair_take_profit_price(self, pair: int) -> Decimal | None:
+        """The price this Pair alone leaves at.
+
+        A Pair is the unit a Basket takes Entries in, so it is the unit they
+        leave in: measured from what that Pair paid, against the ATR its own
+        latest Fill was read with. Pairs that averaged down further therefore
+        reach their target sooner, which is what lets a Basket give back the
+        Entries it can while it goes on holding the ones it cannot.
+        """
+        entries = self.pair_entries(pair)
+        if not entries or self._tick_size is None:
+            return None
+        average = self.pair_average_entry_price(pair)
+        assert average is not None
+        latest = max(entries, key=lambda entry: (entry.filled_at, entry.entry_number))
+        take_profit_price, _ = self._measure_targets(
+            average_entry_price=average,
+            atr=latest.atr,
+            tick_size=self._tick_size,
+        )
+        return take_profit_price
+
+    def open_pair_views(self) -> tuple[BasketPair, ...]:
+        """Every Pair still open, with the figures it is judged by."""
+        views: list[BasketPair] = []
+        for pair in self.open_pairs():
+            average = self.pair_average_entry_price(pair)
+            target = self.pair_take_profit_price(pair)
+            if average is None or target is None:
+                continue
+            views.append(
+                BasketPair(
+                    pair=pair,
+                    average_entry_price=average,
+                    take_profit_price=target,
+                )
+            )
+        return tuple(views)
+
+    def take_profit_exits(
+        self, high: Decimal, low: Decimal
+    ) -> tuple[TakeProfitExit, ...]:
+        """Every Entry this candle sells, and the price each one sells at.
+
+        Two rules answer here, and their order is the whole of it. A Pair that
+        reached its own target sells there first, because a limit order left at
+        that price would have filled before the market ever came any higher —
+        reading it the other way round would book the better of two prices the
+        Basket could not have had both of.
+
+        Only then does the Basket's own target apply, to whatever is still
+        held. That is the net under an Entry Pair the market has left behind:
+        it leaves below the target it was aiming at, carried out by the Pairs
+        that did reach theirs. The net catches a fast recovery — one candle
+        clearing the Basket's target — and not a slow one, where each Pair
+        reaches its own target and goes, until the Pair left behind is the
+        whole Basket and the two targets are the same price.
+        """
+        exits: list[TakeProfitExit] = []
+        taken: set[int] = set()
+        pair_targets = [
+            (pair, self.pair_take_profit_price(pair)) for pair in self.open_pairs()
+        ]
+        reached = [
+            (pair, target)
+            for pair, target in pair_targets
+            if target is not None and self._reached(target, high, low)
+        ]
+        # Nearest target first, which is the order the market reached them in.
+        reached.sort(key=lambda item: item[1], reverse=self._is_short)
+        for pair, target in reached:
+            assert target is not None
+            for entry in self.pair_entries(pair):
+                exits.append(TakeProfitExit(entry=entry, price=target))
+                taken.add(entry.entry_number)
+
+        sweep = self._take_profit_price
+        if sweep is not None and self._reached(sweep, high, low):
+            for entry in self._entries:
+                if entry.entry_number not in taken:
+                    exits.append(TakeProfitExit(entry=entry, price=sweep))
+        return tuple(exits)
+
+    def _reached(self, target: Decimal, high: Decimal, low: Decimal) -> bool:
+        if self._is_short:
+            return low <= target
+        return high >= target
+
+    @property
+    def _is_short(self) -> bool:
+        return self.position_side is PositionSide.SHORT
 
     @property
     def stop_loss_price(self) -> Decimal | None:

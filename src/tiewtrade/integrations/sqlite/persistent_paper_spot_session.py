@@ -3,6 +3,9 @@ from tiewtrade.application.paper_spot_session import (
     PaperSpotSessionSnapshot,
 )
 from tiewtrade.application.session_persistence import EntryClosingPersistence
+from tiewtrade.integrations.sqlite.paper_entry_exit import (
+    entry_exits_with_closing_basket,
+)
 from tiewtrade.integrations.sqlite.paper_spot_history import PaperSpotSQLiteHistory
 from tiewtrade.integrations.sqlite.session_persistence import (
     SQLiteEntryClosingCoordinator,
@@ -54,26 +57,19 @@ class _PaperSpotSnapshotRecorder:
         )
 
     def _record_entry_exits(self, snapshot: PaperSpotSessionSnapshot) -> None:
-        """Write each Entry's sale in the order the Basket made them.
-
-        Only the last of them can be the sale that closed the Basket, so the
-        closed Basket travels with that one and with no other.
-        """
+        """Write each Entry's sale in the order the Basket made them."""
         if snapshot.exit_fill is not None:
             raise ValueError("an Entry Exit cannot accompany a whole-Basket Exit")
-        basket_id = snapshot.basket_id
-        if basket_id is None:
-            raise ValueError("Entry Exit requires a Basket ID")
-        closed_basket = snapshot.closed_basket
-        if closed_basket is not None and closed_basket.basket_id != basket_id:
-            raise ValueError("closed Basket requires a matching Basket ID")
-        last = len(snapshot.entry_exits) - 1
-        for index, entry_exit in enumerate(snapshot.entry_exits):
+        for entry_exit, basket_id, closed_basket in entry_exits_with_closing_basket(
+            snapshot.entry_exits,
+            basket_id=snapshot.basket_id,
+            closed_basket=snapshot.closed_basket,
+        ):
             self._history.record_entry_exit(
                 basket_id=basket_id,
                 fill=entry_exit.fill,
                 closed=entry_exit.closed,
-                closed_basket=closed_basket if index == last else None,
+                closed_basket=closed_basket,
             )
 
 

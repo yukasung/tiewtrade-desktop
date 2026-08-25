@@ -10,12 +10,11 @@ _V1_VERSION = "fast-test-v1"
 _V1_RSI_PERIOD = 14
 _V1_ATR_PERIOD = 14
 _V1_TAKE_PROFIT_ATR_MULTIPLIER = Decimal("3")
-_V1_STOP_LOSS_ATR_MULTIPLIER = Decimal("3")
 
 
 @dataclass(frozen=True, slots=True)
 class FastTestPreset:
-    """A preset that enters fast but sizes its exits like a real one.
+    """A preset that enters fast but sizes its take profit like a real one.
 
     What this preset shortens is the wait for a *signal*, which is the
     strategy's business, not the wait for a *measurement*. The RSI it carries
@@ -37,9 +36,11 @@ class FastTestPreset:
     rsi_period: int
     atr_period: int
     take_profit_atr_multiplier: Decimal
-    stop_loss_atr_multiplier: Decimal | None
+    stop_loss_atr_multiplier: Decimal | None = None
 
     def __post_init__(self) -> None:
+        if self.stop_loss_atr_multiplier is not None:
+            raise ValueError("fast-test-v1 does not support stop_loss_atr_multiplier")
         require_shared_preset_rules(
             version=self.version,
             rsi_period=self.rsi_period,
@@ -53,7 +54,6 @@ class FastTestPreset:
             self.rsi_period != _V1_RSI_PERIOD
             or self.atr_period != _V1_ATR_PERIOD
             or self.take_profit_atr_multiplier != _V1_TAKE_PROFIT_ATR_MULTIPLIER
-            or self.stop_loss_atr_multiplier != _V1_STOP_LOSS_ATR_MULTIPLIER
         ):
             raise ValueError("fast-test-v1 parameters must remain canonical")
 
@@ -68,5 +68,4 @@ class FastTestPreset:
             rsi_period=_V1_RSI_PERIOD,
             atr_period=_V1_ATR_PERIOD,
             take_profit_atr_multiplier=_V1_TAKE_PROFIT_ATR_MULTIPLIER,
-            stop_loss_atr_multiplier=_V1_STOP_LOSS_ATR_MULTIPLIER,
         )

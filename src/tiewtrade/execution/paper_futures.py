@@ -6,6 +6,10 @@ from tiewtrade.execution.paper_fill_identity import (
     paper_fill_id,
     require_matching_symbol,
 )
+from tiewtrade.execution.paper_take_profit import (
+    PaperTakeProfitSale,
+    paper_take_profit_sales,
+)
 from tiewtrade.market_data.candle import Candle
 from tiewtrade.strategies.entry_intent import EntryIntent
 from tiewtrade.trading.basket import Basket, BasketCloseReason
@@ -35,6 +39,11 @@ class PaperFuturesExitFill:
     price: Decimal
     quantity: Decimal
     filled_at: datetime
+    # The Entry this Fill closed. Every exit this market makes closes one
+    # Entry: a Pair that reached its own target leaves at that price, and a
+    # Basket that reached its own sells what is left one Entry at a time, so
+    # each sale says which Entry it was and what that Entry got.
+    entry_number: int
 
 
 class PaperFuturesExecutor:
@@ -83,48 +92,35 @@ class PaperFuturesExecutor:
 
     def fill_take_profit(
         self, basket: Basket, candle: Candle
-    ) -> PaperFuturesExitFill | None:
-        require_matching_symbol(candle, self._symbol_rules)
-        take_profit_price = basket.take_profit_price
-        if take_profit_price is None:
-            return None
-        if not basket.reaches_take_profit(candle.high, candle.low):
-            return None
+    ) -> tuple[PaperFuturesExitFill, ...]:
+        """A Fill for every Entry this candle carried to a target.
 
-        if basket.position_side is PositionSide.LONG:
-            price = self._symbol_rules.floor_price(take_profit_price)
-        else:
-            price = self._symbol_rules.ceil_price(take_profit_price)
-
-        return self._exit_fill(
-            basket=basket,
-            price=price,
-            close_reason=BasketCloseReason.TAKE_PROFIT,
-            filled_at=candle.close_time,
+        Which Entries those are and what each is worth is read once, the same
+        way Paper Spot reads it; all that is left here is the record Futures
+        keeps of each sale — its side, why it sold, and the candle close it
+        books at, this market never selling between candles.
+        """
+        return tuple(
+            self._take_profit_fill(basket, sale, filled_at=candle.close_time)
+            for sale in paper_take_profit_sales(basket, candle, self._symbol_rules)
         )
 
-    def _exit_fill(
+    def _take_profit_fill(
         self,
-        *,
         basket: Basket,
-        price: Decimal,
-        close_reason: BasketCloseReason,
+        sale: PaperTakeProfitSale,
+        *,
         filled_at: datetime,
-    ) -> PaperFuturesExitFill | None:
-        if not price.is_finite() or price <= 0:
-            return None
-
-        quantity = basket.total_quantity
-        if not quantity.is_finite() or quantity <= 0:
-            return None
-
-        order_id = f"{close_reason.value}:{basket.basket_id}"
+    ) -> PaperFuturesExitFill:
+        close_reason = BasketCloseReason.TAKE_PROFIT
+        order_id = f"{close_reason.value}:{basket.basket_id}:{sale.entry_number}"
         return PaperFuturesExitFill(
             order_id=order_id,
             fill_id=paper_fill_id(self._session.session_id, order_id),
             side=basket.position_side,
             close_reason=close_reason,
-            price=price,
-            quantity=quantity,
+            price=sale.price,
+            quantity=sale.quantity,
             filled_at=filled_at,
+            entry_number=sale.entry_number,
         )

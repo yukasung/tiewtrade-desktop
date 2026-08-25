@@ -6,7 +6,11 @@ import pytest
 
 from tests.support.entry_pair_walk import reachable_lifecycles
 from tests.support.paper_session_setup import configured_spot_session
-from tests.support.workspace_snapshots import basket_entries, basket_snapshot
+from tests.support.workspace_snapshots import (
+    basket_entries,
+    basket_pairs,
+    basket_snapshot,
+)
 from tiewtrade.application.trading_workspace import (
     BasketEntryGate,
     BasketEntrySnapshot,
@@ -289,6 +293,9 @@ def _basket() -> BasketSnapshot:
         average_entry_price=Decimal("66000"),
         current_price=Decimal("66321"),
         take_profit_price=Decimal("67000"),
+        pairs=basket_pairs(
+            basket_entries("66000", "66000", quantity="0.003", current_price="66321")
+        ),
         unrealized_pnl=Decimal("1.926"),
         entry_gate=BasketEntryGate.OPEN,
         updated_at_utc=OBSERVED_AT,

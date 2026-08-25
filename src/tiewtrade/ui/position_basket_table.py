@@ -58,13 +58,16 @@ def _price(row: _Row) -> str:
 
 
 def _take_profit_price(row: _Row) -> str:
-    """The one price the whole Basket leaves at, repeated on every row.
+    """The price this row's Entry Pair leaves at.
 
-    Every Entry is sold there together, so the column says the same figure all
-    the way down — which is the point: the Entry bought high does not have a
-    target of its own to wait for, it leaves when the Basket does.
+    A Pair is the unit that is sold, so both its Entries read the same figure
+    and a Pair that averaged down further reads a lower one than a Pair that
+    did not. The Basket's own target — the net that takes whatever is left —
+    is not printed per row, because it is not the price this Entry is waiting
+    for.
     """
-    return price_text(row.basket.take_profit_price)
+    pair = row.basket.pair_for(row.entry.entry_number)
+    return BLANK if pair is None else price_text(pair.take_profit_price)
 
 
 def _entry_gate(row: _Row) -> str:
@@ -82,20 +85,23 @@ def _notional(row: _Row) -> str:
 
 
 def _average_entry_price(row: _Row) -> str:
-    """What the Basket paid on average, repeated on every row.
+    """What this row's Entry Pair paid, which its target is measured from.
 
-    The figure Take Profit is measured from. Without it on screen the target
-    reads as coming from nowhere — or worse, as measured from the price on the
-    row beside it, which is exactly what it is not.
+    The Pair's rather than the Basket's, so the two price columns beside each
+    other belong to the same figure: without it the target reads as coming
+    from nowhere, or worse, as measured from the price on the row itself.
 
-    Shown at the scale the Entries were quoted at. The average is a division,
-    so three Entries can leave it with no last decimal place at all, and the
-    exact answer read as a wall of digits wide enough to push the rest of the
-    row off. The Basket keeps every place — the target is measured from the
-    exact figure, not from this one.
+    Shown at the scale the Entries were quoted at. An average is a division,
+    so it can be left with no last decimal place at all, and the exact answer
+    read as a wall of digits wide enough to push the rest of the row off. The
+    Basket keeps every place — a target is measured from the exact figure, not
+    from this one.
     """
+    pair = row.basket.pair_for(row.entry.entry_number)
+    if pair is None:
+        return BLANK
     return price_text(
-        row.basket.average_entry_price.quantize(
+        pair.average_entry_price.quantize(
             _quoted_scale(row.basket), rounding=ROUND_HALF_EVEN
         )
     )
@@ -137,13 +143,13 @@ class PositionBasketTable(QWidget):
     hides the prices actually paid. The rows are the Entries, each with the
     price it paid.
 
-    Some columns are the Basket's rather than the row's, and repeat all the
-    way down: what every Entry is sold at, the average that target is measured
-    from, and the lifecycle gate. The average was once left off for reading as
-    a third price among the row's own — but the target comes from it, and a
-    target whose measure is not on screen is a number the trader has to take
-    on trust. Repeated in its own column it is plainly the Basket's, which is
-    what the old summary label beside the table could never say.
+    Two columns belong to the row's Entry Pair rather than to the row: what
+    that Pair paid and what it is sold at. They repeat across the Entries of
+    one Pair and change between Pairs, which is what a Pair being the unit
+    that leaves looks like on a screen. The average was once left off for
+    reading as a third price among the row's own — but the target comes from
+    it, and a target whose measure is not shown is a number the trader has to
+    take on trust. The lifecycle gate is the Basket's, and repeats throughout.
     """
 
     # Measured numbers hang on the right so their digits line up and a minus

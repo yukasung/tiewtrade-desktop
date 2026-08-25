@@ -59,7 +59,7 @@ def test_paper_futures_history_survives_restart_and_duplicate_replay(
     assert entry_snapshot is not None
     assert entry_snapshot.entry_fill is not None
     assert close_snapshot is not None
-    assert close_snapshot.exit_fill is not None
+    assert close_snapshot.entry_exits
     assert close_snapshot.closed_basket is not None
     basket_id = close_snapshot.closed_basket.basket_id
 
@@ -86,10 +86,12 @@ def test_paper_futures_history_survives_restart_and_duplicate_replay(
         entry_number=1,
         fill=entry_snapshot.entry_fill,
     )
-    assert not replay_history.record_close(
+    last_exit = close_snapshot.entry_exits[-1]
+    assert not replay_history.record_entry_exit(
         basket_id=basket_id,
-        fill=close_snapshot.exit_fill,
-        closed=close_snapshot.closed_basket,
+        fill=last_exit.fill,
+        closed=last_exit.closed,
+        closed_basket=close_snapshot.closed_basket,
     )
     assert reopened.get_basket(basket_id) == basket
     assert reopened.list_fills(basket_id) == fills

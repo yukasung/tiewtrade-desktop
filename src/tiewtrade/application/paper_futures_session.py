@@ -20,9 +20,15 @@ from tiewtrade.market_data.config import MarketDataConfig
 from tiewtrade.market_data.warm_up import require_warm_up_candle
 from tiewtrade.strategies.entry_intent import EntryIntent
 from tiewtrade.strategies.indicators import IndicatorSnapshot, WilderIndicators
-from tiewtrade.strategies.protocols import StrategyPreset
+from tiewtrade.strategies.protocols import EntryStrategy, StrategyPreset
 from tiewtrade.strategies.registry import strategy_definition_for
-from tiewtrade.trading.basket import Basket, ClosedBasket
+from tiewtrade.trading.basket import (
+    Basket,
+    BasketCloseReason,
+    BasketPair,
+    ClosedBasket,
+    ClosedEntry,
+)
 from tiewtrade.trading.capital import FuturesCapitalPlan
 from tiewtrade.trading.entry_pair import EntryGate, EntryPairLifecycle
 from tiewtrade.trading.position import PositionSide, account_equity
@@ -53,20 +59,32 @@ class PaperFuturesSessionIdentity:
 
 
 @dataclass(frozen=True, slots=True)
+class PaperFuturesEntryExit:
+    """One Entry a target took out of the Basket, and what it left behind."""
+
+    fill: PaperFuturesExitFill
+    closed: ClosedEntry
+
+
+@dataclass(frozen=True, slots=True)
 class PaperFuturesSessionSnapshot:
     accepted: bool
     state: PaperFuturesSessionState
     pending_intent: EntryIntent | None
     entry_fill: PaperFuturesEntryFill | None
     # The number of the Entry just filled, which the tab reads per Entry.
-    # Futures sells its Basket whole, so it never sells one alone.
     entry_number: int | None
-    exit_fill: PaperFuturesExitFill | None
+    # Entries a target sold this candle, each at the price its own rule gave
+    # it. Futures has no other way out — no stop loss, and no sale the trader
+    # asks for — so every exit this Session books arrives here.
+    entry_exits: tuple[PaperFuturesEntryExit, ...]
     closed_basket: ClosedBasket | None
     basket_id: UUID | None
     basket_entry_count: int
     position_side: PositionSide | None
     take_profit_price: Decimal | None
+    # What each open Entry Pair paid and leaves at; see the Spot snapshot.
+    entry_pairs: tuple[BasketPair, ...]
     account_equity: Decimal
     capital_plan: FuturesCapitalPlan
     failure_reason: PaperFuturesFailureReason | None
@@ -79,13 +97,32 @@ class PaperFuturesSessionSnapshot:
 
     @property
     def sold_entry_numbers(self) -> tuple[int, ...]:
-        """Futures takes its Basket whole, so no Entry ever leaves alone."""
-        return ()
+        """The Entries this snapshot took out of the Basket."""
+        return tuple(item.closed.entry_number for item in self.entry_exits)
 
     @property
     def failed_closed(self) -> bool:
         """This Session has stopped for good, whatever it was asked next."""
         return self.state is PaperFuturesSessionState.FAILED_CLOSED
+
+
+@dataclass(slots=True)
+class _PaperFuturesTransition:
+    """What one candle would leave the Session holding, if it gets that far.
+
+    Every part a candle can move is worked on as a copy and taken up in one
+    go, so a Session that raises half way through a candle is not left holding
+    a Basket that sold some of its Entries and none of its wallet. Paper Spot
+    keeps the same shape for the same reason.
+    """
+
+    indicators: WilderIndicators
+    strategy: EntryStrategy
+    lifecycle: EntryPairLifecycle
+    basket: Basket | None
+    pending_intent: EntryIntent | None
+    closed_basket_count: int
+    wallet_balance: Decimal
 
 
 class PaperFuturesSession:
@@ -168,35 +205,33 @@ class PaperFuturesSession:
 
         self._latest_mark_price = candle.close
         basket_existed_at_open = self._basket is not None
-        closed: ClosedBasket | None
         try:
+            transition = self._new_transition()
             # An Intent handed back can be signalled again on a live candle;
             # one left pending would fill there off a signal read long before.
             if backfilled:
-                self._reject_pending_intent()
+                self._reject_pending_intent(transition)
                 entry_fill = None
             else:
-                entry_fill = self._fill_pending_intent(candle)
-            take_profit_fill: PaperFuturesExitFill | None = None
-            closed = None
+                entry_fill = self._fill_pending_intent(transition, candle)
+            entry_exits: tuple[PaperFuturesEntryExit, ...] = ()
+            closed: ClosedBasket | None = None
             if basket_existed_at_open and entry_fill is None:
-                take_profit_fill = self._fill_take_profit(candle)
-                if take_profit_fill is not None:
-                    closed = self._close_basket(take_profit_fill)
-                    self._lifecycle.reset()
+                entry_exits, closed = self._take_profit_entries(transition, candle)
 
-            indicators = self._indicators.update(candle)
+            indicators = transition.indicators.update(candle)
             self._evaluate_strategy(
+                transition,
                 candle,
                 indicators,
-                exited_on_this_candle=take_profit_fill is not None,
+                exited_on_this_candle=bool(entry_exits),
             )
-            if entry_fill is None:
-                self._mark_open_basket()
+            self._commit_transition(transition)
+            self._mark_open_basket()
             return self._snapshot(
                 accepted=True,
                 entry_fill=entry_fill,
-                exit_fill=take_profit_fill,
+                entry_exits=entry_exits,
                 closed_basket=closed,
             )
         except PaperFuturesSessionError:
@@ -240,53 +275,70 @@ class PaperFuturesSession:
         """
         if self._state is not PaperFuturesSessionState.ACTIVE or self._basket is None:
             return self._snapshot(accepted=False)
-        candidate_lifecycle = deepcopy(self._lifecycle)
+        transition = self._new_transition()
         try:
-            candidate_lifecycle.waive_cooldown()
+            transition.lifecycle.waive_cooldown()
         except ValueError:
             return self._snapshot(accepted=False)
-        self._lifecycle = candidate_lifecycle
+        self._commit_transition(transition)
         return self._snapshot(accepted=True)
 
-    def _reject_pending_intent(self) -> None:
+    def _new_transition(self) -> _PaperFuturesTransition:
+        return _PaperFuturesTransition(
+            indicators=deepcopy(self._indicators),
+            strategy=deepcopy(self._strategy),
+            lifecycle=deepcopy(self._lifecycle),
+            basket=deepcopy(self._basket),
+            pending_intent=self._pending_intent,
+            closed_basket_count=self._closed_basket_count,
+            wallet_balance=self._wallet_balance,
+        )
+
+    def _commit_transition(self, transition: _PaperFuturesTransition) -> None:
+        self._indicators = transition.indicators
+        self._strategy = transition.strategy
+        self._lifecycle = transition.lifecycle
+        self._basket = transition.basket
+        self._pending_intent = transition.pending_intent
+        self._closed_basket_count = transition.closed_basket_count
+        self._wallet_balance = transition.wallet_balance
+
+    def _reject_pending_intent(self, transition: _PaperFuturesTransition) -> None:
         """Give the Intent back to the strategy, which signals again when it can.
 
         Holding it instead would fill it at a later open than the candle it
         was read from, pricing an Entry off a signal the market has left.
         """
-        intent = self._pending_intent
+        intent = transition.pending_intent
         if intent is None:
             return
-        self._strategy.on_entry_rejected(intent.intent_id)
-        self._pending_intent = None
+        transition.strategy.on_entry_rejected(intent.intent_id)
+        transition.pending_intent = None
 
-    def _fill_pending_intent(self, candle: Candle) -> PaperFuturesEntryFill | None:
-        if self._pending_intent is None:
+    def _fill_pending_intent(
+        self, transition: _PaperFuturesTransition, candle: Candle
+    ) -> PaperFuturesEntryFill | None:
+        if transition.pending_intent is None:
             return None
 
-        intent = self._pending_intent
+        intent = transition.pending_intent
         fill = self._executor.fill_entry(intent, candle)
         if fill is None:
-            self._reject_pending_intent()
+            self._reject_pending_intent(transition)
             return None
 
-        if self._basket is None:
+        if transition.basket is None:
             basket_id = uuid5(
                 self._session.session_id,
-                f"basket:{self._closed_basket_count + 1}",
+                f"basket:{transition.closed_basket_count + 1}",
             )
-            candidate_basket = Basket(
+            transition.basket = Basket(
                 basket_id,
                 self._session.entry_policy,
                 self._preset.take_profit_atr_multiplier,
                 position_side=fill.side,
             )
-        else:
-            candidate_basket = deepcopy(self._basket)
-        candidate_lifecycle = deepcopy(self._lifecycle)
-        candidate_strategy = deepcopy(self._strategy)
-
-        candidate_basket.add_entry(
+        transition.basket.add_entry(
             price=fill.price,
             quantity=fill.quantity,
             filled_at=fill.filled_at,
@@ -294,41 +346,58 @@ class PaperFuturesSession:
             tick_size=self._symbol_rules.tick_size,
             position_side=fill.side,
         )
-        candidate_lifecycle.record_fill()
-        candidate_strategy.on_entry_filled(intent.intent_id)
-
-        self._basket = candidate_basket
-        self._lifecycle = candidate_lifecycle
-        self._strategy = candidate_strategy
-        self._account_equity = account_equity(
-            side=candidate_basket.position_side,
-            average_entry_price=candidate_basket.average_entry_price,
-            quantity=candidate_basket.total_quantity,
-            available_capital=self._wallet_balance,
-            current_price=candle.close,
-        )
-        self._pending_intent = None
+        transition.lifecycle.record_fill()
+        transition.strategy.on_entry_filled(intent.intent_id)
+        transition.pending_intent = None
         return fill
 
-    def _fill_take_profit(self, candle: Candle) -> PaperFuturesExitFill | None:
-        assert self._basket is not None
-        return self._executor.fill_take_profit(self._basket, candle)
+    def _take_profit_entries(
+        self, transition: _PaperFuturesTransition, candle: Candle
+    ) -> tuple[tuple[PaperFuturesEntryExit, ...], ClosedBasket | None]:
+        """Sell every Entry this candle carried to a target.
 
-    def _close_basket(self, exit_fill: PaperFuturesExitFill) -> ClosedBasket:
-        assert self._basket is not None
-        closed = self._basket.close(
-            exit_price=exit_fill.price,
-            closed_at=exit_fill.filled_at,
-            close_reason=exit_fill.close_reason,
-        )
-        self._wallet_balance += closed.realized_pnl
-        self._account_equity = self._wallet_balance
-        self._basket = None
-        self._closed_basket_count += 1
-        return closed
+        Each sale hands its place in the Basket back, so an Entry that took
+        profit frees the quota and the Entry Pair count it was using, and what
+        it realised reaches the wallet as it goes rather than waiting for the
+        round to end. The Basket itself closes only when its last Entry has
+        gone — which a candle reaching the Basket's own target always does,
+        since nothing is left behind it.
+        """
+        basket = transition.basket
+        assert basket is not None
+        fills = self._executor.fill_take_profit(basket, candle)
+        if not fills:
+            return (), None
+
+        exits: list[PaperFuturesEntryExit] = []
+        for fill in fills:
+            closed_entry = basket.close_entry(
+                fill.entry_number,
+                exit_price=fill.price,
+                closed_at=fill.filled_at,
+            )
+            transition.lifecycle.release_fill(fill.entry_number)
+            # Every Entry books its own result, so the wallet grows by the sum
+            # of them rather than by a Basket figure counting the same money
+            # again.
+            transition.wallet_balance += closed_entry.realized_pnl
+            exits.append(PaperFuturesEntryExit(fill=fill, closed=closed_entry))
+
+        closed_basket: ClosedBasket | None = None
+        if basket.is_empty:
+            closed_basket = basket.settled_result(
+                exit_price=fills[-1].price,
+                closed_at=fills[-1].filled_at,
+                close_reason=BasketCloseReason.TAKE_PROFIT,
+            )
+            transition.basket = None
+            transition.lifecycle.reset()
+            transition.closed_basket_count += 1
+        return tuple(exits), closed_basket
 
     def _evaluate_strategy(
         self,
+        transition: _PaperFuturesTransition,
         candle: Candle,
         indicators: IndicatorSnapshot | None,
         *,
@@ -339,22 +408,23 @@ class PaperFuturesSession:
         # A signal read from the candle that closed the basket would fill at
         # the very next open, re-entering on the back of its own exit. The
         # earliest a new entry can be signalled is the candle after the sell.
+        basket = transition.basket
         can_enter = (
             not exited_on_this_candle
-            and self._lifecycle.can_enter()
+            and transition.lifecycle.can_enter()
             and (
-                self._basket is None
-                or self._basket.entry_count < self._session.entry_policy.max_entries
+                basket is None
+                or basket.entry_count < self._session.entry_policy.max_entries
             )
         )
-        intent = self._strategy.evaluate(
+        intent = transition.strategy.evaluate(
             candle,
             indicators,
-            entry_number=self._lifecycle.entry_count + 1,
+            entry_number=transition.lifecycle.entry_count + 1,
             can_enter=can_enter,
         )
         if intent is not None:
-            self._pending_intent = intent
+            transition.pending_intent = intent
 
     def _mark_open_basket(self) -> None:
         if self._basket is None:
@@ -392,7 +462,7 @@ class PaperFuturesSession:
         *,
         accepted: bool,
         entry_fill: PaperFuturesEntryFill | None = None,
-        exit_fill: PaperFuturesExitFill | None = None,
+        entry_exits: tuple[PaperFuturesEntryExit, ...] = (),
         closed_basket: ClosedBasket | None = None,
     ) -> PaperFuturesSessionSnapshot:
         basket_id: UUID | None
@@ -422,12 +492,15 @@ class PaperFuturesSession:
             pending_intent=self._pending_intent,
             entry_fill=entry_fill,
             entry_number=None if filled_entry is None else filled_entry.entry_number,
-            exit_fill=exit_fill,
+            entry_exits=entry_exits,
             closed_basket=closed_basket,
             basket_id=basket_id,
             basket_entry_count=basket_entry_count,
             position_side=position_side,
             take_profit_price=take_profit_price,
+            entry_pairs=(
+                () if self._basket is None else self._basket.open_pair_views()
+            ),
             account_equity=self._account_equity,
             capital_plan=self._capital_plan,
             failure_reason=self._failure_reason,

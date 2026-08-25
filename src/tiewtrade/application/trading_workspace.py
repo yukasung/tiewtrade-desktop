@@ -126,6 +126,21 @@ class BasketEntrySnapshot:
 
 
 @dataclass(frozen=True, slots=True)
+class BasketPairSnapshot:
+    """What one Entry Pair paid and leaves at, as the Basket stated it."""
+
+    pair: int
+    average_entry_price: Decimal
+    take_profit_price: Decimal
+
+    def __post_init__(self) -> None:
+        if type(self.pair) is not int or self.pair < 1:
+            raise ValueError("pair must be a positive integer")
+        _require_decimal(self.average_entry_price, "average_entry_price")
+        _require_decimal(self.take_profit_price, "take_profit_price")
+
+
+@dataclass(frozen=True, slots=True)
 class BasketSnapshot:
     symbol: str
     market_type: str
@@ -137,6 +152,10 @@ class BasketSnapshot:
     # Basket read back out of the database stands before its first candle.
     current_price: Decimal | None
     take_profit_price: Decimal
+    # Every open Entry Pair, so a row can read the figures of its own Pair
+    # rather than the Basket-wide ones. Those are the net under all the Pairs
+    # at once, not the price any single Pair is waiting for.
+    pairs: tuple[BasketPairSnapshot, ...]
     unrealized_pnl: Decimal | None
     entry_gate: BasketEntryGate
     updated_at_utc: datetime
@@ -164,6 +183,15 @@ class BasketSnapshot:
         if type(self.completed_pairs) is not int or self.completed_pairs < 0:
             raise ValueError("completed_pairs must be a non-negative integer")
         _require_utc(self.updated_at_utc, "updated_at_utc")
+
+    def pair_for(self, entry_number: int) -> BasketPairSnapshot | None:
+        """The Pair this Entry belongs to, as the Basket last stated it.
+
+        Counted by the rule's own module rather than again here, the same way
+        `entry_gate_for` counts it — one reading of what makes a Pair.
+        """
+        wanted = entry_pair_index(entry_number)
+        return next((pair for pair in self.pairs if pair.pair == wanted), None)
 
     def entry_gate_for(self, entry_number: int) -> BasketEntryGate:
         """The gate as it stands for one Entry, not the Basket read as a whole.

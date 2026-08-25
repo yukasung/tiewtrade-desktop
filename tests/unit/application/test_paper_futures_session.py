@@ -219,6 +219,115 @@ def test_waive_cooldown_rejects_a_futures_session_with_no_basket() -> None:
     assert snapshot.accepted is False
 
 
+def make_session_holding_two_pairs() -> tuple[PaperFuturesSession, Candle]:
+    """A Basket of two Entry Pairs that paid very different prices.
+
+    Entries 1 and 2 fill at 120 and make Pair 1. The Cooldown that Pair starts
+    is waived, and Entry 3 fills far below at 60, opening Pair 2 on its own.
+    Two Pairs at two averages is what gives them two targets to be judged by.
+    """
+    session = make_session(
+        replace(futures_session(), entry_policy=EntryPolicy(max_entries=4))
+    )
+    pending = arm_entry_intent(session)
+    current = next_candle(
+        pending.signal_candle, open="120", high="121", low="100", close="120"
+    )
+    session.process_completed_candle(current, received_at=current.close_time)
+    pending = arm_next_entry_intent(session, current)
+    current = next_candle(
+        pending.signal_candle, open="120", high="121", low="100", close="120"
+    )
+    session.process_completed_candle(current, received_at=current.close_time)
+
+    session.waive_cooldown(datetime(2026, 1, 25, tzinfo=UTC))
+    pending = arm_next_entry_intent(session, current)
+    current = next_candle(
+        pending.signal_candle, open="60", high="61", low="59", close="60"
+    )
+    snapshot = session.process_completed_candle(current, received_at=current.close_time)
+
+    assert snapshot.basket_entry_count == 3
+    assert [pair.pair for pair in snapshot.entry_pairs] == [1, 2]
+    return session, current
+
+
+def test_a_futures_pair_leaves_at_its_own_target_and_leaves_the_other_holding() -> None:
+    """The cheap Pair reaches its target first and goes on its own.
+
+    The Basket keeps trading with what is left, and what the sale realised
+    reaches the wallet as it goes rather than waiting for the round to end.
+    """
+    session, entry_candle = make_session_holding_two_pairs()
+    pair_one, pair_two = session.snapshot.entry_pairs
+    basket_target = session.snapshot.take_profit_price
+    assert basket_target is not None
+    assert pair_two.take_profit_price < basket_target < pair_one.take_profit_price
+    wallet_before = session._wallet_balance
+
+    reached = next_candle(
+        entry_candle,
+        open=str(pair_two.take_profit_price - Decimal("1")),
+        high=str(pair_two.take_profit_price),
+        low=str(pair_two.take_profit_price - Decimal("2")),
+        close=str(pair_two.take_profit_price - Decimal("1")),
+    )
+    snapshot = session.process_completed_candle(reached, received_at=reached.close_time)
+
+    assert snapshot.sold_entry_numbers == (3,)
+    assert snapshot.entry_exits[0].fill.price == pair_two.take_profit_price
+    assert snapshot.closed_basket is None
+    assert snapshot.basket_entry_count == 2
+    # With Pair 2 gone the Basket is Pair 1, so the net and Pair 1's own
+    # target are now the same price.
+    assert snapshot.take_profit_price == pair_one.take_profit_price
+    assert session._wallet_balance == (
+        wallet_before + snapshot.entry_exits[0].closed.realized_pnl
+    )
+
+
+def test_the_futures_basket_target_sweeps_out_the_pair_left_behind() -> None:
+    """One candle clears the Basket's target, and everything goes with it.
+
+    Pair 2 still sells at its own target rather than at the Basket's: a limit
+    order left there would have filled long before the price came any higher.
+    Pair 1 never reached its own and is swept at the Basket's.
+    """
+    session, entry_candle = make_session_holding_two_pairs()
+    pair_one, pair_two = session.snapshot.entry_pairs
+    basket_target = session.snapshot.take_profit_price
+    assert basket_target is not None
+    wallet_before = session._wallet_balance
+
+    swept = next_candle(
+        entry_candle,
+        open=str(basket_target - Decimal("1")),
+        high=str(basket_target),
+        low=str(basket_target - Decimal("2")),
+        close=str(basket_target - Decimal("1")),
+    )
+    snapshot = session.process_completed_candle(swept, received_at=swept.close_time)
+
+    assert sorted(snapshot.sold_entry_numbers) == [1, 2, 3]
+    assert {
+        exit.fill.entry_number: exit.fill.price for exit in snapshot.entry_exits
+    } == {
+        3: pair_two.take_profit_price,
+        1: basket_target,
+        2: basket_target,
+    }
+    closed = snapshot.closed_basket
+    assert closed is not None
+    assert closed.entry_count == 3
+    assert snapshot.basket_entry_count == 0
+    assert snapshot.take_profit_price is None
+    assert snapshot.entry_gate == EntryGate(EntryGateState.OPEN)
+    # Every Entry booked its own result, so the wallet grew by the sum of them
+    # and by that only — the closed Basket is a record, not a second payment.
+    assert session._wallet_balance == wallet_before + closed.realized_pnl
+    assert snapshot.account_equity == session._wallet_balance
+
+
 def make_session(
     session: SessionConfig | None = None,
     *,

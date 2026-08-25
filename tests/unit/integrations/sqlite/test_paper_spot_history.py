@@ -386,7 +386,12 @@ def test_the_last_entry_closes_the_basket_on_the_totals_the_store_kept(
         )
     history.record_entry_exit(
         basket_id=BASKET_ID,
-        fill=replace(exit_fill(), order_id="close-entry:1", fill_id="fill-exit-1"),
+        fill=replace(
+            exit_fill(),
+            order_id="close-entry:1",
+            fill_id="fill-exit-1",
+            entry_number=1,
+        ),
         closed=ClosedEntry(
             entry_number=1,
             quantity=Decimal("2"),
@@ -402,7 +407,12 @@ def test_the_last_entry_closes_the_basket_on_the_totals_the_store_kept(
     # the Basket it hands over knows nothing of the 11.34 already realised.
     history.record_entry_exit(
         basket_id=BASKET_ID,
-        fill=replace(exit_fill(), order_id="close-entry:2", fill_id="fill-exit-2"),
+        fill=replace(
+            exit_fill(),
+            order_id="close-entry:2",
+            fill_id="fill-exit-2",
+            entry_number=2,
+        ),
         closed=ClosedEntry(
             entry_number=2,
             quantity=Decimal("2"),
@@ -430,6 +440,37 @@ def test_the_last_entry_closes_the_basket_on_the_totals_the_store_kept(
     assert basket.status is BasketStatus.CLOSED
     assert basket.realized_pnl == Decimal("31.34")
     assert basket.entry_count == 2
+
+
+def test_an_exit_fill_and_the_entry_it_closed_must_name_the_same_entry(
+    history: PaperSpotSQLiteHistory,
+) -> None:
+    """A Fill that took the whole Basket has no place on the per-Entry path.
+
+    It names no Entry, so recording it here would write a sale of everything
+    as though one Entry had made it — and leave the rest of the Basket open.
+    """
+    history.record_entry(
+        basket_id=BASKET_ID,
+        entry_number=1,
+        fill=entry_fill(),
+        entry_atr=ENTRY_ATR,
+    )
+
+    with pytest.raises(ValueError, match="different Entries"):
+        history.record_entry_exit(
+            basket_id=BASKET_ID,
+            fill=exit_fill(),
+            closed=ClosedEntry(
+                entry_number=1,
+                quantity=Decimal("2"),
+                entry_price=Decimal("100"),
+                exit_price=Decimal("110"),
+                realized_pnl=Decimal("20"),
+                closed_at=CLOSED_AT,
+            ),
+            closed_basket=None,
+        )
 
 
 def test_close_records_exact_closed_basket_and_sell_fill(

@@ -34,7 +34,7 @@ from tests.support.trade_history_ui import (
     empty_basket_history,
     empty_trade_fills,
 )
-from tests.support.workspace_snapshots import basket_entries
+from tests.support.workspace_snapshots import basket_entries, basket_pairs
 from tiewtrade.application.bot_control import (
     BotControlAction,
     BotControlSnapshot,
@@ -454,7 +454,13 @@ def test_trade_history_remains_available_when_session_load_fails(
     )
 
 
-def test_tab_activation_starts_history_query_only_once(qtbot: QtBot) -> None:
+def test_reopening_a_history_tab_reads_it_again(qtbot: QtBot) -> None:
+    """A visit to the tab is a request to see what is there now.
+
+    Records land while the trader is on the Position tab — every Entry fill
+    of an open Basket — so the half being opened is read again each time,
+    not left showing what it held on the first visit.
+    """
     calls = 0
 
     def count_baskets(filters: TradeHistoryFilter) -> BasketHistoryResult:
@@ -477,7 +483,38 @@ def test_tab_activation_starts_history_query_only_once(qtbot: QtBot) -> None:
     window.workspace.show_tab(WorkspaceTab.POSITION_BASKET)
     open_trade_history(window)
 
-    assert calls == 1
+    qtbot.waitUntil(lambda: calls == 2)
+
+
+def test_reopening_the_trade_half_reads_it_again_without_doubling(
+    qtbot: QtBot,
+) -> None:
+    """Reopening the other half asks for it once, not once per signal."""
+    calls = 0
+
+    def count_fills(filters: TradeHistoryFilter) -> tuple[TradeFillHistoryItem, ...]:
+        nonlocal calls
+        calls += 1
+        return empty_trade_fills(filters)
+
+    window = MainWindow(
+        create_session=unused_create,
+        load_active=no_active_session,
+        list_basket_history=empty_basket_history,
+        list_trade_fills=count_fills,
+    )
+    qtbot.addWidget(window)
+    window.show()
+    qtbot.waitUntil(window.setup.create_button.isEnabled)
+
+    window.workspace.show_tab(WorkspaceTab.TRADE_HISTORY)
+    qtbot.waitUntil(lambda: calls == 1)
+    window.workspace.show_tab(WorkspaceTab.POSITION_BASKET)
+    window.workspace.show_tab(WorkspaceTab.TRADE_HISTORY)
+
+    qtbot.waitUntil(lambda: calls == 2)
+    qtbot.wait(50)
+    assert calls == 2
 
 
 def test_position_history_refreshes_when_the_open_basket_closes(
@@ -1892,6 +1929,7 @@ def test_stop_with_open_position_reopens_editable_setup_without_closing(
         average_entry_price=Decimal("100"),
         current_price=Decimal("110"),
         take_profit_price=Decimal("120"),
+        pairs=basket_pairs(basket_entries("100", quantity="1", current_price="110")),
         unrealized_pnl=Decimal("10"),
         entry_gate=BasketEntryGate.OPEN,
         updated_at_utc=observed_at,

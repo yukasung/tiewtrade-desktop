@@ -4,7 +4,7 @@ from decimal import Decimal
 
 from tests.support.paper_session_setup import configured_spot_session
 from tests.support.trade_history_records import trade_fill
-from tests.support.workspace_snapshots import basket_entries
+from tests.support.workspace_snapshots import basket_entries, basket_pairs
 from tiewtrade.application.bot_control import (
     BotControlAction,
     BotControlSnapshot,
@@ -1173,6 +1173,9 @@ def open_basket(session: ConfiguredPaperSession, entry_count: int) -> BasketSnap
         average_entry_price=Decimal("100"),
         current_price=Decimal("101"),
         take_profit_price=Decimal("110"),
+        pairs=basket_pairs(
+            basket_entries(*("100",) * entry_count, quantity="1", current_price="101")
+        ),
         unrealized_pnl=Decimal("1"),
         entry_gate=BasketEntryGate.OPEN,
         updated_at_utc=datetime(2026, 1, 1, 0, 0, tzinfo=UTC),

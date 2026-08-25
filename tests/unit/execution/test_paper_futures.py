@@ -80,20 +80,22 @@ def test_long_take_profit_fills_at_its_target() -> None:
     basket = long_basket(entry_price="100", take_profit="106")
     current = candle(open="105", high="107", low="104")
 
-    fill = executor.fill_take_profit(basket, current)
+    fills = executor.fill_take_profit(basket, current)
 
-    assert fill is not None
+    assert len(fills) == 1
+    fill = fills[0]
     assert fill.side is PositionSide.LONG
     assert fill.close_reason is BasketCloseReason.TAKE_PROFIT
     assert fill.price == Decimal("106")
     assert fill.quantity == Decimal("2")
+    assert fill.entry_number == 1
     assert fill.filled_at == current.close_time
-    assert fill.order_id == ("take_profit:00000000-0000-0000-0000-000000000108")
+    assert fill.order_id == ("take_profit:00000000-0000-0000-0000-000000000108:1")
     assert fill.fill_id == (
         "paper:00000000-0000-0000-0000-000000000107:"
-        "take_profit:00000000-0000-0000-0000-000000000108:fill"
+        "take_profit:00000000-0000-0000-0000-000000000108:1:fill"
     )
-    assert fill == executor.fill_take_profit(basket, current)
+    assert fills == executor.fill_take_profit(basket, current)
 
 
 def test_short_take_profit_fills_at_its_target() -> None:
@@ -101,21 +103,57 @@ def test_short_take_profit_fills_at_its_target() -> None:
     basket = short_basket(entry_price="100", take_profit="94")
     current = candle(open="95", high="96", low="93")
 
-    fill = executor.fill_take_profit(basket, current)
+    fills = executor.fill_take_profit(basket, current)
 
-    assert fill is not None
+    assert len(fills) == 1
+    fill = fills[0]
     assert fill.side is PositionSide.SHORT
     assert fill.close_reason is BasketCloseReason.TAKE_PROFIT
     assert fill.price == Decimal("94")
     assert fill.quantity == Decimal("2")
-    assert fill.order_id == ("take_profit:00000000-0000-0000-0000-000000000108")
+    assert fill.entry_number == 1
+    assert fill.order_id == ("take_profit:00000000-0000-0000-0000-000000000108:1")
     assert fill.fill_id == (
         "paper:00000000-0000-0000-0000-000000000107:"
-        "take_profit:00000000-0000-0000-0000-000000000108:fill"
+        "take_profit:00000000-0000-0000-0000-000000000108:1:fill"
     )
 
 
-def test_take_profit_returns_none_until_the_target_is_touched() -> None:
+def test_each_pair_leaves_at_the_target_its_own_rule_gave_it() -> None:
+    """One candle, two prices: a Pair at its own target, the rest at the net.
+
+    Pair 2 paid 60 and leaves at 66; Pair 1 paid 105 and never reached its
+    111, so the Basket's own 96 carries it out. Booked as one Fill per Entry,
+    each naming the Entry it sold and the price that Entry got.
+    """
+    executor = make_executor()
+    swept = pair_basket()
+    current = candle(open="95", high="96", low="94")
+
+    fills = executor.fill_take_profit(swept, current)
+
+    assert [(fill.entry_number, fill.price) for fill in fills] == [
+        (3, Decimal("66")),
+        (1, Decimal("96")),
+        (2, Decimal("96")),
+    ]
+    assert {fill.order_id for fill in fills} == {
+        "take_profit:00000000-0000-0000-0000-000000000108:1",
+        "take_profit:00000000-0000-0000-0000-000000000108:2",
+        "take_profit:00000000-0000-0000-0000-000000000108:3",
+    }
+
+
+def test_a_pair_that_reached_its_target_goes_without_the_others() -> None:
+    executor = make_executor()
+    held = pair_basket()
+
+    fills = executor.fill_take_profit(held, candle(open="65", high="66", low="64"))
+
+    assert [(fill.entry_number, fill.price) for fill in fills] == [(3, Decimal("66"))]
+
+
+def test_take_profit_sells_nothing_until_the_target_is_touched() -> None:
     executor = make_executor()
 
     assert (
@@ -123,14 +161,14 @@ def test_take_profit_returns_none_until_the_target_is_touched() -> None:
             long_basket(entry_price="100", take_profit="106"),
             candle(open="100", high="105", low="99"),
         )
-        is None
+        == ()
     )
     assert (
         executor.fill_take_profit(
             short_basket(entry_price="100", take_profit="94"),
             candle(open="100", high="101", low="95"),
         )
-        is None
+        == ()
     )
 
 
@@ -279,4 +317,30 @@ def basket(
         position_side=position_side,
     )
     assert result.take_profit_price == Decimal(take_profit)
+    return result
+
+
+def pair_basket() -> Basket:
+    """Two Pairs at different averages, so their targets differ.
+
+    Entries 1 and 2 make Pair 1, which paid 105 and leaves at 111. Entry 3
+    opens Pair 2 alone at 60 and leaves at 66. The Basket paid 90 across all
+    three, so the net it takes everything at sits at 96, between them.
+    """
+    result = Basket(
+        basket_id=UUID("00000000-0000-0000-0000-000000000108"),
+        policy=EntryPolicy(max_entries=4),
+        take_profit_atr_multiplier=Decimal("3"),
+    )
+    for index, price in enumerate(("100", "110", "60")):
+        result.add_entry(
+            price=Decimal(price),
+            quantity=Decimal("2"),
+            filled_at=datetime(2026, 1, 1, 0, 5 * index, tzinfo=UTC),
+            atr=Decimal("2"),
+            tick_size=Decimal("0.1"),
+        )
+    assert result.pair_take_profit_price(1) == Decimal("111")
+    assert result.pair_take_profit_price(2) == Decimal("66")
+    assert result.take_profit_price == Decimal("96")
     return result

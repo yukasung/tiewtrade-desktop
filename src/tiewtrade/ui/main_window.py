@@ -370,7 +370,7 @@ class MainWindow(QMainWindow):
             parent=self,
         )
         self._wire_trade_history()
-        self.workspace.trade_history_activated.connect(self._start_trade_history_once)
+        self.workspace.trade_history_activated.connect(self._trade_history_activated)
         self._workflow.start()
 
     @Slot(object)
@@ -1229,11 +1229,15 @@ class MainWindow(QMainWindow):
             self._start_chart_for(self._default_chart_session)
 
     @Slot()
-    def _start_trade_history_once(self) -> None:
-        if self._history_started:
-            return
+    def _trade_history_activated(self) -> None:
+        """Note that history has been looked at; the tab itself asks for it.
+
+        Opening a history tab already announces which half it wants, and
+        that announcement is what reads it — every visit, not only the
+        first. All that is left here is remembering that the trader has
+        been there, so a Basket closing later knows to refresh the table.
+        """
         self._history_started = True
-        self._history_workflow.start()
 
     def closeEvent(self, event: QCloseEvent) -> None:
         if not self._close_sequence_completed:

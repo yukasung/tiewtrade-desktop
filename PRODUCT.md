@@ -80,27 +80,40 @@ Session เลือกเท่านั้น
 
 ## 5. Basket Take Profit
 
-Basket Take Profit คำนวณตาม Position Side ด้วยสูตร:
+Take Profit ทำงานสองระดับ **Entry Pair Take Profit** เป็นระดับปกติที่ Position ออก
+ส่วน **Basket Take Profit** เป็นตาข่ายรองรับ Pair ที่ตลาดทิ้งไว้ข้างหลัง ทั้งสองคำนวณตาม
+Position Side ด้วยสูตรเดียวกัน ต่างกันที่ราคาเฉลี่ยที่ป้อนเข้าไป:
 
 ```text
-Long  = weighted_average_entry_price + (ATR(14) * 3)
-Short = weighted_average_entry_price - (ATR(14) * 3)
+Entry Pair : Long  = pair_weighted_average_entry_price   + (ATR(14) * 3)
+             Short = pair_weighted_average_entry_price   - (ATR(14) * 3)
+Basket     : Long  = basket_weighted_average_entry_price + (ATR(14) * 3)
+             Short = basket_weighted_average_entry_price - (ATR(14) * 3)
 ```
 
 กติกา:
 
+- Entry Pair เป็นหน่วยที่ถูกขาย: เมื่อราคาแตะเป้าของ Pair ใด ให้ปิด Entries ที่ยังเปิดอยู่
+  ของ Pair นั้นทั้งหมดพร้อมกัน Pair อื่นยังคงเปิดต่อไป
+- Basket Take Profit ครอบคลุมขนาด Position ที่ Bot เป็นเจ้าของทั้งหมดใน Basket เมื่อราคา
+  แตะระดับนี้ ให้ปิดทุก Entry ที่ยังเหลือ ไม่ว่าจะอยู่ Pair ใดและกำไรหรือขาดทุน
+- ราคาเฉลี่ยของ Basket อยู่ระหว่างราคาเฉลี่ยของ Pair ที่ถัวลงต่ำสุดกับสูงสุดเสมอ เป้า Basket
+  จึงอยู่ระหว่างเป้า Pair ต่ำสุดกับสูงสุดด้วย
+- **ถ้า candle เดียวแตะทั้งเป้า Pair และเป้า Basket ให้เป้า Pair มีผลก่อน** Pair นั้นขายที่เป้า
+  ของตัวเอง แล้วจึงกวาดส่วนที่เหลือที่เป้า Basket การสลับลำดับเท่ากับสมมติว่า limit order ที่
+  ราคาต่ำกว่าไม่ได้ Fill ก่อน ซึ่งเป็นการนับกำไรที่ตลาดยังไม่ได้ให้
+- **ขอบเขตของตาข่าย** — ตาข่ายนี้กันการฟื้นตัวแบบเร็วเท่านั้น ถ้าราคาค่อย ๆ ขึ้น แต่ละ Pair
+  จะถึงเป้าของตัวเองแล้วออกไปก่อน จนเหลือ Pair เดียวซึ่งราคาเฉลี่ยของมันคือราคาเฉลี่ยของ
+  Basket ทำให้เป้าทั้งสองเท่ากันและตาข่ายไม่มีผล Pair ที่ติดดอยยาวจึงยังต้องอาศัยการปิดเอง
 - ใช้ ATR จาก completed candle ล่าสุดของ Timeframe ที่ Session เลือก ณ เวลาที่ Entry ถูก Fill
-  โดยยึด ATR ของ Entry ที่ยังเปิดอยู่และ Fill ล่าสุด หาก Entry นั้นถูกปิดรายตัวไป ให้ตกไปใช้
-  ATR ของ Entry ที่เปิดอยู่และ Fill ล่าสุดถัดลงมา
-- คำนวณราคา Take Profit ใหม่หลังทุก Entry Fill และหลังการปิด Entry รายตัว เพราะทั้งสอง
-  เหตุการณ์เปลี่ยนราคาเฉลี่ยถ่วงน้ำหนักของ Basket
+  โดยยึด ATR ของ Entry ที่ยังเปิดอยู่และ Fill ล่าสุด — ของ Pair นั้นสำหรับเป้า Pair และของทั้ง
+  Basket สำหรับเป้า Basket หาก Entry นั้นถูกปิดไป ให้ตกไปใช้ ATR ของ Entry ที่เปิดอยู่และ
+  Fill ล่าสุดถัดลงมา
+- คำนวณราคา Take Profit ทั้งสองระดับใหม่หลังทุก Entry Fill และหลังการปิด Entry รายตัว
+  เพราะทั้งสองเหตุการณ์เปลี่ยนราคาเฉลี่ยถ่วงน้ำหนัก
 - Long Take Profit ปัดลง และ Short Take Profit ปัดขึ้นตาม tick size ของ Symbol และ Market Type ที่ตรึงใน Session
 - RSI Step Grid Preset v1 ยังสร้างเฉพาะ Long Entry Intent
-- Take Profit ครอบคลุมขนาด Position ที่ Bot เป็นเจ้าของทั้งหมดใน Basket
-- เมื่อ Take Profit ถูก Fill ให้ปิด Entries ทั้งหมดใน Basket พร้อมกัน
-- Take Profit อัตโนมัติมีระดับเดียวต่อ Basket ไม่มีเป้ารายตัว Entry ที่ยังขาดทุนจึงถูกปิดรวบ
-  ไปพร้อม Entry ที่กำไรในการ Fill ครั้งเดียว การปิด Entry รายตัวเกิดจากคำสั่งของผู้ใช้เท่านั้น
-  ตามข้อ 6.3
+- การปิด Entry รายตัวนอกเหนือจากนี้เกิดจากคำสั่งของผู้ใช้เท่านั้น ตามข้อ 6.3
 - กติกานี้เป็น Basket rule กลางที่ใช้กับทุก Preset ไม่ผูกกับ Preset version ส่วนค่า Take Profit
   ATR multiplier ยังมาจาก Preset ตามข้อ 3
 - Paper Spot ตรวจ Take Profit และ Stop Loss จากราคาที่วิ่งอยู่ระหว่าง candle และ Fill
@@ -108,6 +121,9 @@ Short = weighted_average_entry_price - (ATR(14) * 3)
   เท่านั้นตามข้อ 4.2
 - Paper Futures ตรวจ Take Profit ที่ candle ปิดเท่านั้น เพราะราคาที่แตะระหว่าง candle
   อาจไม่ใช่ราคาที่ candle ปิดใกล้เคียง การ Fill ทันทีจึงเป็นการนับกำไรที่ตลาดยังไม่ได้ให้
+  ทั้งสองระดับข้างต้นใช้กับ Paper Futures เช่นเดียวกับ Paper Spot — Pair ที่ถึงเป้าออกไป
+  ก่อนโดย Basket ยังเทรดต่อ และทุก Take Profit ถูก book เป็น Fill รายไม้ ต่างกันเพียง
+  จังหวะที่ตรวจเท่านั้น กำไรที่ realize จากแต่ละไม้เข้า Wallet Balance ทันทีที่ไม้นั้นถูกขาย
 - เมื่อ Basket ปิดสมบูรณ์ สามารถเริ่ม Basket ใหม่ในเดือน UTC เดียวกันได้ทันที
 
 ## 6. Entry Pair และ Cooldown

@@ -7,9 +7,10 @@ from tiewtrade.execution.paper_futures import (
     PaperFuturesEntryFill,
     PaperFuturesExitFill,
 )
+from tiewtrade.integrations.sqlite.paper_entry_exit import record_paper_entry_exit
 from tiewtrade.integrations.sqlite.paper_fill_record import paper_fill_record
 from tiewtrade.integrations.sqlite.trade_history import SQLiteTradeHistory
-from tiewtrade.trading.basket import ClosedBasket
+from tiewtrade.trading.basket import ClosedBasket, ClosedEntry
 from tiewtrade.trading.position import PositionSide
 from tiewtrade.trading.session_config import MarketType, TradeMode
 from tiewtrade.trading.trade_history import BasketResult, BasketStatus, FillSide
@@ -107,42 +108,37 @@ class PaperFuturesSQLiteHistory:
         )
         return self._store.record_entry_fill(basket, normalized_fill)
 
-    def record_close(
+    def record_entry_exit(
         self,
         *,
         basket_id: UUID,
         fill: PaperFuturesExitFill,
-        closed: ClosedBasket,
+        closed: ClosedEntry,
+        closed_basket: ClosedBasket | None,
     ) -> bool:
-        if closed.basket_id != basket_id:
-            raise ValueError("closed Basket does not match basket_id")
-        if closed.position_side is not fill.side:
-            raise ValueError("closed Basket and exit Fill use different sides")
+        """Record one Entry sold at a target, whichever target took it.
 
-        existing = self._store.get_basket(basket_id)
-        if existing is None:
-            raise ValueError("Basket does not exist")
+        Written the same way Paper Spot writes it, so a Fill row cannot mean
+        one thing in one market and another in the other. What this market
+        adds is the side the Position was held on, which its Fills carry and
+        Spot's never do, and the leverage its Basket row is pinned to.
+        """
+        if closed_basket is not None:
+            if closed_basket.basket_id != basket_id:
+                raise ValueError("closed Basket does not match basket_id")
+            if closed_basket.position_side is not fill.side:
+                raise ValueError("closed Basket and exit Fill use different sides")
 
-        normalized_fill = paper_fill_record(
-            fill,
+        return record_paper_entry_exit(
+            self._store,
             basket_id=basket_id,
             session_id=self._context.session_id,
+            fill=fill,
             side=_exit_fill_side(fill.side),
-            # What this sale sold, which for Futures — where nothing is ever
-            # sold out of a Basket on its own — is the whole round. Read from
-            # the same field Spot reads so the two cannot mean different
-            # things by the number on a Fill.
-            realized_pnl=closed.exit_realized_pnl,
-        )
-        basket = replace(
-            existing,
             leverage=self._context.leverage,
-            closed_at_utc=closed.closed_at,
-            entry_count=closed.entry_count,
-            realized_pnl=closed.realized_pnl,
-            status=BasketStatus.CLOSED,
+            closed=closed,
+            closed_basket=closed_basket,
         )
-        return self._store.record_closed_basket(basket, normalized_fill)
 
 
 def _entry_fill_side(side: PositionSide) -> FillSide:

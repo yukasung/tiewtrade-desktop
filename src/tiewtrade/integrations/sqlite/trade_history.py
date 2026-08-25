@@ -261,7 +261,7 @@ class SQLiteTradeHistory:
         def operation(
             connection: sqlite3.Connection,
         ) -> tuple[TradeFillHistoryItem, ...]:
-            where_sql, parameters = _basket_where(filters)
+            where_sql, parameters = _fill_where(filters)
             rows = connection.execute(
                 f"""
                 SELECT trade_fills.*, basket_results.symbol, basket_results.timeframe,
@@ -395,11 +395,13 @@ class SQLiteTradeHistory:
         return result
 
 
-def _basket_where(
+def _basket_facets(
     filters: TradeHistoryFilter,
     *,
-    closed_only: bool = False,
-) -> tuple[str, tuple[object, ...]]:
+    prefix: str,
+    closed_only: bool,
+) -> tuple[list[str], list[object]]:
+    """What a Basket is, as clauses — everything but the range it is read over."""
     clauses: list[str] = []
     parameters: list[object] = []
     fields = (
@@ -416,23 +418,57 @@ def _basket_where(
     )
     for column, value in fields:
         if value is not None:
-            clauses.append(f"{column} = ?")
+            clauses.append(f"{prefix}{column} = ?")
             parameters.append(value)
 
     status = BasketStatus.CLOSED if closed_only else filters.status
     if status is not None:
-        clauses.append("status = ?")
+        clauses.append(f"{prefix}status = ?")
         parameters.append(status.value)
+    return clauses, parameters
+
+
+def _where(
+    clauses: list[str], parameters: list[object]
+) -> tuple[str, tuple[object, ...]]:
+    if not clauses:
+        return "", ()
+    return f"WHERE {' AND '.join(clauses)}", tuple(parameters)
+
+
+def _basket_where(
+    filters: TradeHistoryFilter,
+    *,
+    closed_only: bool = False,
+) -> tuple[str, tuple[object, ...]]:
+    clauses, parameters = _basket_facets(filters, prefix="", closed_only=closed_only)
     if filters.opened_from_utc is not None:
         clauses.append("opened_at_utc >= ?")
         parameters.append(_utc_text(filters.opened_from_utc))
     if filters.opened_before_utc is not None:
         clauses.append("opened_at_utc < ?")
         parameters.append(_utc_text(filters.opened_before_utc))
+    return _where(clauses, parameters)
 
-    if not clauses:
-        return "", ()
-    return f"WHERE {' AND '.join(clauses)}", tuple(parameters)
+
+def _fill_where(filters: TradeHistoryFilter) -> tuple[str, tuple[object, ...]]:
+    """The same filters, dated by the day the Fill landed on.
+
+    A Basket opened before midnight goes on filling after it, and those
+    Fills are the new day's trading. Read by the day their Basket opened,
+    a whole day of trades would sit hidden behind an older Basket — so the
+    range applies to the Fill, and the rest still describes its Basket.
+    """
+    clauses, parameters = _basket_facets(
+        filters, prefix="basket_results.", closed_only=False
+    )
+    if filters.opened_from_utc is not None:
+        clauses.append("trade_fills.filled_at_utc >= ?")
+        parameters.append(_utc_text(filters.opened_from_utc))
+    if filters.opened_before_utc is not None:
+        clauses.append("trade_fills.filled_at_utc < ?")
+        parameters.append(_utc_text(filters.opened_before_utc))
+    return _where(clauses, parameters)
 
 
 def _closed_realized_pnl(

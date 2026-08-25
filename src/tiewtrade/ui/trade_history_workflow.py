@@ -116,7 +116,13 @@ class TradeHistoryWorkflow(QObject):
         self._request_active_tab()
 
     def select_tab(self, tab: HistoryTab) -> None:
-        if self._closed or tab is self._active_tab:
+        """Read the half that was opened, including the one opened again.
+
+        Reopening the half already selected is how a trader asks for what
+        has landed since — Entry fills of a Basket still open, a Basket that
+        has closed — so it is read again rather than left as it was.
+        """
+        if self._closed:
             return
         self._active_tab = tab
         self._request_active_tab()

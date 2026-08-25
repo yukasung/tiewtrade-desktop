@@ -1,9 +1,10 @@
-"""An Entry bought high leaves with the Basket, and the books say so.
+"""An Entry Pair leaves at what that Pair paid, and the net under the rest.
 
-The rule is stated in PRODUCT.md section 5: one target per Basket, measured
-from the weighted average, and every Entry sold at it together. This walks the
-whole path — Session, executor, SQLite — for the case the rule exists for: a
-Basket holding an Entry that is still losing when the target is reached.
+The rules are stated in PRODUCT.md section 5: each Entry Pair is measured from
+what that Pair paid and leaves at its own target, and the Basket carries one
+more target of its own that takes everything still held. This walks the whole
+path — Session, executor, SQLite — for the case the second rule exists for: a
+Pair the market left behind, carried out by the Pair that did reach its target.
 """
 
 from datetime import UTC, datetime, timedelta
@@ -38,16 +39,65 @@ FILLED_AT = datetime(2026, 8, 24, 9, tzinfo=UTC)
 MARKET_DATA = MarketDataConfig(symbol="BTCUSDT", timeframe="5m")
 ENTRY_ATR = Decimal("2")
 
-# Bought at 100 and then at 80, so the Basket paid 90 on average and leaves at
-# 90 + 3 x 2. The Entry bought at 100 is still 4 down at that price, and goes
-# anyway — which is the whole point of measuring the target from the average.
-ENTRY_PRICES = (Decimal("100"), Decimal("80"))
+# Entries 1 and 2 make Pair 1, which paid 105 and leaves at 105 + 3 x 2.
+# Entry 3 opens Pair 2 on its own at 60, and leaves at 66. The Basket paid 90
+# across all three, so its own target — the net — sits at 96, between them.
+ENTRY_PRICES = (Decimal("100"), Decimal("110"), Decimal("60"))
+PAIR_ONE_TARGET = Decimal("111")
+PAIR_TWO_TARGET = Decimal("66")
 SWEEP_PRICE = Decimal("96")
 
 
-def test_a_basket_sweeps_its_losing_entry_out_at_the_average_target(
+def test_a_pair_leaves_at_its_own_target_and_leaves_the_other_holding(
     tmp_path: Path,
 ) -> None:
+    """The cheap Pair reaches its target first and goes on its own.
+
+    This is the ordinary case, and the one that makes the net rare: a price
+    that climbs gradually takes each Pair out at its own target, and never
+    reaches the Basket's while more than one Pair is open.
+    """
+    database_path = tmp_path / "pair-exit.sqlite3"
+    store, history = _seeded_history(database_path)
+    session = _session_holding_the_open_basket()
+    persistent = create_persistent_paper_spot_session(session, history)
+
+    reached = _candle(minute=30, high=PAIR_TWO_TARGET)
+    recorded = persistent.process_completed_candle(
+        reached, received_at=reached.close_time, backfilled=False
+    )
+
+    assert recorded.persistence_state is PersistenceState.READY
+    snapshot = recorded.session
+    # Only Pair 2 went, at 66 — the price never came near Pair 1's 111.
+    assert snapshot.sold_entry_numbers == (3,)
+    assert snapshot.closed_basket is None
+    assert snapshot.basket_entry_count == 2
+    # With Pair 2 gone the Basket is Pair 1, so the net and Pair 1's own
+    # target are now the same price. Nothing is left for the net to catch.
+    assert snapshot.take_profit_price == PAIR_ONE_TARGET
+
+    basket = store.get_basket(BASKET_ID)
+    assert basket is not None
+    assert basket.status is BasketStatus.OPEN
+    # Pair 2 bought at 60 and sold at 66, on a quantity of 1.
+    assert basket.realized_pnl == Decimal("6")
+
+    sells = [fill for fill in store.list_fills(BASKET_ID) if fill.side is FillSide.SELL]
+    assert [fill.closes_entry_number for fill in sells] == [3]
+
+
+def test_the_basket_target_sweeps_out_the_pair_the_market_left_behind(
+    tmp_path: Path,
+) -> None:
+    """One candle clears the Basket's target, and everything goes with it.
+
+    Pair 2 still sells at its own 66 rather than at 96: a limit order left at
+    66 would have filled long before the price reached 96, and booking the
+    higher of two prices the Basket could not have had both of would flatter
+    the result. Pair 1 never reached 111 and is swept at 96 — below the target
+    it was aiming at, above what it paid, which is the trade the net makes.
+    """
     database_path = tmp_path / "sweep.sqlite3"
     store, history = _seeded_history(database_path)
     session = _session_holding_the_open_basket()
@@ -62,80 +112,29 @@ def test_a_basket_sweeps_its_losing_entry_out_at_the_average_target(
 
     assert recorded.persistence_state is PersistenceState.READY
     snapshot = recorded.session
+    assert sorted(snapshot.sold_entry_numbers) == [1, 2, 3]
     closed = snapshot.closed_basket
     assert closed is not None
-    assert closed.entry_count == 2
-    # Sold at 96: the Entry bought at 80 made 16, the one bought at 100 lost 4,
-    # and the Basket comes out 12 ahead having carried both to the exit.
-    assert closed.realized_pnl == Decimal("12")
+    assert closed.entry_count == 3
     assert snapshot.basket_entry_count == 0
     assert snapshot.take_profit_price is None
-    # One sale, naming no Entry, because the Position went as a whole.
-    assert snapshot.entry_exits == ()
-    assert snapshot.exit_fill is not None
-    assert snapshot.exit_fill.entry_number is None
-    assert snapshot.exit_fill.quantity == Decimal("2")
+
+    sells = [fill for fill in store.list_fills(BASKET_ID) if fill.side is FillSide.SELL]
+    # Pair 2 at its own target, Pair 1 swept at the Basket's.
+    assert {fill.closes_entry_number: fill.price for fill in sells} == {
+        3: PAIR_TWO_TARGET,
+        1: SWEEP_PRICE,
+        2: SWEEP_PRICE,
+    }
 
     basket = store.get_basket(BASKET_ID)
     assert basket is not None
     assert basket.status is BasketStatus.CLOSED
-    assert basket.entry_count == 2
-    assert basket.realized_pnl == Decimal("12")
-
-    fills = store.list_fills(BASKET_ID)
-    assert [fill.side for fill in fills] == [FillSide.BUY, FillSide.BUY, FillSide.SELL]
-    sell = fills[-1]
-    assert sell.price == SWEEP_PRICE
-    assert sell.quantity == Decimal("2")
-    assert sell.entry_number is None
-    assert sell.closes_entry_number is None
-    assert sell.realized_pnl == Decimal("12")
-
-
-def test_a_sweep_after_a_manual_sale_books_only_what_it_sold(
-    tmp_path: Path,
-) -> None:
-    """The Entry sold by hand already has a Fill carrying its result.
-
-    Repeating the Basket's whole result on the closing Fill showed the same
-    money twice down the Fills table. The Basket row keeps the round; the Fill
-    keeps the sale.
-    """
-    database_path = tmp_path / "sweep-after-sale.sqlite3"
-    store, history = _seeded_history(database_path)
-    persistent = create_persistent_paper_spot_session(
-        _session_holding_the_open_basket(), history
-    )
-
-    sold = persistent.close_entry(
-        2, price=Decimal("95"), observed_at=FILLED_AT + timedelta(minutes=20)
-    )
-    assert sold.persistence_state is PersistenceState.READY
-    # The Entry bought at 80 sold at 95, and the Basket is left holding only
-    # the Entry bought at 100 — which moves the target it now leaves at.
-    assert sold.session.basket_entry_count == 1
-    assert sold.session.take_profit_price == Decimal("106")
-
-    reached = _candle(minute=30, high=Decimal("106"))
-    recorded = persistent.process_completed_candle(
-        reached, received_at=reached.close_time, backfilled=False
-    )
-
-    assert recorded.persistence_state is PersistenceState.READY
-    closed = recorded.session.closed_basket
-    assert closed is not None
-    # 15 realised by hand, 6 realised by the sweep.
-    assert closed.realized_pnl == Decimal("21")
-    assert closed.exit_realized_pnl == Decimal("6")
-
-    basket = store.get_basket(BASKET_ID)
-    assert basket is not None
-    assert basket.realized_pnl == Decimal("21")
-
-    sells = [fill for fill in store.list_fills(BASKET_ID) if fill.side is FillSide.SELL]
-    assert [fill.realized_pnl for fill in sells] == [Decimal("15"), Decimal("6")]
-    # The Fills add up to the round rather than double-counting the first sale.
-    assert sum((fill.realized_pnl for fill in sells), Decimal("0")) == Decimal("21")
+    assert basket.entry_count == 3
+    # (66-60) + (96-100) + (96-110) = 6 - 4 - 14, on a quantity of 1 each.
+    # The net does not promise a profit: it promises the round ends rather
+    # than leaving a Pair holding a target the market has walked away from.
+    assert basket.realized_pnl == Decimal("-12")
 
 
 def _seeded_history(
@@ -209,13 +208,14 @@ def _session_holding_the_open_basket() -> PaperSpotSession:
 
 
 def _candle(*, minute: int, high: Decimal) -> Candle:
-    open_time = FILLED_AT + timedelta(minutes=minute)
+    """A candle that rises to `high` and closes just under it."""
+    body = high - Decimal("1")
     return Candle(
         symbol=MARKET_DATA.symbol,
         timeframe=MARKET_DATA.timeframe,
-        open_time=open_time,
-        open=Decimal("95"),
+        open_time=FILLED_AT + timedelta(minutes=minute),
+        open=body,
         high=high,
-        low=Decimal("94"),
-        close=Decimal("95"),
+        low=body - Decimal("1"),
+        close=body,
     )

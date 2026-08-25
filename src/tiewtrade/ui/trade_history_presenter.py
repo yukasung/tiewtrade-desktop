@@ -95,10 +95,13 @@ BASKET_COLUMNS: tuple[Column[BasketResult], ...] = (
     # "Total" is what an exchange calls price × quantity, and what the Fills
     # table beside this one already calls it. One word for one idea.
     Column("Total", RIGHT, lambda basket: money_text(basket.invested_notional)),
+    # A Basket row exists only once it has closed, so its result is always
+    # final — unlike a Fill's, a Basket's zero is a real break-even, not a
+    # trade that has not realised anything yet.
     Column(
         "Profit / Loss",
         RIGHT,
-        lambda basket: realized_text(basket.realized_pnl),
+        lambda basket: money_text(basket.realized_pnl),
         lambda basket: sign_colour(basket.realized_pnl),
     ),
     # Mode and Status are on the record but off the screen: a Paper Bot writes
