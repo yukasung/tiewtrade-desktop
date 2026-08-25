@@ -796,6 +796,9 @@ def test_futures_overview_shows_immutable_policy(qtbot: QtBot) -> None:
     overview.show_session(session)
 
     assert overview.market_value.text() == "Futures"
+    # The one Futures setting the trader chose, and the multiplier that says
+    # what the Amount beside it actually opens.
+    assert overview.leverage_value.text() == "3x"
     assert overview.margin_mode_value.text() == "Cross Margin"
     assert overview.position_mode_value.text() == "One-way Mode"
 
@@ -811,6 +814,7 @@ def test_futures_overview_marks_missing_required_policy_unavailable(
 
     overview.show_session(session)
 
+    assert overview.leverage_value.text() == "Unavailable"
     assert overview.margin_mode_value.text() == "Unavailable"
     assert overview.position_mode_value.text() == "Unavailable"
 
@@ -828,6 +832,7 @@ def test_spot_overview_marks_a_mixed_futures_policy_unavailable(
 
     overview.show_session(session)
 
+    assert overview.leverage_value.text() == "Unavailable"
     assert overview.margin_mode_value.text() == "Unavailable"
     assert overview.position_mode_value.text() == "Unavailable"
 
@@ -838,6 +843,7 @@ def test_spot_overview_leaves_the_futures_rows_blank(qtbot: QtBot) -> None:
 
     overview.show_session(configured_spot_session())
 
+    assert overview.leverage_value.text() == "—"
     assert overview.margin_mode_value.text() == "—"
     assert overview.position_mode_value.text() == "—"
     assert not hasattr(overview, "spot_ratio_value")

@@ -26,6 +26,7 @@ class SessionOverviewWidget(QWidget):
         self.preset_value = self._value_label()
         self.capital_per_entry_value = self._value_label()
         self.max_entries_value = self._value_label()
+        self.leverage_value = self._value_label()
         self.margin_mode_value = self._value_label()
         self.position_mode_value = self._value_label()
         self.created_at_value = self._value_label()
@@ -63,6 +64,7 @@ class SessionOverviewWidget(QWidget):
             ("Strategy Preset", self.preset_value),
             ("Amount", self.capital_per_entry_value),
             ("Max Entries", self.max_entries_value),
+            ("Leverage", self.leverage_value),
             ("Margin Mode", self.margin_mode_value),
             ("Position Mode", self.position_mode_value),
             ("Created at", self.created_at_value),
@@ -81,13 +83,13 @@ class SessionOverviewWidget(QWidget):
         root.addStretch()
 
     def _show_market_policy(self, session: ConfiguredPaperSession) -> None:
-        """Fill the Futures pair, and blank it for the market that has none.
+        """Fill the Futures rows, and blank them for the market that has none.
 
         Only Futures carries a policy of its own. A Spot Session trades the
-        capital it was given under nothing but its Entry count, so the two
-        rows read as blank — unless it holds a Futures policy, which is
-        malformed: then they read Unavailable rather than showing settings a
-        Spot Session never chose.
+        capital it was given under nothing but its Entry count, so the rows
+        read as blank — unless it holds a Futures policy, which is malformed:
+        then they read Unavailable rather than showing settings a Spot Session
+        never chose.
         """
         config = session.config
         if config.market_type is MarketType.SPOT:
@@ -103,9 +105,14 @@ class SessionOverviewWidget(QWidget):
         missing: str = _UNAVAILABLE,
     ) -> None:
         if policy is None:
+            self.leverage_value.setText(missing)
             self.margin_mode_value.setText(missing)
             self.position_mode_value.setText(missing)
             return
+        # Shown because it is the only Futures setting the trader picks, and
+        # because the Amount above reads as margin: what an Entry opens is
+        # that figure times this one, which the card cannot say without it.
+        self.leverage_value.setText(f"{policy.leverage}x")
         self.margin_mode_value.setText(f"{policy.margin_mode.value.title()} Margin")
         self.position_mode_value.setText(
             f"{policy.position_mode.value.replace('_', '-').capitalize()} Mode"
