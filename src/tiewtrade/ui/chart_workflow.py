@@ -5,6 +5,7 @@ from dataclasses import replace
 from datetime import UTC, datetime
 from threading import Lock
 from typing import TypeGuard
+from uuid import UUID
 
 from PySide6.QtCore import QObject, QThreadPool, Signal, Slot
 
@@ -23,6 +24,13 @@ from tiewtrade.application.chart_view_selection import ChartViewSelection
 from tiewtrade.application.paper_session_setup import ConfiguredPaperSession
 from tiewtrade.trading.trade_history import TradeFill
 from tiewtrade.ui.background_task import BackgroundTask
+from tiewtrade.ui.chart_feed_reporter import (
+    PRICE_SILENCE_CHECK_MILLISECONDS as PRICE_SILENCE_CHECK_MILLISECONDS,
+)
+from tiewtrade.ui.chart_feed_reporter import (
+    PRICE_SILENCE_SECONDS as PRICE_SILENCE_SECONDS,
+)
+from tiewtrade.ui.chart_feed_reporter import ChartFeedReporter
 
 LoadChart = Callable[[ConfiguredPaperSession, ChartRange], Awaitable[ChartSnapshot]]
 RefreshChart = Callable[
@@ -35,13 +43,6 @@ LoadChartFills = Callable[
     Awaitable[tuple[TradeFill, ...]],
 ]
 _LOGGER = logging.getLogger("tiewtrade.ui.chart_workflow")
-# How long a chart of a Pair that trades every second may go without a price
-# before the screen says so. Long enough that ordinary jitter passes, short
-# enough that a reader is still looking at the screen when it answers.
-PRICE_SILENCE_SECONDS = 15.0
-# Asking is cheap — one subtraction — and asking often is what keeps the
-# answer within the window above rather than a check period behind it.
-PRICE_SILENCE_CHECK_MILLISECONDS = 5000
 
 
 class ChartFactPublisher:
@@ -128,11 +129,12 @@ class ChartWorkflow(QObject):
         self._basket_facts: tuple[object, ...] | None = None
         self._fills_task: BackgroundTask | None = None
         self._fills_refresh_pending = False
-        self._feed_state: ChartFeedState | None = None
-        self._shown_feed_state: ChartFeedState | None = None
-        self._prices_silent = False
-        self._last_fact_at: datetime | None = None
         self._re_anchored_for: datetime | None = None
+        self._feed = ChartFeedReporter(
+            clock=self._clock,
+            view=lambda: self._selection,
+            announce=self._feed_reading_changed,
+        )
 
     def configure(self, session: ConfiguredPaperSession) -> None:
         if self._closed:
@@ -152,8 +154,7 @@ class ChartWorkflow(QObject):
         self._basket_facts = None
         self._fills_refresh_pending = False
         self._re_anchored_for = None
-        self._prices_silent = False
-        self._last_fact_at = self._clock()
+        self._feed.restart()
 
     def start(self, session: ConfiguredPaperSession) -> None:
         self.configure(session)
@@ -223,10 +224,7 @@ class ChartWorkflow(QObject):
         """
         if self._closed or not isinstance(state, ChartFeedState):
             return
-        if state is self._feed_state:
-            return
-        self._feed_state = state
-        self._publish_feed_state()
+        self._feed.feed_reported(state)
 
     def _log_dropped_candle(
         self,
@@ -255,68 +253,18 @@ class ChartWorkflow(QObject):
 
     @Slot()
     def check_price_silence(self) -> None:
-        """Ask whether prices are still arriving, and say so when they stop.
+        if self._closed or self._session is None:
+            return
+        self._feed.check_silence()
 
-        This is the fault as the reader meets it. What is behind it — a dead
-        socket, a machine that slept, a stream that went quiet — is the
-        feed's business to report and to recover from; the screen's business
-        is not to keep drawing as though nothing had changed.
+    def _feed_reading_changed(
+        self, state: ChartFeedState, previous: ChartFeedState | None
+    ) -> None:
+        """Show the new reading, and read the range again where one was missed.
+
+        Coming back from a silence is the half that matters: the candles the
+        outage swallowed are only in the history now.
         """
-        last_fact_at = self._last_fact_at
-        if self._closed or self._session is None or last_fact_at is None:
-            return
-        silent_seconds = (self._clock() - last_fact_at).total_seconds()
-        if self._prices_silent or silent_seconds < PRICE_SILENCE_SECONDS:
-            return
-        self._prices_silent = True
-        self._log_price_silence("chart.prices.silent", silent_seconds)
-        self._publish_feed_state()
-
-    def _record_price_arrived(self) -> None:
-        now = self._clock()
-        last_fact_at = self._last_fact_at
-        self._last_fact_at = now
-        if not self._prices_silent:
-            return
-        self._prices_silent = False
-        self._log_price_silence(
-            "chart.prices.resumed",
-            0.0 if last_fact_at is None else (now - last_fact_at).total_seconds(),
-        )
-        self._publish_feed_state()
-
-    def _log_price_silence(self, event_name: str, silent_seconds: float) -> None:
-        selection = self._selection
-        _LOGGER.info(
-            event_name,
-            extra={
-                "event_name": event_name,
-                "silent_seconds": round(silent_seconds, 1),
-                "symbol": None if selection is None else selection.symbol,
-                "timeframe": None if selection is None else selection.timeframe,
-            },
-        )
-
-    def _shown_state(self) -> ChartFeedState:
-        """One reading of two facts: what the feed says, and what arrives.
-
-        A feed that has stopped is the worse of the two and stays on top of
-        a silence, which is what a stopped feed causes anyway. Prices coming
-        in with nothing said against them is what live means, whether or not
-        anything is reporting the feed at all.
-        """
-        if self._feed_state is ChartFeedState.STOPPED:
-            return ChartFeedState.STOPPED
-        if self._prices_silent or self._feed_state is ChartFeedState.RECONNECTING:
-            return ChartFeedState.RECONNECTING
-        return ChartFeedState.LIVE
-
-    def _publish_feed_state(self) -> None:
-        state = self._shown_state()
-        if state is self._shown_feed_state:
-            return
-        previous = self._shown_feed_state
-        self._shown_feed_state = state
         self.feed_state_changed.emit(state)
         if state is ChartFeedState.LIVE and previous is ChartFeedState.RECONNECTING:
             self._reload_after_reconnect()
@@ -453,7 +401,7 @@ class ChartWorkflow(QObject):
     def in_progress_candle(self, candle: object) -> None:
         if self._closed or not self._is_current_session_candle_fact(candle):
             return
-        self._record_price_arrived()
+        self._feed.price_arrived()
         if not self._following_latest or not self._is_observed_inside_candle(candle):
             return
         snapshot = self._snapshot
@@ -488,7 +436,7 @@ class ChartWorkflow(QObject):
         again is what makes room for it. Once per candle: prices arrive many
         times a second and the history behind them changes once a boundary.
         """
-        if self._shown_state() is not ChartFeedState.RECONNECTING:
+        if self._feed.shown_state() is not ChartFeedState.RECONNECTING:
             return False
         if candle.open_time == snapshot.chart_range.end:
             return False
@@ -498,7 +446,7 @@ class ChartWorkflow(QObject):
         if not self._is_current_session_candle_fact(candle):
             self._log_dropped_candle("not_this_view")
             return
-        self._record_price_arrived()
+        self._feed.price_arrived()
         self._clear_in_progress_candle(matching_open_time=candle.open_time)
         snapshot = self._snapshot
         if not self._following_latest:
@@ -588,25 +536,13 @@ class ChartWorkflow(QObject):
         error: object,
     ) -> None:
         del error
-        session = self._session
-        selection = self._selection
-        if generation != self._generation or session is None or selection is None:
+        if generation != self._generation:
+            return
+        unavailable = self._unavailable_snapshot(snapshot.chart_range)
+        if unavailable is None:
             return
         self._pending_completed_candle = None
         self._pending_in_progress_candle = None
-        unavailable = ChartSnapshot(
-            chart_range=snapshot.chart_range,
-            observed_at_utc=max(self._clock(), snapshot.chart_range.end),
-            candles=(),
-            fills=(),
-            state=ChartReadState.UNAVAILABLE,
-            message="Chart is unavailable",
-            _session_facts=(
-                session.config.session_id,
-                selection.symbol,
-                selection.timeframe,
-            ),
-        )
         self._snapshot = unavailable
         self.snapshot_changed.emit(unavailable)
 
@@ -658,22 +594,9 @@ class ChartWorkflow(QObject):
         self._thread_pool.start(task)
 
     def _publish_loading(self, chart_range: ChartRange) -> None:
-        session = self._session
-        selection = self._selection
-        if session is None or selection is None:
+        loading = self._blank_snapshot(chart_range, state=ChartReadState.LOADING)
+        if loading is None:
             return
-        loading = ChartSnapshot(
-            chart_range=chart_range,
-            observed_at_utc=max(self._clock(), chart_range.end),
-            candles=(),
-            fills=(),
-            state=ChartReadState.LOADING,
-            _session_facts=(
-                session.config.session_id,
-                selection.symbol,
-                selection.timeframe,
-            ),
-        )
         self._snapshot = loading
         self.snapshot_changed.emit(loading)
 
@@ -692,25 +615,12 @@ class ChartWorkflow(QObject):
         self, generation: int, chart_range: ChartRange, error: object
     ) -> None:
         del error
-        session = self._session
-        selection = self._selection
-        if generation != self._generation or session is None or selection is None:
+        if generation != self._generation:
+            return
+        unavailable = self._unavailable_snapshot(chart_range)
+        if unavailable is None:
             return
         self._pending_in_progress_candle = None
-        observed_at_utc = max(self._clock(), chart_range.end)
-        unavailable = ChartSnapshot(
-            chart_range=chart_range,
-            observed_at_utc=observed_at_utc,
-            candles=(),
-            fills=(),
-            state=ChartReadState.UNAVAILABLE,
-            message="Chart is unavailable",
-            _session_facts=(
-                session.config.session_id,
-                selection.symbol,
-                selection.timeframe,
-            ),
-        )
         self._snapshot = unavailable
         self.snapshot_changed.emit(unavailable)
 
@@ -864,6 +774,51 @@ class ChartWorkflow(QObject):
             ),
         )
 
+    def _view_facts(self) -> tuple[UUID, str, str] | None:
+        """Whose Session this chart is on, and which Pair at which timeframe.
+
+        None before there is a view to answer for, which is every caller's
+        reason to have nothing to draw.
+        """
+        session = self._session
+        selection = self._selection
+        if session is None or selection is None:
+            return None
+        return (session.config.session_id, selection.symbol, selection.timeframe)
+
+    def _unavailable_snapshot(self, chart_range: ChartRange) -> ChartSnapshot | None:
+        """A chart with nothing on it, because the read behind it did not land."""
+        return self._blank_snapshot(
+            chart_range,
+            state=ChartReadState.UNAVAILABLE,
+            message="Chart is unavailable",
+        )
+
+    def _blank_snapshot(
+        self,
+        chart_range: ChartRange,
+        *,
+        state: ChartReadState,
+        message: str | None = None,
+    ) -> ChartSnapshot | None:
+        """A chart of this view with nothing drawn on it yet, or nothing left.
+
+        Observed no earlier than the range it covers, so a window ending in
+        the future is not read as one the clock has already passed.
+        """
+        facts = self._view_facts()
+        if facts is None:
+            return None
+        return ChartSnapshot(
+            chart_range=chart_range,
+            observed_at_utc=max(self._clock(), chart_range.end),
+            candles=(),
+            fills=(),
+            state=state,
+            message=message,
+            _session_facts=facts,
+        )
+
     def _view_session(self) -> ConfiguredPaperSession:
         session = self._session
         selection = self._selection
@@ -884,9 +839,11 @@ class ChartWorkflow(QObject):
         """
         session = self._session
         selection = self._selection
+        facts = self._view_facts()
         if (
             session is None
             or selection is None
+            or facts is None
             or selection.symbol == session.market_data.symbol
         ):
             return snapshot
@@ -900,11 +857,7 @@ class ChartWorkflow(QObject):
             message=snapshot.message,
             rsi=snapshot.rsi,
             atr=snapshot.atr,
-            _session_facts=(
-                session.config.session_id,
-                selection.symbol,
-                selection.timeframe,
-            ),
+            _session_facts=facts,
         )
 
     def _drain_pending_in_progress_candle(self) -> None:
