@@ -36,7 +36,6 @@ from tiewtrade.ui.bot_lifecycle_workflow import (
     RuntimeSnapshotRelay,
 )
 from tiewtrade.ui.chart_workflow import (
-    PRICE_SILENCE_CHECK_MILLISECONDS,
     ChartFactRelay,
     ChartWorkflow,
     LoadChart,
@@ -340,14 +339,6 @@ class MainWindow(QMainWindow):
             self.workspace.chart.set_following_latest
         )
         self._chart_workflow.feed_state_changed.connect(self._show_chart_feed_state)
-        # Prices stopping is not an event anything can send; it is the
-        # absence of one, so somebody has to keep asking.
-        self._price_silence_timer = QTimer(self)
-        self._price_silence_timer.setInterval(PRICE_SILENCE_CHECK_MILLISECONDS)
-        self._price_silence_timer.timeout.connect(
-            self._chart_workflow.check_price_silence
-        )
-        self._price_silence_timer.start()
         # A drop worth telling is one that lasts, so the telling waits.
         self._connection_notice_timer = QTimer(self)
         self._connection_notice_timer.setSingleShot(True)
