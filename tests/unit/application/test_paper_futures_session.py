@@ -66,6 +66,27 @@ def test_session_exposes_immutable_persistence_identity() -> None:
     )
 
 
+def test_a_forming_candle_decides_nothing_and_leaves_the_basket_alone() -> None:
+    """Futures answers a forming candle with an unaccepted snapshot.
+
+    A price that has not closed is a price the candle may never close near,
+    so the Basket has to stay exactly where the last close left it.
+    """
+    session, entry_candle = make_session_with_open_long_basket()
+    before = session.snapshot
+    forming = next_candle(entry_candle, open="120", high="241", low="119", close="240")
+
+    snapshot = session.process_in_progress_candle(
+        forming, observed_at=forming.open_time
+    )
+
+    assert snapshot.accepted is False
+    assert snapshot.entry_fill is None
+    assert snapshot.entry_exits == ()
+    assert snapshot.closed_basket is None
+    assert replace(session.snapshot, accepted=True) == replace(before, accepted=True)
+
+
 def test_incomplete_candle_is_not_processed() -> None:
     session = make_session()
     incomplete = candle(0, open="100", close="101")

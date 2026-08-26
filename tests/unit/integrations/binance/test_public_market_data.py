@@ -156,17 +156,20 @@ def rest_kline(minute: int) -> list[object]:
 
 def websocket_kline(*, closed: bool, timeframe: str = "5m") -> dict[str, object]:
     return {
-        "s": "BTCUSDT",
-        "k": {
-            "t": 1767225600000,
+        "stream": f"btcusdt@kline_{timeframe}",
+        "data": {
             "s": "BTCUSDT",
-            "i": timeframe,
-            "o": "100.10",
-            "h": "102.20",
-            "l": "99.90",
-            "c": "101.30",
-            "v": "12.50",
-            "x": closed,
+            "k": {
+                "t": 1767225600000,
+                "s": "BTCUSDT",
+                "i": timeframe,
+                "o": "100.10",
+                "h": "102.20",
+                "l": "99.90",
+                "c": "101.30",
+                "v": "12.50",
+                "x": closed,
+            },
         },
     }
 
@@ -627,8 +630,22 @@ def test_stream_klines_yields_open_then_closed_from_one_websocket() -> None:
 
     assert [update.is_closed for update in updates] == [False, True]
     assert session.websocket_urls == [
-        "wss://data-stream.binance.vision/ws/btcusdt@kline_5m"
+        "wss://nbstream.binance.th/w3w/wsa/stream?streams=btcusdt@kline_5m"
     ]
+
+
+def test_stream_klines_passes_over_the_subscription_answer() -> None:
+    """The first message answers the subscription, not the market."""
+    source, _ = source_with(
+        websocket_payloads=[
+            {"id": 13264512, "result": None},
+            websocket_kline(closed=True),
+        ]
+    )
+
+    updates = asyncio.run(collect_updates(source))
+
+    assert [update.is_closed for update in updates] == [True]
 
 
 def test_stream_klines_uses_one_minute_configured_interval() -> None:
@@ -641,7 +658,7 @@ def test_stream_klines_uses_one_minute_configured_interval() -> None:
     assert len(updates) == 1
     assert updates[0].candle.timeframe == "1m"
     assert session.websocket_urls == [
-        "wss://data-stream.binance.vision/ws/btcusdt@kline_1m"
+        "wss://nbstream.binance.th/w3w/wsa/stream?streams=btcusdt@kline_1m"
     ]
 
 

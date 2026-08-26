@@ -86,7 +86,7 @@ from tiewtrade.trading.futures_policy import FuturesTradingPolicy
 from tiewtrade.trading.session_config import MarketType, TradeMode
 from tiewtrade.ui.blank_text import BLANK
 from tiewtrade.ui.bot_lifecycle_workflow import RuntimeSnapshotRelay
-from tiewtrade.ui.chart_workflow import PRICE_SILENCE_CHECK_MILLISECONDS, ChartFactRelay
+from tiewtrade.ui.chart_workflow import ChartFactRelay
 from tiewtrade.ui.display_time import display_today
 from tiewtrade.ui.main_window import (
     CHART_FEED_STOPPED_NOTICE,
@@ -2405,32 +2405,6 @@ def test_a_bot_that_stops_replaces_the_connection_notice_with_its_own(
     qtbot.waitUntil(
         lambda: blocked == ["Paper Bot stopped: market data could not be recovered"]
     )
-
-
-def test_the_window_keeps_asking_whether_prices_are_still_arriving(
-    qtbot: QtBot,
-) -> None:
-    """The silence watchdog needs something to tick it, or it never fires."""
-    session = configured_spot_session()
-
-    async def load_chart(
-        loaded: ConfiguredPaperSession,
-        chart_range: ChartRange,
-    ) -> ChartSnapshot:
-        return empty_chart_snapshot(loaded, chart_range)
-
-    window = MainWindow(
-        create_session=unused_create,
-        load_active=lambda: session,
-        list_basket_history=empty_basket_history,
-        list_trade_fills=empty_trade_fills,
-        chart=ChartSources(load=load_chart),
-    )
-    qtbot.addWidget(window)
-    window.show()
-
-    assert window._price_silence_timer.isActive()
-    assert window._price_silence_timer.interval() == PRICE_SILENCE_CHECK_MILLISECONDS
 
 
 def test_retrying_a_stopped_chart_feed_starts_a_new_one(qtbot: QtBot) -> None:

@@ -23,7 +23,10 @@ from tiewtrade.application.paper_symbols import PAPER_SYMBOLS
 from tiewtrade.market_data.config import SUPPORTED_V1_TIMEFRAME_CHOICES
 from tiewtrade.trading.futures_policy import FuturesTradingPolicy
 from tiewtrade.trading.session_config import MarketType
+from tiewtrade.ui.money_text import QUOTE_ASSET
 from tiewtrade.ui.pair_text import pair_text
+
+_AMOUNT_LABEL = f"Amount ({QUOTE_ASSET})"
 
 
 class SessionSetupWidget(QWidget):
@@ -59,7 +62,7 @@ class SessionSetupWidget(QWidget):
 
         self.capital_per_entry = QLineEdit()
         self.capital_per_entry.setObjectName("capitalPerEntry")
-        self.capital_per_entry.setPlaceholderText("Enter USDT amount")
+        self.capital_per_entry.setPlaceholderText(f"Enter {QUOTE_ASSET} amount")
         self.capital_per_entry_error = self._error_label(
             "capital_per_entry", self.capital_per_entry
         )
@@ -98,7 +101,7 @@ class SessionSetupWidget(QWidget):
         self.symbol.setAccessibleName("Pair")
         self.timeframe.setAccessibleName("Timeframe")
         self.strategy.setAccessibleName("Strategy")
-        self.capital_per_entry.setAccessibleName("Amount (USDT)")
+        self.capital_per_entry.setAccessibleName(_AMOUNT_LABEL)
         self.max_entries.setAccessibleName("Maximum Entries")
         self.leverage.setAccessibleName("Futures Leverage")
         self.create_button.setAccessibleName("Start Paper Bot")
@@ -223,7 +226,7 @@ class SessionSetupWidget(QWidget):
         )
         self._add_row(
             self._form_layout,
-            "Amount (USDT)",
+            _AMOUNT_LABEL,
             self.capital_per_entry,
             (self.capital_per_entry_error,),
         )

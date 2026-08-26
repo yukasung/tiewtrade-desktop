@@ -7,12 +7,14 @@ from email.utils import parsedate_to_datetime
 import aiohttp
 
 from tiewtrade.integrations.binance.kline_parser import (
+    is_stream_acknowledgement,
     parse_rest_kline,
     parse_websocket_kline,
 )
 from tiewtrade.integrations.binance.public_endpoints import (
     BinanceMarketDataPayloadError,
     BinancePublicEndpoints,
+    kline_stream_name,
 )
 from tiewtrade.market_data.candle import Candle
 from tiewtrade.market_data.candle_source import MarketDataKlineUpdate
@@ -45,11 +47,10 @@ _HTTP_REQUEST_TIMEOUT_SECONDS = 30.0
 # long enough for a reader to turn the network back on before the app had
 # noticed it was gone.
 #
-# Well inside what Binance allows. What it caps is the rate, not the count:
-# five incoming messages a second on Spot, and a ping frame is one of them.
+# Well inside what Binance TH allows. What it caps is the rate, not the
+# count: five incoming messages a second, and a ping frame is one of them.
 # Six a minute spends about two percent of that, and the pongs owed to
-# Binance's own pings — every twenty seconds on Spot, every three minutes on
-# Futures — leave it under four percent together.
+# Binance TH's own ping — one every three minutes — barely add to it.
 WEBSOCKET_HEARTBEAT_SECONDS = 10.0
 
 
@@ -267,8 +268,7 @@ class BinancePublicMarketData:
     ) -> AsyncIterator[MarketDataKlineUpdate]:
         session = self._network_session()
         stream_url = (
-            f"{self._endpoints.websocket_base_url}/"
-            f"{config.symbol.lower()}@kline_{config.timeframe}"
+            f"{self._endpoints.websocket_base_url}?streams={kline_stream_name(config)}"
         )
         try:
             async with session.ws_connect(
@@ -278,6 +278,8 @@ class BinancePublicMarketData:
                 async for message in websocket:
                     if message.type is aiohttp.WSMsgType.TEXT:
                         payload = json.loads(message.data)
+                        if is_stream_acknowledgement(payload):
+                            continue
                         yield parse_websocket_kline(payload, config)
                     elif message.type in {
                         aiohttp.WSMsgType.CLOSE,

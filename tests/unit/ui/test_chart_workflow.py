@@ -160,99 +160,37 @@ def test_a_live_feed_does_not_reload_history_for_every_forming_candle() -> None:
     assert loads == []
 
 
-def test_prices_that_stop_arriving_are_reported_without_waiting_for_the_socket() -> (
-    None
-):
-    """The screen should answer for what it can see, not for what it is told.
+def test_a_quiet_market_is_not_read_as_a_broken_feed() -> None:
+    """A market with nothing to say is not a connection with nothing to say.
 
-    A dead socket is only noticed when a ping goes unanswered, and a chart
-    that has stopped being true in the meantime says nothing. Prices not
-    arriving is the fault itself, whatever is behind it — a dropped network,
-    a machine that slept, a stream that quietly stopped sending.
+    How often prices arrive is a property of how much a Pair is traded, not
+    of whether the feed works. Measured on Binance TH: BTCUSDT goes 8-17
+    seconds between prices and over 25 at its widest, and ETHUSDT managed one
+    price in a minute. A chart that called any of those a fault would spend
+    a thin market announcing an outage that never happened, and reloading
+    the range each time it decided the feed had come back.
+
+    Whether the connection is alive is answered where it is known: the
+    socket's own heartbeat, and the Runtime's staleness deadline counted
+    from the boundary a candle was due to close on.
     """
     session = configured_spot_session()
-    clock = MutableClock(datetime(2026, 1, 1, 0, 43, tzinfo=UTC))
-    workflow = latest_workflow(session=session, snapshots=[], clock=clock)
-    states: list[object] = []
-    workflow.feed_state_changed.connect(states.append)
-
-    clock.value += timedelta(seconds=14)
-    workflow.check_price_silence()
-
-    assert states == []
-
-    clock.value += timedelta(seconds=2)
-    workflow.check_price_silence()
-
-    assert states == [ChartFeedState.RECONNECTING]
-
-
-def test_prices_arriving_keep_the_chart_quiet() -> None:
-    session = configured_spot_session()
-    clock = MutableClock(datetime(2026, 1, 1, 0, 43, tzinfo=UTC))
-    workflow = latest_workflow(session=session, snapshots=[], clock=clock)
-    states: list[object] = []
-    workflow.feed_state_changed.connect(states.append)
-
-    for _ in range(6):
-        clock.value += timedelta(seconds=5)
-        workflow.in_progress_candle(candle("5m", 40))
-        workflow.check_price_silence()
-
-    assert states == []
-
-
-def test_a_price_after_a_silence_puts_the_chart_back_on_its_feet() -> None:
-    session = configured_spot_session()
-    snapshots: list[ChartSnapshot] = []
     loads: list[ChartRange] = []
     clock = MutableClock(datetime(2026, 1, 1, 0, 43, tzinfo=UTC))
     workflow = latest_workflow(
         session=session,
-        snapshots=snapshots,
+        snapshots=[],
         clock=clock,
         load_calls=loads,
     )
     states: list[object] = []
     workflow.feed_state_changed.connect(states.append)
-    clock.value = datetime(2026, 1, 1, 0, 57, tzinfo=UTC)
-    workflow.check_price_silence()
+    workflow.feed_state(ChartFeedState.LIVE)
 
-    workflow.in_progress_candle(candle("5m", 55))
+    clock.value += timedelta(minutes=5)
 
-    assert states == [ChartFeedState.RECONNECTING, ChartFeedState.LIVE]
-    # The same recovery a reconnect gets: the range re-anchored on now, and
-    # the price that proved the feed is back drawn on it.
-    assert len(loads) == 1
-    assert snapshots[-1].in_progress_candle == candle("5m", 55)
-
-
-def test_a_stopped_feed_outranks_a_silence() -> None:
-    session = configured_spot_session()
-    clock = MutableClock(datetime(2026, 1, 1, 0, 43, tzinfo=UTC))
-    workflow = latest_workflow(session=session, snapshots=[], clock=clock)
-    states: list[object] = []
-    workflow.feed_state_changed.connect(states.append)
-
-    workflow.feed_state(ChartFeedState.STOPPED)
-    clock.value += timedelta(seconds=20)
-    workflow.check_price_silence()
-
-    assert states == [ChartFeedState.STOPPED]
-
-
-def test_a_closed_workflow_stops_watching_for_silence() -> None:
-    session = configured_spot_session()
-    clock = MutableClock(datetime(2026, 1, 1, 0, 43, tzinfo=UTC))
-    workflow = latest_workflow(session=session, snapshots=[], clock=clock)
-    states: list[object] = []
-    workflow.feed_state_changed.connect(states.append)
-    workflow.close()
-
-    clock.value += timedelta(seconds=20)
-    workflow.check_price_silence()
-
-    assert states == []
+    assert states == [ChartFeedState.LIVE]
+    assert loads == []
 
 
 def test_a_feed_that_was_never_away_does_not_reload_the_chart() -> None:

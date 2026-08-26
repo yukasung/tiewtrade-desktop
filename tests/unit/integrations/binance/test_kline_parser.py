@@ -4,6 +4,7 @@ from decimal import Decimal
 import pytest
 
 from tiewtrade.integrations.binance.kline_parser import (
+    is_stream_acknowledgement,
     parse_rest_kline,
     parse_websocket_kline,
 )
@@ -18,29 +19,42 @@ def config(*, symbol: str = "BTCUSDT", timeframe: str = "5m") -> MarketDataConfi
 
 
 def closed_kline_payload(
-    *, symbol: str = "BTCUSDT", timeframe: str = "5m"
+    *,
+    symbol: str = "BTCUSDT",
+    timeframe: str = "5m",
+    stream: str = "btcusdt@kline_5m",
 ) -> dict[str, object]:
+    """One combined-stream event, the way Binance TH delivers it."""
     return {
-        "s": symbol,
-        "k": {
-            "t": 1767225600000,
+        "stream": stream,
+        "data": {
             "s": symbol,
-            "i": timeframe,
-            "o": "100.10",
-            "h": "102.20",
-            "l": "99.90",
-            "c": "101.30",
-            "v": "12.50",
-            "x": True,
+            "k": {
+                "t": 1767225600000,
+                "s": symbol,
+                "i": timeframe,
+                "o": "100.10",
+                "h": "102.20",
+                "l": "99.90",
+                "c": "101.30",
+                "v": "12.50",
+                "x": True,
+            },
         },
     }
 
 
+def kline_of(payload: dict[str, object]) -> dict[str, object]:
+    event = payload["data"]
+    assert isinstance(event, dict)
+    kline = event["k"]
+    assert isinstance(kline, dict)
+    return kline
+
+
 def open_kline_payload() -> dict[str, object]:
     payload = closed_kline_payload()
-    kline = payload["k"]
-    assert isinstance(kline, dict)
-    kline["x"] = False
+    kline_of(payload)["x"] = False
     return payload
 
 
@@ -124,8 +138,7 @@ def test_closed_websocket_kline_maps_to_closed_update() -> None:
 
 def test_closed_websocket_kline_ignores_transport_volume() -> None:
     payload = closed_kline_payload()
-    kline = payload["k"]
-    assert isinstance(kline, dict)
+    kline = kline_of(payload)
     kline["v"] = object()
 
     update = parse_websocket_kline(payload, config())
@@ -145,8 +158,7 @@ def test_open_websocket_kline_maps_to_open_update() -> None:
 
 def test_websocket_kline_preserves_public_error_for_out_of_range_open_time() -> None:
     payload = closed_kline_payload()
-    kline = payload["k"]
-    assert isinstance(kline, dict)
+    kline = kline_of(payload)
     kline["t"] = 10**20
 
     with pytest.raises(BinanceMarketDataPayloadError) as captured:
@@ -160,8 +172,7 @@ def test_websocket_kline_preserves_public_error_for_out_of_range_open_time() -> 
 
 def test_websocket_kline_preserves_public_error_for_value_error_range() -> None:
     payload = closed_kline_payload()
-    kline = payload["k"]
-    assert isinstance(kline, dict)
+    kline = kline_of(payload)
     kline["t"] = 10**15
 
     with pytest.raises(BinanceMarketDataPayloadError) as captured:
@@ -175,8 +186,7 @@ def test_websocket_kline_preserves_public_error_for_value_error_range() -> None:
 
 def test_websocket_kline_preserves_public_error_with_closed_field_diagnostic() -> None:
     payload = closed_kline_payload()
-    kline = payload["k"]
-    assert isinstance(kline, dict)
+    kline = kline_of(payload)
     kline["x"] = "true"
 
     with pytest.raises(BinanceMarketDataPayloadError) as captured:
@@ -236,4 +246,37 @@ def test_rest_kline_requires_only_timestamp_and_ohlc_fields() -> None:
 
 def test_malformed_websocket_kline_is_rejected() -> None:
     with pytest.raises(BinanceMarketDataPayloadError, match="invalid Binance"):
-        parse_websocket_kline({"s": "BTCUSDT", "k": {"x": True}}, config())
+        parse_websocket_kline(
+            {"stream": "btcusdt@kline_5m", "data": {"s": "BTCUSDT", "k": {"x": True}}},
+            config(),
+        )
+
+
+def test_websocket_kline_from_another_stream_is_rejected() -> None:
+    payload = closed_kline_payload(stream="ethusdt@kline_5m")
+
+    with pytest.raises(BinanceMarketDataPayloadError) as captured:
+        parse_websocket_kline(payload, config())
+
+    assert isinstance(captured.value.__cause__, ValueError)
+    assert str(captured.value.__cause__) == "stream must match the configured market"
+
+
+def test_unwrapped_websocket_kline_is_rejected() -> None:
+    payload = closed_kline_payload()
+    event = payload["data"]
+    assert isinstance(event, dict)
+
+    with pytest.raises(BinanceMarketDataPayloadError, match="invalid Binance"):
+        parse_websocket_kline(event, config())
+
+
+def test_the_subscription_answer_is_recognised_as_carrying_no_candle() -> None:
+    """Binance TH answers the subscription before the market says anything."""
+    assert is_stream_acknowledgement({"id": 13264512, "result": None}) is True
+
+
+def test_a_market_event_is_not_mistaken_for_the_subscription_answer() -> None:
+    assert is_stream_acknowledgement(closed_kline_payload()) is False
+    assert is_stream_acknowledgement({"result": None}) is False
+    assert is_stream_acknowledgement("not an object") is False
