@@ -406,6 +406,50 @@ class AsyncIteratorFailureSource(FakeSource):
             yield MarketDataKlineUpdate(candle=candle_at(15), is_closed=True)
 
 
+class AbandonedStreamSource(FakeSource):
+    """Streams that fail on the first read and say whether they were let go of.
+
+    An abandoned kline stream holds a half-open connection open, and an
+    outage abandons one per attempt, so what matters is that every stream a
+    failed attempt walked away from was closed on the way out.
+    """
+
+    def __init__(self, failures: Iterable[Exception]) -> None:
+        super().__init__(
+            recent=warm_up_candles(),
+            live=[candle_at(15)],
+            ranges={
+                (candle_at(15).open_time, candle_at(20).open_time): (candle_at(15),),
+            },
+        )
+        self._failures = iter(failures)
+        self.closed_streams = 0
+
+    def stream_klines(
+        self, config: MarketDataConfig
+    ) -> AsyncIterator[MarketDataKlineUpdate]:
+        try:
+            error = next(self._failures)
+        except StopIteration:
+            return self._stream_klines()
+        return _AbandonedStream(error, self)
+
+
+class _AbandonedStream:
+    def __init__(self, error: Exception, source: AbandonedStreamSource) -> None:
+        self._error = error
+        self._source = source
+
+    def __aiter__(self) -> _AbandonedStream:
+        return self
+
+    async def __anext__(self) -> MarketDataKlineUpdate:
+        raise self._error
+
+    async def aclose(self) -> None:
+        self._source.closed_streams += 1
+
+
 class BackfillFailureSource(FakeSource):
     def __init__(self, failures: Iterable[Exception]) -> None:
         super().__init__(
@@ -2356,6 +2400,28 @@ def test_reconnect_keeps_trying_past_the_old_three_attempt_limit(
         if record.event_name == MarketDataEventName.RECONNECT_ATTEMPTED.value
     ]
     assert [record.attempt for record in reconnect_records] == [1, 2, 3, 4, 5, 6]
+
+
+def test_every_stream_a_failed_reconnect_walked_away_from_is_closed() -> None:
+    """A retry that left its socket open would leak one per attempt.
+
+    Reconnecting is a loop with no end of its own, so a stream abandoned
+    without being closed is not one half-open connection but one per attempt
+    for as long as the outage lasts.
+
+    Two of the three failures here are the reconnect loop's. The first is the
+    live stream dropping, which is what sends the run into that loop rather
+    than something it does inside it.
+    """
+    source = AbandonedStreamSource([RuntimeError("disconnected")] * 3)
+    scheduler = FakeScheduler(now=datetime(2026, 1, 1, 0, 20, tzinfo=UTC))
+    sink = RecordingSink()
+    runtime = runtime_for(source, sink, scheduler=scheduler)
+
+    asyncio.run(run_until_sink_receives_or_runtime_stops(runtime, sink, count=1))
+
+    assert source.closed_streams == 2
+    assert sink.live_candles == [candle_at(15)]
 
 
 def test_synchronous_disconnect_keeps_trying_until_the_stream_comes_back() -> None:

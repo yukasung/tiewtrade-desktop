@@ -570,94 +570,48 @@ class MarketDataRuntime:
         *,
         pending_rate_limit: MarketDataRateLimitError | None = None,
     ) -> AsyncIterator[MarketDataKlineUpdate] | None:
-        if pending_rate_limit is None:
-            if reason is MarketDataRuntimeReason.DATA_STALE:
-                self._runtime_log.stale_detected(
-                    reason=reason,
-                    last_accepted_open_time=(
-                        self._status.snapshot.last_accepted_open_time
-                    ),
-                )
-            self._transition(MarketDataRuntimeState.STALE, reason)
+        """Keep trying for a stream the Session can go on trading from.
+
+        Each attempt waits, opens a stream, reads it up to the first candle it
+        says is closed, and backfills the gap that opened while the feed was
+        away. None means the run is over — the source failed fatally, the
+        backfill did, or a stop was asked for while this was waiting.
+        """
+        self._announce_the_fault(reason, pending_rate_limit)
         attempt = 0
         while True:
             attempt += 1
-            if pending_rate_limit is None:
-                attempt_delay = _reconnect_backoff_seconds(attempt)
-                await self._scheduler.sleep(attempt_delay)
-                self._transition(MarketDataRuntimeState.RECONNECTING, reason)
-            else:
-                if (
-                    self._status.snapshot.state
-                    is not MarketDataRuntimeState.RATE_LIMITED
-                ):
-                    self._transition(
-                        MarketDataRuntimeState.RATE_LIMITED,
-                        MarketDataRuntimeReason.RATE_LIMITED,
-                    )
-                attempt_delay = _retry_after_seconds(
-                    pending_rate_limit, now=self._scheduler.now()
-                )
-                await self._scheduler.sleep(attempt_delay)
-                self._transition(MarketDataRuntimeState.RECONNECTING, reason)
+            delay = await self._wait_before_reconnecting(
+                attempt, reason, pending_rate_limit
+            )
             if self._stop_requested:
                 return None
             self._runtime_log.reconnect_attempted(
                 attempt=attempt,
-                delay_seconds=attempt_delay,
+                delay_seconds=delay,
                 reason=reason,
             )
-            stream: AsyncIterator[MarketDataKlineUpdate] | None = None
+
             try:
-                stream = self._source.stream_klines(self._config)
-                deadline = self._reconnect_deadline()
-                while True:
-                    update = await self._next_reconnect_candle(
-                        stream,
-                        deadline=deadline,
-                    )
-                    if update.is_closed:
-                        observed = update.candle
-                        break
-                    self._publish_open_candle(update.candle)
+                stream, observed = await self._stream_to_first_closed_candle()
             except MarketDataFatalError as error:
-                await _close_stream(stream)
                 self._fail_closed(
                     MarketDataRuntimeReason.SOURCE_FATAL,
                     failure_kind=_failure_kind(error),
                 )
                 return None
             except MarketDataRateLimitError as error:
-                await _close_stream(stream)
                 pending_rate_limit = error
                 self._transition(
                     MarketDataRuntimeState.RATE_LIMITED,
                     MarketDataRuntimeReason.RATE_LIMITED,
                 )
                 continue
-            except MarketDataSourceError:
-                await _close_stream(stream)
-                pending_rate_limit = None
-                continue
             except Exception:
-                await _close_stream(stream)
                 pending_rate_limit = None
                 continue
 
-            received_at = self._scheduler.now()
-            latest_boundary = _latest_completed_boundary(
-                received_at,
-                interval=self._config.interval,
-            )
-            end = max(
-                observed.open_time + self._config.interval,
-                latest_boundary,
-            )
-            outcome = await self._backfill_to_boundary(
-                end,
-                received_at=received_at,
-                observed=observed,
-            )
+            outcome = await self._backfill_after_reconnect(observed)
             if outcome is _BackfillOutcome.RECOVERABLE:
                 # The connection is back but the history behind it is not all
                 # there yet. Another attempt costs a backoff delay; giving up
@@ -668,6 +622,95 @@ class MarketDataRuntime:
             if outcome is _BackfillOutcome.FAILED:
                 return None
             return stream
+
+    def _announce_the_fault(
+        self,
+        reason: MarketDataRuntimeReason,
+        pending_rate_limit: MarketDataRateLimitError | None,
+    ) -> None:
+        """Say what took the feed away, before anything waits on getting it back.
+
+        A rate limit says so for itself in the wait below — it is the one
+        fault that names its own delay — so it is not announced as staleness
+        here.
+        """
+        if pending_rate_limit is not None:
+            return
+        if reason is MarketDataRuntimeReason.DATA_STALE:
+            self._runtime_log.stale_detected(
+                reason=reason,
+                last_accepted_open_time=(self._status.snapshot.last_accepted_open_time),
+            )
+        self._transition(MarketDataRuntimeState.STALE, reason)
+
+    async def _wait_before_reconnecting(
+        self,
+        attempt: int,
+        reason: MarketDataRuntimeReason,
+        pending_rate_limit: MarketDataRateLimitError | None,
+    ) -> float:
+        """Wait out this attempt's delay, and hand back how long it was.
+
+        Who decides the delay is what differs: a rate limit is a pause the
+        provider asked for by name, and everything else climbs a backoff of
+        our own. Either way the wait ends the same, in the state that says a
+        fresh stream is being opened.
+        """
+        if pending_rate_limit is None:
+            delay = _reconnect_backoff_seconds(attempt)
+        else:
+            if self._status.snapshot.state is not MarketDataRuntimeState.RATE_LIMITED:
+                self._transition(
+                    MarketDataRuntimeState.RATE_LIMITED,
+                    MarketDataRuntimeReason.RATE_LIMITED,
+                )
+            delay = _retry_after_seconds(pending_rate_limit, now=self._scheduler.now())
+        await self._scheduler.sleep(delay)
+        self._transition(MarketDataRuntimeState.RECONNECTING, reason)
+        return delay
+
+    async def _stream_to_first_closed_candle(
+        self,
+    ) -> tuple[AsyncIterator[MarketDataKlineUpdate], Candle]:
+        """A fresh stream, read up to the first candle it says is closed.
+
+        That candle is what the backfill measures its gap against, so the
+        stream is not handed back until one has arrived. A stream that raises
+        on the way is closed here rather than by each of the callers' handlers
+        — whatever the fault turns out to mean, the socket it was read from is
+        finished either way.
+        """
+        stream: AsyncIterator[MarketDataKlineUpdate] | None = None
+        try:
+            stream = self._source.stream_klines(self._config)
+            deadline = self._reconnect_deadline()
+            while True:
+                update = await self._next_reconnect_candle(stream, deadline=deadline)
+                if update.is_closed:
+                    return stream, update.candle
+                self._publish_open_candle(update.candle)
+        except Exception:
+            await _close_stream(stream)
+            raise
+
+    async def _backfill_after_reconnect(self, observed: Candle) -> _BackfillOutcome:
+        """Fill in what the market did while the feed was away.
+
+        The gap runs to whichever is later: the candle the fresh stream just
+        closed, or the boundary the clock has since passed. A feed that came
+        back mid-candle has the second one ahead of the first.
+        """
+        received_at = self._scheduler.now()
+        latest_boundary = _latest_completed_boundary(
+            received_at,
+            interval=self._config.interval,
+        )
+        end = max(observed.open_time + self._config.interval, latest_boundary)
+        return await self._backfill_to_boundary(
+            end,
+            received_at=received_at,
+            observed=observed,
+        )
 
     async def _run_source_operation(
         self,
