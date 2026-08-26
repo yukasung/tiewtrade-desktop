@@ -44,6 +44,7 @@ from tiewtrade.ui.chart_workflow import (
     RefreshChart,
 )
 from tiewtrade.ui.connection_notice import ConnectionNotice
+from tiewtrade.ui.guarded_action import GuardedAction
 from tiewtrade.ui.open_position_workflow import (
     OpenPositionWorkflow,
     ReadOpenBasket,
@@ -196,10 +197,7 @@ class MainWindow(QMainWindow):
         self._load_chart = chart.load
         self._close_position = bot.close_position
         self._close_entry = bot.close_entry
-        self._close_entry_task: BackgroundTask | None = None
-        self._close_all_task: BackgroundTask | None = None
         self._cancel_cooldown = bot.cancel_cooldown
-        self._cancel_cooldown_task: BackgroundTask | None = None
         self._waiting_on_a_reading: list[Callable[[], None]] = []
         self._has_open_position = bot.has_open_position
         self._clock = chart.clock
@@ -208,7 +206,6 @@ class MainWindow(QMainWindow):
         self._validate_session = validate_session or validate_paper_session
         self._shutdown_runtime = bot.shutdown_runtime
         self._clear_database = clear_database
-        self._clear_database_task: BackgroundTask | None = None
         self._chart_fact_relay = chart.facts
         self._start_chart_feed = chart.start_feed
         self._select_chart_view = chart.select_view
@@ -244,7 +241,27 @@ class MainWindow(QMainWindow):
         self._replacement_session: ConfiguredPaperSession | None = None
         self._replacement_values: PaperSessionSetupValues | None = None
         self._replacement_succeeded = False
+        self._history_started = False
+        # Whether a Basket is open right now, read across whichever side is
+        # holding it — the running Runtime or the database. A close is the
+        # moment this goes from true to false, wherever it is seen.
+        self._position_open = False
 
+        # Built in the order the window reads: the Session first, because
+        # everything below is about the one it is on, and the history last,
+        # because it outlives every Session there has been.
+        self._wire_session_workflow(create_session, load_active)
+        self._build_guarded_actions()
+        self._wire_open_position(bot)
+        self._wire_bot_lifecycle(bot)
+        self._wire_chart(chart, bot, connection_notice_delay_ms)
+        self._wire_trade_history(list_basket_history, list_trade_fills)
+        self._workflow.start()
+
+    def _wire_session_workflow(
+        self, create_session: CreateSession, load_active: LoadActiveSession
+    ) -> None:
+        """The workflow that reads, creates and validates the Paper Session."""
         self._workflow = SessionWorkflow(
             create_session=create_session,
             load_active=load_active,
@@ -260,6 +277,8 @@ class MainWindow(QMainWindow):
         self.setup.create_requested.connect(self._create_requested)
         self.unavailable_retry_button.clicked.connect(self._retry_unavailable)
 
+    def _wire_open_position(self, bot: BotActions) -> None:
+        """The Position tab, and the three things it lets the trader do."""
         self._open_position = OpenPositionWorkflow(
             read_open_basket=bot.read_open_basket,
             thread_pool=self._thread_pool,
@@ -285,6 +304,8 @@ class MainWindow(QMainWindow):
         )
         self._open_position.reading_landed.connect(self._position_reading_landed)
 
+    def _wire_bot_lifecycle(self, bot: BotActions) -> None:
+        """Starting and stopping the Bot, and hearing what state it is in."""
         self._lifecycle_workflow = BotLifecycleWorkflow(
             start_bot=bot.start,
             stop_bot=bot.stop,
@@ -297,6 +318,10 @@ class MainWindow(QMainWindow):
         self.workspace.start_bot_requested.connect(self._start_requested)
         self.workspace.stop_bot_requested.connect(self._stop_requested)
 
+    def _wire_chart(
+        self, chart: ChartSources, bot: BotActions, connection_notice_delay_ms: int
+    ) -> None:
+        """The chart, the candles that reach it, and the notices it raises."""
         self._chart_workflow = ChartWorkflow(
             load_chart=chart.load or _unused_chart_loader,
             refresh_chart=chart.refresh,
@@ -357,21 +382,6 @@ class MainWindow(QMainWindow):
                 self._runtime_in_progress_candle,
                 Qt.ConnectionType.QueuedConnection,
             )
-
-        self._history_started = False
-        # Whether a Basket is open right now, read across whichever side is
-        # holding it — the running Runtime or the database. A close is the
-        # moment this goes from true to false, wherever it is seen.
-        self._position_open = False
-        self._history_workflow = TradeHistoryWorkflow(
-            list_basket_history=list_basket_history,
-            list_trade_fills=list_trade_fills,
-            thread_pool=self._thread_pool,
-            parent=self,
-        )
-        self._wire_trade_history()
-        self.workspace.trade_history_activated.connect(self._trade_history_activated)
-        self._workflow.start()
 
     @Slot(object)
     def _create_requested(self, raw_values: object) -> None:
@@ -539,27 +549,51 @@ class MainWindow(QMainWindow):
         except RuntimeError:
             return None
 
-    def _start_task(
-        self,
-        work: Callable[[], object],
-        *,
-        succeeded: Callable[[object], None],
-        failed: Callable[[object], None],
-        finished: Callable[[], None],
-    ) -> BackgroundTask:
-        """Run one piece of work off the UI thread, and hand back the handle.
+    def _build_guarded_actions(self) -> None:
+        """The things the trader asks for that run off the UI thread.
 
-        The handle is what a caller holds to know its own work is still in
-        flight — the guard that keeps a second click from starting a second
-        one — so it is returned rather than kept here under a name this
-        window would have to invent.
+        Each one switches its own control off while it runs, says what went
+        wrong where that control speaks, and comes back either way — which is
+        the whole of what they have in common, and all that is stated here.
         """
-        task = BackgroundTask(work)
-        task.signals.succeeded.connect(succeeded)
-        task.signals.failed.connect(failed)
-        task.signals.finished.connect(finished)
-        self._thread_pool.start(task)
-        return task
+        position_basket = self.workspace.position_basket
+        settings_panel = self.workspace.settings_panel
+        self._sell_entry = GuardedAction(
+            available=position_basket.set_closing_enabled,
+            report_failure=lambda: position_basket.show_close_error(
+                "Could not sell that Entry. Check your connection, then try again."
+            ),
+            failure_log="Could not sell that Entry",
+            start=self._thread_pool.start,
+        )
+        self._waive_cooldown = GuardedAction(
+            available=position_basket.set_cancelling_enabled,
+            report_failure=lambda: position_basket.show_cancel_error(
+                "Could not waive the Cooldown. Check your connection, then try again."
+            ),
+            failure_log="Could not waive the Cooldown",
+            start=self._thread_pool.start,
+        )
+        self._sell_position = GuardedAction(
+            available=position_basket.set_selling_enabled,
+            report_failure=lambda: position_basket.show_close_error(
+                "Could not close the Position. Check your connection, then try again."
+            ),
+            failure_log="Could not close the Position",
+            start=self._thread_pool.start,
+        )
+        # The Settings panel has no line of its own to answer on, and says
+        # "busy" where the Position tab says which control is off.
+        self._wipe_database = GuardedAction(
+            available=lambda available: settings_panel.set_busy(not available),
+            report_failure=lambda: QMessageBox.warning(
+                settings_panel,
+                "Settings",
+                "Could not clear the database. Check your connection, then try again.",
+            ),
+            failure_log="Could not clear the database",
+            start=self._thread_pool.start,
+        )
 
     def _ask_before_starting(self) -> None:
         """Put the question the reading turned out to be worth, or none."""
@@ -1004,19 +1038,16 @@ class MainWindow(QMainWindow):
         database a stopped Bot left it in.
         """
         close_entry = self._close_entry
-        if close_entry is None or self._close_entry_task is not None:
+        if close_entry is None or self._sell_entry.is_running:
             return
         session = self._current_session()
         if session is None:
             return
         if not ask_about_selling_one_entry(self, entry_number):
             return
-        self.workspace.position_basket.set_closing_enabled(False)
-        self._close_entry_task = self._start_task(
+        self._sell_entry.run(
             lambda: close_entry(session, entry_number),
             succeeded=self._position_action_landed,
-            failed=self._entry_close_failed,
-            finished=self._entry_close_finished,
         )
 
     @Slot(object)
@@ -1034,19 +1065,6 @@ class MainWindow(QMainWindow):
         if self._lifecycle_workflow.snapshot.state is not BotRuntimeState.RUNNING:
             self._open_position.read_for(session)
 
-    @Slot(object)
-    def _entry_close_failed(self, error: object) -> None:
-        if isinstance(error, BaseException):
-            _LOGGER.exception("Could not sell that Entry", exc_info=error)
-        self.workspace.position_basket.show_close_error(
-            "Could not sell that Entry. Check your connection, then try again."
-        )
-
-    @Slot()
-    def _entry_close_finished(self) -> None:
-        self._close_entry_task = None
-        self.workspace.position_basket.set_closing_enabled(True)
-
     @Slot()
     def _cancel_cooldown_requested(self) -> None:
         """Lift a Cooldown, once the trader has said so in as many words.
@@ -1056,7 +1074,7 @@ class MainWindow(QMainWindow):
         database a stopped Bot left it in.
         """
         cancel_cooldown = self._cancel_cooldown
-        if cancel_cooldown is None or self._cancel_cooldown_task is not None:
+        if cancel_cooldown is None or self._waive_cooldown.is_running:
             return
         basket = self.workspace.position_basket.basket
         if basket is None or basket.entry_gate is not BasketEntryGate.COOLDOWN:
@@ -1066,26 +1084,10 @@ class MainWindow(QMainWindow):
             return
         if not ask_about_cancelling_cooldown(self):
             return
-        self.workspace.position_basket.set_cancelling_enabled(False)
-        self._cancel_cooldown_task = self._start_task(
+        self._waive_cooldown.run(
             lambda: cancel_cooldown(session),
             succeeded=self._position_action_landed,
-            failed=self._cancel_cooldown_failed,
-            finished=self._cancel_cooldown_finished,
         )
-
-    @Slot(object)
-    def _cancel_cooldown_failed(self, error: object) -> None:
-        if isinstance(error, BaseException):
-            _LOGGER.exception("Could not waive the Cooldown", exc_info=error)
-        self.workspace.position_basket.show_cancel_error(
-            "Could not waive the Cooldown. Check your connection, then try again."
-        )
-
-    @Slot()
-    def _cancel_cooldown_finished(self) -> None:
-        self._cancel_cooldown_task = None
-        self.workspace.position_basket.set_cancelling_enabled(True)
 
     @Slot()
     def _close_all_requested(self) -> None:
@@ -1096,33 +1098,17 @@ class MainWindow(QMainWindow):
         database a stopped Bot left it in.
         """
         close_position = self._close_position
-        if close_position is None or self._close_all_task is not None:
+        if close_position is None or self._sell_position.is_running:
             return
         session = self._current_session()
         if session is None:
             return
         if not ask_about_closing_all_at_market(self):
             return
-        self.workspace.position_basket.set_selling_enabled(False)
-        self._close_all_task = self._start_task(
+        self._sell_position.run(
             lambda: close_position(session),
             succeeded=self._position_action_landed,
-            failed=self._close_all_failed,
-            finished=self._close_all_finished,
         )
-
-    @Slot(object)
-    def _close_all_failed(self, error: object) -> None:
-        if isinstance(error, BaseException):
-            _LOGGER.exception("Could not close the Position", exc_info=error)
-        self.workspace.position_basket.show_close_error(
-            "Could not close the Position. Check your connection, then try again."
-        )
-
-    @Slot()
-    def _close_all_finished(self) -> None:
-        self._close_all_task = None
-        self.workspace.position_basket.set_selling_enabled(True)
 
     @Slot()
     def _settings_requested(self) -> None:
@@ -1134,7 +1120,7 @@ class MainWindow(QMainWindow):
     @Slot()
     def _clear_database_requested(self) -> None:
         clear_database = self._clear_database
-        if clear_database is None or self._clear_database_task is not None:
+        if clear_database is None or self._wipe_database.is_running:
             return
         if self._last_bot_state in _CLEAR_DATABASE_BLOCKED_STATES:
             QMessageBox.warning(
@@ -1145,13 +1131,7 @@ class MainWindow(QMainWindow):
             return
         if not ask_about_clearing_database(self.workspace.settings_panel):
             return
-        self.workspace.settings_panel.set_busy(True)
-        self._clear_database_task = self._start_task(
-            clear_database,
-            succeeded=self._database_cleared,
-            failed=self._clear_database_failed,
-            finished=self._clear_database_finished,
-        )
+        self._wipe_database.run(clear_database, succeeded=self._database_cleared)
 
     @Slot(object)
     def _database_cleared(self, _result: object) -> None:
@@ -1168,21 +1148,6 @@ class MainWindow(QMainWindow):
         if session is not None:
             self._open_position.read_for(session)
         self.workspace.hide_settings()
-
-    @Slot(object)
-    def _clear_database_failed(self, error: object) -> None:
-        if isinstance(error, BaseException):
-            _LOGGER.exception("Could not clear the database", exc_info=error)
-        QMessageBox.warning(
-            self.workspace.settings_panel,
-            "Settings",
-            "Could not clear the database. Check your connection, then try again.",
-        )
-
-    @Slot()
-    def _clear_database_finished(self) -> None:
-        self._clear_database_task = None
-        self.workspace.settings_panel.set_busy(False)
 
     @Slot(object)
     def _chart_view_requested(self, value: object) -> None:
@@ -1284,7 +1249,19 @@ class MainWindow(QMainWindow):
         self._shutdown_task = None
         self.close()
 
-    def _wire_trade_history(self) -> None:
+    def _wire_trade_history(
+        self,
+        list_basket_history: ListBasketHistory | None,
+        list_trade_fills: ListTradeFills | None,
+    ) -> None:
+        """The durable history tables, and what asks them to read again."""
+        self._history_workflow = TradeHistoryWorkflow(
+            list_basket_history=list_basket_history,
+            list_trade_fills=list_trade_fills,
+            thread_pool=self._thread_pool,
+            parent=self,
+        )
+        self.workspace.trade_history_activated.connect(self._trade_history_activated)
         self.trade_history.apply_filters_requested.connect(
             self._history_workflow.apply_filters
         )
