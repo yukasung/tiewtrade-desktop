@@ -2402,6 +2402,23 @@ def test_reconnect_keeps_trying_past_the_old_three_attempt_limit(
     assert [record.attempt for record in reconnect_records] == [1, 2, 3, 4, 5, 6]
 
 
+def test_a_live_stream_that_drops_is_closed_before_reconnecting() -> None:
+    """The stream the live loop was reading is finished the moment it fails.
+
+    Left open it is a half-open connection held for the rest of the run —
+    and the run goes on for as long as the Session does.
+    """
+    source = AbandonedStreamSource([RuntimeError("disconnected")])
+    scheduler = FakeScheduler(now=datetime(2026, 1, 1, 0, 20, tzinfo=UTC))
+    sink = RecordingSink()
+    runtime = runtime_for(source, sink, scheduler=scheduler)
+
+    asyncio.run(run_until_sink_receives_or_runtime_stops(runtime, sink, count=1))
+
+    assert source.closed_streams == 1
+    assert sink.live_candles == [candle_at(15)]
+
+
 def test_every_stream_a_failed_reconnect_walked_away_from_is_closed() -> None:
     """A retry that left its socket open would leak one per attempt.
 
@@ -2409,9 +2426,8 @@ def test_every_stream_a_failed_reconnect_walked_away_from_is_closed() -> None:
     without being closed is not one half-open connection but one per attempt
     for as long as the outage lasts.
 
-    Two of the three failures here are the reconnect loop's. The first is the
-    live stream dropping, which is what sends the run into that loop rather
-    than something it does inside it.
+    Three streams are walked away from here: the live one that dropped, and
+    the two the reconnect loop opened before one answered.
     """
     source = AbandonedStreamSource([RuntimeError("disconnected")] * 3)
     scheduler = FakeScheduler(now=datetime(2026, 1, 1, 0, 20, tzinfo=UTC))
@@ -2420,7 +2436,7 @@ def test_every_stream_a_failed_reconnect_walked_away_from_is_closed() -> None:
 
     asyncio.run(run_until_sink_receives_or_runtime_stops(runtime, sink, count=1))
 
-    assert source.closed_streams == 2
+    assert source.closed_streams == 3
     assert sink.live_candles == [candle_at(15)]
 
 

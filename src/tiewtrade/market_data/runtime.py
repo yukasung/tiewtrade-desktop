@@ -282,72 +282,95 @@ class MarketDataRuntime:
             raise _WarmUpSinkError from error
 
     async def _consume_live(self) -> None:
+        stream = await self._open_live_stream()
+        if stream is None:
+            return
         try:
-            stream = self._source.stream_klines(self._config)
+            while not self._stop_requested:
+                disconnect_reason: MarketDataRuntimeReason
+                try:
+                    update = await self._next_before_stale(stream)
+                except TimeoutError:
+                    disconnect_reason = MarketDataRuntimeReason.DATA_STALE
+                except MarketDataFatalError as error:
+                    self._fail_closed(
+                        MarketDataRuntimeReason.SOURCE_FATAL,
+                        failure_kind=_failure_kind(error),
+                    )
+                    return
+                except MarketDataRateLimitError as error:
+                    stream = await self._stream_after(
+                        stream,
+                        MarketDataRuntimeReason.RATE_LIMITED,
+                        pending_rate_limit=error,
+                    )
+                    if stream is None:
+                        return
+                    continue
+                except Exception:
+                    disconnect_reason = MarketDataRuntimeReason.SOURCE_DISCONNECTED
+                else:
+                    if not update.is_closed:
+                        self._publish_open_candle(update.candle)
+                        if not await self._deliver_open_candle(update.candle):
+                            return
+                        continue
+                    outcome = await self._accept_live_candle(update.candle)
+                    if outcome is _LiveOutcome.STOP:
+                        return
+                    if outcome is _LiveOutcome.CONTINUE:
+                        continue
+                    # A source that answered the gap short is one to ask again
+                    # from a fresh stream, at the boundary that holds by then.
+                    disconnect_reason = MarketDataRuntimeReason.SOURCE_DISCONNECTED
+
+                stream = await self._stream_after(stream, disconnect_reason)
+                if stream is None:
+                    return
+        finally:
+            # Whatever ended the loop, the stream it was reading is finished.
+            await _close_stream(stream)
+
+    async def _open_live_stream(self) -> AsyncIterator[MarketDataKlineUpdate] | None:
+        """The stream the live loop starts on, or None where the run is over.
+
+        A handshake that fails outright is the same fault as one that drops
+        later, so it goes to the same recovery — there is simply no stream to
+        let go of yet.
+        """
+        try:
+            return self._source.stream_klines(self._config)
         except MarketDataFatalError as error:
             self._fail_closed(
                 MarketDataRuntimeReason.SOURCE_FATAL,
                 failure_kind=_failure_kind(error),
             )
-            return
+            return None
         except MarketDataRateLimitError as error:
-            recovered_stream = await self._recover_stream(
+            return await self._recover_stream(
                 MarketDataRuntimeReason.RATE_LIMITED,
                 pending_rate_limit=error,
             )
-            if recovered_stream is None:
-                return
-            stream = recovered_stream
         except Exception:
-            recovered_stream = await self._recover_stream(
+            return await self._recover_stream(
                 MarketDataRuntimeReason.SOURCE_DISCONNECTED
             )
-            if recovered_stream is None:
-                return
-            stream = recovered_stream
-        while not self._stop_requested:
-            disconnect_reason: MarketDataRuntimeReason
-            try:
-                update = await self._next_before_stale(stream)
-            except TimeoutError:
-                disconnect_reason = MarketDataRuntimeReason.DATA_STALE
-            except MarketDataFatalError as error:
-                self._fail_closed(
-                    MarketDataRuntimeReason.SOURCE_FATAL,
-                    failure_kind=_failure_kind(error),
-                )
-                return
-            except MarketDataRateLimitError as error:
-                recovered_stream = await self._recover_stream(
-                    MarketDataRuntimeReason.RATE_LIMITED,
-                    pending_rate_limit=error,
-                )
-                if recovered_stream is None:
-                    return
-                stream = recovered_stream
-                continue
-            except Exception:
-                disconnect_reason = MarketDataRuntimeReason.SOURCE_DISCONNECTED
-            else:
-                if not update.is_closed:
-                    self._publish_open_candle(update.candle)
-                    if not await self._deliver_open_candle(update.candle):
-                        return
-                    continue
-                outcome = await self._accept_live_candle(update.candle)
-                if outcome is _LiveOutcome.STOP:
-                    return
-                if outcome is _LiveOutcome.CONTINUE:
-                    continue
-                # A source that answered the gap short is one to ask again
-                # from a fresh stream, at the boundary that holds by then.
-                await _close_stream(stream)
-                disconnect_reason = MarketDataRuntimeReason.SOURCE_DISCONNECTED
 
-            recovered_stream = await self._recover_stream(disconnect_reason)
-            if recovered_stream is None:
-                return
-            stream = recovered_stream
+    async def _stream_after(
+        self,
+        stream: AsyncIterator[MarketDataKlineUpdate],
+        reason: MarketDataRuntimeReason,
+        *,
+        pending_rate_limit: MarketDataRateLimitError | None = None,
+    ) -> AsyncIterator[MarketDataKlineUpdate] | None:
+        """Let go of the stream that failed, and get one to carry on with.
+
+        Closing first is what keeps an outage from costing a connection per
+        attempt: the stream being replaced is one nothing will read again,
+        and a source that raises on the way out is no reason to keep it.
+        """
+        await _close_stream(stream)
+        return await self._recover_stream(reason, pending_rate_limit=pending_rate_limit)
 
     async def _next_before_stale(
         self,
