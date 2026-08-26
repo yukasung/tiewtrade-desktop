@@ -4,9 +4,10 @@ from dataclasses import dataclass
 from datetime import datetime
 from decimal import Decimal
 from enum import StrEnum
-from uuid import UUID, uuid5
+from uuid import UUID
 
 from tiewtrade.application.open_basket import OpenBasketState, reopen_basket
+from tiewtrade.application.paper_candle_transition import PaperCandleTransition
 from tiewtrade.execution.paper_spot import (
     PaperSpotEntryFill,
     PaperSpotExecutor,
@@ -20,8 +21,8 @@ from tiewtrade.market_data.completed_candle_stream import (
 from tiewtrade.market_data.config import MarketDataConfig
 from tiewtrade.market_data.warm_up import require_warm_up_candle
 from tiewtrade.strategies.entry_intent import EntryIntent
-from tiewtrade.strategies.indicators import IndicatorSnapshot, WilderIndicators
-from tiewtrade.strategies.protocols import EntryStrategy, StrategyPreset
+from tiewtrade.strategies.indicators import WilderIndicators
+from tiewtrade.strategies.protocols import StrategyPreset
 from tiewtrade.strategies.registry import strategy_definition_for
 from tiewtrade.trading.basket import (
     Basket,
@@ -113,14 +114,15 @@ class PaperSpotSessionIdentity:
     preset_version: str
 
 
-@dataclass(slots=True)
-class _PaperSpotTransition:
-    indicators: WilderIndicators
-    strategy: EntryStrategy
-    lifecycle: EntryPairLifecycle
-    basket: Basket | None
-    pending_intent: EntryIntent | None
-    closed_basket_count: int
+@dataclass(slots=True, kw_only=True)
+class _PaperSpotTransition(PaperCandleTransition):
+    """What one candle would leave this Session holding, if it gets that far.
+
+    Both fields are Spot's own. An exit between ticks is something only Spot
+    takes, so only Spot has to remember which candle one owns; and only Spot
+    reports the number of the Entry a Fill opened, which the tab reads per row.
+    """
+
     exited_candle_open_time: datetime | None
     entry_number_filled: int | None = None
 
@@ -223,7 +225,7 @@ class PaperSpotSession:
             # An Intent handed back can be signalled again on a live candle;
             # one left pending would fill there off a signal read long before.
             if sold_between_ticks or backfilled:
-                self._reject_pending_intent(transition)
+                transition.reject_pending_intent()
             else:
                 entry_fill = self._fill_pending_intent(transition, candle)
             entry_filled_on_current_candle = entry_fill is not None
@@ -249,10 +251,10 @@ class PaperSpotSession:
                     )
 
             indicators = transition.indicators.update(candle)
-            self._evaluate_strategy(
-                transition,
+            transition.evaluate_strategy(
                 candle,
                 indicators,
+                max_entries=self._session.entry_policy.max_entries,
                 exited_on_this_candle=(
                     exit_fill is not None or bool(entry_exits) or sold_between_ticks
                 ),
@@ -378,22 +380,16 @@ class PaperSpotSession:
             fill = self._executor.fill_entry_close(
                 basket, entry_number, price=price, filled_at=observed_at
             )
-            closed_entry = basket.close_entry(
+            closed_entry = transition.sell_entry(
                 entry_number,
                 exit_price=fill.price,
                 closed_at=fill.filled_at,
             )
-            transition.lifecycle.release_fill(entry_number)
-            closed_basket: ClosedBasket | None = None
-            if basket.is_empty:
-                closed_basket = basket.settled_result(
-                    exit_price=fill.price,
-                    closed_at=observed_at,
-                    close_reason=BasketCloseReason.MANUAL,
-                )
-                transition.basket = None
-                transition.lifecycle.reset()
-                transition.closed_basket_count += 1
+            closed_basket = transition.settle_emptied_basket(
+                exit_price=fill.price,
+                closed_at=observed_at,
+                close_reason=BasketCloseReason.MANUAL,
+            )
             self._commit_transition(transition)
             return self._snapshot(
                 accepted=True,
@@ -452,17 +448,6 @@ class PaperSpotSession:
         self._closed_basket_count = transition.closed_basket_count
         self._exited_candle_open_time = transition.exited_candle_open_time
 
-    def _reject_pending_intent(self, transition: _PaperSpotTransition) -> None:
-        """Give the Intent back to the strategy, which signals again when it can.
-
-        Holding it instead would fill it at a later open than the candle it was
-        read from, pricing an Entry off a signal the market has left behind.
-        """
-        if transition.pending_intent is None:
-            return
-        transition.strategy.on_entry_rejected(transition.pending_intent.intent_id)
-        transition.pending_intent = None
-
     def _fill_pending_intent(
         self,
         transition: _PaperSpotTransition,
@@ -474,17 +459,12 @@ class PaperSpotSession:
         intent = transition.pending_intent
         fill = self._executor.fill_entry(intent, candle)
         if fill is None:
-            transition.strategy.on_entry_rejected(intent.intent_id)
-            transition.pending_intent = None
+            transition.reject_pending_intent()
             return None
 
         if transition.basket is None:
-            basket_id = uuid5(
-                self._session.session_id,
-                f"basket:{transition.closed_basket_count + 1}",
-            )
             transition.basket = Basket(
-                basket_id,
+                transition.next_basket_id(self._session.session_id),
                 self._session.entry_policy,
                 self._preset.take_profit_atr_multiplier,
                 stop_loss_atr_multiplier=self._preset.stop_loss_atr_multiplier,
@@ -496,11 +476,8 @@ class PaperSpotSession:
             atr=intent.atr,
             tick_size=self._symbol_rules.tick_size,
         )
-        transition.lifecycle.record_fill()
-        filled_entry = transition.basket.entries[-1]
-        transition.entry_number_filled = filled_entry.entry_number
-        transition.strategy.on_entry_filled(intent.intent_id)
-        transition.pending_intent = None
+        transition.entry_number_filled = transition.basket.entries[-1].entry_number
+        transition.accept_pending_intent()
         return fill
 
     def _fail_closed(self) -> None:
@@ -545,26 +522,21 @@ class PaperSpotSession:
         exits: list[PaperSpotEntryExit] = []
         for fill in fills:
             assert fill.entry_number is not None
-            closed_entry = basket.close_entry(
+            closed_entry = transition.sell_entry(
                 fill.entry_number,
                 exit_price=fill.price,
                 closed_at=fill.filled_at,
             )
-            transition.lifecycle.release_fill(fill.entry_number)
             exits.append(PaperSpotEntryExit(fill=fill, closed=closed_entry))
 
         # An Entry sold on this candle owns it: an Entry filling at the open
         # would predate a sale the market has already made.
         transition.exited_candle_open_time = candle.open_time
-        closed_basket: ClosedBasket | None = None
-        if basket.is_empty:
-            closed_basket = basket.settled_result(
-                exit_price=fills[-1].price,
-                closed_at=filled_at,
-            )
-            transition.basket = None
-            transition.lifecycle.reset()
-            transition.closed_basket_count += 1
+        closed_basket = transition.settle_emptied_basket(
+            exit_price=fills[-1].price,
+            closed_at=filled_at,
+            close_reason=BasketCloseReason.TAKE_PROFIT,
+        )
         return tuple(exits), closed_basket
 
     def _close_basket(
@@ -581,46 +553,8 @@ class PaperSpotSession:
             close_reason=close_reason,
         )
         transition.exited_candle_open_time = candle.open_time
-        transition.basket = None
-        transition.lifecycle.reset()
-        transition.closed_basket_count += 1
+        transition.retire_basket()
         return closed
-
-    def _evaluate_strategy(
-        self,
-        transition: _PaperSpotTransition,
-        candle: Candle,
-        indicators: IndicatorSnapshot | None,
-        *,
-        exited_on_this_candle: bool = False,
-    ) -> None:
-        if indicators is None:
-            return
-        # A signal read from the candle that closed the basket would fill at
-        # the very next open, re-entering on the back of its own exit. The
-        # earliest a new entry can be signalled is the candle after the sell.
-        can_enter = (
-            not exited_on_this_candle
-            and transition.lifecycle.can_enter()
-            and (
-                transition.basket is None
-                or transition.basket.entry_count
-                < self._session.entry_policy.max_entries
-            )
-        )
-        # Entry numbers count every Entry the Basket has ever taken, so one
-        # that sold does not hand its number to the Entry that replaces it.
-        entry_sequence = (
-            0 if transition.basket is None else transition.basket.entry_sequence
-        )
-        intent = transition.strategy.evaluate(
-            candle,
-            indicators,
-            entry_number=entry_sequence + 1,
-            can_enter=can_enter,
-        )
-        if intent is not None:
-            transition.pending_intent = intent
 
     def _entry_gate(self) -> EntryGate | None:
         """The gate, once the Session has seen a candle to state one against.

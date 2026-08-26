@@ -286,6 +286,31 @@ def test_a_futures_pair_leaves_at_its_own_target_and_leaves_the_other_holding() 
     )
 
 
+def test_a_sold_futures_entry_does_not_hand_its_number_to_the_next_one() -> None:
+    """Entry numbers count every Entry the Basket has taken, sold ones included.
+
+    They are what an Intent is identified by and what a Preset reads to decide
+    which step of the grid it is on, so a number handed back to the Entry that
+    replaces it would name two different Entries the same thing.
+    """
+    session, entry_candle = make_session_holding_two_pairs()
+    _pair_one, pair_two = session.snapshot.entry_pairs
+
+    reached = next_candle(
+        entry_candle,
+        open=str(pair_two.take_profit_price - Decimal("1")),
+        high=str(pair_two.take_profit_price),
+        low=str(pair_two.take_profit_price - Decimal("2")),
+        close=str(pair_two.take_profit_price - Decimal("1")),
+    )
+    sold = session.process_completed_candle(reached, received_at=reached.close_time)
+    assert sold.sold_entry_numbers == (3,)
+
+    pending = arm_next_entry_intent(session, reached)
+
+    assert pending.entry_number == 4
+
+
 def test_the_futures_basket_target_sweeps_out_the_pair_left_behind() -> None:
     """One candle clears the Basket's target, and everything goes with it.
 
