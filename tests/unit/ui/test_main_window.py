@@ -386,6 +386,20 @@ def unused_create(values: PaperSessionSetupValues) -> PaperSessionCreateOutcome:
     pytest.fail("create must not run")
 
 
+def wait_for_history_reads_to_land(qtbot: QtBot, window: MainWindow) -> None:
+    """Wait until no history read is still in flight.
+
+    The counters these tests keep are raised by the read itself, on the
+    thread it runs on, so a count says a read has *started*. A tab reopened
+    while one is still running is answered by that one rather than starting
+    another — the de-duplication these tests are not about — so waiting on
+    the count alone lets the reopen land too early and the next count never
+    comes.
+    """
+    workflow = window._history_workflow
+    qtbot.waitUntil(lambda: not workflow._basket_tasks and not workflow._trade_tasks)
+
+
 def open_trade_history(window: MainWindow) -> None:
     window.workspace.show_tab(WorkspaceTab.BASKET_HISTORY)
 
@@ -480,6 +494,7 @@ def test_reopening_a_history_tab_reads_it_again(qtbot: QtBot) -> None:
 
     open_trade_history(window)
     qtbot.waitUntil(lambda: calls == 1)
+    wait_for_history_reads_to_land(qtbot, window)
     window.workspace.show_tab(WorkspaceTab.POSITION_BASKET)
     open_trade_history(window)
 
@@ -509,6 +524,7 @@ def test_reopening_the_trade_half_reads_it_again_without_doubling(
 
     window.workspace.show_tab(WorkspaceTab.TRADE_HISTORY)
     qtbot.waitUntil(lambda: calls == 1)
+    wait_for_history_reads_to_land(qtbot, window)
     window.workspace.show_tab(WorkspaceTab.POSITION_BASKET)
     window.workspace.show_tab(WorkspaceTab.TRADE_HISTORY)
 
@@ -564,6 +580,7 @@ def test_position_history_refreshes_when_the_open_basket_closes(
 
     open_trade_history(window)
     qtbot.waitUntil(lambda: calls == 1)
+    wait_for_history_reads_to_land(qtbot, window)
     window.workspace.show_tab(WorkspaceTab.POSITION_BASKET)
 
     QTimer.singleShot(0, _answer_position_dialog("Market", []))
