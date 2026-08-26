@@ -3,9 +3,7 @@ from tiewtrade.application.paper_spot_session import (
     PaperSpotSessionSnapshot,
 )
 from tiewtrade.application.session_persistence import EntryClosingPersistence
-from tiewtrade.integrations.sqlite.paper_entry_exit import (
-    entry_exits_with_closing_basket,
-)
+from tiewtrade.integrations.sqlite.paper_entry_exit import record_paper_entry_exits
 from tiewtrade.integrations.sqlite.paper_spot_history import PaperSpotSQLiteHistory
 from tiewtrade.integrations.sqlite.session_persistence import (
     SQLiteEntryClosingCoordinator,
@@ -42,7 +40,14 @@ class _PaperSpotSnapshotRecorder:
                 entry_atr=snapshot.entry_atr,
             )
         if snapshot.entry_exits:
-            self._record_entry_exits(snapshot)
+            if snapshot.exit_fill is not None:
+                raise ValueError("an Entry Exit cannot accompany a whole-Basket Exit")
+            record_paper_entry_exits(
+                self._history,
+                snapshot.entry_exits,
+                basket_id=snapshot.basket_id,
+                closed_basket=snapshot.closed_basket,
+            )
             return
         if snapshot.exit_fill is None and snapshot.closed_basket is None:
             return
@@ -55,22 +60,6 @@ class _PaperSpotSnapshotRecorder:
             fill=snapshot.exit_fill,
             closed=snapshot.closed_basket,
         )
-
-    def _record_entry_exits(self, snapshot: PaperSpotSessionSnapshot) -> None:
-        """Write each Entry's sale in the order the Basket made them."""
-        if snapshot.exit_fill is not None:
-            raise ValueError("an Entry Exit cannot accompany a whole-Basket Exit")
-        for entry_exit, basket_id, closed_basket in entry_exits_with_closing_basket(
-            snapshot.entry_exits,
-            basket_id=snapshot.basket_id,
-            closed_basket=snapshot.closed_basket,
-        ):
-            self._history.record_entry_exit(
-                basket_id=basket_id,
-                fill=entry_exit.fill,
-                closed=entry_exit.closed,
-                closed_basket=closed_basket,
-            )
 
 
 def create_persistent_paper_spot_session(

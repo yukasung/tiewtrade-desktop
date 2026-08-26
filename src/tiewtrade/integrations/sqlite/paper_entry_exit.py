@@ -12,7 +12,7 @@ Entries at once, exactly one of those sales — the last — is the one that
 emptied the Basket, and it is the only one that may carry the closed Basket.
 """
 
-from collections.abc import Iterator, Sequence
+from collections.abc import Sequence
 from dataclasses import replace
 from typing import Protocol
 from uuid import UUID
@@ -86,13 +86,42 @@ def record_paper_entry_exit(
     return store.record_entry_exit_fill(basket, normalized_fill)
 
 
-def entry_exits_with_closing_basket[Exit](
-    exits: Sequence[Exit],
+class PaperEntryExit[Fill](Protocol):
+    """One Entry a sale took out of the Basket, and what it left behind.
+
+    Read as a shape rather than as either market's record, because what a
+    sale does to the database is the same in both and only the Fill it books
+    differs.
+    """
+
+    @property
+    def fill(self) -> Fill: ...
+
+    @property
+    def closed(self) -> ClosedEntry: ...
+
+
+class PaperEntryExitHistory[Fill](Protocol):
+    """Where one market writes the sale of a single Entry."""
+
+    def record_entry_exit(
+        self,
+        *,
+        basket_id: UUID,
+        fill: Fill,
+        closed: ClosedEntry,
+        closed_basket: ClosedBasket | None,
+    ) -> bool: ...
+
+
+def record_paper_entry_exits[Fill](
+    history: PaperEntryExitHistory[Fill],
+    exits: Sequence[PaperEntryExit[Fill]],
     *,
     basket_id: UUID | None,
     closed_basket: ClosedBasket | None,
-) -> Iterator[tuple[Exit, UUID, ClosedBasket | None]]:
-    """Each sale in the order the Basket made them, and what it closed.
+) -> None:
+    """Write each Entry's sale in the order the Basket made them.
 
     Only the last sale can be the one that emptied the Basket, so the closed
     Basket travels with that one and with no other — writing it beside an
@@ -103,5 +132,10 @@ def entry_exits_with_closing_basket[Exit](
     if closed_basket is not None and closed_basket.basket_id != basket_id:
         raise ValueError("closed Basket requires a matching Basket ID")
     last = len(exits) - 1
-    for index, exit in enumerate(exits):
-        yield exit, basket_id, closed_basket if index == last else None
+    for index, entry_exit in enumerate(exits):
+        history.record_entry_exit(
+            basket_id=basket_id,
+            fill=entry_exit.fill,
+            closed=entry_exit.closed,
+            closed_basket=closed_basket if index == last else None,
+        )

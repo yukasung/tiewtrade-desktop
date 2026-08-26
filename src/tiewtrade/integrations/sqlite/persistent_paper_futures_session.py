@@ -3,9 +3,7 @@ from tiewtrade.application.paper_futures_session import (
     PaperFuturesSessionSnapshot,
 )
 from tiewtrade.application.session_persistence import SessionPersistenceCoordinator
-from tiewtrade.integrations.sqlite.paper_entry_exit import (
-    entry_exits_with_closing_basket,
-)
+from tiewtrade.integrations.sqlite.paper_entry_exit import record_paper_entry_exits
 from tiewtrade.integrations.sqlite.paper_futures_history import (
     PaperFuturesSQLiteHistory,
 )
@@ -35,21 +33,12 @@ class _PaperFuturesSnapshotRecorder:
             if snapshot.closed_basket is not None:
                 raise ValueError("a closed Basket requires the Exits that emptied it")
             return
-        self._record_entry_exits(snapshot)
-
-    def _record_entry_exits(self, snapshot: PaperFuturesSessionSnapshot) -> None:
-        """Write each Entry's sale in the order the Basket made them."""
-        for entry_exit, basket_id, closed_basket in entry_exits_with_closing_basket(
+        record_paper_entry_exits(
+            self._history,
             snapshot.entry_exits,
             basket_id=snapshot.basket_id,
             closed_basket=snapshot.closed_basket,
-        ):
-            self._history.record_entry_exit(
-                basket_id=basket_id,
-                fill=entry_exit.fill,
-                closed=entry_exit.closed,
-                closed_basket=closed_basket,
-            )
+        )
 
 
 def create_persistent_paper_futures_session(
