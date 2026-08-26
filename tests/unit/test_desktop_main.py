@@ -48,7 +48,10 @@ from tiewtrade.application.trading_workspace import (
     WorkspaceTabState,
 )
 from tiewtrade.desktop_logging import LOG_FILE_NAME
-from tiewtrade.integrations.binance.public_endpoints import BinancePublicEndpoints
+from tiewtrade.integrations.binance.public_endpoints import (
+    BinanceMarketDataPayloadError,
+    BinancePublicEndpoints,
+)
 from tiewtrade.integrations.binance.public_market_data import BinancePublicMarketData
 from tiewtrade.integrations.sqlite.database import (
     SQLiteDatabase,
@@ -285,26 +288,22 @@ def test_desktop_composition_supplies_chart_loader_without_ui_adapter_imports(
         return await load_chart(session, chart_range)
 
     spot: ChartSnapshot = asyncio.run(invoke_chart_loader(configured_spot_session()))
-    futures: ChartSnapshot = asyncio.run(
-        invoke_chart_loader(configured_futures_session())
-    )
 
     assert isinstance(spot, ChartSnapshot)
-    assert isinstance(futures, ChartSnapshot)
+    # Binance TH lists no Futures market, so a Futures chart has nothing to
+    # read and says so rather than drawing another exchange's prices.
+    with pytest.raises(BinanceMarketDataPayloadError):
+        asyncio.run(invoke_chart_loader(configured_futures_session()))
     assert selected_endpoints == [
         BinancePublicEndpoints(
-            rest_klines_url="https://data-api.binance.vision/api/v3/klines",
-            websocket_base_url="wss://data-stream.binance.vision/ws",
-        ),
-        BinancePublicEndpoints(
-            rest_klines_url="https://fapi.binance.com/fapi/v1/klines",
-            websocket_base_url="wss://fstream.binance.com/ws",
+            rest_klines_url="https://api.binance.th/api/v1/klines",
+            websocket_base_url="wss://nbstream.binance.th/w3w/wsa/stream",
         ),
     ]
     assert all(
         "/api/v3/account" not in item.rest_klines_url for item in selected_endpoints
     )
-    assert len(sources) == 2
+    assert len(sources) == 1
     assert all(cast(FakePublicMarketData, source).closed for source in sources)
 
     ui_source = "\n".join(

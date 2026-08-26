@@ -331,16 +331,17 @@ def test_in_progress_candle_is_published_without_changing_workspace(
     controller.stop(session)
 
 
-def test_futures_does_not_act_on_a_forming_candle(tmp_path: Path) -> None:
-    """One sink feeds both markets, so the Session states this rule, not the sink.
+def test_a_futures_session_cannot_start_without_a_market_to_read(
+    tmp_path: Path,
+) -> None:
+    """Binance TH lists no Futures market, so there is no feed to start on.
 
-    Paper Futures answers a forming candle with an unaccepted snapshot, which
-    has to keep the Basket exactly where the last close left it.
+    The Bot says so at the door and stays stopped, rather than reporting
+    RUNNING over a stream that was never opened.
     """
     session = configured_futures_session()
     database = _database_with_session(tmp_path, session)
     source = QueuedPublicCandleSource(warm_up=_warm_up_candles())
-    in_progress_candles: list[Candle] = []
     controller = PaperRuntimeController(
         lifecycle=SQLitePaperRuntimeLifecycle(database),
         trade_history=SQLiteTradeHistory(database),
@@ -348,19 +349,13 @@ def test_futures_does_not_act_on_a_forming_candle(tmp_path: Path) -> None:
         source_factory=lambda _endpoints: source,
         scheduler=ImmediateScheduler(),
         snapshot_callback=lambda _snapshot: None,
-        in_progress_candle_callback=in_progress_candles.append,
     )
-    controller.start(session)
-    before = controller.current_workspace
-    forming = _candle(15, close=Decimal("87.25"))
 
-    source.emit_open(forming)
+    result = controller.start(session)
 
-    assert source.delivery_completed.wait(1)
-    # The chart still sees it; the Session simply decided nothing on it.
-    assert in_progress_candles == [forming]
-    assert controller.current_workspace == before
-    controller.stop(session)
+    assert result.blocked_reason == "Paper Bot could not be started"
+    assert result.workspace.header is not None
+    assert result.workspace.header.runtime_state is not BotRuntimeState.RUNNING
 
 
 def test_in_progress_candle_observer_failure_does_not_block_runtime(
@@ -390,7 +385,7 @@ def test_in_progress_candle_observer_failure_does_not_block_runtime(
     controller.stop(session)
 
 
-@pytest.mark.parametrize("market_type", [MarketType.SPOT, MarketType.FUTURES])
+@pytest.mark.parametrize("market_type", [MarketType.SPOT])
 def test_start_selects_concrete_paper_market_and_publishes_live_basket(
     tmp_path: Path,
     market_type: MarketType,
@@ -1185,7 +1180,7 @@ def _record_open_spot_entry(
     )
 
 
-@pytest.mark.parametrize("market_type", [MarketType.SPOT, MarketType.FUTURES])
+@pytest.mark.parametrize("market_type", [MarketType.SPOT])
 def test_stop_closes_runtime_marks_stopped_and_preserves_basket(
     tmp_path: Path,
     market_type: MarketType,

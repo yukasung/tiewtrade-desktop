@@ -11,7 +11,10 @@ import pytest
 from tiewtrade.application.public_market_data_runtime import (
     create_public_market_data_runtime,
 )
-from tiewtrade.integrations.binance.public_endpoints import BinancePublicEndpoints
+from tiewtrade.integrations.binance.public_endpoints import (
+    BinanceMarketDataPayloadError,
+    BinancePublicEndpoints,
+)
 from tiewtrade.market_data.candle import Candle
 from tiewtrade.market_data.candle_source import MarketDataKlineUpdate
 from tiewtrade.market_data.config import MarketDataConfig
@@ -75,26 +78,10 @@ class RecordingSink:
         del candle, received_at
 
 
-@pytest.mark.parametrize(
-    ("market_type", "expected_rest_url", "expected_websocket_url"),
-    [
-        (
-            MarketType.SPOT,
-            "https://data-api.binance.vision/api/v3/klines",
-            "wss://data-stream.binance.vision/ws",
-        ),
-        (
-            MarketType.FUTURES,
-            "https://fapi.binance.com/fapi/v1/klines",
-            "wss://fstream.binance.com/ws",
-        ),
-    ],
-)
-def test_session_market_type_selects_public_endpoint_before_source_creation(
-    market_type: MarketType,
-    expected_rest_url: str,
-    expected_websocket_url: str,
-) -> None:
+def test_session_market_type_selects_public_endpoint_before_source_creation() -> None:
+    market_type = MarketType.SPOT
+    expected_rest_url = "https://api.binance.th/api/v1/klines"
+    expected_websocket_url = "wss://nbstream.binance.th/w3w/wsa/stream"
     selected_endpoints: list[BinancePublicEndpoints] = []
     fake_source = FakePublicCandleSource()
 
@@ -121,6 +108,18 @@ def test_session_market_type_selects_public_endpoint_before_source_creation(
     ]
     asyncio.run(runtime.run())
     assert fake_source.requested_warm_up_counts == [15]
+
+
+def test_a_futures_session_has_no_public_market_to_read() -> None:
+    """Binance TH lists no Futures market, so composition stops here."""
+    with pytest.raises(BinanceMarketDataPayloadError):
+        create_public_market_data_runtime(
+            session=session_config(MarketType.FUTURES),
+            market_data=MarketDataConfig(symbol="ETHUSDT", timeframe="15m"),
+            preset=RsiStepGridPreset.v1(),
+            sink=RecordingSink(),
+            source_factory=lambda endpoints: FakePublicCandleSource(),
+        )
 
 
 def session_config(market_type: MarketType) -> SessionConfig:

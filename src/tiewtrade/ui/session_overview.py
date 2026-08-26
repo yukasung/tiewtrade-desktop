@@ -10,6 +10,7 @@ from tiewtrade.trading.futures_policy import FuturesTradingPolicy
 from tiewtrade.trading.session_config import MarketType
 from tiewtrade.ui.blank_text import BLANK
 from tiewtrade.ui.display_time import display_timestamp
+from tiewtrade.ui.money_text import QUOTE_ASSET
 from tiewtrade.ui.pair_text import pair_text
 
 _UNAVAILABLE = "Unavailable"
@@ -40,7 +41,7 @@ class SessionOverviewWidget(QWidget):
         self.timeframe_value.setText(session.market_data.timeframe)
         self.preset_value.setText(preset_display_name(config.preset_version))
         self.capital_per_entry_value.setText(
-            f"{_amount_text(config.capital_per_entry)} USDT"
+            f"{_amount_text(config.capital_per_entry)} {QUOTE_ASSET}"
         )
         self.max_entries_value.setText(str(config.entry_policy.max_entries))
         self._show_market_policy(session)

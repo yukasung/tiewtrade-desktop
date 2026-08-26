@@ -4,6 +4,7 @@ from decimal import Decimal, InvalidOperation
 
 from tiewtrade.integrations.binance.public_endpoints import (
     BinanceMarketDataPayloadError,
+    kline_stream_name,
 )
 from tiewtrade.market_data.candle import Candle
 from tiewtrade.market_data.candle_source import MarketDataKlineUpdate
@@ -30,16 +31,43 @@ def parse_rest_kline(payload: object, config: MarketDataConfig) -> Candle:
         raise BinanceMarketDataPayloadError(_INVALID_PAYLOAD_MESSAGE) from error
 
 
+def is_stream_acknowledgement(payload: object) -> bool:
+    """Whether this message is Binance TH answering the subscription itself.
+
+    A combined-stream connection opens with the streams named in the URL, and
+    Binance TH answers that request before any market data arrives:
+    {"id": 13264512, "result": null}. It carries no candle and no stream, so
+    it is neither an update to yield nor a payload to reject — the feed has
+    simply not started talking about the market yet.
+    """
+    return (
+        isinstance(payload, Mapping)
+        and "result" in payload
+        and "id" in payload
+        and "stream" not in payload
+    )
+
+
 def parse_websocket_kline(
     payload: object, config: MarketDataConfig
 ) -> MarketDataKlineUpdate:
-    """Normalize one Binance WebSocket kline into a validated stateful update."""
+    """Normalize one Binance TH WebSocket kline into a validated update.
+
+    Binance TH publishes market data through combined streams only, so every
+    event arrives wrapped in the stream that carried it. The wrapper is
+    checked rather than skipped: one connection may carry up to a thousand
+    streams, and a Candle read off the wrong one would be another market's
+    price wearing this Session's symbol.
+    """
     try:
         if not isinstance(payload, Mapping):
             raise ValueError("WebSocket kline payload must be an object")
+        if _required_string(payload, "stream") != kline_stream_name(config):
+            raise ValueError("stream must match the configured market")
+        event = _required_mapping(payload, "data")
 
-        symbol = _required_string(payload, "s")
-        kline = _required_mapping(payload, "k")
+        symbol = _required_string(event, "s")
+        kline = _required_mapping(event, "k")
         if symbol != config.symbol:
             raise ValueError("s must match configured symbol")
         if _required_string(kline, "s", field_name="k.s") != config.symbol:

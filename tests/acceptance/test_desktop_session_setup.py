@@ -152,16 +152,15 @@ class _AcceptancePublicCandleSource:
         await asyncio.Event().wait()
 
 
+# Spot only: Binance TH lists no Futures market, so a Futures Session has no
+# feed to start on and never reaches a running runtime. That the Bot says so
+# instead of starting is covered in tests/unit/application/test_paper_runtime.
 @pytest.mark.parametrize(
     "case",
     [
         pytest.param(
             _SessionCase("spot", "5m", 10, None),
             id="spot",
-        ),
-        pytest.param(
-            _SessionCase("futures", "5m", 10, 3),
-            id="futures",
         ),
     ],
 )
