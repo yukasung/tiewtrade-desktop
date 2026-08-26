@@ -1,3 +1,4 @@
+import logging
 from collections.abc import Callable
 from datetime import UTC, datetime
 from enum import Enum
@@ -25,6 +26,7 @@ from tiewtrade.ui.background_task import BackgroundTask
 CreateSession = Callable[[PaperSessionSetupValues], PaperSessionCreateOutcome]
 LoadActiveSession = Callable[[], ConfiguredPaperSession | None]
 _NEWER_DATABASE_MESSAGE = "Database was created by a newer version of TiewTrade"
+_LOGGER = logging.getLogger("tiewtrade.ui.session_workflow")
 
 
 class _Operation(Enum):
@@ -162,6 +164,7 @@ class SessionWorkflow(QObject):
             self._publish_load_failure(_NEWER_DATABASE_MESSAGE)
             return
         if isinstance(error, PaperSessionUnavailableError):
+            self._log_unavailable("load", error)
             self._publish_load_failure("Session storage is unavailable")
             return
         self._publish_load_failure("Paper Session could not be loaded")
@@ -175,9 +178,25 @@ class SessionWorkflow(QObject):
             self._publish_create_failure(_NEWER_DATABASE_MESSAGE)
             return
         if isinstance(error, PaperSessionUnavailableError):
+            self._log_unavailable("create", error)
             self._publish_create_failure("Session storage is unavailable")
             return
         self._publish_create_failure("Paper Session could not be created")
+
+    def _log_unavailable(
+        self, operation: str, error: PaperSessionUnavailableError
+    ) -> None:
+        """Write down the sqlite3.Error the UI message hides.
+
+        "Session storage is unavailable" is deliberately generic for the user,
+        but without the cause underneath it a lock, a permissions problem, and
+        a corrupt row all look identical afterward.
+        """
+        _LOGGER.error(
+            "session_storage.unavailable",
+            extra={"event_name": "session_storage.unavailable", "operation": operation},
+            exc_info=error,
+        )
 
     def _publish_load_failure(self, message: str) -> None:
         self._publish_workspace(
