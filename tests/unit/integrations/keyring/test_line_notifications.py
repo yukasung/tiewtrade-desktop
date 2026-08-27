@@ -8,7 +8,6 @@ from keyring.errors import KeyringError, PasswordDeleteError
 
 from tiewtrade.integrations.keyring.line_notifications import (
     LineNotificationSettingsError,
-    line_notifications_are_stored,
     load_line_notification_settings,
     save_line_notification_settings,
 )
@@ -69,7 +68,6 @@ def test_nothing_saved_reads_as_notifications_off(fake_keyring: FakeKeyring) -> 
 
     assert not settings.enabled
     assert not settings.deliverable
-    assert not line_notifications_are_stored()
 
 
 def test_settings_turned_on_without_a_token_deliver_nothing(
@@ -85,14 +83,11 @@ def test_settings_turned_on_without_a_token_deliver_nothing(
     assert not settings.deliverable
 
 
-def test_saving_without_a_new_token_keeps_the_one_already_stored(
-    fake_keyring: FakeKeyring,
-) -> None:
-    """A blank token field is a field left alone, not a token taken back.
+def test_a_token_the_trader_cleared_is_cleared(fake_keyring: FakeKeyring) -> None:
+    """A blank token field is a token taken back, not a field left alone.
 
-    The form never shows the stored token, so blank is what it always starts
-    at — treating that as "erase it" would mean retyping the whole token to
-    change the recipient beside it.
+    The form is filled from what is stored, so a field that reaches here
+    empty was emptied on purpose — the same reading the recipient gets.
     """
     save_line_notification_settings(
         enabled=True, target_id="U123", channel_access_token="token-value"
@@ -104,7 +99,7 @@ def test_saving_without_a_new_token_keeps_the_one_already_stored(
 
     settings = load_line_notification_settings()
     assert settings.target_id == "U456"
-    assert settings.channel_access_token == "token-value"
+    assert settings.channel_access_token == ""
 
 
 def test_turning_notifications_off_stops_them_without_forgetting_the_token(
@@ -115,7 +110,7 @@ def test_turning_notifications_off_stops_them_without_forgetting_the_token(
     )
 
     save_line_notification_settings(
-        enabled=False, target_id="U123", channel_access_token=""
+        enabled=False, target_id="U123", channel_access_token="token-value"
     )
 
     settings = load_line_notification_settings()
@@ -130,7 +125,9 @@ def test_a_target_the_trader_cleared_is_cleared(fake_keyring: FakeKeyring) -> No
         enabled=True, target_id="U123", channel_access_token="token-value"
     )
 
-    save_line_notification_settings(enabled=True, target_id="", channel_access_token="")
+    save_line_notification_settings(
+        enabled=True, target_id="", channel_access_token="token-value"
+    )
 
     assert load_line_notification_settings().target_id == ""
 
@@ -158,13 +155,3 @@ def test_a_keyring_that_cannot_be_written_says_so(
         save_line_notification_settings(
             enabled=True, target_id="U123", channel_access_token="token-value"
         )
-
-
-def test_whether_a_token_is_stored_is_answerable_without_reading_it(
-    fake_keyring: FakeKeyring,
-) -> None:
-    save_line_notification_settings(
-        enabled=True, target_id="U123", channel_access_token="token-value"
-    )
-
-    assert line_notifications_are_stored()

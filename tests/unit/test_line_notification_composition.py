@@ -78,6 +78,21 @@ def _notify_once(monkeypatch: pytest.MonkeyPatch, settings: object) -> None:
     asyncio.run(run())
 
 
+def test_the_reading_a_form_gets_is_the_settings_themselves(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The form is filled from what is stored, token included.
+
+    A screen that offers to change a token has to show which one it is
+    changing, the same way it shows the recipient beside it.
+    """
+    monkeypatch.setattr(
+        composition, "load_line_notification_settings", lambda: _settings()
+    )
+
+    assert composition.line_notification_reading() == (True, "U123", "token-value")
+
+
 def test_settings_that_are_ready_push_the_notice(
     monkeypatch: pytest.MonkeyPatch,
     push: RecordingPush,

@@ -97,7 +97,6 @@ from tiewtrade.ui.main_window import (
 )
 from tiewtrade.ui.pair_text import pair_text
 from tiewtrade.ui.session_overview import SessionOverviewWidget
-from tiewtrade.ui.settings_panel import TOKEN_STORED_PLACEHOLDER
 from tiewtrade.ui.trade_history_presenter import (
     default_filter_values,
     trade_history_filter,
@@ -4227,7 +4226,7 @@ def test_opening_settings_fills_the_line_form_from_what_is_stored(
         load_active=no_active_session,
         list_basket_history=empty_basket_history,
         list_trade_fills=empty_trade_fills,
-        read_line_notifications=lambda: (True, "U123", True),
+        read_line_notifications=lambda: (True, "U123", "token-value"),
     )
     qtbot.addWidget(window)
     window.show()
@@ -4238,20 +4237,20 @@ def test_opening_settings_fills_the_line_form_from_what_is_stored(
     panel = window.workspace.settings_panel
     qtbot.waitUntil(lambda: panel.line_target_id.text() == "U123")
     assert panel.line_enabled.isChecked()
-    assert panel.line_access_token.text() == ""
+    assert panel.line_access_token.text() == "token-value"
 
 
 def test_saving_line_settings_hands_them_off_and_reads_them_back(
     qtbot: QtBot,
 ) -> None:
-    """The token leaves the screen the moment it is stored, and does not return.
+    """What the form shows after saving is what was stored, not what was typed.
 
-    Saving is the only thing the window does with a token: it is handed to
-    whoever keeps it, and what comes back to the form is the reading — which
-    says a token is stored without saying what it is.
+    The two are not the same thing — a token that never reached the machine
+    would leave a form claiming it had — so the window hands the settings off
+    and fills the form from the reading that comes back.
     """
     saved: list[tuple[bool, str, str]] = []
-    readings = [(False, "", False), (True, "U123", True)]
+    readings = [(False, "", ""), (True, "U123", "stored-token")]
 
     def save(enabled: bool, target_id: str, access_token: str) -> None:
         saved.append((enabled, target_id, access_token))
@@ -4277,10 +4276,7 @@ def test_saving_line_settings_hands_them_off_and_reads_them_back(
     click(panel.save_line_button)
 
     qtbot.waitUntil(lambda: saved == [(True, "U123", "token-value")])
-    qtbot.waitUntil(
-        lambda: panel.line_access_token.placeholderText() == TOKEN_STORED_PLACEHOLDER
-    )
-    assert panel.line_access_token.text() == ""
+    qtbot.waitUntil(lambda: panel.line_access_token.text() == "stored-token")
 
 
 def test_line_settings_that_cannot_be_stored_are_reported_where_they_were_typed(

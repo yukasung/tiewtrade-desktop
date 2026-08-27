@@ -34,17 +34,18 @@ __all__ = [
 ]
 
 
-def line_notification_reading() -> tuple[bool, str, bool]:
-    """What a settings form may know: turned on, sending to whom, token or not.
+def line_notification_reading() -> tuple[bool, str, str]:
+    """What a settings form is filled with: turned on, sending to whom, with what.
 
-    The token itself is deliberately not among them. A screen that offers to
-    replace it needs to know only that there is one to replace.
+    The token comes back with the rest of it. A screen that offers to change
+    a token has to show which token it is changing, and it stays covered on
+    the way there — read out of here, never out of a message or a log.
     """
     settings = load_line_notification_settings()
     return (
         settings.enabled,
         settings.target_id,
-        bool(settings.channel_access_token),
+        settings.channel_access_token,
     )
 
 

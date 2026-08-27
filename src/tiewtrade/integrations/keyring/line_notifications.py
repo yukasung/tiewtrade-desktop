@@ -67,15 +67,6 @@ def load_line_notification_settings() -> LineNotificationSettings:
     )
 
 
-def line_notifications_are_stored() -> bool:
-    """Whether a token is there to send with — never what it is.
-
-    The screen that offers to change the token has no business reading it,
-    and this is the whole of what it needs to say so.
-    """
-    return bool(load_line_notification_settings().channel_access_token)
-
-
 def save_line_notification_settings(
     *,
     enabled: bool,
@@ -84,16 +75,14 @@ def save_line_notification_settings(
 ) -> None:
     """Keep the settings, and say so plainly where they could not be kept.
 
-    A blank token means the token already stored, not an empty one: the form
-    it comes from never shows a stored token, so blank is where it starts
-    every time and cannot be read as an erasure. The recipient is different —
-    the form does show it, so an empty one there was typed empty on purpose.
+    Every field is taken at its word, the blank ones included: the form these
+    come from is filled with what is stored, so a value that arrives empty
+    was emptied on purpose rather than never filled in.
     """
     try:
         _put(_ENABLED_KEY, _ENABLED_VALUE if enabled else "")
         _put(_TARGET_KEY, target_id)
-        if channel_access_token:
-            _put(_TOKEN_KEY, channel_access_token)
+        _put(_TOKEN_KEY, channel_access_token)
     except KeyringError as error:
         _logger.warning("%s reason=%s", _UNAVAILABLE_EVENT, type(error).__name__)
         raise LineNotificationSettingsError(

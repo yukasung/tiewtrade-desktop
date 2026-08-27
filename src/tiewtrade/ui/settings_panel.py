@@ -8,13 +8,13 @@ say if it does not — is for whoever owns the actual clearing to decide,
 the same way `PositionBasketTable.close_all_requested` leaves the
 confirming to its window rather than asking it here.
 
-The LINE fields are filled in here and never read back out: the panel is
-told whether a token is stored, and says so on the token field itself
-rather than in a note beside it, while the token stays wherever the
-machine keeps it.
+The LINE fields are filled in from what is stored, the token among them:
+a form that offers to change a token has to show which one it is changing.
+It arrives covered and stays that way unless the trader asks to see it.
 """
 
-from PySide6.QtCore import Signal
+from PySide6.QtCore import QPointF, QRectF, Qt, Signal
+from PySide6.QtGui import QAction, QColor, QIcon, QPainter, QPainterPath, QPen, QPixmap
 from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
@@ -30,12 +30,16 @@ CLEAR_DATABASE_BUSY_TEXT = "Clearing…"
 CLEAR_DATABASE_IDLE_TEXT = "Clear All Database"
 SAVE_LINE_BUSY_TEXT = "Saving…"
 SAVE_LINE_IDLE_TEXT = "Save Settings"
-TOKEN_STORED_PLACEHOLDER = "Saved — type a new token to replace it"
 TOKEN_MISSING_PLACEHOLDER = "Messaging API channel access token"
 TOKEN_UNREADABLE_TEXT = "The saved LINE settings could not be read on this machine."
+REVEAL_TOKEN_TEXT = "Show the token being typed"
+HIDE_TOKEN_TEXT = "Hide the token being typed"
 
-type LineNotificationsReading = tuple[bool, str, bool]
-"""Turned on, who the messages go to, and whether a token is stored for it."""
+_EYE_ICON_SIZE = 18
+_EYE_ICON_COLOR = "#94A3B8"
+
+type LineNotificationsReading = tuple[bool, str, str]
+"""Turned on, who the messages go to, and the token they are sent with."""
 
 
 class SettingsPanel(QWidget):
@@ -69,6 +73,15 @@ class SettingsPanel(QWidget):
         self.line_access_token = QLineEdit()
         self.line_access_token.setEchoMode(QLineEdit.EchoMode.Password)
         self.line_access_token.setPlaceholderText(TOKEN_MISSING_PLACEHOLDER)
+
+        # Inside the field rather than beside it: the token needs the whole
+        # width of the page, and a button in the row would take some of it.
+        self.reveal_token = QAction(_eye_icon(crossed=False), REVEAL_TOKEN_TEXT, self)
+        self.reveal_token.setCheckable(True)
+        self.reveal_token.toggled.connect(self._show_token_being_typed)
+        self.line_access_token.addAction(
+            self.reveal_token, QLineEdit.ActionPosition.TrailingPosition
+        )
 
         # Blank unless something is wrong: what a trader has to be told about
         # these settings is that they could not be read, not that they were.
@@ -122,21 +135,27 @@ class SettingsPanel(QWidget):
         )
 
     def show_line_notifications(self, reading: LineNotificationsReading) -> None:
-        """Fill the form from what is stored, leaving the token field empty.
+        """Fill the form from what is stored, the token field included.
 
-        A token that is already saved is said to be there, never shown: the
-        trader types one only to replace it, and a field filled with the old
-        one would put a live token on screen for nothing.
+        The token comes back covered, and the page is left the way it opens
+        rather than the way it was last typed into: whatever was revealed
+        before is hidden again with it.
         """
-        enabled, target_id, token_stored = reading
+        enabled, target_id, access_token = reading
         self.line_enabled.setChecked(enabled)
         self.line_target_id.setText(target_id)
-        self.line_access_token.clear()
-        self.line_access_token.setPlaceholderText(
-            TOKEN_STORED_PLACEHOLDER if token_stored else TOKEN_MISSING_PLACEHOLDER
-        )
+        self.reveal_token.setChecked(False)
+        self.line_access_token.setText(access_token)
         self.line_token_state.clear()
         self.line_token_state.setVisible(False)
+
+    def _show_token_being_typed(self, revealed: bool) -> None:
+        """Uncover the token, which is covered whenever the form is filled."""
+        self.line_access_token.setEchoMode(
+            QLineEdit.EchoMode.Normal if revealed else QLineEdit.EchoMode.Password
+        )
+        self.reveal_token.setIcon(_eye_icon(crossed=revealed))
+        self.reveal_token.setText(HIDE_TOKEN_TEXT if revealed else REVEAL_TOKEN_TEXT)
 
     def say_line_notifications_unreadable(self) -> None:
         """Say the settings could not be read, rather than that there are none.
@@ -154,6 +173,32 @@ class SettingsPanel(QWidget):
             self.line_target_id.text().strip(),
             self.line_access_token.text().strip(),
         )
+
+
+def _eye_icon(*, crossed: bool) -> QIcon:
+    """An eye, struck through once what it was hiding is on screen."""
+    # Painted at 3x and tagged, so the outline stays smooth on a retina screen.
+    ratio = 3
+    pixmap = QPixmap(_EYE_ICON_SIZE * ratio, _EYE_ICON_SIZE * ratio)
+    pixmap.setDevicePixelRatio(ratio)
+    pixmap.fill(Qt.GlobalColor.transparent)
+    painter = QPainter(pixmap)
+    painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+    pen = QPen(QColor(_EYE_ICON_COLOR), 1.5)
+    pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+    painter.setPen(pen)
+    painter.setBrush(Qt.BrushStyle.NoBrush)
+    outline = QPainterPath(QPointF(1.8, 9.0))
+    outline.quadTo(QPointF(9.0, 1.6), QPointF(16.2, 9.0))
+    outline.quadTo(QPointF(9.0, 16.4), QPointF(1.8, 9.0))
+    painter.drawPath(outline)
+    painter.drawEllipse(QRectF(6.4, 6.4, 5.2, 5.2))
+    if crossed:
+        painter.drawLine(QPointF(3.4, 15.0), QPointF(14.6, 3.0))
+    painter.end()
+    icon = QIcon()
+    icon.addPixmap(pixmap)
+    return icon
 
 
 def _field_row(label: str, field: QWidget) -> QVBoxLayout:

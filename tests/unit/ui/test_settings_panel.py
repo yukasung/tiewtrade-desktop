@@ -6,7 +6,6 @@ from tiewtrade.ui.settings_panel import (
     SAVE_LINE_BUSY_TEXT,
     SAVE_LINE_IDLE_TEXT,
     TOKEN_MISSING_PLACEHOLDER,
-    TOKEN_STORED_PLACEHOLDER,
     TOKEN_UNREADABLE_TEXT,
     SettingsPanel,
 )
@@ -92,23 +91,66 @@ def test_saving_line_settings_emits_what_the_form_holds(qtbot: QtBot) -> None:
     assert emitted.args == [True, "U123", "token-value"]
 
 
-def test_the_token_field_never_shows_what_it_holds(qtbot: QtBot) -> None:
+def test_the_token_field_starts_as_dots(qtbot: QtBot) -> None:
+    """Typing a token in front of whoever is nearby is nobody's default."""
     panel = SettingsPanel()
     qtbot.addWidget(panel)
 
     assert panel.line_access_token.echoMode() is QLineEdit.EchoMode.Password
+    assert not panel.reveal_token.isChecked()
 
 
-def test_a_stored_token_is_described_rather_than_filled_in(qtbot: QtBot) -> None:
+def test_the_token_being_typed_can_be_read_back_and_hidden_again(
+    qtbot: QtBot,
+) -> None:
+    """A token is long enough to mistype, and dots say nothing about where."""
+    panel = SettingsPanel()
+    qtbot.addWidget(panel)
+    panel.line_access_token.setText("token-value")
+
+    panel.reveal_token.trigger()
+
+    assert panel.line_access_token.echoMode() is QLineEdit.EchoMode.Normal
+
+    panel.reveal_token.trigger()
+
+    assert panel.line_access_token.echoMode() is QLineEdit.EchoMode.Password
+
+
+def test_reading_the_settings_back_covers_the_token_field_again(
+    qtbot: QtBot,
+) -> None:
+    """A revealed field left open outlives the reason it was opened.
+
+    Saving empties the field and reads the settings back, and a page returned
+    to later should not still be the one that was being typed into.
+    """
+    panel = SettingsPanel()
+    qtbot.addWidget(panel)
+    panel.line_access_token.setText("token-value")
+    panel.reveal_token.trigger()
+
+    panel.show_line_notifications((True, "U123", "token-value"))
+
+    assert panel.line_access_token.echoMode() is QLineEdit.EchoMode.Password
+    assert not panel.reveal_token.isChecked()
+
+
+def test_a_stored_token_is_filled_in_behind_dots(qtbot: QtBot) -> None:
+    """The form shows what is stored, the way the recipient beside it does.
+
+    A field that only ever said a token was there left a trader no way to
+    check which one, and no way to edit the one they had.
+    """
     panel = SettingsPanel()
     qtbot.addWidget(panel)
 
-    panel.show_line_notifications((True, "U123", True))
+    panel.show_line_notifications((True, "U123", "token-value"))
 
     assert panel.line_enabled.isChecked()
     assert panel.line_target_id.text() == "U123"
-    assert panel.line_access_token.text() == ""
-    assert panel.line_access_token.placeholderText() == TOKEN_STORED_PLACEHOLDER
+    assert panel.line_access_token.text() == "token-value"
+    assert panel.line_access_token.echoMode() is QLineEdit.EchoMode.Password
 
 
 def test_settings_with_no_token_saved_say_so(qtbot: QtBot) -> None:
@@ -116,7 +158,7 @@ def test_settings_with_no_token_saved_say_so(qtbot: QtBot) -> None:
     qtbot.addWidget(panel)
     panel.line_access_token.setText("typed-but-not-saved")
 
-    panel.show_line_notifications((False, "", False))
+    panel.show_line_notifications((False, "", ""))
 
     assert not panel.line_enabled.isChecked()
     assert panel.line_access_token.text() == ""
@@ -142,7 +184,7 @@ def test_settings_nobody_could_read_say_so_where_they_were_typed(
     assert panel.line_token_state.isVisible()
     assert panel.line_token_state.text() == TOKEN_UNREADABLE_TEXT
 
-    panel.show_line_notifications((False, "", False))
+    panel.show_line_notifications((False, "", ""))
 
     assert not panel.line_token_state.isVisible()
 
