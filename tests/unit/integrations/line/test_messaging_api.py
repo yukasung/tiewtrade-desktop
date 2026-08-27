@@ -56,7 +56,7 @@ def test_a_delivered_notice_is_pushed_once() -> None:
     _notify_and_settle(push)
 
     assert len(push.messages) == 1
-    assert "Entry #1 opened — BTCUSDT 5m" in push.messages[0]
+    assert push.messages[0].startswith("Entry #1 opened\nBTCUSDT 5m\n\n")
 
 
 def test_a_retryable_push_is_tried_once_more() -> None:
