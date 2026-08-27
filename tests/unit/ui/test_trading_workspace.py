@@ -8,7 +8,7 @@ from PySide6.QtWidgets import QWidget
 from pytestqt.qtbot import QtBot
 
 from tests.support.paper_session_setup import configured_spot_session
-from tests.support.workspace_snapshots import basket_entries, basket_pairs
+from tests.support.workspace_snapshots import basket_entries, basket_targets
 from tiewtrade.application.chart_data import ChartRange, ChartReadState, ChartSnapshot
 from tiewtrade.application.trading_workspace import (
     BasketEntryGate,
@@ -97,7 +97,7 @@ def test_workspace_tabs_render_independent_scoped_states(qtbot: QtBot) -> None:
         average_entry_price=Decimal("66000.0000"),
         current_price=Decimal("66321.1200"),
         take_profit_price=Decimal("67000.0000"),
-        pairs=basket_pairs(
+        targets=basket_targets(
             basket_entries(
                 "66000.0000", quantity="0.00300000", current_price="66321.1200"
             )

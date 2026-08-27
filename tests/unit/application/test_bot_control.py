@@ -6,7 +6,7 @@ from decimal import Decimal
 import pytest
 
 from tests.support.paper_session_setup import configured_spot_session
-from tests.support.workspace_snapshots import basket_entries, basket_pairs
+from tests.support.workspace_snapshots import basket_entries, basket_targets
 from tiewtrade.application.bot_control import (
     BotControlAction,
     BotControlSnapshot,
@@ -510,7 +510,7 @@ def _running_control_with_workspace_facts() -> BotControlSnapshot:
                 average_entry_price=Decimal("64000.123456789012345678"),
                 current_price=Decimal("65000.123456789012345678"),
                 take_profit_price=Decimal("66000.123456789012345678"),
-                pairs=basket_pairs(basket_entries("63000", "65000")),
+                targets=basket_targets(basket_entries("63000", "65000")),
                 unrealized_pnl=Decimal("1000"),
                 entry_gate=BasketEntryGate.OPEN,
                 updated_at_utc=OBSERVED_AT,

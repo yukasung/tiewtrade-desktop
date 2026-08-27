@@ -22,7 +22,7 @@ from tests.support.trade_history_ui import (
     empty_basket_history,
     empty_trade_fills,
 )
-from tests.support.workspace_snapshots import basket_entries, basket_pairs
+from tests.support.workspace_snapshots import basket_entries, basket_targets
 from tiewtrade.application.bot_control import (
     BotControlSnapshot,
     BotLifecycleResult,
@@ -1082,7 +1082,7 @@ def _fake_running_workspace(
                 average_entry_price=Decimal("66000.1250"),
                 current_price=Decimal("66321.1200"),
                 take_profit_price=Decimal("67000.0000"),
-                pairs=basket_pairs(
+                targets=basket_targets(
                     basket_entries(
                         "66000.1250", quantity="0.00150000", current_price="66321.1200"
                     )

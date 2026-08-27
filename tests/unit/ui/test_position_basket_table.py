@@ -10,8 +10,8 @@ from pytestqt.qtbot import QtBot
 
 from tests.support.workspace_snapshots import (
     basket_entries,
-    basket_pairs,
     basket_snapshot,
+    basket_targets,
 )
 from tiewtrade.application.trading_workspace import (
     BasketEntryGate,
@@ -46,7 +46,7 @@ def _entry(
 
 
 def _futures_basket() -> BasketSnapshot:
-    """Two Entries at different prices, making one Pair between them."""
+    """Two Entries at different prices, each with a target of its own."""
     entries = (
         _entry(1, "66000.0000", "0.96336"),
         _entry(2, "66000.2500", "0.96264"),
@@ -61,7 +61,7 @@ def _futures_basket() -> BasketSnapshot:
         current_price=Decimal("66321.1200"),
         # The Basket's own target — the net — which no row prints.
         take_profit_price=Decimal("68000.0000"),
-        pairs=basket_pairs(entries, take_profit_offset="999.8750"),
+        targets=basket_targets(entries, take_profit_offset="1000.0000"),
         unrealized_pnl=Decimal("1.92600000"),
         entry_gate=BasketEntryGate.OPEN,
         updated_at_utc=OBSERVED_AT,
@@ -113,7 +113,7 @@ def test_each_entry_of_the_basket_is_its_own_row(qtbot: QtBot) -> None:
     assert _row(widget, 0) == {
         "Date": "2026-08-02 09:00:00",
         "Entry Price": "66,000.2500",
-        "Take Profit": "67,000.0000",
+        "Take Profit": "67,000.2500",
         "Quantity": "0.00300000",
         "Total": "198.00 USDT",
         "Average": "66,000.1250",
@@ -126,15 +126,15 @@ def test_each_entry_of_the_basket_is_its_own_row(qtbot: QtBot) -> None:
     assert widget.state_label.accessibleName() == "Position status"
 
 
-def test_both_entries_of_a_pair_read_the_target_that_pair_leaves_at(
+def test_each_entry_reads_the_target_it_alone_leaves_at(
     qtbot: QtBot,
 ) -> None:
-    """Entries bought at different prices are sold together at their Pair's.
+    """Entries bought at different prices wait for different prices.
 
-    The column repeats across a Pair rather than varying by row, which is the
-    fact: the Entry bought high has no target of its own to wait for. The
-    Basket's own target — 68,000 here, the net under every Pair — is not what
-    this Entry is waiting for, so it is not what the row shows.
+    The column varies by row rather than repeating, which is the fact: each
+    Entry is sold at a target measured from what it paid. The Basket's own
+    target — 68,000 here, the net under every Entry — is not what any one
+    Entry is waiting for, so it is not what a row shows.
     """
     widget = PositionBasketTable()
     qtbot.addWidget(widget)
@@ -143,7 +143,7 @@ def test_both_entries_of_a_pair_read_the_target_that_pair_leaves_at(
         ready_position_basket_tab(_futures_basket(), observed_at_utc=OBSERVED_AT)
     )
 
-    assert _cell(widget, "Take Profit", 0).text() == "67,000.0000"
+    assert _cell(widget, "Take Profit", 0).text() == "67,000.2500"
     assert _cell(widget, "Take Profit", 1).text() == "67,000.0000"
     assert "68,000" not in _cell(widget, "Take Profit", 0).text()
     for row in (0, 1):
@@ -253,13 +253,13 @@ def test_the_average_is_a_column_and_not_a_label_beside_the_table(
 def test_an_average_that_does_not_divide_evenly_reads_at_the_quoted_scale(
     qtbot: QtBot,
 ) -> None:
-    """A Pair whose Entries are different sizes averages to no last decimal.
+    """A Basket whose Entries are different sizes averages to no last decimal.
 
     Paper buys a fixed amount of money rather than a fixed amount of the
-    asset, so the two Entries of a Pair rarely hold the same quantity and the
-    weighted average between them runs on forever. Printed in full it grew the
-    column wide enough to push the rest of the row off. An average of prices
-    is a price, so it reads at the scale those prices were quoted at.
+    asset, so two Entries rarely hold the same quantity and the weighted
+    average between them runs on forever. Printed in full it grew the column
+    wide enough to push the rest of the row off. An average of prices is a
+    price, so it reads at the scale those prices were quoted at.
     """
     widget = PositionBasketTable()
     qtbot.addWidget(widget)
@@ -276,7 +276,7 @@ def test_an_average_that_does_not_divide_evenly_reads_at_the_quoted_scale(
             basket_snapshot(
                 entry_count=2,
                 entries=entries,
-                pairs=basket_pairs(entries, take_profit_offset="10"),
+                targets=basket_targets(entries, take_profit_offset="10"),
                 average_entry_price=Decimal("302") / Decimal("3"),
                 take_profit_price=Decimal("110.67"),
             ),
@@ -284,10 +284,13 @@ def test_an_average_that_does_not_divide_evenly_reads_at_the_quoted_scale(
         )
     )
 
-    # 100.666666..., read at the two places the Entries were quoted at.
+    # 100.666666..., read at the two places the Entries were quoted at, and
+    # the same figure on both rows because it is the Basket's.
     for row in (0, 1):
         assert _cell(widget, "Average", row).text() == "100.67"
-        assert _cell(widget, "Take Profit", row).text() == "110.67"
+    # The targets are the rows' own, measured from the prices beside them.
+    assert _cell(widget, "Take Profit", 0).text() == "111.00"
+    assert _cell(widget, "Take Profit", 1).text() == "110.00"
 
 
 def test_a_single_entry_basket_reads_the_one_price_it_paid(

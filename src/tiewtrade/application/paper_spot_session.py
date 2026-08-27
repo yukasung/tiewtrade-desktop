@@ -28,7 +28,7 @@ from tiewtrade.trading.basket import (
     Basket,
     BasketCloseReason,
     BasketEntry,
-    BasketPair,
+    BasketEntryTarget,
     ClosedBasket,
     ClosedEntry,
 )
@@ -80,10 +80,10 @@ class PaperSpotSessionSnapshot:
     basket_id: UUID | None
     basket_entry_count: int
     take_profit_price: Decimal | None
-    # What each open Entry Pair paid and leaves at. A row on screen reads its
-    # own Pair's figures off this rather than the Basket-wide ones, which are
-    # the net under every Pair rather than the price any one of them awaits.
-    entry_pairs: tuple[BasketPair, ...]
+    # What each open Entry paid and leaves at. A row on screen reads its own
+    # Entry's target off this rather than the Basket-wide one, which is the
+    # net under every Entry rather than the price any one of them awaits.
+    entry_targets: tuple[BasketEntryTarget, ...]
     # Read against the last candle the Session accepted, so it answers for the
     # same moment the Session used to decide entries. None until one arrives.
     entry_gate: EntryGate | None
@@ -568,8 +568,8 @@ class PaperSpotSession:
             take_profit_price=(
                 None if self._basket is None else self._basket.take_profit_price
             ),
-            entry_pairs=(
-                () if self._basket is None else self._basket.open_pair_views()
+            entry_targets=(
+                () if self._basket is None else self._basket.open_entry_targets()
             ),
             entry_gate=self._entry_gate(),
             waived_pair=waived_pair,

@@ -144,7 +144,7 @@ def snapshot(
         basket_entry_count=1 if entry is not None else 0,
         position_side=PositionSide.LONG,
         take_profit_price=Decimal("105") if closed is None else None,
-        entry_pairs=(),
+        entry_targets=(),
         account_equity=Decimal("200000"),
         capital_plan=capital_plan(),
         failure_reason=None,

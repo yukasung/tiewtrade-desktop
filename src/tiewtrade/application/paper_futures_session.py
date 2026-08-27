@@ -26,7 +26,7 @@ from tiewtrade.strategies.registry import strategy_definition_for
 from tiewtrade.trading.basket import (
     Basket,
     BasketCloseReason,
-    BasketPair,
+    BasketEntryTarget,
     ClosedBasket,
     ClosedEntry,
 )
@@ -84,8 +84,8 @@ class PaperFuturesSessionSnapshot:
     basket_entry_count: int
     position_side: PositionSide | None
     take_profit_price: Decimal | None
-    # What each open Entry Pair paid and leaves at; see the Spot snapshot.
-    entry_pairs: tuple[BasketPair, ...]
+    # What each open Entry paid and leaves at; see the Spot snapshot.
+    entry_targets: tuple[BasketEntryTarget, ...]
     account_equity: Decimal
     capital_plan: FuturesCapitalPlan
     failure_reason: PaperFuturesFailureReason | None
@@ -436,8 +436,8 @@ class PaperFuturesSession:
             basket_entry_count=basket_entry_count,
             position_side=position_side,
             take_profit_price=take_profit_price,
-            entry_pairs=(
-                () if self._basket is None else self._basket.open_pair_views()
+            entry_targets=(
+                () if self._basket is None else self._basket.open_entry_targets()
             ),
             account_equity=self._account_equity,
             capital_plan=self._capital_plan,

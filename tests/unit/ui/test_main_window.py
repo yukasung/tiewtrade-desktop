@@ -34,7 +34,7 @@ from tests.support.trade_history_ui import (
     empty_basket_history,
     empty_trade_fills,
 )
-from tests.support.workspace_snapshots import basket_entries, basket_pairs
+from tests.support.workspace_snapshots import basket_entries, basket_targets
 from tiewtrade.application.bot_control import (
     BotControlAction,
     BotControlSnapshot,
@@ -1953,7 +1953,9 @@ def test_stop_with_open_position_reopens_editable_setup_without_closing(
         average_entry_price=Decimal("100"),
         current_price=Decimal("110"),
         take_profit_price=Decimal("120"),
-        pairs=basket_pairs(basket_entries("100", quantity="1", current_price="110")),
+        targets=basket_targets(
+            basket_entries("100", quantity="1", current_price="110")
+        ),
         unrealized_pnl=Decimal("10"),
         entry_gate=BasketEntryGate.OPEN,
         updated_at_utc=observed_at,

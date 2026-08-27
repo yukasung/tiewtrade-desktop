@@ -12,18 +12,19 @@ from tiewtrade.application.open_basket import (
 from tiewtrade.ui.take_profit_confirmation import (
     position_at_target_message,
     position_held_message,
+    sells_on_start,
     sells_on_start_message,
-    sweeps_on_start,
 )
 
 FILLED_AT = datetime(2026, 8, 1, 12, tzinfo=UTC)
 
 
 def _reopened(*prices: str) -> ReopenedBasket:
-    """A Basket of Entries at the given prices, sharing one target.
+    """A Basket of Entries at the given prices.
 
-    The multiplier and ATR put the target 6 above what the Basket paid on
-    average, so a price picked in a test says plainly whether it reaches it.
+    The multiplier and ATR put every target 6 above the price it is measured
+    from — an Entry's own, and the Basket's above its average — so a price
+    picked in a test says plainly which of them it reaches.
     """
     session = configured_spot_session()
     return reopen_basket(
@@ -56,30 +57,47 @@ def test_a_position_at_its_target_is_warned_about_once_however_many_entries() ->
     """The sale books at the target, and that is the whole warning.
 
     Counting Entries grew the box by a clause each, for figures the Position
-    tab already shows in columns behind it — and under one Basket target the
-    count says nothing about the sale anyway: it takes everything.
+    tab already shows in columns behind it.
     """
     expected = (
         "The Position is already at its Take Profit. Starting the Bot sells "
-        "every Entry at once at that target, not at the price now."
+        "every Entry that has reached its target at once at that target, not "
+        "at the price now."
     )
 
     assert sells_on_start_message(_reopened("100"), Decimal("110")) == expected
     assert sells_on_start_message(_reopened("100", "101"), Decimal("110")) == expected
 
 
-def test_an_entry_under_water_is_swept_out_with_the_rest() -> None:
-    """The Entry paid 120 for is losing at 110 and leaves anyway.
+def test_an_entry_past_its_own_target_would_sell_before_the_basket_does() -> None:
+    """A Start sells whatever has reached a target, not only a whole Basket.
 
-    Its average with the Entry at 100 is 110, so the Basket's target is 116 —
-    which is the point of measuring from the average: the Entry that would
-    otherwise be stranded goes when the Basket goes.
+    The Entry bought at 100 leaves at 106 on its own, long before the Basket's
+    116 — the average of 100 and 120 plus 6. A question asked only about the
+    net would let that Entry go with nothing said.
     """
     reopened = _reopened("100", "120")
 
     assert reopened.basket.take_profit_price == Decimal("116")
-    assert sweeps_on_start(reopened, Decimal("116")) is True
-    assert sweeps_on_start(reopened, Decimal("115.99")) is False
+    assert reopened.basket.entry_take_profit_price(1) == Decimal("106")
+    assert sells_on_start(reopened, Decimal("106")) is True
+    assert sells_on_start(reopened, Decimal("105.99")) is False
+
+
+def test_an_entry_under_water_is_swept_out_with_the_rest() -> None:
+    """The Entry paid 120 for is losing at 116 and leaves anyway.
+
+    Its target of its own is 126, which the price never reached. The Basket's
+    is 116, and that is the point of the net: the Entry that would otherwise
+    be stranded goes when the Basket goes.
+    """
+    reopened = _reopened("100", "120")
+
+    assert reopened.basket.entry_take_profit_price(2) == Decimal("126")
+    assert [
+        (exit.entry.entry_number, exit.price)
+        for exit in reopened.basket.take_profit_exits(Decimal("116"), Decimal("116"))
+    ] == [(1, Decimal("106")), (2, Decimal("116"))]
 
 
 def test_no_price_is_quoted_where_none_can_be_formatted_well() -> None:

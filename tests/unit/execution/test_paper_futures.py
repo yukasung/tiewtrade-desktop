@@ -119,15 +119,15 @@ def test_short_take_profit_fills_at_its_target() -> None:
     )
 
 
-def test_each_pair_leaves_at_the_target_its_own_rule_gave_it() -> None:
-    """One candle, two prices: a Pair at its own target, the rest at the net.
+def test_each_entry_leaves_at_the_target_its_own_rule_gave_it() -> None:
+    """One candle, two prices: an Entry at its own target, the rest at the net.
 
-    Pair 2 paid 60 and leaves at 66; Pair 1 paid 105 and never reached its
-    111, so the Basket's own 96 carries it out. Booked as one Fill per Entry,
-    each naming the Entry it sold and the price that Entry got.
+    Entry 3 paid 60 and leaves at 66; Entries 1 and 2 never reached their 106
+    and 116, so the Basket's own 96 carries them out. Booked as one Fill per
+    Entry, each naming the Entry it sold and the price that Entry got.
     """
     executor = make_executor()
-    swept = pair_basket()
+    swept = spread_basket()
     current = candle(open="95", high="96", low="94")
 
     fills = executor.fill_take_profit(swept, current)
@@ -144,9 +144,9 @@ def test_each_pair_leaves_at_the_target_its_own_rule_gave_it() -> None:
     }
 
 
-def test_a_pair_that_reached_its_target_goes_without_the_others() -> None:
+def test_an_entry_that_reached_its_target_goes_without_the_others() -> None:
     executor = make_executor()
-    held = pair_basket()
+    held = spread_basket()
 
     fills = executor.fill_take_profit(held, candle(open="65", high="66", low="64"))
 
@@ -320,12 +320,12 @@ def basket(
     return result
 
 
-def pair_basket() -> Basket:
-    """Two Pairs at different averages, so their targets differ.
+def spread_basket() -> Basket:
+    """Three Entries at three prices, so their targets differ.
 
-    Entries 1 and 2 make Pair 1, which paid 105 and leaves at 111. Entry 3
-    opens Pair 2 alone at 60 and leaves at 66. The Basket paid 90 across all
-    three, so the net it takes everything at sits at 96, between them.
+    Entry 1 paid 100 and leaves at 106, Entry 2 paid 110 and leaves at 116,
+    Entry 3 paid 60 and leaves at 66. The Basket paid 90 across all three, so
+    the net it takes everything at sits at 96, among them.
     """
     result = Basket(
         basket_id=UUID("00000000-0000-0000-0000-000000000108"),
@@ -340,7 +340,8 @@ def pair_basket() -> Basket:
             atr=Decimal("2"),
             tick_size=Decimal("0.1"),
         )
-    assert result.pair_take_profit_price(1) == Decimal("111")
-    assert result.pair_take_profit_price(2) == Decimal("66")
+    assert result.entry_take_profit_price(1) == Decimal("106")
+    assert result.entry_take_profit_price(2) == Decimal("116")
+    assert result.entry_take_profit_price(3) == Decimal("66")
     assert result.take_profit_price == Decimal("96")
     return result

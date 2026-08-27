@@ -1,10 +1,10 @@
-"""An Entry Pair leaves at what that Pair paid, and the net under the rest.
+"""An Entry leaves at what it paid, and the net under the rest.
 
-The rules are stated in PRODUCT.md section 5: each Entry Pair is measured from
-what that Pair paid and leaves at its own target, and the Basket carries one
-more target of its own that takes everything still held. This walks the whole
-path — Session, executor, SQLite — for the case the second rule exists for: a
-Pair the market left behind, carried out by the Pair that did reach its target.
+The rules are stated in PRODUCT.md section 5: each Entry is measured from what
+that Entry paid and leaves at its own target, and the Basket carries one more
+target of its own that takes everything still held. This walks the whole path
+— Session, executor, SQLite — for the case the second rule exists for: an
+Entry the market left behind, carried out by the ones that did reach theirs.
 """
 
 from datetime import UTC, datetime, timedelta
@@ -39,64 +39,66 @@ FILLED_AT = datetime(2026, 8, 24, 9, tzinfo=UTC)
 MARKET_DATA = MarketDataConfig(symbol="BTCUSDT", timeframe="5m")
 ENTRY_ATR = Decimal("2")
 
-# Entries 1 and 2 make Pair 1, which paid 105 and leaves at 105 + 3 x 2.
-# Entry 3 opens Pair 2 on its own at 60, and leaves at 66. The Basket paid 90
-# across all three, so its own target — the net — sits at 96, between them.
+# Each Entry leaves at what it paid plus 3 x 2: Entry 1 at 106, Entry 2 at
+# 116, Entry 3 at 66. The Basket paid 90 across all three, so its own target
+# — the net — sits at 96, among them.
 ENTRY_PRICES = (Decimal("100"), Decimal("110"), Decimal("60"))
-PAIR_ONE_TARGET = Decimal("111")
-PAIR_TWO_TARGET = Decimal("66")
+ENTRY_THREE_TARGET = Decimal("66")
 SWEEP_PRICE = Decimal("96")
+# With Entry 3 gone the Basket is Entries 1 and 2, which paid 105 on average.
+REMAINING_SWEEP_PRICE = Decimal("111")
 
 
-def test_a_pair_leaves_at_its_own_target_and_leaves_the_other_holding(
+def test_an_entry_leaves_at_its_own_target_and_leaves_the_others_holding(
     tmp_path: Path,
 ) -> None:
-    """The cheap Pair reaches its target first and goes on its own.
+    """The cheap Entry reaches its target first and goes on its own.
 
     This is the ordinary case, and the one that makes the net rare: a price
-    that climbs gradually takes each Pair out at its own target, and never
-    reaches the Basket's while more than one Pair is open.
+    that climbs gradually takes each Entry out at its own target, and never
+    reaches the Basket's while more than one Entry is open.
     """
-    database_path = tmp_path / "pair-exit.sqlite3"
+    database_path = tmp_path / "entry-exit.sqlite3"
     store, history = _seeded_history(database_path)
     session = _session_holding_the_open_basket()
     persistent = create_persistent_paper_spot_session(session, history)
 
-    reached = _candle(minute=30, high=PAIR_TWO_TARGET)
+    reached = _candle(minute=30, high=ENTRY_THREE_TARGET)
     recorded = persistent.process_completed_candle(
         reached, received_at=reached.close_time, backfilled=False
     )
 
     assert recorded.persistence_state is PersistenceState.READY
     snapshot = recorded.session
-    # Only Pair 2 went, at 66 — the price never came near Pair 1's 111.
+    # Only Entry 3 went, at 66 — the price never came near Entry 1's 106.
     assert snapshot.sold_entry_numbers == (3,)
     assert snapshot.closed_basket is None
     assert snapshot.basket_entry_count == 2
-    # With Pair 2 gone the Basket is Pair 1, so the net and Pair 1's own
-    # target are now the same price. Nothing is left for the net to catch.
-    assert snapshot.take_profit_price == PAIR_ONE_TARGET
+    # The net is restated on what is left: Entries 1 and 2 paid 105 on
+    # average, so it moves up to 111 while their own targets stay put.
+    assert snapshot.take_profit_price == REMAINING_SWEEP_PRICE
 
     basket = store.get_basket(BASKET_ID)
     assert basket is not None
     assert basket.status is BasketStatus.OPEN
-    # Pair 2 bought at 60 and sold at 66, on a quantity of 1.
+    # Entry 3 bought at 60 and sold at 66, on a quantity of 1.
     assert basket.realized_pnl == Decimal("6")
 
     sells = [fill for fill in store.list_fills(BASKET_ID) if fill.side is FillSide.SELL]
     assert [fill.closes_entry_number for fill in sells] == [3]
 
 
-def test_the_basket_target_sweeps_out_the_pair_the_market_left_behind(
+def test_the_basket_target_sweeps_out_the_entries_the_market_left_behind(
     tmp_path: Path,
 ) -> None:
     """One candle clears the Basket's target, and everything goes with it.
 
-    Pair 2 still sells at its own 66 rather than at 96: a limit order left at
+    Entry 3 still sells at its own 66 rather than at 96: a limit order left at
     66 would have filled long before the price reached 96, and booking the
     higher of two prices the Basket could not have had both of would flatter
-    the result. Pair 1 never reached 111 and is swept at 96 — below the target
-    it was aiming at, above what it paid, which is the trade the net makes.
+    the result. Entries 1 and 2 never reached 106 and 116, and are swept at 96
+    — one below the target it was aiming at and above what it paid, the other
+    below both, which is the trade the net makes.
     """
     database_path = tmp_path / "sweep.sqlite3"
     store, history = _seeded_history(database_path)
@@ -120,9 +122,9 @@ def test_the_basket_target_sweeps_out_the_pair_the_market_left_behind(
     assert snapshot.take_profit_price is None
 
     sells = [fill for fill in store.list_fills(BASKET_ID) if fill.side is FillSide.SELL]
-    # Pair 2 at its own target, Pair 1 swept at the Basket's.
+    # Entry 3 at its own target, the rest swept at the Basket's.
     assert {fill.closes_entry_number: fill.price for fill in sells} == {
-        3: PAIR_TWO_TARGET,
+        3: ENTRY_THREE_TARGET,
         1: SWEEP_PRICE,
         2: SWEEP_PRICE,
     }
@@ -133,7 +135,7 @@ def test_the_basket_target_sweeps_out_the_pair_the_market_left_behind(
     assert basket.entry_count == 3
     # (66-60) + (96-100) + (96-110) = 6 - 4 - 14, on a quantity of 1 each.
     # The net does not promise a profit: it promises the round ends rather
-    # than leaving a Pair holding a target the market has walked away from.
+    # than leaving an Entry holding a target the market has walked away from.
     assert basket.realized_pnl == Decimal("-12")
 
 

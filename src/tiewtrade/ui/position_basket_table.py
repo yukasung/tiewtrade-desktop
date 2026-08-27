@@ -58,16 +58,16 @@ def _price(row: _Row) -> str:
 
 
 def _take_profit_price(row: _Row) -> str:
-    """The price this row's Entry Pair leaves at.
+    """The price this row's Entry leaves at.
 
-    A Pair is the unit that is sold, so both its Entries read the same figure
-    and a Pair that averaged down further reads a lower one than a Pair that
-    did not. The Basket's own target — the net that takes whatever is left —
-    is not printed per row, because it is not the price this Entry is waiting
+    An Entry is the unit that is sold, so every row reads a figure of its
+    own: one that averaged down further reads a lower one than one that did
+    not. The Basket's own target — the net that takes whatever is left — is
+    not printed per row, because it is not the price this Entry is waiting
     for.
     """
-    pair = row.basket.pair_for(row.entry.entry_number)
-    return BLANK if pair is None else price_text(pair.take_profit_price)
+    target = row.basket.target_for(row.entry.entry_number)
+    return BLANK if target is None else price_text(target.take_profit_price)
 
 
 def _entry_gate(row: _Row) -> str:
@@ -85,23 +85,21 @@ def _notional(row: _Row) -> str:
 
 
 def _average_entry_price(row: _Row) -> str:
-    """What this row's Entry Pair paid, which its target is measured from.
+    """What the whole Basket paid, repeated down the column.
 
-    The Pair's rather than the Basket's, so the two price columns beside each
-    other belong to the same figure: without it the target reads as coming
-    from nowhere, or worse, as measured from the price on the row itself.
+    The row's own target is measured from the price beside it, so this column
+    no longer explains that one. It is the Basket's figure — what the net
+    under every Entry is measured from — and it is what says where a row's
+    price stands among the others.
 
     Shown at the scale the Entries were quoted at. An average is a division,
     so it can be left with no last decimal place at all, and the exact answer
     read as a wall of digits wide enough to push the rest of the row off. The
-    Basket keeps every place — a target is measured from the exact figure, not
+    Basket keeps every place — the net is measured from the exact figure, not
     from this one.
     """
-    pair = row.basket.pair_for(row.entry.entry_number)
-    if pair is None:
-        return BLANK
     return price_text(
-        pair.average_entry_price.quantize(
+        row.basket.average_entry_price.quantize(
             _quoted_scale(row.basket), rounding=ROUND_HALF_EVEN
         )
     )
@@ -143,13 +141,12 @@ class PositionBasketTable(QWidget):
     hides the prices actually paid. The rows are the Entries, each with the
     price it paid.
 
-    Two columns belong to the row's Entry Pair rather than to the row: what
-    that Pair paid and what it is sold at. They repeat across the Entries of
-    one Pair and change between Pairs, which is what a Pair being the unit
-    that leaves looks like on a screen. The average was once left off for
-    reading as a third price among the row's own — but the target comes from
-    it, and a target whose measure is not shown is a number the trader has to
-    take on trust. The lifecycle gate is the Basket's, and repeats throughout.
+    The target beside a row's price is that Entry's own: it is measured from
+    the price on the row, so the two read together and no two rows have to
+    agree. The average is the Basket's and repeats down the column — what the
+    net under every Entry is measured from, and what says where this row's
+    price stands among the rest. The lifecycle gate is the Basket's too, and
+    repeats throughout.
     """
 
     # Measured numbers hang on the right so their digits line up and a minus
@@ -160,9 +157,9 @@ class PositionBasketTable(QWidget):
         Column("Entry Price", RIGHT, _price),
         # Beside the price paid, so the distance left to run reads at a glance.
         Column("Take Profit", RIGHT, _take_profit_price),
-        # Straight after the target, because it is what the target is measured
-        # from: the two Basket figures read together rather than with the row's
-        # own quantity between them.
+        # Straight after the target, so the row's own two prices and the
+        # Basket's average read together rather than with the row's own
+        # quantity between them.
         Column("Average", RIGHT, _average_entry_price),
         Column("Quantity", RIGHT, _quantity),
         Column("Total", RIGHT, _notional),
