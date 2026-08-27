@@ -3185,6 +3185,118 @@ def test_clearing_the_database_refreshes_the_position_tab(qtbot: QtBot) -> None:
     assert window._open_position.basket is None
 
 
+def test_clearing_the_database_leaves_no_session_for_the_next_start_to_replace(
+    qtbot: QtBot,
+) -> None:
+    """A wiped database holds no Session left to retire.
+
+    The window went on holding the Session it had read before the clear, so
+    the next Start took the replacement course and asked the database to
+    retire a row that had just been deleted — and told the trader the Session
+    was "still running somewhere", about a Session nothing was running. What
+    a clear leaves is an installation with no Session at all, which is what
+    the next Start has to make.
+    """
+    session = configured_spot_session()
+    created: list[PaperSessionSetupValues] = []
+    events: list[str] = []
+    # Wiped along with everything else, the way the database answers after a
+    # clear: no row is left for either question to find.
+    stored_session: list[ConfiguredPaperSession] = [session]
+
+    def start(snapshot: BotControlSnapshot) -> BotLifecycleResult:
+        return BotLifecycleResult(
+            workspace=workspace_with_runtime_state(
+                snapshot.workspace,
+                BotRuntimeState.RUNNING,
+                data_freshness=DataFreshness.FRESH,
+            )
+        )
+
+    def stop(snapshot: BotControlSnapshot) -> BotLifecycleResult:
+        return BotLifecycleResult(
+            workspace=workspace_with_runtime_state(
+                snapshot.workspace, BotRuntimeState.STOPPED
+            )
+        )
+
+    def create(values: PaperSessionSetupValues) -> PaperSessionCreateOutcome:
+        created.append(values)
+        return PaperSessionCreateOutcome(session=session, created=True)
+
+    window = MainWindow(
+        create_session=create,
+        load_active=lambda: session,
+        list_basket_history=empty_basket_history,
+        list_trade_fills=empty_trade_fills,
+        bot=BotActions(
+            start=start,
+            stop=stop,
+            close_position=lambda _session: events.append("close"),
+            has_open_position=lambda _session: bool(stored_session),
+            retire_session=lambda _session: events.append("retire"),
+        ),
+        clear_database=stored_session.clear,
+    )
+    qtbot.addWidget(window)
+    window.show()
+    control = window.workspace.bot_control_widget
+    qtbot.waitUntil(control.start_button.isEnabled)
+    click(control.start_button)
+    qtbot.waitUntil(lambda: _runtime_state(window) is BotRuntimeState.RUNNING)
+    click(control.stop_button)
+    stop_dialog = window.findChild(QMessageBox)
+    assert stop_dialog is not None
+    click(
+        next(button for button in stop_dialog.buttons() if button.text() == "Stop Bot")
+    )
+    qtbot.waitUntil(window.setup.isVisible)
+    _click_settings(window)
+
+    def confirm_clear() -> None:
+        confirm_dialog = QApplication.activeModalWidget()
+        assert isinstance(confirm_dialog, QMessageBox)
+        click(next(b for b in confirm_dialog.buttons() if b.text() == "Clear All"))
+
+    QTimer.singleShot(0, confirm_clear)
+    click(window.workspace.settings_panel.clear_database_button)
+    qtbot.waitUntil(lambda: not window.workspace.is_showing_settings)
+
+    window.setup.capital_per_entry.setText("2500")
+    click(window.setup.create_button)
+
+    qtbot.waitUntil(lambda: len(created) == 1)
+    assert events == []
+
+
+def test_a_session_that_is_gone_is_not_reported_as_one_still_running(
+    qtbot: QtBot,
+) -> None:
+    """Two reasons a retirement fails, and only one of them is a running Bot.
+
+    Told the row it went to retire was not there, the form used to say the
+    Session was still running somewhere and ask the trader to stop it — an
+    instruction with nothing to carry it out on.
+    """
+    window = MainWindow(
+        create_session=unused_create,
+        load_active=no_active_session,
+        list_basket_history=empty_basket_history,
+        list_trade_fills=empty_trade_fills,
+    )
+    qtbot.addWidget(window)
+    window.show()
+
+    window._replacement_failed(
+        PaperSessionUnavailableError("Active Paper Session is no longer there")
+    )
+
+    assert window.setup.capital_per_entry_error.text() == (
+        "The existing Paper Session is no longer in the database. "
+        "Try Start Paper Bot again."
+    )
+
+
 def test_clearing_the_database_wipes_the_chart_badges(qtbot: QtBot) -> None:
     """The Buy/Sell badges are drawings of rows that no longer exist.
 

@@ -751,7 +751,7 @@ class MainWindow(QMainWindow):
 
     @Slot(object)
     def _replacement_failed(self, _error: object) -> None:
-        message = "Could not stop, close, or retire the existing Paper Session. "
+        message = "Could not stop, close, or retire the existing Paper Session."
         if isinstance(_error, RuntimeError) and str(_error) == (
             "A fresh market price is unavailable"
         ):
@@ -770,6 +770,8 @@ class MainWindow(QMainWindow):
                 "The existing Paper Session is still running somewhere. "
                 "Stop it, or restart the application."
             )
+        elif str(_error) == "Active Paper Session is no longer there":
+            message = "The existing Paper Session is no longer in the database."
         self.setup.show_field_error(
             "capital_per_entry",
             f"{message} Try Start Paper Bot again.",
@@ -1223,6 +1225,14 @@ class MainWindow(QMainWindow):
         session = self._current_session()
         if session is not None:
             self._open_position.read_for(session)
+        # The Session the setup form was holding to replace was wiped along
+        # with the rest, so there is nothing left to stop, close, or retire.
+        # Held on to, it sent the next Start to retire a row that was gone,
+        # which came back as "still running somewhere" — about a Session
+        # nothing was running. A cleared installation has no Session, and
+        # the next Start is the one that makes one.
+        self._replacement_session = None
+        self._replacement_values = None
         self.workspace.hide_settings()
 
     @Slot(object)
