@@ -109,9 +109,10 @@ def test_each_entry_of_the_basket_is_its_own_row(qtbot: QtBot) -> None:
         "Close Position",
     )
     assert widget.table.rowCount() == 2
+    # Latest Fill on top, so the row that just happened is the one on screen.
     assert _row(widget, 0) == {
-        "Date": "2026-08-02 08:00:00",
-        "Entry Price": "66,000.0000",
+        "Date": "2026-08-02 09:00:00",
+        "Entry Price": "66,000.2500",
         "Take Profit": "67,000.0000",
         "Quantity": "0.00300000",
         "Total": "198.00 USDT",
@@ -119,8 +120,8 @@ def test_each_entry_of_the_basket_is_its_own_row(qtbot: QtBot) -> None:
         "Unrealized P/L": "0.96 USDT",
         "Status": "Active",
     }
-    assert _row(widget, 1)["Entry Price"] == "66,000.2500"
-    assert _row(widget, 1)["Date"] == "2026-08-02 09:00:00"
+    assert _row(widget, 1)["Entry Price"] == "66,000.0000"
+    assert _row(widget, 1)["Date"] == "2026-08-02 08:00:00"
     assert widget.state_label.text() == ""
     assert widget.state_label.accessibleName() == "Position status"
 
@@ -159,13 +160,70 @@ def test_money_is_grouped_and_a_quantity_is_not(qtbot: QtBot) -> None:
         ready_position_basket_tab(_futures_basket(), observed_at_utc=OBSERVED_AT)
     )
 
-    row = _row(widget, 0)
+    row = _row(widget, 1)
     assert row["Entry Price"] == "66,000.0000"
     assert row["Take Profit"] == "67,000.0000"
     assert row["Total"] == "198.00 USDT"
     # The quantity is counted in BTC, where a separator would suggest a
     # scale the number does not have.
     assert row["Quantity"] == "0.00300000"
+
+
+def test_the_entry_that_just_filled_is_the_row_on_top(qtbot: QtBot) -> None:
+    """A Basket lists its Entries in the order taken; the tab reads backwards.
+
+    The row worth seeing is the one that just filled, and a Basket deep
+    enough to scroll had it out of sight at the bottom.
+    """
+    widget = PositionBasketTable()
+    qtbot.addWidget(widget)
+
+    widget.show_snapshot(
+        ready_position_basket_tab(
+            basket_snapshot(
+                entry_count=3,
+                entries=(
+                    _entry(1, "100", "1"),
+                    _entry(2, "101", "1"),
+                    _entry(3, "102", "1"),
+                ),
+            ),
+            observed_at_utc=OBSERVED_AT,
+        )
+    )
+
+    assert [_cell(widget, "Entry Price", row).text() for row in range(3)] == [
+        "102",
+        "101",
+        "100",
+    ]
+
+
+def test_two_entries_filled_on_one_candle_are_ordered_by_their_numbers(
+    qtbot: QtBot,
+) -> None:
+    """The clock cannot separate them, and the later number is the later Entry."""
+    widget = PositionBasketTable()
+    qtbot.addWidget(widget)
+    filled_at = datetime(2026, 8, 2, 10, 0, tzinfo=UTC)
+
+    widget.show_snapshot(
+        ready_position_basket_tab(
+            basket_snapshot(
+                entry_count=2,
+                entries=(
+                    replace(_entry(1, "100", "1"), filled_at_utc=filled_at),
+                    replace(_entry(2, "101", "1"), filled_at_utc=filled_at),
+                ),
+            ),
+            observed_at_utc=OBSERVED_AT,
+        )
+    )
+
+    assert [_cell(widget, "Entry Price", row).text() for row in range(2)] == [
+        "101",
+        "100",
+    ]
 
 
 def test_the_average_is_a_column_and_not_a_label_beside_the_table(
@@ -186,8 +244,8 @@ def test_the_average_is_a_column_and_not_a_label_beside_the_table(
 
     assert _cell(widget, "Average", 0).text() == "66,000.1250"
     assert _cell(widget, "Average", 1).text() == "66,000.1250"
-    assert _cell(widget, "Entry Price", 0).text() == "66,000.0000"
-    assert _cell(widget, "Entry Price", 1).text() == "66,000.2500"
+    assert _cell(widget, "Entry Price", 0).text() == "66,000.2500"
+    assert _cell(widget, "Entry Price", 1).text() == "66,000.0000"
     assert not hasattr(widget, "total_label")
     assert not hasattr(widget, "basket_label")
 
@@ -658,8 +716,9 @@ def test_every_entry_carries_the_order_that_closes_it(qtbot: QtBot) -> None:
     _close_button(widget, 1).click()
 
     # The Entry's own number, not the row it happens to sit in: rows are
-    # rebuilt on every price, and one of them has already gone before now.
-    assert asked == [2]
+    # rebuilt on every price, are listed newest first, and one of them has
+    # already gone before now.
+    assert asked == [1]
 
 
 def test_the_order_is_taken_away_while_one_is_still_in_flight(
@@ -740,11 +799,12 @@ def test_only_the_pair_that_just_completed_reads_as_cooling_down(
         )
     )
 
+    # Newest Pair first, so the Cooldown it holds reads on the top two rows.
     assert [_cell(widget, "Status", row).text() for row in range(4)] == [
-        "Active",
-        "Active",
         "Cooldown",
         "Cooldown",
+        "Active",
+        "Active",
     ]
 
 

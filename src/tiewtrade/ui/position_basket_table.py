@@ -250,11 +250,7 @@ class PositionBasketTable(QWidget):
         self._show_close_all(value.basket)
 
     def _show_basket(self, basket: BasketSnapshot | None) -> None:
-        rows = (
-            ()
-            if basket is None
-            else tuple(_Row(basket, entry) for entry in basket.entries)
-        )
+        rows = () if basket is None else _rows_newest_first(basket)
         with QSignalBlocker(self.table):
             self.table.clearSelection()
             self.table.setCurrentCell(-1, -1)
@@ -426,3 +422,24 @@ class PositionBasketTable(QWidget):
             len(self.COLUMNS) - 1, QHeaderView.ResizeMode.Stretch
         )
         return table
+
+
+def _rows_newest_first(basket: BasketSnapshot) -> tuple[_Row, ...]:
+    """The Entries the Basket holds, latest Fill at the top.
+
+    A Basket lists its Entries in the order they were taken, which is the
+    order they are numbered in and the order an audit reads them in. On
+    screen the row worth seeing is the one that just filled, and a Basket
+    deep enough to scroll put it out of sight at the bottom.
+
+    The number breaks a tie rather than the order deciding it: two Entries
+    can fill on the same candle, and the later number is the later Entry.
+    """
+    return tuple(
+        _Row(basket, entry)
+        for entry in sorted(
+            basket.entries,
+            key=lambda entry: (entry.filled_at_utc, entry.entry_number),
+            reverse=True,
+        )
+    )
