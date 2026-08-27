@@ -172,10 +172,17 @@ class _PaperRuntimeActions:
         to whatever the database has, the way a single row's close already
         does. A Runtime that holds it but has nothing open answers with an
         empty tuple, not None: there is a position, it is just closed.
+
+        Whether one holds it is the controller's own answer rather than a
+        reading of its workspace. A controller is put in place to inspect
+        durable lifecycle state before any Bot runs, and its workspace
+        carries no Basket until a running Runtime publishes one — read that
+        way, a stopped Bot says "nothing open" about a Position that is
+        sitting in the database, and Close All sells none of it.
         """
         with self._lock:
             controller = self._controller if self._session == session else None
-        if controller is None:
+        if controller is None or not controller.is_holding(session):
             return None
         basket = controller.current_workspace.position_basket.basket
         if basket is None:

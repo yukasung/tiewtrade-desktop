@@ -570,6 +570,23 @@ class PaperRuntimeController:
                 entry_number, price=price, observed_at=self._clock()
             )
 
+    def is_holding(self, session: ConfiguredPaperSession) -> bool:
+        """Whether a sale of this Session's Basket has to go through here.
+
+        The same three facts `close_entry` acts under: a Session is being
+        driven, it is this one, and the Bot is not on its way out. Stated
+        once and asked rather than guessed at, because a caller that reads
+        the workspace instead cannot tell a Runtime holding nothing from a
+        Runtime that was never started — and the Basket a stopped Bot left
+        in the database is one the caller must sell there instead.
+        """
+        with self._lock:
+            return (
+                self._sink is not None
+                and self._active_session == session
+                and self._entries_enabled.is_set()
+            )
+
     def waive_cooldown(self, session: ConfiguredPaperSession) -> bool:
         """Lift the Cooldown holding the running Session's Basket now.
 

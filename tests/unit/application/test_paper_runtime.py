@@ -1813,3 +1813,57 @@ def test_a_bot_that_stopped_says_so_once_and_says_why(tmp_path: Path) -> None:
     assert errors[0].reason == stopped
     assert errors[0].market.session_id == session.config.session_id
     controller.stop(session)
+
+
+def test_a_controller_that_only_inspected_startup_is_not_holding_the_session(
+    tmp_path: Path,
+) -> None:
+    """Reading durable lifecycle state is not taking a Basket in hand.
+
+    A controller is put in place before any Bot runs so the tab can say what
+    the last one left behind. Nothing is driving candles yet, so a sale asked
+    for now belongs to the database, not to this.
+    """
+    session = configured_spot_session()
+    database = _database_with_session(tmp_path, session)
+    controller = PaperRuntimeController(
+        lifecycle=SQLitePaperRuntimeLifecycle(database),
+        trade_history=SQLiteTradeHistory(database),
+        symbol_rules=_symbol_rules(),
+        source_factory=lambda _endpoints: _source(),
+        scheduler=ImmediateScheduler(),
+        snapshot_callback=lambda _snapshot: None,
+    )
+
+    controller.inspect_startup(session)
+
+    assert controller.is_holding(session) is False
+
+
+def test_a_running_controller_holds_its_session_until_it_is_stopped(
+    tmp_path: Path,
+) -> None:
+    """What a Runtime holds it must be asked for, and only while it holds it.
+
+    A stopped Bot leaves its Basket in the database, so the same question has
+    to answer the other way round the moment it stops — otherwise a sale is
+    asked of a Runtime that will never write it.
+    """
+    session = configured_spot_session()
+    database = _database_with_session(tmp_path, session)
+    controller = PaperRuntimeController(
+        lifecycle=SQLitePaperRuntimeLifecycle(database),
+        trade_history=SQLiteTradeHistory(database),
+        symbol_rules=_symbol_rules(),
+        source_factory=lambda _endpoints: _source(),
+        scheduler=ImmediateScheduler(),
+        snapshot_callback=lambda _snapshot: None,
+    )
+
+    controller.start(session)
+
+    assert controller.is_holding(session) is True
+
+    controller.stop(session)
+
+    assert controller.is_holding(session) is False
