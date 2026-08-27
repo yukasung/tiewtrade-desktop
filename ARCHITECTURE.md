@@ -110,6 +110,27 @@ candle ถัดไปเมื่อยืนยัน durability ไม่ไ�
 generic interface ล่วงหน้า เมื่อมี consumer ของ persistence adapter อย่างน้อยสองแบบ
 จึงค่อยย้าย contract ไปไว้ที่ Module ผู้ใช้งาน
 
+## Entry Notification Boundary
+
+การแจ้งเตือนออกนอกเครื่องเป็น side effect ที่ไม่มี trading decision ใดพึ่งพา `trading` และ
+`execution` จึงไม่รู้จักมันเลย `application` เป็นเจ้าของ `EntryOpenedNotice` กับ contract
+`EntryOpenedNotifier` และ `integrations/line` เป็นผู้ implement contract นี้ผ่าน LINE
+Messaging API push (LINE Notify ปิดบริการเมื่อ มี.ค. 2025 จึงใช้ไม่ได้)
+
+`PaperRuntimeSink` เรียก notifier **หลังปล่อย entry lock** และเรียกเฉพาะเมื่อ snapshot มี
+Entry Fill notifier ต้องคืนค่าทันทีและห้าม raise ส่วนการส่งจริงถูก queue ไว้ให้ worker ของ
+`integrations/line` ทำ candle ถัดไปจึงไม่รอ network และการส่งล้มเหลวไม่ทำให้ Session
+fail-closed — ค่าที่เสียคือข้อความ ไม่ใช่ Session
+
+Channel access token เป็น credential จึงอยู่ใน OS keyring ผ่าน
+`integrations/keyring/line_notifications.py` เท่านั้น ห้ามลง SQLite, log หรือ fixture
+`line_notification_composition.py` เป็น seam เดียวที่ประกอบ keyring adapter เข้ากับ
+transport โดย `desktop_main` และ `ui` รับเฉพาะ callable ที่ประกอบไว้แล้ว จึงไม่ import
+keyring หรือ transport เอง และหน้าจอ Settings รับรู้ได้แค่ว่า "มี token เก็บไว้หรือไม่"
+ไม่เคยอ่านค่า token กลับมาแสดง
+
+Session อ่านค่าตั้งค่าตอน Runtime เริ่มทำงาน การแก้ค่าจึงมีผลกับการ Start ครั้งถัดไป
+
 ## Backfilled Candle
 
 `market_data` เป็นผู้รู้ว่า candle ใดมาสดและ candle ใดถูกดึงย้อนหลังหลังการเชื่อมต่อขาด จึงส่ง

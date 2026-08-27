@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import AsyncIterator, Awaitable, Callable
+from contextlib import asynccontextmanager
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
@@ -16,6 +17,10 @@ import tiewtrade.application.paper_runtime as paper_runtime_module
 from tests.support.paper_session_setup import (
     configured_futures_session,
     configured_spot_session,
+)
+from tiewtrade.application.entry_opened_notice import (
+    EntryOpenedNotice,
+    EntryOpenedNotifier,
 )
 from tiewtrade.application.open_basket import reopen_basket
 from tiewtrade.application.paper_runtime import (
@@ -1608,3 +1613,78 @@ def _runtime_snapshot(state: MarketDataRuntimeState) -> MarketDataRuntimeSnapsho
 
 def _history_filter(market_type: MarketType) -> TradeHistoryFilter:
     return TradeHistoryFilter(market_type=market_type)
+
+
+def test_a_filled_entry_is_said_out_loud_to_whoever_is_listening(
+    tmp_path: Path,
+) -> None:
+    session = _session(MarketType.SPOT)
+    database = _database_with_session(tmp_path, session)
+    source = _source()
+    notices: list[EntryOpenedNotice] = []
+    notice_ready = Event()
+
+    def notify(notice: EntryOpenedNotice) -> None:
+        notices.append(notice)
+        notice_ready.set()
+
+    @asynccontextmanager
+    async def notifier() -> AsyncIterator[EntryOpenedNotifier]:
+        yield notify
+
+    controller = PaperRuntimeController(
+        lifecycle=SQLitePaperRuntimeLifecycle(database),
+        trade_history=SQLiteTradeHistory(database),
+        symbol_rules=_symbol_rules(),
+        source_factory=lambda _endpoints: source,
+        scheduler=ImmediateScheduler(),
+        snapshot_callback=lambda _snapshot: None,
+        notifier_factory=notifier,
+    )
+
+    controller.start(session)
+
+    assert notice_ready.wait(2)
+    controller.stop(session)
+    notice = notices[0]
+    assert notice.symbol == session.market_data.symbol
+    assert notice.timeframe == session.market_data.timeframe
+    assert notice.entry_number == 1
+    assert notice.session_id == session.config.session_id
+
+
+def test_a_notifier_that_cannot_be_opened_does_not_keep_the_bot_from_trading(
+    tmp_path: Path,
+) -> None:
+    """Settings that are wrong cost the message, never the Session.
+
+    A token that has been withdrawn is found out here, on the way up, at the
+    moment the trader has just asked the Bot to start. Refusing to start on
+    it would make a chat notification a precondition of trading, which it is
+    not — the Position tab remains the thing that says what is open.
+    """
+    session = _session(MarketType.SPOT)
+    database = _database_with_session(tmp_path, session)
+    source = _source()
+
+    @asynccontextmanager
+    async def notifier() -> AsyncIterator[EntryOpenedNotifier]:
+        raise RuntimeError("the notifier could not be opened")
+        yield  # pragma: no cover - never reached
+
+    controller = PaperRuntimeController(
+        lifecycle=SQLitePaperRuntimeLifecycle(database),
+        trade_history=SQLiteTradeHistory(database),
+        symbol_rules=_symbol_rules(),
+        source_factory=lambda _endpoints: source,
+        scheduler=ImmediateScheduler(),
+        snapshot_callback=lambda _snapshot: None,
+        notifier_factory=notifier,
+    )
+
+    result = controller.start(session)
+
+    assert result.blocked_reason is None
+    assert result.workspace.header is not None
+    assert result.workspace.header.runtime_state is BotRuntimeState.RUNNING
+    controller.stop(session)

@@ -59,6 +59,7 @@ from tiewtrade.ui.session_workflow import (
     SessionWorkflow,
 )
 from tiewtrade.ui.settings_dialogs import ask_about_clearing_database
+from tiewtrade.ui.settings_panel import LineNotificationsReading
 from tiewtrade.ui.start_decision import StartCourse, course_before_start
 from tiewtrade.ui.start_dialogs import (
     PositionAtTarget,
@@ -165,6 +166,13 @@ NO_BOT = BotActions()
 NO_CHART = ChartSources()
 
 
+type SaveLineNotifications = Callable[[bool, str, str], None]
+"""Keep these LINE settings, wherever this installation keeps them."""
+
+type ReadLineNotifications = Callable[[], LineNotificationsReading]
+"""Read back the LINE settings — never the token, only that there is one."""
+
+
 class MainWindow(QMainWindow):
     def __init__(
         self,
@@ -182,6 +190,8 @@ class MainWindow(QMainWindow):
         connection_notice: ConnectionNotice | None = None,
         connection_notice_delay_ms: int = CONNECTION_NOTICE_DELAY_MILLISECONDS,
         clear_database: Callable[[], None] | None = None,
+        save_line_notifications: SaveLineNotifications | None = None,
+        read_line_notifications: ReadLineNotifications | None = None,
     ) -> None:
         super().__init__()
         self._take_profit_confirmation = (
@@ -205,6 +215,8 @@ class MainWindow(QMainWindow):
         self._validate_session = validate_session or validate_paper_session
         self._shutdown_runtime = bot.shutdown_runtime
         self._clear_database = clear_database
+        self._save_line_notifications = save_line_notifications
+        self._read_line_notifications = read_line_notifications
         self._chart_fact_relay = chart.facts
         self._start_chart_feed = chart.start_feed
         self._select_chart_view = chart.select_view
@@ -300,6 +312,9 @@ class MainWindow(QMainWindow):
         self.workspace.settings_requested.connect(self._settings_requested)
         self.workspace.settings_panel.clear_database_requested.connect(
             self._clear_database_requested
+        )
+        self.workspace.settings_panel.line_notifications_save_requested.connect(
+            self._line_notifications_save_requested
         )
         self._open_position.reading_landed.connect(self._position_reading_landed)
 
@@ -583,6 +598,26 @@ class MainWindow(QMainWindow):
                 "Could not clear the database. Check your connection, then try again.",
             ),
             failure_log="Could not clear the database",
+            start=self._thread_pool.start,
+        )
+        self._keep_line_settings = GuardedAction(
+            available=lambda available: settings_panel.set_busy(not available),
+            report_failure=lambda: QMessageBox.warning(
+                settings_panel,
+                "Settings",
+                "Could not save the LINE settings. "
+                "This machine may not be letting TiewTrade store them.",
+            ),
+            failure_log="Could not save the LINE notification settings",
+            start=self._thread_pool.start,
+        )
+        # Reading is its own action rather than a second use of the one that
+        # saves: what is saved is read back straight afterwards, and an action
+        # already running is an action that refuses to start again.
+        self._show_line_settings = GuardedAction(
+            available=lambda available: settings_panel.set_busy(not available),
+            report_failure=settings_panel.say_line_notifications_unreadable,
+            failure_log="Could not read the LINE notification settings",
             start=self._thread_pool.start,
         )
 
@@ -1107,6 +1142,51 @@ class MainWindow(QMainWindow):
             self.workspace.hide_settings()
             return
         self.workspace.show_settings()
+        self._read_line_settings()
+
+    def _read_line_settings(self) -> None:
+        """Fill the LINE form from what is stored, off the UI thread.
+
+        Wherever the settings are kept, reading them can put a prompt in front
+        of the trader and wait on an answer, which is not something a window
+        may do while it is being drawn. The form opens as it is and fills in
+        when the reading lands.
+        """
+        read = self._read_line_notifications
+        if read is None or self._show_line_settings.is_running:
+            return
+        self._show_line_settings.run(read, succeeded=self._line_settings_read)
+
+    @Slot(object)
+    def _line_settings_read(self, reading: object) -> None:
+        if not isinstance(reading, tuple):
+            return
+        self.workspace.settings_panel.show_line_notifications(reading)
+
+    @Slot(bool, str, str)
+    def _line_notifications_save_requested(
+        self,
+        enabled: bool,
+        target_id: str,
+        access_token: str,
+    ) -> None:
+        save = self._save_line_notifications
+        if save is None or self._keep_line_settings.is_running:
+            return
+        self._keep_line_settings.run(
+            lambda: save(enabled, target_id, access_token),
+            succeeded=self._line_settings_kept,
+        )
+
+    @Slot(object)
+    def _line_settings_kept(self, _result: object) -> None:
+        """Read the form back from what was actually stored.
+
+        What the trader typed and what is now stored are two things, and the
+        second is the one the Bot will use. Reading it back is also what
+        empties the token field once its value is somewhere safer.
+        """
+        self._read_line_settings()
 
     @Slot()
     def _clear_database_requested(self) -> None:

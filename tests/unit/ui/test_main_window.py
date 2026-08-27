@@ -96,6 +96,7 @@ from tiewtrade.ui.main_window import (
 )
 from tiewtrade.ui.pair_text import pair_text
 from tiewtrade.ui.session_overview import SessionOverviewWidget
+from tiewtrade.ui.settings_panel import TOKEN_STORED_TEXT
 from tiewtrade.ui.trade_history_presenter import (
     default_filter_values,
     trade_history_filter,
@@ -4046,3 +4047,99 @@ def _session_with_policy_changes(
     for field, value in changes.items():
         object.__setattr__(inconsistent_config, field, value)
     return replace(session, config=inconsistent_config)
+
+
+def test_opening_settings_fills_the_line_form_from_what_is_stored(
+    qtbot: QtBot,
+) -> None:
+    window = MainWindow(
+        create_session=unused_create,
+        load_active=no_active_session,
+        list_basket_history=empty_basket_history,
+        list_trade_fills=empty_trade_fills,
+        read_line_notifications=lambda: (True, "U123", True),
+    )
+    qtbot.addWidget(window)
+    window.show()
+    qtbot.waitUntil(window.setup.isVisible)
+
+    _click_settings(window)
+
+    panel = window.workspace.settings_panel
+    qtbot.waitUntil(lambda: panel.line_target_id.text() == "U123")
+    assert panel.line_enabled.isChecked()
+    assert panel.line_access_token.text() == ""
+
+
+def test_saving_line_settings_hands_them_off_and_reads_them_back(
+    qtbot: QtBot,
+) -> None:
+    """The token leaves the screen the moment it is stored, and does not return.
+
+    Saving is the only thing the window does with a token: it is handed to
+    whoever keeps it, and what comes back to the form is the reading — which
+    says a token is stored without saying what it is.
+    """
+    saved: list[tuple[bool, str, str]] = []
+    readings = [(False, "", False), (True, "U123", True)]
+
+    def save(enabled: bool, target_id: str, access_token: str) -> None:
+        saved.append((enabled, target_id, access_token))
+
+    window = MainWindow(
+        create_session=unused_create,
+        load_active=no_active_session,
+        list_basket_history=empty_basket_history,
+        list_trade_fills=empty_trade_fills,
+        save_line_notifications=save,
+        read_line_notifications=lambda: readings[min(len(saved), 1)],
+    )
+    qtbot.addWidget(window)
+    window.show()
+    qtbot.waitUntil(window.setup.isVisible)
+    _click_settings(window)
+    panel = window.workspace.settings_panel
+    qtbot.waitUntil(lambda: panel.save_line_button.isEnabled())
+
+    panel.line_enabled.setChecked(True)
+    panel.line_target_id.setText("U123")
+    panel.line_access_token.setText("token-value")
+    click(panel.save_line_button)
+
+    qtbot.waitUntil(lambda: saved == [(True, "U123", "token-value")])
+    qtbot.waitUntil(lambda: panel.line_token_state.text() == TOKEN_STORED_TEXT)
+    assert panel.line_access_token.text() == ""
+
+
+def test_line_settings_that_cannot_be_stored_are_reported_where_they_were_typed(
+    qtbot: QtBot,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def save(enabled: bool, target_id: str, access_token: str) -> None:
+        del enabled, target_id, access_token
+        raise RuntimeError("nowhere to keep them")
+
+    seen: list[str] = []
+    monkeypatch.setattr(
+        QMessageBox,
+        "warning",
+        lambda parent, title, text, *args: seen.append(text),
+    )
+    window = MainWindow(
+        create_session=unused_create,
+        load_active=no_active_session,
+        list_basket_history=empty_basket_history,
+        list_trade_fills=empty_trade_fills,
+        save_line_notifications=save,
+    )
+    qtbot.addWidget(window)
+    window.show()
+    qtbot.waitUntil(window.setup.isVisible)
+    _click_settings(window)
+    panel = window.workspace.settings_panel
+
+    click(panel.save_line_button)
+
+    qtbot.waitUntil(lambda: bool(seen))
+    assert "Could not save the LINE settings." in seen[0]
+    qtbot.waitUntil(panel.save_line_button.isEnabled)

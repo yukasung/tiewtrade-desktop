@@ -10,9 +10,11 @@ from tiewtrade.ui.main_window import (
     BotActions,
     ChartSources,
     MainWindow,
+    ReadLineNotifications,
+    SaveLineNotifications,
 )
 from tiewtrade.ui.session_workflow import CreateSession, LoadActiveSession
-from tiewtrade.ui.theme import DARK_THEME
+from tiewtrade.ui.theme import DARK_THEME, apply_dark_appearance
 from tiewtrade.ui.trade_history_workflow import (
     ListBasketHistory,
     ListTradeFills,
@@ -29,10 +31,13 @@ def run_desktop(
     bot: BotActions = NO_BOT,
     chart: ChartSources = NO_CHART,
     clear_database: Callable[[], None] | None = None,
+    save_line_notifications: SaveLineNotifications | None = None,
+    read_line_notifications: ReadLineNotifications | None = None,
 ) -> int:
     app = QApplication.instance()
     if app is None:
         app = QApplication(sys.argv)
+    apply_dark_appearance()
 
     window = MainWindow(
         create_session=create_session,
@@ -43,6 +48,8 @@ def run_desktop(
         bot=bot,
         chart=chart,
         clear_database=clear_database,
+        save_line_notifications=save_line_notifications,
+        read_line_notifications=read_line_notifications,
     )
     window.setStyleSheet(DARK_THEME)
     window.show()

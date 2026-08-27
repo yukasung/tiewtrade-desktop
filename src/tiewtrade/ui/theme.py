@@ -1,3 +1,6 @@
+from PySide6.QtCore import Qt
+from PySide6.QtGui import QGuiApplication
+
 # The gain/loss pair the whole app reads by colour: chart candles, fill badges
 # and any figure that can go either way.
 POSITIVE_COLOR = "#0ECB81"
@@ -339,11 +342,6 @@ QHeaderView::section {
     font-weight: 650;
     padding: 8px;
 }
-QCheckBox { color: #CBD5E1; spacing: 7px; }
-QCheckBox::indicator:checked {
-    background: #315CF4;
-    border: 1px solid #4C7DFF;
-}
 QLabel#fieldError, QLabel#filterError { color: #F6465D; }
 QLabel#unavailableMessage {
     background: #2A1B20;
@@ -385,3 +383,15 @@ QMessageBox QPushButton {
     padding: 0 20px;
 }
 """
+
+
+def apply_dark_appearance() -> None:
+    """Tell the platform the app is dark, so it draws its own parts dark.
+
+    A stylesheet reaches the widgets Qt paints itself and stops at the ones
+    the operating system paints — scroll bars, focus rings, the text cursor
+    and selection. On a Mac set to Light those are drawn for a light window
+    and all but disappear against this theme. Saying which scheme the app is
+    in is what keeps them native and visible at once.
+    """
+    QGuiApplication.styleHints().setColorScheme(Qt.ColorScheme.Dark)

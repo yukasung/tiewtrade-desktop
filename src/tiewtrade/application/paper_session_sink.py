@@ -11,6 +11,7 @@ the composition it forbids, rather than inside a controller that also owns a
 thread, a loop, and a stream of snapshots.
 """
 
+import logging
 from collections.abc import Callable
 from datetime import datetime
 from decimal import Decimal
@@ -18,6 +19,10 @@ from threading import Lock
 from typing import Protocol
 from uuid import UUID
 
+from tiewtrade.application.entry_opened_notice import (
+    EntryOpenedNotice,
+    EntryOpenedNotifier,
+)
 from tiewtrade.application.open_basket import OpenBasketEntry, OpenBasketState
 from tiewtrade.application.paper_basket_projection import (
     OpenBasketPosition,
@@ -64,6 +69,8 @@ from tiewtrade.trading.basket import SettledEntries
 from tiewtrade.trading.session_config import MarketType
 from tiewtrade.trading.symbol_rules import SymbolRules
 
+_logger = logging.getLogger(__name__)
+
 
 class PaperPositionRestoreError(RuntimeError):
     """An open Basket cannot be put back the way it was left."""
@@ -87,6 +94,12 @@ class _CandleSnapshot(Protocol):
 
     @property
     def entry_number(self) -> int | None: ...
+
+    @property
+    def basket_id(self) -> UUID | None: ...
+
+    @property
+    def take_profit_price(self) -> Decimal | None: ...
 
     @property
     def sold_entry_numbers(self) -> tuple[int, ...]: ...
@@ -130,6 +143,7 @@ class PaperRuntimeSink[Snapshot: _CandleSnapshot]:
         close_entry: CloseOneEntry[Snapshot] | None = None,
         waive_cooldown: WaiveCooldown[Snapshot] | None = None,
         position: OpenBasketPosition | None = None,
+        notify_entry_opened: Callable[[Snapshot], None] | None = None,
     ) -> None:
         self._warm_up = warm_up
         self._persistent = persistent
@@ -141,6 +155,7 @@ class PaperRuntimeSink[Snapshot: _CandleSnapshot]:
         self._restored = restored
         self._close_entry = close_entry
         self._waive_cooldown = waive_cooldown
+        self._notify_entry_opened = notify_entry_opened
         # The last completed price this sink has seen. A sale the trader asks
         # for arrives between candles, and what is left of the Basket is still
         # marked on the price the tab is already showing.
@@ -200,6 +215,10 @@ class PaperRuntimeSink[Snapshot: _CandleSnapshot]:
             self._require_running(snapshot)
             self._candle = candle
             self._publish_snapshot(snapshot, candle, candle.close_time)
+        # Outside the lock: whoever is told about the Entry is somewhere else
+        # on the network, and the next candle is due whether or not they have
+        # answered yet.
+        self._say_an_entry_opened(snapshot)
 
     async def process_in_progress(
         self,
@@ -282,6 +301,21 @@ class PaperRuntimeSink[Snapshot: _CandleSnapshot]:
             self._publish_snapshot(snapshot, candle, observed_at)
             return True
 
+    def _say_an_entry_opened(self, snapshot: Snapshot) -> None:
+        """Tell whoever is listening that this candle filled an Entry.
+
+        Only a completed candle fills one, and a backfilled candle never does,
+        so an Entry Fill in the snapshot is the whole test. The Fill is already
+        persisted by now: nothing said here can change what was decided, and a
+        listener that fails is not allowed to take the Session with it.
+        """
+        if self._notify_entry_opened is None or snapshot.entry_fill is None:
+            return
+        try:
+            self._notify_entry_opened(snapshot)
+        except Exception:
+            _logger.exception("saying that an Entry opened failed")
+
     @staticmethod
     def _require_running(snapshot: Snapshot) -> None:
         """Stop feeding a Session that has stopped deciding.
@@ -327,6 +361,48 @@ def _warm_up_of(
     return warm_up
 
 
+def entry_opened_notice(
+    snapshot: _CandleSnapshot,
+    session: ConfiguredPaperSession,
+) -> EntryOpenedNotice | None:
+    """Read one filled Entry out of a snapshot, as a notice off the machine.
+
+    The market a Session trades is not part of the reading: both markets fill
+    an Entry into a Basket at a price, and a message about it says the same
+    thing either way. What only the composition knows — which symbol and
+    timeframe this Session was pinned to — is joined on here.
+    """
+    fill = snapshot.entry_fill
+    if fill is None or snapshot.basket_id is None or snapshot.entry_number is None:
+        return None
+    return EntryOpenedNotice(
+        session_id=session.config.session_id,
+        symbol=session.market_data.symbol,
+        timeframe=session.market_data.timeframe,
+        basket_id=snapshot.basket_id,
+        entry_number=snapshot.entry_number,
+        price=fill.price,
+        quantity=fill.quantity,
+        take_profit_price=snapshot.take_profit_price,
+        filled_at=fill.filled_at,
+    )
+
+
+def _entry_opened_reading(
+    session: ConfiguredPaperSession,
+    notify: EntryOpenedNotifier | None,
+) -> Callable[[_CandleSnapshot], None] | None:
+    if notify is None:
+        return None
+
+    def say(snapshot: _CandleSnapshot) -> None:
+        notice = entry_opened_notice(snapshot, session)
+        if notice is not None:
+            notify(notice)
+
+    return say
+
+
 def paper_session_sink(
     session: ConfiguredPaperSession,
     preset: StrategyPreset,
@@ -337,6 +413,7 @@ def paper_session_sink(
     entry_lock: Lock,
     entries_enabled: Callable[[], bool],
     restored: Callable[[BasketSnapshot, datetime], None] | None = None,
+    notify_entry_opened: EntryOpenedNotifier | None = None,
 ) -> (
     PaperRuntimeSink[PaperSpotSessionSnapshot]
     | PaperRuntimeSink[PaperFuturesSessionSnapshot]
@@ -348,6 +425,7 @@ def paper_session_sink(
     snapshot that comes back. They are chosen here, together, so the Runtime
     that drives candles never has to know which market it is driving.
     """
+    say_an_entry_opened = _entry_opened_reading(session, notify_entry_opened)
     if session.config.market_type is MarketType.SPOT:
         open_basket = read_open_basket_state(trade_history, session.config.session_id)
         spot_application = PaperSpotSession(
@@ -387,6 +465,7 @@ def paper_session_sink(
                 observed_at
             ),
             position=open_basket_position(spot_application.open_entries),
+            notify_entry_opened=say_an_entry_opened,
         )
 
     # Paper Futures has no way back into a Basket it did not open: what it
@@ -434,6 +513,7 @@ def paper_session_sink(
         waive_cooldown=lambda observed_at: futures_persistent.waive_cooldown(
             observed_at
         ),
+        notify_entry_opened=say_an_entry_opened,
     )
 
 

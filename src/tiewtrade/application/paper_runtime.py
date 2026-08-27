@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from collections.abc import Callable, Iterator
-from contextlib import contextmanager
+from contextlib import AbstractAsyncContextManager, AsyncExitStack, contextmanager
 from datetime import UTC, datetime
 from decimal import Decimal
 from threading import Event, Lock, Thread
@@ -13,6 +14,7 @@ from tiewtrade.application.bot_control import (
     BotLifecycleResult,
     workspace_with_runtime_state,
 )
+from tiewtrade.application.entry_opened_notice import EntryOpenedNotifier
 from tiewtrade.application.paper_session_setup import ConfiguredPaperSession
 from tiewtrade.application.paper_session_sink import (
     PaperPositionRestoreError as PaperPositionRestoreError,
@@ -57,6 +59,8 @@ from tiewtrade.strategies.registry import strategy_definition_for
 from tiewtrade.trading.session_config import TradeMode
 from tiewtrade.trading.symbol_rules import SymbolRules
 
+_logger = logging.getLogger(__name__)
+
 _START_BLOCKED_REASON = "Paper Bot could not be started"
 _STOP_BLOCKED_REASON = "Paper Bot could not be stopped"
 _RECOVERY_BLOCKED_REASON = "Paper Bot recovery failed"
@@ -79,6 +83,9 @@ class PaperRuntimeController:
         symbol_rules: SymbolRules,
         source_factory: Callable[[BinancePublicEndpoints], MarketDataCandleSource],
         snapshot_callback: Callable[[TradingWorkspaceSnapshot], None],
+        notifier_factory: (
+            Callable[[], AbstractAsyncContextManager[EntryOpenedNotifier]] | None
+        ) = None,
         completed_candle_callback: Callable[[Candle], None] | None = None,
         in_progress_candle_callback: Callable[[Candle], None] | None = None,
         scheduler: RuntimeScheduler | None = None,
@@ -89,6 +96,7 @@ class PaperRuntimeController:
         self._symbol_rules = symbol_rules
         self._source_factory = source_factory
         self._snapshot_callback = snapshot_callback
+        self._notifier_factory = notifier_factory
         self._completed_candle_callback = completed_candle_callback
         self._in_progress_candle_callback = in_progress_candle_callback
         self._scheduler = scheduler or AsyncioRuntimeScheduler()
@@ -285,6 +293,31 @@ class PaperRuntimeController:
             self._thread_finished.set()
 
     async def _run(self, session: ConfiguredPaperSession) -> None:
+        async with AsyncExitStack() as stack:
+            await self._run_session(session, await self._open_notifier(stack))
+
+    async def _open_notifier(self, stack: AsyncExitStack) -> EntryOpenedNotifier | None:
+        """Open whatever says an Entry filled, or run without one.
+
+        Settings that are wrong — a token that will not open a connection —
+        are a reason for the Bot to say nothing, never a reason for it not to
+        trade. The Session is what the trader started; the message is not.
+        """
+        if self._notifier_factory is None:
+            return None
+        try:
+            return await stack.enter_async_context(self._notifier_factory())
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            _logger.exception("the Entry notifier could not be opened")
+            return None
+
+    async def _run_session(
+        self,
+        session: ConfiguredPaperSession,
+        notify_entry_opened: EntryOpenedNotifier | None,
+    ) -> None:
         with self._lock:
             self._loop = asyncio.get_running_loop()
         terminal = asyncio.Event()
@@ -307,6 +340,7 @@ class PaperRuntimeController:
             entry_lock=self._entry_lock,
             entries_enabled=self._entries_enabled.is_set,
             restored=self._publish_restored_basket,
+            notify_entry_opened=notify_entry_opened,
         )
         with self._lock:
             self._sink = sink

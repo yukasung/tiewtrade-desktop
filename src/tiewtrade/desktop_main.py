@@ -57,6 +57,11 @@ from tiewtrade.integrations.sqlite.paper_runtime_lifecycle import (
     SQLitePaperRuntimeLifecycle,
 )
 from tiewtrade.integrations.sqlite.trade_history import SQLiteTradeHistory
+from tiewtrade.line_notification_composition import (
+    line_entry_notifier,
+    line_notification_reading,
+    save_line_notification_settings,
+)
 from tiewtrade.market_data.candle import Candle
 from tiewtrade.strategies.protocols import StrategyPreset
 from tiewtrade.strategies.registry import strategy_definition_for
@@ -303,6 +308,7 @@ class _PaperRuntimeActions:
             trade_history=self._trade_history,
             symbol_rules=_symbol_rules_for(session),
             source_factory=BinancePublicMarketData,
+            notifier_factory=line_entry_notifier,
             snapshot_callback=publish_current_result,
             completed_candle_callback=publish.completed_candle,
             in_progress_candle_callback=publish.in_progress_candle,
@@ -719,6 +725,20 @@ def run_desktop(database_path: Path | None = None) -> int:
             chart_feed=chart_feed,
         ),
         clear_database=_migrate_first(prepare_database, database.clear_all_data),
+        save_line_notifications=_keep_line_notifications,
+        read_line_notifications=line_notification_reading,
+    )
+
+
+def _keep_line_notifications(
+    enabled: bool,
+    target_id: str,
+    access_token: str,
+) -> None:
+    save_line_notification_settings(
+        enabled=enabled,
+        target_id=target_id,
+        channel_access_token=access_token,
     )
 
 
