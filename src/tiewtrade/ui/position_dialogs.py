@@ -21,10 +21,8 @@ def ask_about_selling_one_entry(parent: QWidget | None, entry_number: int) -> bo
         title="Close Position",
         question=f"Sell Entry {entry_number} at the market price?",
         detail=(
-            f"Market sells Entry {entry_number} at the price now, not at the Take "
-            "Profit it was given. The rest of the Position is left as it is, and "
-            "the Bot goes on running.\n\n"
-            "Cancel leaves the Entry open."
+            f"Entry {entry_number} sells at the price now, not at its Take Profit. "
+            "The rest of the Position and the Bot are left alone."
         ),
         confirm_label="Market",
     )
@@ -42,9 +40,8 @@ def ask_about_closing_all_at_market(parent: QWidget | None) -> bool:
         title="Close All at Market",
         question="Sell the whole Position at the market price now?",
         detail=(
-            "Market sells every remaining Entry at the price now, not at the "
-            "Take Profit each was given, and closes the Basket.\n\n"
-            "Cancel leaves the Position open."
+            "Every remaining Entry sells at the price now, not at its Take "
+            "Profit, and the Basket closes."
         ),
         confirm_label="Close All",
     )
@@ -62,10 +59,9 @@ def ask_about_cancelling_cooldown(parent: QWidget | None) -> bool:
         title="Cancel Cooldown",
         question="Lift this Cooldown and open a new Entry now?",
         detail=(
-            "This Basket completed an Entry Pair, so the strategy is holding it "
-            "back from taking another Entry. Lifting the Cooldown lets one open "
-            "immediately. The next Pair it completes is held back again.\n\n"
-            "Cancel leaves the Cooldown as it is."
+            "The strategy is holding this Basket back after an Entry Pair. "
+            "Lifting the Cooldown lets one Entry open now; the next Pair is "
+            "held back again."
         ),
         confirm_label="Cancel Cooldown",
     )

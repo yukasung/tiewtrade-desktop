@@ -12,10 +12,9 @@ from decimal import Decimal
 from tiewtrade.application.open_basket import ReopenedBasket
 
 UNREADABLE_POSITION_MESSAGE = (
-    "What the open Position holds cannot be read yet, or no price has "
-    "arrived to judge it by. Starting the Bot sells the whole Position at "
-    "once if the price has already reached its Take Profit, at that target "
-    "rather than at the price now."
+    "The open Position cannot be read yet, or no price has arrived to judge "
+    "it by. If it is already at its Take Profit, starting the Bot sells "
+    "every Entry at once at that target, not at the price now."
 )
 """Why a Start is worth confirming when nothing can be said about the sale.
 

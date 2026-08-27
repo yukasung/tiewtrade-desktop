@@ -595,7 +595,7 @@ class MainWindow(QMainWindow):
             report_failure=lambda: QMessageBox.warning(
                 settings_panel,
                 "Settings",
-                "Could not clear the database. Check your connection, then try again.",
+                "Could not clear the database. Try again.",
             ),
             failure_log="Could not clear the database",
             start=self._thread_pool.start,
@@ -953,7 +953,7 @@ class MainWindow(QMainWindow):
         dialog.setIcon(QMessageBox.Icon.Warning)
         dialog.setText(reason)
         dialog.setInformativeText(
-            "The Session is open on the setup form. Start the Bot again when "
+            "The Session is open on the setup form. Start the Bot again once "
             "the connection is back."
         )
         dialog.addButton(QMessageBox.StandardButton.Ok)
