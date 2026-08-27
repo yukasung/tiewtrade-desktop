@@ -9,14 +9,13 @@ the same way `PositionBasketTable.close_all_requested` leaves the
 confirming to its window rather than asking it here.
 
 The LINE fields are filled in here and never read back out: the panel is
-told whether a token is stored, which is all a trader needs to know to
-decide whether to type a new one, and the token itself stays wherever the
+told whether a token is stored, and says so on the token field itself
+rather than in a note beside it, while the token stays wherever the
 machine keeps it.
 """
 
 from PySide6.QtCore import Signal
 from PySide6.QtWidgets import (
-    QFormLayout,
     QHBoxLayout,
     QLabel,
     QLineEdit,
@@ -31,12 +30,8 @@ CLEAR_DATABASE_BUSY_TEXT = "Clearing…"
 CLEAR_DATABASE_IDLE_TEXT = "Clear All Database"
 SAVE_LINE_BUSY_TEXT = "Saving…"
 SAVE_LINE_IDLE_TEXT = "Save Settings"
-TOKEN_STORED_TEXT = (
-    "A channel access token is saved. Leave the field blank to keep it, "
-    "or type a new one to replace it."
-)
-TOKEN_MISSING_TEXT = "No channel access token is saved yet."
-LINE_APPLIES_TEXT = "Saved settings apply the next time the bot is started."
+TOKEN_STORED_PLACEHOLDER = "Saved — type a new token to replace it"
+TOKEN_MISSING_PLACEHOLDER = "Messaging API channel access token"
 TOKEN_UNREADABLE_TEXT = "The saved LINE settings could not be read on this machine."
 
 type LineNotificationsReading = tuple[bool, str, bool]
@@ -73,21 +68,24 @@ class SettingsPanel(QWidget):
         self.line_target_id.setPlaceholderText("User or group ID")
         self.line_access_token = QLineEdit()
         self.line_access_token.setEchoMode(QLineEdit.EchoMode.Password)
-        self.line_access_token.setPlaceholderText("Messaging API channel access token")
+        self.line_access_token.setPlaceholderText(TOKEN_MISSING_PLACEHOLDER)
 
-        self.line_token_state = QLabel(TOKEN_MISSING_TEXT)
-        self.line_token_state.setObjectName("hint")
-        applies_note = QLabel(LINE_APPLIES_TEXT)
-        applies_note.setObjectName("hint")
-        applies_note.setWordWrap(True)
+        # Blank unless something is wrong: what a trader has to be told about
+        # these settings is that they could not be read, not that they were.
+        self.line_token_state = QLabel()
+        self.line_token_state.setObjectName("fieldError")
+        self.line_token_state.setWordWrap(True)
+        self.line_token_state.setVisible(False)
 
         self.save_line_button = QPushButton(SAVE_LINE_IDLE_TEXT)
         self.save_line_button.setObjectName("secondaryButton")
         self.save_line_button.clicked.connect(self._save_line_notifications)
 
-        line_form = QFormLayout()
-        line_form.addRow("Send to", self.line_target_id)
-        line_form.addRow("Access token", self.line_access_token)
+        line_form = QVBoxLayout()
+        line_form.setContentsMargins(0, 0, 0, 0)
+        line_form.setSpacing(12)
+        line_form.addLayout(_field_row("Send to", self.line_target_id))
+        line_form.addLayout(_field_row("Access token", self.line_access_token))
 
         self.clear_database_button = QPushButton(CLEAR_DATABASE_IDLE_TEXT)
         self.clear_database_button.setObjectName("destructiveButton")
@@ -105,7 +103,6 @@ class SettingsPanel(QWidget):
         layout.addLayout(line_enabled_row)
         layout.addLayout(line_form)
         layout.addWidget(self.line_token_state)
-        layout.addWidget(applies_note)
         # The actions sit at the foot of the page, under the space the values
         # yet to come will fill, so they stay where a trader last left them
         # instead of sliding down the page as fields are added above.
@@ -127,17 +124,19 @@ class SettingsPanel(QWidget):
     def show_line_notifications(self, reading: LineNotificationsReading) -> None:
         """Fill the form from what is stored, leaving the token field empty.
 
-        A token that is already saved is described, never shown: the trader
-        types one only to replace it, and a field filled with the old one
-        would put a live token on screen for nothing.
+        A token that is already saved is said to be there, never shown: the
+        trader types one only to replace it, and a field filled with the old
+        one would put a live token on screen for nothing.
         """
         enabled, target_id, token_stored = reading
         self.line_enabled.setChecked(enabled)
         self.line_target_id.setText(target_id)
         self.line_access_token.clear()
-        self.line_token_state.setText(
-            TOKEN_STORED_TEXT if token_stored else TOKEN_MISSING_TEXT
+        self.line_access_token.setPlaceholderText(
+            TOKEN_STORED_PLACEHOLDER if token_stored else TOKEN_MISSING_PLACEHOLDER
         )
+        self.line_token_state.clear()
+        self.line_token_state.setVisible(False)
 
     def say_line_notifications_unreadable(self) -> None:
         """Say the settings could not be read, rather than that there are none.
@@ -147,6 +146,7 @@ class SettingsPanel(QWidget):
         never set up, the other a Bot that may well send and cannot say so.
         """
         self.line_token_state.setText(TOKEN_UNREADABLE_TEXT)
+        self.line_token_state.setVisible(True)
 
     def _save_line_notifications(self) -> None:
         self.line_notifications_save_requested.emit(
@@ -154,3 +154,18 @@ class SettingsPanel(QWidget):
             self.line_target_id.text().strip(),
             self.line_access_token.text().strip(),
         )
+
+
+def _field_row(label: str, field: QWidget) -> QVBoxLayout:
+    """A label with its field under it, filling the width it is given.
+
+    The Setup screen states its fields this way, and these are the same kind
+    of thing: a token is long enough that a field sharing its row with a
+    label has nowhere to show what was typed into it.
+    """
+    row = QVBoxLayout()
+    row.setContentsMargins(0, 0, 0, 0)
+    row.setSpacing(4)
+    row.addWidget(QLabel(label))
+    row.addWidget(field)
+    return row

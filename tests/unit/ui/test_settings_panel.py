@@ -1,12 +1,13 @@
-from PySide6.QtWidgets import QLineEdit
+from PySide6.QtWidgets import QLabel, QLineEdit
 from pytestqt.qtbot import QtBot
 
 from tests.support.qt_interactions import click
 from tiewtrade.ui.settings_panel import (
     SAVE_LINE_BUSY_TEXT,
     SAVE_LINE_IDLE_TEXT,
-    TOKEN_MISSING_TEXT,
-    TOKEN_STORED_TEXT,
+    TOKEN_MISSING_PLACEHOLDER,
+    TOKEN_STORED_PLACEHOLDER,
+    TOKEN_UNREADABLE_TEXT,
     SettingsPanel,
 )
 
@@ -25,6 +26,32 @@ def test_clicking_the_button_emits_clear_database_requested(qtbot: QtBot) -> Non
 
     with qtbot.waitSignal(panel.clear_database_requested, timeout=1000):
         click(panel.clear_database_button)
+
+
+def test_the_line_fields_are_stated_under_their_labels_and_fill_the_width(
+    qtbot: QtBot,
+) -> None:
+    """A token is far longer than a field sharing its row with a label.
+
+    Side by side, the label took the width the value needed and the token
+    scrolled past the edge of a field a few characters wide.
+    """
+    panel = SettingsPanel()
+    qtbot.addWidget(panel)
+    panel.resize(600, 500)
+    panel.show()
+    qtbot.waitUntil(panel.line_target_id.isVisible)
+
+    for field, text in (
+        (panel.line_target_id, "Send to"),
+        (panel.line_access_token, "Access token"),
+    ):
+        label = next(
+            widget for widget in panel.findChildren(QLabel) if widget.text() == text
+        )
+        assert label.y() < field.y()
+        # Whatever room the panel has, less its own margins, is the field's.
+        assert field.width() > panel.width() - 60
 
 
 def test_clicking_back_emits_back_requested(qtbot: QtBot) -> None:
@@ -81,7 +108,7 @@ def test_a_stored_token_is_described_rather_than_filled_in(qtbot: QtBot) -> None
     assert panel.line_enabled.isChecked()
     assert panel.line_target_id.text() == "U123"
     assert panel.line_access_token.text() == ""
-    assert panel.line_token_state.text() == TOKEN_STORED_TEXT
+    assert panel.line_access_token.placeholderText() == TOKEN_STORED_PLACEHOLDER
 
 
 def test_settings_with_no_token_saved_say_so(qtbot: QtBot) -> None:
@@ -93,7 +120,31 @@ def test_settings_with_no_token_saved_say_so(qtbot: QtBot) -> None:
 
     assert not panel.line_enabled.isChecked()
     assert panel.line_access_token.text() == ""
-    assert panel.line_token_state.text() == TOKEN_MISSING_TEXT
+    assert panel.line_access_token.placeholderText() == TOKEN_MISSING_PLACEHOLDER
+
+
+def test_settings_nobody_could_read_say_so_where_they_were_typed(
+    qtbot: QtBot,
+) -> None:
+    """An empty form and a form nobody could read mean opposite things.
+
+    One is a Bot that will send nothing because it was never set up, the
+    other a Bot that may well send and cannot say what it is sending with.
+    Nothing else on the page says anything, so this line has to.
+    """
+    panel = SettingsPanel()
+    qtbot.addWidget(panel)
+    panel.show()
+    assert not panel.line_token_state.isVisible()
+
+    panel.say_line_notifications_unreadable()
+
+    assert panel.line_token_state.isVisible()
+    assert panel.line_token_state.text() == TOKEN_UNREADABLE_TEXT
+
+    panel.show_line_notifications((False, "", False))
+
+    assert not panel.line_token_state.isVisible()
 
 
 def test_set_busy_holds_the_save_button_too(qtbot: QtBot) -> None:

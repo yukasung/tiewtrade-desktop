@@ -97,7 +97,7 @@ from tiewtrade.ui.main_window import (
 )
 from tiewtrade.ui.pair_text import pair_text
 from tiewtrade.ui.session_overview import SessionOverviewWidget
-from tiewtrade.ui.settings_panel import TOKEN_STORED_TEXT
+from tiewtrade.ui.settings_panel import TOKEN_STORED_PLACEHOLDER
 from tiewtrade.ui.trade_history_presenter import (
     default_filter_values,
     trade_history_filter,
@@ -4165,7 +4165,9 @@ def test_saving_line_settings_hands_them_off_and_reads_them_back(
     click(panel.save_line_button)
 
     qtbot.waitUntil(lambda: saved == [(True, "U123", "token-value")])
-    qtbot.waitUntil(lambda: panel.line_token_state.text() == TOKEN_STORED_TEXT)
+    qtbot.waitUntil(
+        lambda: panel.line_access_token.placeholderText() == TOKEN_STORED_PLACEHOLDER
+    )
     assert panel.line_access_token.text() == ""
 
 
