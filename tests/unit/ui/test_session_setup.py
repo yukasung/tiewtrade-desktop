@@ -1,4 +1,5 @@
 import pytest
+from PySide6.QtGui import QValidator
 from pytestqt.qtbot import QtBot
 
 from tests.support.paper_session_setup import (
@@ -211,3 +212,26 @@ def test_a_form_filled_from_a_session_reads_back_as_that_session(
     widget.set_values_from_session(session)
 
     assert widget.values() == setup_values_of(session)
+
+
+def _validator_state(validator: QValidator, text: str) -> QValidator.State:
+    result = validator.validate(text, len(text))
+    assert isinstance(result, tuple)
+    state = result[0]
+    assert isinstance(state, QValidator.State)
+    return state
+
+
+def test_amount_field_accepts_only_a_number(qtbot: QtBot) -> None:
+    widget = SessionSetupWidget()
+    qtbot.addWidget(widget)
+
+    validator = widget.capital_per_entry.validator()
+    assert validator is not None
+    assert _validator_state(validator, "250.75") is QValidator.State.Acceptable
+    assert _validator_state(validator, "2 5 0") is QValidator.State.Invalid
+    assert _validator_state(validator, "abc") is QValidator.State.Invalid
+    assert _validator_state(validator, "-250") is QValidator.State.Invalid
+    # A field being filled in is not yet a field that is wrong: an empty
+    # Amount is still what the form reports as a missing Amount.
+    assert _validator_state(validator, "") is not QValidator.State.Invalid
