@@ -116,7 +116,7 @@ Basket     : Long  = basket_weighted_average_entry_price + (ATR(14) * 3)
 - การปิด Entry รายตัวนอกเหนือจากนี้เกิดจากคำสั่งของผู้ใช้เท่านั้น ตามข้อ 6.3
 - กติกานี้เป็น Basket rule กลางที่ใช้กับทุก Preset ไม่ผูกกับ Preset version ส่วนค่า Take Profit
   ATR multiplier ยังมาจาก Preset ตามข้อ 3
-- Paper Spot ตรวจ Take Profit และ Stop Loss จากราคาที่วิ่งอยู่ระหว่าง candle และ Fill
+- Paper Spot ตรวจ Take Profit จากราคาที่วิ่งอยู่ระหว่าง candle และ Fill
   ทันทีที่ราคาถึงระดับ โดยไม่รอ candle ปิด ส่วน Entry ยังคงประเมินจาก completed candle
   เท่านั้นตามข้อ 4.2
 - Paper Futures ตรวจ Take Profit ที่ candle ปิดเท่านั้น เพราะราคาที่แตะระหว่าง candle
@@ -199,7 +199,7 @@ Paper Trading ใช้ conservative candle fill เพื่อให้ replay
 - **ห้ามเปิด Entry ใหม่จาก candle ที่ดึงย้อนหลัง** — Entry Intent ที่ค้างอยู่ต้องถูกคืนให้
   Strategy (ไม่ใช่ค้างรอ) เพื่อไม่ให้ไป Fill ที่ candle สดแท่งแรกด้วยสัญญาณที่อ่านจาก candle
   เก่าหลายแท่งก่อนหน้า Strategy ส่งสัญญาณใหม่ได้เมื่อตลาดสดยังบอกแบบเดิม
-- **ยังต้องปิด Position ตามปกติ** — Take Profit และ Stop Loss ยังทำงานเต็มรูปแบบ
+- **ยังต้องปิด Position ตามปกติ** — Take Profit ยังทำงานเต็มรูปแบบ
   เพราะเหตุการณ์เหล่านั้นเกิดขึ้นจริงในตลาดไม่ว่าระบบจะเห็นทันหรือไม่ การเมินจะรายงาน Position
   ที่ผู้ใช้ไม่ได้ถืออยู่จริง และทำให้ผลการเทรดดูดีเกินจริง
 - **ยังต้องคำนวณ Indicator ตามปกติ** — RSI และ ATR ต้องเห็น candle ครบทุกแท่ง มิฉะนั้นค่าจะผิด

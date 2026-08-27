@@ -65,7 +65,6 @@ def reopen_basket(
     *,
     entry_policy: EntryPolicy,
     take_profit_atr_multiplier: Decimal,
-    stop_loss_atr_multiplier: Decimal | None,
     tick_size: Decimal,
 ) -> ReopenedBasket:
     """Replay the Entries, letting the Basket state its own numbers again."""
@@ -73,7 +72,6 @@ def reopen_basket(
         state.basket_id,
         entry_policy,
         take_profit_atr_multiplier,
-        stop_loss_atr_multiplier=stop_loss_atr_multiplier,
         # Replaying the open Entries states everything the Basket holds; what
         # it already sold is not there to be replayed, and is told to it.
         settled=state.settled,

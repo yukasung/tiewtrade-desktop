@@ -168,7 +168,7 @@ Session อ่านค่าตั้งค่าตอน Runtime เริ่
 (`PaperSpotSession` / `PaperFuturesSession`) เป็นผู้บังคับ
 
 Session ที่ได้รับ candle ย้อนหลังจะคืน Entry Intent ที่ค้างอยู่ให้ Strategy แทนการ Fill แต่ยัง
-ประมวลผลทุกอย่างที่เหลือตามปกติ ทั้ง indicator, Take Profit และ Stop Loss
+ประมวลผลทุกอย่างที่เหลือตามปกติ ทั้ง indicator และ Take Profit
 รายละเอียดกฎอยู่ใน PRODUCT.md ข้อ 8.1
 
 ## Cooldown Waiver

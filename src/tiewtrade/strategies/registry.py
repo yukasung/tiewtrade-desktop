@@ -5,8 +5,6 @@ from uuid import UUID
 from tiewtrade.strategies.fast_test.preset import FastTestPreset
 from tiewtrade.strategies.fast_test.strategy import FastTestStrategy
 from tiewtrade.strategies.protocols import EntryStrategy, StrategyPreset
-from tiewtrade.strategies.rsi_buy_only.preset import RsiBuyOnlyPreset
-from tiewtrade.strategies.rsi_buy_only.strategy import RsiBuyOnlyStrategy
 from tiewtrade.strategies.rsi_step_grid.preset import RsiStepGridPreset
 from tiewtrade.strategies.rsi_step_grid.strategy import RsiStepGridStrategy
 from tiewtrade.trading.session_config import MarketType
@@ -28,13 +26,6 @@ def _build_rsi_step_grid_strategy(
     return RsiStepGridStrategy(session_id, preset)
 
 
-def _build_rsi_buy_only_strategy(
-    session_id: UUID, preset: StrategyPreset
-) -> EntryStrategy:
-    assert isinstance(preset, RsiBuyOnlyPreset)
-    return RsiBuyOnlyStrategy(session_id, preset)
-
-
 def _build_fast_test_strategy(
     session_id: UUID, preset: StrategyPreset
 ) -> EntryStrategy:
@@ -49,13 +40,6 @@ _DEFINITIONS: dict[str, StrategyDefinition] = {
         market_types=frozenset({MarketType.SPOT, MarketType.FUTURES}),
         build_preset=RsiStepGridPreset.v1,
         build_strategy=_build_rsi_step_grid_strategy,
-    ),
-    RsiBuyOnlyPreset.v1().version: StrategyDefinition(
-        preset_version=RsiBuyOnlyPreset.v1().version,
-        display_name="RSI Buy Only v1",
-        market_types=frozenset({MarketType.SPOT}),
-        build_preset=RsiBuyOnlyPreset.v1,
-        build_strategy=_build_rsi_buy_only_strategy,
     ),
     # Named for what it is on every screen that lists it: a way to see the
     # machinery run, not a strategy anyone should trade.

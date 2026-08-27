@@ -98,8 +98,8 @@ to trade.
 **Backfilled candles never open an Entry.** After a disconnect the runtime refetches the
 missed candles up to now and delivers them through the same sink call a live candle takes,
 so `market_data` reports *whether* a candle was backfilled and the Session enforces the
-rule. A backfilled candle still feeds indicators and still closes a Basket (take-profit,
-stop-loss — those happened in the market whether the feed saw them or not),
+rule. A backfilled candle still feeds indicators and still closes a Basket (take-profit —
+that happened in the market whether the feed saw it or not),
 but it may not fill an Entry, and a pending Entry Intent is handed back to the strategy
 rather than left to fill on the first live candle off a stale signal. Applies to Paper and
 Live alike; see PRODUCT.md 8.1.

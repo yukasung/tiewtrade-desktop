@@ -27,7 +27,7 @@ class PaperEntryExitFill(PaperFill, Protocol):
     """A Paper Fill that sold one Entry rather than a whole Basket.
 
     `entry_number` is optional because a Spot Fill carries None when it took
-    everything — a stop loss or a manual close — which is exactly the Fill
+    everything — a manual close — which is exactly the Fill
     that must never reach this path.
     """
 

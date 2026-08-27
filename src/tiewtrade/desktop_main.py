@@ -527,7 +527,6 @@ def _bot_actions(
             state,
             entry_policy=session.config.entry_policy,
             take_profit_atr_multiplier=preset.take_profit_atr_multiplier,
-            stop_loss_atr_multiplier=preset.stop_loss_atr_multiplier,
             tick_size=_symbol_rules_for(session).tick_size,
         )
 

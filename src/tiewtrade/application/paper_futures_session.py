@@ -76,8 +76,8 @@ class PaperFuturesSessionSnapshot:
     # The number of the Entry just filled, which the tab reads per Entry.
     entry_number: int | None
     # Entries a target sold this candle, each at the price its own rule gave
-    # it. Futures has no other way out — no stop loss, and no sale the trader
-    # asks for — so every exit this Session books arrives here.
+    # it. Futures has no other way out — no sale the trader asks for — so
+    # every exit this Session books arrives here.
     entry_exits: tuple[PaperFuturesEntryExit, ...]
     closed_basket: ClosedBasket | None
     basket_id: UUID | None

@@ -20,7 +20,6 @@ def require_shared_preset_rules(
     rsi_period: int,
     atr_period: int,
     take_profit_atr_multiplier: Decimal,
-    stop_loss_atr_multiplier: Decimal | None,
 ) -> None:
     if not version:
         raise ValueError("version must not be empty")
@@ -30,8 +29,6 @@ def require_shared_preset_rules(
         raise ValueError("atr_period must be positive")
     if take_profit_atr_multiplier <= 0:
         raise ValueError("take_profit_atr_multiplier must be positive")
-    if stop_loss_atr_multiplier is not None and stop_loss_atr_multiplier <= 0:
-        raise ValueError("stop_loss_atr_multiplier must be positive")
 
 
 def minimum_warm_up_candles(rsi_period: int, atr_period: int) -> int:

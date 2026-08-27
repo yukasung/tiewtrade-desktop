@@ -190,7 +190,7 @@ def _create_schema(connection: sqlite3.Connection) -> None:
             -- recorded before it was kept.
             entry_atr TEXT,
             -- The Entry this Exit sold, when it sold one rather than the
-            -- whole Basket. NULL for an Entry, a stop loss and a manual close.
+            -- whole Basket. NULL for an Entry and for a manual close.
             closes_entry_number INTEGER,
             UNIQUE (source, order_id, exchange_trade_id)
         )

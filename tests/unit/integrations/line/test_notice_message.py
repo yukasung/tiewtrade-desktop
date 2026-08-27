@@ -94,11 +94,11 @@ def test_a_losing_position_is_named_a_loss_rather_than_a_negative_profit() -> No
     message = notice_message(
         _closed(
             realized_pnl=Decimal("-41.20"),
-            close_reason=BasketCloseReason.STOP_LOSS,
+            close_reason=BasketCloseReason.MANUAL,
         )
     )
 
-    assert "Stop loss · Loss 41.20 USDT" in message
+    assert "Closed by you · Loss 41.20 USDT" in message
     assert "-" not in message.splitlines()[1]
 
 

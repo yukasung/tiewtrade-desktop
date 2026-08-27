@@ -11,7 +11,6 @@ from tiewtrade.trading.position import PositionSide
 
 class BasketCloseReason(StrEnum):
     TAKE_PROFIT = "take_profit"
-    STOP_LOSS = "stop_loss"
     # The trader sold it, at the price the market was at when they asked.
     MANUAL = "manual"
 
@@ -173,25 +172,20 @@ class Basket:
         policy: EntryPolicy,
         take_profit_atr_multiplier: Decimal,
         position_side: PositionSide = PositionSide.LONG,
-        stop_loss_atr_multiplier: Decimal | None = None,
         settled: SettledEntries | None = None,
     ) -> None:
         _require_positive(
             take_profit_atr_multiplier,
             "take_profit_atr_multiplier",
         )
-        if stop_loss_atr_multiplier is not None:
-            _require_positive(stop_loss_atr_multiplier, "stop_loss_atr_multiplier")
         self._basket_id = basket_id
         self._policy = policy
         self._take_profit_atr_multiplier = take_profit_atr_multiplier
-        self._stop_loss_atr_multiplier = stop_loss_atr_multiplier
         self._position_side = position_side
         self._entries: list[BasketEntry] = []
         self._is_closed = False
         self._entry_sequence = 0
         self._take_profit_price: Decimal | None = None
-        self._stop_loss_price: Decimal | None = None
         # Taken from the first Fill and pinned there. The Basket has to round
         # its target again whenever an Entry leaves, and it may not go asking
         # an exchange rule for the tick to do it — Symbol identity is pinned
@@ -307,12 +301,11 @@ class Basket:
         average = self.pair_average_entry_price(pair)
         assert average is not None
         latest = max(entries, key=lambda entry: (entry.filled_at, entry.entry_number))
-        take_profit_price, _ = self._measure_targets(
+        return self._measure_take_profit(
             average_entry_price=average,
             atr=latest.atr,
             tick_size=self._tick_size,
         )
-        return take_profit_price
 
     def open_pair_views(self) -> tuple[BasketPair, ...]:
         """Every Pair still open, with the figures it is judged by."""
@@ -385,10 +378,6 @@ class Basket:
         return self.position_side is PositionSide.SHORT
 
     @property
-    def stop_loss_price(self) -> Decimal | None:
-        return self._stop_loss_price
-
-    @property
     def total_quantity(self) -> Decimal:
         return sum((entry.quantity for entry in self._entries), Decimal("0"))
 
@@ -439,7 +428,7 @@ class Basket:
         # Measured before anything is added, so a target that cannot be stated
         # leaves the Basket exactly as it found it. This Fill is the latest one
         # by definition, so its ATR is the ATR the Basket now measures with.
-        take_profit_price, stop_loss_price = self._measure_targets(
+        take_profit_price = self._measure_take_profit(
             average_entry_price=average_entry_price,
             atr=atr,
             tick_size=tick_size,
@@ -461,21 +450,19 @@ class Basket:
         )
         self._tick_size = tick_size
         self._take_profit_price = take_profit_price
-        self._stop_loss_price = stop_loss_price
 
-    def _measure_targets(
+    def _measure_take_profit(
         self,
         *,
         average_entry_price: Decimal,
         atr: Decimal,
         tick_size: Decimal,
-    ) -> tuple[Decimal, Decimal | None]:
-        """The Basket's exit levels for an average and the ATR it measures with.
+    ) -> Decimal:
+        """The Basket's exit level for an average and the ATR it measures with.
 
-        Both levels come from the same average, so the Basket has one place it
-        can be right or wrong about what it paid. Long rounds its target down
-        and its stop up; Short does the reverse — every rounding is against the
-        Basket, so a Paper Fill can never flatter itself.
+        Long rounds its target down and Short rounds it up — the rounding is
+        against the Basket either way, so a Paper Fill can never flatter
+        itself.
         """
         if self.position_side is PositionSide.LONG:
             raw_target = average_entry_price + (atr * self._take_profit_atr_multiplier)
@@ -488,39 +475,23 @@ class Basket:
         take_profit_price = (raw_target / tick_size).to_integral_value(
             rounding=target_rounding
         ) * tick_size
-
-        stop_loss_price: Decimal | None = None
-        if self._stop_loss_atr_multiplier is not None:
-            if self.position_side is PositionSide.LONG:
-                raw_stop = average_entry_price - (atr * self._stop_loss_atr_multiplier)
-                stop_rounding = ROUND_CEILING
-            else:
-                raw_stop = average_entry_price + (atr * self._stop_loss_atr_multiplier)
-                stop_rounding = ROUND_DOWN
-            if raw_stop <= 0:
-                raise ValueError("stop loss price must be positive")
-            stop_loss_price = (raw_stop / tick_size).to_integral_value(
-                rounding=stop_rounding
-            ) * tick_size
-        return take_profit_price, stop_loss_price
+        return take_profit_price
 
     def _remeasure_targets(self) -> None:
-        """State the exit levels again for the Entries the Basket still holds.
+        """State the exit level again for the Entries the Basket still holds.
 
         An Entry leaving moves the average as surely as one arriving does, so
-        the levels have to be restated then too. Left alone, they would go on
-        describing a Basket that no longer exists — which is what let a stop
-        outlive the Entries whose average put it there.
+        the target has to be restated then too. Left alone, it would go on
+        describing a Basket that no longer exists.
         """
         if self.is_empty:
             self._take_profit_price = None
-            self._stop_loss_price = None
             return
         assert self._tick_size is not None
         latest = max(
             self._entries, key=lambda entry: (entry.filled_at, entry.entry_number)
         )
-        self._take_profit_price, self._stop_loss_price = self._measure_targets(
+        self._take_profit_price = self._measure_take_profit(
             average_entry_price=self.average_entry_price,
             atr=latest.atr,
             tick_size=self._tick_size,

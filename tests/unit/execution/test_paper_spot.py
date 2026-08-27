@@ -85,7 +85,7 @@ def test_rejected_entry_warns_with_the_numbers_needed_to_fix_the_setup(
     """
     session = SessionConfig(
         session_id=UUID("00000000-0000-0000-0000-000000000079"),
-        preset_version="rsi-buy-only-v1",
+        preset_version="rsi-step-grid-v1",
         market_type=MarketType.SPOT,
         trade_mode=TradeMode.PAPER,
         capital_per_entry=Decimal("10"),
@@ -224,129 +224,6 @@ def test_take_profit_rejects_a_padded_near_match() -> None:
 
     with pytest.raises(ValueError) as error:
         PaperSpotExecutor(spot_session(), rules).fill_take_profit(
-            basket, candle, filled_at=candle.close_time
-        )
-
-    assert str(error.value) == (
-        "candle symbol must match SymbolRules.symbol: "
-        "candle=' BTCUSDT ', rules='BTCUSDT'"
-    )
-
-
-def test_stop_loss_target_touch_uses_sell_floor_price_and_exact_fee() -> None:
-    session = SessionConfig(
-        session_id=UUID("00000000-0000-0000-0000-000000000079"),
-        preset_version="rsi-buy-only-v1",
-        market_type=MarketType.SPOT,
-        trade_mode=TradeMode.PAPER,
-        capital_per_entry=Decimal("250"),
-        entry_policy=EntryPolicy(max_entries=4),
-    )
-    rules = SymbolRules(
-        symbol="BTCUSDT",
-        tick_size=Decimal("0.01"),
-        step_size=Decimal("0.001"),
-        min_notional=Decimal("5"),
-    )
-    basket = Basket(
-        UUID("00000000-0000-0000-0000-000000000092"),
-        EntryPolicy(max_entries=4),
-        Decimal("1"),
-        stop_loss_atr_multiplier=Decimal("1"),
-    )
-    basket.add_entry(
-        price=Decimal("100"),
-        quantity=Decimal("2"),
-        filled_at=datetime(2026, 1, 1, tzinfo=UTC),
-        atr=Decimal("1"),
-        tick_size=rules.tick_size,
-    )
-    touch_candle = candle_at(5, open_price="99", high="100", low="98", close="99")
-
-    fill = PaperSpotExecutor(session, rules).fill_stop_loss(
-        basket, touch_candle, filled_at=touch_candle.close_time
-    )
-
-    assert fill is not None
-    assert fill.price == Decimal("99")
-    assert fill.quantity == Decimal("2")
-    assert fill.filled_at == touch_candle.close_time
-    exit_order_id = f"stop-loss:{basket.basket_id}"
-    assert fill.order_id == exit_order_id
-    assert fill.fill_id == f"paper:{session.session_id}:{exit_order_id}:fill"
-
-
-def test_stop_loss_does_not_trigger_when_basket_has_no_multiplier_configured() -> None:
-    rules = spot_rules()
-    basket = Basket(
-        UUID("00000000-0000-0000-0000-000000000092"),
-        EntryPolicy(max_entries=4),
-        Decimal("1"),
-    )
-    basket.add_entry(
-        price=Decimal("100"),
-        quantity=Decimal("2"),
-        filled_at=datetime(2026, 1, 1, tzinfo=UTC),
-        atr=Decimal("1"),
-        tick_size=rules.tick_size,
-    )
-    touch_candle = candle_at(5, open_price="90", high="91", low="80", close="90")
-
-    fill = PaperSpotExecutor(spot_session(), rules).fill_stop_loss(
-        basket, touch_candle, filled_at=touch_candle.close_time
-    )
-
-    assert fill is None
-
-
-def test_stop_loss_does_not_trigger_when_candle_low_stays_above_target() -> None:
-    rules = spot_rules()
-    basket = Basket(
-        UUID("00000000-0000-0000-0000-000000000092"),
-        EntryPolicy(max_entries=4),
-        Decimal("1"),
-        stop_loss_atr_multiplier=Decimal("1"),
-    )
-    basket.add_entry(
-        price=Decimal("100"),
-        quantity=Decimal("2"),
-        filled_at=datetime(2026, 1, 1, tzinfo=UTC),
-        atr=Decimal("1"),
-        tick_size=rules.tick_size,
-    )
-    above_target_candle = candle_at(
-        5, open_price="100", high="101", low="99.5", close="100"
-    )
-
-    fill = PaperSpotExecutor(spot_session(), rules).fill_stop_loss(
-        basket, above_target_candle, filled_at=above_target_candle.close_time
-    )
-
-    assert fill is None
-
-
-def test_stop_loss_rejects_a_padded_near_match() -> None:
-    rules = spot_rules()
-    basket = Basket(
-        UUID("00000000-0000-0000-0000-000000000092"),
-        EntryPolicy(max_entries=4),
-        Decimal("1"),
-        stop_loss_atr_multiplier=Decimal("1"),
-    )
-    basket.add_entry(
-        price=Decimal("100"),
-        quantity=Decimal("2"),
-        filled_at=datetime(2026, 1, 1, tzinfo=UTC),
-        atr=Decimal("1"),
-        tick_size=rules.tick_size,
-    )
-    candle = replace(
-        candle_at(5, open_price="99", high="100", low="98", close="99"),
-        symbol=" BTCUSDT ",
-    )
-
-    with pytest.raises(ValueError) as error:
-        PaperSpotExecutor(spot_session(), rules).fill_stop_loss(
             basket, candle, filled_at=candle.close_time
         )
 

@@ -32,7 +32,6 @@ QUOTE_ASSET = "USDT"
 
 _CLOSE_REASONS = {
     BasketCloseReason.TAKE_PROFIT: "Take profit",
-    BasketCloseReason.STOP_LOSS: "Stop loss",
     BasketCloseReason.MANUAL: "Closed by you",
 }
 

@@ -40,7 +40,6 @@ def _reopen(state: OpenBasketState, *, max_entries: int = 10) -> ReopenedBasket:
         state,
         entry_policy=EntryPolicy(max_entries=max_entries),
         take_profit_atr_multiplier=Decimal("1"),
-        stop_loss_atr_multiplier=None,
         tick_size=Decimal("0.01"),
     )
 

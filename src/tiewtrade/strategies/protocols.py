@@ -20,9 +20,6 @@ class StrategyPreset(Protocol):
     def take_profit_atr_multiplier(self) -> Decimal: ...
 
     @property
-    def stop_loss_atr_multiplier(self) -> Decimal | None: ...
-
-    @property
     def minimum_warm_up_candles(self) -> int: ...
 
 

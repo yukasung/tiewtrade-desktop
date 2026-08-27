@@ -68,8 +68,8 @@ Cooldown เกิดขึ้นเมื่อ Basket ทำ Entry Pair คร
 ### Candle ที่ดึงย้อนหลัง (Backfilled Candle)
 
 Candle ที่ระบบดึงย้อนหลังมาหลังการเชื่อมต่อขาด ห้ามใช้เปิด Entry ใหม่ เพราะราคาเปิดของมันเป็น
-ราคาที่ตลาดผ่านไปแล้ว แต่ยังใช้ปิด Position ได้เต็มรูปแบบ (Take Profit / Stop Loss /
-Stop Loss) และยังใช้คำนวณ Indicator ตามปกติ กฎนี้ใช้กับทั้ง `PAPER` และ `LIVE` ทุก Market
+ราคาที่ตลาดผ่านไปแล้ว แต่ยังใช้ปิด Position ได้เต็มรูปแบบ (Take Profit และการปิดเอง)
+และยังใช้คำนวณ Indicator ตามปกติ กฎนี้ใช้กับทั้ง `PAPER` และ `LIVE` ทุก Market
 Type — ดู PRODUCT.md ข้อ 8.1
 
 ### Basket Take Profit
@@ -89,5 +89,5 @@ ATR ที่ใช้คือของ Entry ที่ยังเปิดอ
 
 ### Basket Close Reason
 
-Basket ปิดได้ด้วย `TAKE_PROFIT`, `STOP_LOSS` หรือ `MANUAL` เมื่อผู้ใช้สั่งปิดเอง
+Basket ปิดได้ด้วย `TAKE_PROFIT` หรือ `MANUAL` เมื่อผู้ใช้สั่งปิดเอง
 Internal Alpha ไม่มี Liquidation: ไม่มีกลไกใดบังคับปิด Position ไม่ว่าราคาจะเสียหายเพียงใด

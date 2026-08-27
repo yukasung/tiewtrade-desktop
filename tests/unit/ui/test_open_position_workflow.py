@@ -48,7 +48,6 @@ def _reopened() -> ReopenedBasket:
         ),
         entry_policy=session.config.entry_policy,
         take_profit_atr_multiplier=Decimal("3"),
-        stop_loss_atr_multiplier=None,
         tick_size=Decimal("0.01"),
     )
 

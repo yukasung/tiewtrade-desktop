@@ -1086,8 +1086,8 @@ def test_a_basket_taken_back_closes_on_the_entries_that_already_sold_too(
     """A restart must not lose what the Basket had already made.
 
     The Runtime replays the Entries still open — the ones that sold are not
-    in the position to replay — so a stop loss on the rest wrote a result and
-    a count that left them out: 20 on a Basket that had made 25.8, over two
+    in the position to replay — so closing the rest wrote a result and a
+    count that left them out: 20 on a Basket that had made 25.8, over two
     Entries reported as one.
     """
     session = configured_spot_session()
@@ -1144,14 +1144,13 @@ def test_a_basket_taken_back_closes_on_the_entries_that_already_sold_too(
         state,
         entry_policy=session.config.entry_policy,
         take_profit_atr_multiplier=Decimal("3"),
-        stop_loss_atr_multiplier=None,
         tick_size=Decimal("0.01"),
     )
 
     closed = reopened.basket.close(
         exit_price=Decimal("120"),
         closed_at=_NOW + timedelta(minutes=20),
-        close_reason=BasketCloseReason.STOP_LOSS,
+        close_reason=BasketCloseReason.MANUAL,
     )
 
     # 5.8 from the Entry that sold before, 20 from the one taken back.

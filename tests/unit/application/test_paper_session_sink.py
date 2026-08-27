@@ -328,13 +328,13 @@ def test_a_candle_that_both_filled_and_closed_says_each_in_its_own_message() -> 
 
 
 def test_a_basket_that_closed_between_candles_is_still_said_out_loud() -> None:
-    """A stop loss reached on a forming candle is a Position gone, all the same."""
+    """A target reached on a forming candle is a Position gone, all the same."""
     notices: list[SessionNotice] = []
     sink, _ = sink_for(
         replace(
             FakeSnapshot(),
             basket_id=BASKET_ID,
-            closed_basket=closed_basket(BasketCloseReason.STOP_LOSS),
+            closed_basket=closed_basket(BasketCloseReason.TAKE_PROFIT),
         ),
         notify=notices.append,
     )

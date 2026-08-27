@@ -2496,7 +2496,6 @@ def test_an_open_position_shows_before_any_bot_is_started(qtbot: QtBot) -> None:
         ),
         entry_policy=session.config.entry_policy,
         take_profit_atr_multiplier=Decimal("3"),
-        stop_loss_atr_multiplier=None,
         tick_size=Decimal("0.01"),
     )
 
@@ -2665,7 +2664,6 @@ def _open_position_window(
         ),
         entry_policy=session.config.entry_policy,
         take_profit_atr_multiplier=Decimal("3"),
-        stop_loss_atr_multiplier=None,
         tick_size=Decimal("0.01"),
     )
 
@@ -3437,7 +3435,6 @@ def _basket_of(session: ConfiguredPaperSession, price: str) -> ReopenedBasket:
         ),
         entry_policy=session.config.entry_policy,
         take_profit_atr_multiplier=Decimal("3"),
-        stop_loss_atr_multiplier=None,
         tick_size=Decimal("0.01"),
     )
 

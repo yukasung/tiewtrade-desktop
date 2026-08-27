@@ -194,7 +194,6 @@ def test_the_target_is_remeasured_when_an_entry_is_sold_out_of_the_basket() -> N
         basket_id=basket_id(),
         policy=policy(),
         take_profit_atr_multiplier=Decimal("3"),
-        stop_loss_atr_multiplier=Decimal("3"),
     )
     basket.add_entry(
         price=Decimal("100"),
@@ -210,9 +209,8 @@ def test_the_target_is_remeasured_when_an_entry_is_sold_out_of_the_basket() -> N
         atr=Decimal("4"),
         tick_size=Decimal("0.1"),
     )
-    # 97.5 +/- 3 x 4, on the latest Fill's ATR.
+    # 97.5 + 3 x 4, on the latest Fill's ATR.
     assert basket.take_profit_price == Decimal("109.5")
-    assert basket.stop_loss_price == Decimal("85.5")
 
     basket.close_entry(
         2,
@@ -224,7 +222,6 @@ def test_the_target_is_remeasured_when_an_entry_is_sold_out_of_the_basket() -> N
     # it was itself read against.
     assert basket.average_entry_price == Decimal("100")
     assert basket.take_profit_price == Decimal("106.0")
-    assert basket.stop_loss_price == Decimal("94.0")
 
 
 def test_a_short_basket_takes_profit_below_its_average_and_rounds_up() -> None:
@@ -415,13 +412,12 @@ def test_closing_an_entry_the_basket_does_not_hold_is_refused() -> None:
         )
 
 
-def test_a_stop_loss_after_a_sale_reports_the_whole_basket() -> None:
+def test_a_manual_close_after_a_sale_reports_the_whole_basket() -> None:
     """The Entries that already sold are part of the Basket's result too."""
     basket = Basket(
         basket_id=basket_id(),
         policy=policy(),
         take_profit_atr_multiplier=Decimal("3"),
-        stop_loss_atr_multiplier=Decimal("3"),
     )
     for index, price in enumerate((Decimal("100"), Decimal("90"))):
         basket.add_entry(
@@ -440,12 +436,12 @@ def test_a_stop_loss_after_a_sale_reports_the_whole_basket() -> None:
     closed = basket.close(
         exit_price=Decimal("80"),
         closed_at=datetime(2026, 1, 4, tzinfo=UTC),
-        close_reason=BasketCloseReason.STOP_LOSS,
+        close_reason=BasketCloseReason.MANUAL,
     )
 
     assert closed.entry_count == 2
     assert closed.average_entry_price == Decimal("95")
-    # The sale made 6, the stop lost 20.
+    # The sale made 6, the manual close lost 20.
     assert closed.realized_pnl == Decimal("-14")
     assert closed.realized_pnl == Decimal("-14")
 
@@ -510,95 +506,6 @@ def test_basket_requires_positive_take_profit_multiplier() -> None:
             policy=policy(),
             take_profit_atr_multiplier=Decimal("0"),
         )
-
-
-def test_stop_loss_price_defaults_to_none_when_multiplier_is_not_configured() -> None:
-    basket = Basket(
-        basket_id=basket_id(), policy=policy(), take_profit_atr_multiplier=Decimal("3")
-    )
-    basket.add_entry(
-        price=Decimal("100"),
-        quantity=Decimal("1"),
-        filled_at=datetime(2026, 1, 1, tzinfo=UTC),
-        atr=Decimal("2"),
-        tick_size=Decimal("0.1"),
-    )
-
-    assert basket.stop_loss_price is None
-
-
-def test_long_basket_reprices_stop_loss_below_average_and_rounds_up() -> None:
-    basket = Basket(
-        basket_id=basket_id(),
-        policy=policy(),
-        take_profit_atr_multiplier=Decimal("1.5"),
-        stop_loss_atr_multiplier=Decimal("1.5"),
-    )
-    basket.add_entry(
-        price=Decimal("100"),
-        quantity=Decimal("3"),
-        filled_at=datetime(2026, 1, 1, tzinfo=UTC),
-        atr=Decimal("2.03"),
-        tick_size=Decimal("0.1"),
-    )
-
-    assert basket.take_profit_price == Decimal("103.0")
-    assert basket.stop_loss_price == Decimal("97.0")
-
-
-def test_short_basket_reprices_stop_loss_above_average_and_rounds_down() -> None:
-    basket = Basket(
-        basket_id=basket_id(),
-        policy=policy(),
-        take_profit_atr_multiplier=Decimal("1.5"),
-        stop_loss_atr_multiplier=Decimal("1.5"),
-        position_side=PositionSide.SHORT,
-    )
-    basket.add_entry(
-        price=Decimal("100"),
-        quantity=Decimal("3"),
-        filled_at=datetime(2026, 1, 1, tzinfo=UTC),
-        atr=Decimal("2.03"),
-        tick_size=Decimal("0.1"),
-        position_side=PositionSide.SHORT,
-    )
-
-    assert basket.take_profit_price == Decimal("97.0")
-    assert basket.stop_loss_price == Decimal("103.0")
-
-
-def test_basket_requires_positive_stop_loss_multiplier() -> None:
-    with pytest.raises(ValueError, match="stop_loss_atr_multiplier"):
-        Basket(
-            basket_id=basket_id(),
-            policy=policy(),
-            take_profit_atr_multiplier=Decimal("3"),
-            stop_loss_atr_multiplier=Decimal("0"),
-        )
-
-
-def test_close_records_explicit_stop_loss_reason() -> None:
-    basket = Basket(
-        basket_id=basket_id(),
-        policy=policy(),
-        take_profit_atr_multiplier=Decimal("1.5"),
-        stop_loss_atr_multiplier=Decimal("1.5"),
-    )
-    basket.add_entry(
-        price=Decimal("100"),
-        quantity=Decimal("1"),
-        filled_at=datetime(2026, 1, 1, tzinfo=UTC),
-        atr=Decimal("2.03"),
-        tick_size=Decimal("0.1"),
-    )
-
-    closed = basket.close(
-        exit_price=Decimal("97"),
-        closed_at=datetime(2026, 1, 2, tzinfo=UTC),
-        close_reason=BasketCloseReason.STOP_LOSS,
-    )
-
-    assert closed.close_reason is BasketCloseReason.STOP_LOSS
 
 
 def test_close_exposes_identity_and_pnl_accounting_components() -> None:
@@ -970,7 +877,7 @@ def test_a_basket_told_what_it_settled_closes_on_that_too() -> None:
     closed = basket.close(
         exit_price=Decimal("120"),
         closed_at=datetime(2026, 8, 3, tzinfo=UTC),
-        close_reason=BasketCloseReason.STOP_LOSS,
+        close_reason=BasketCloseReason.MANUAL,
     )
 
     # The Entry it holds made 20; the one it was told about made 11.34.
