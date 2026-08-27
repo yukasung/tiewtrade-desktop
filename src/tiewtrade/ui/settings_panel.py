@@ -106,9 +106,12 @@ class SettingsPanel(QWidget):
         layout.addLayout(line_form)
         layout.addWidget(self.line_token_state)
         layout.addWidget(applies_note)
+        # The actions sit at the foot of the page, under the space the values
+        # yet to come will fill, so they stay where a trader last left them
+        # instead of sliding down the page as fields are added above.
+        layout.addStretch()
         layout.addWidget(self.save_line_button)
         layout.addWidget(self.clear_database_button)
-        layout.addStretch()
         layout.addWidget(self.back_button)
 
     def set_busy(self, busy: bool) -> None:
