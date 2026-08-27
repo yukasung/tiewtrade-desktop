@@ -84,6 +84,7 @@ from tiewtrade.integrations.sqlite.active_paper_sessions import (
 from tiewtrade.integrations.sqlite.database import SQLiteDatabase
 from tiewtrade.trading.futures_policy import FuturesTradingPolicy
 from tiewtrade.trading.session_config import MarketType, TradeMode
+from tiewtrade.trading.trade_history import TradeFill
 from tiewtrade.ui.blank_text import BLANK
 from tiewtrade.ui.bot_lifecycle_workflow import RuntimeSnapshotRelay
 from tiewtrade.ui.chart_workflow import ChartFactRelay
@@ -3184,6 +3185,66 @@ def test_clearing_the_database_refreshes_the_position_tab(qtbot: QtBot) -> None:
 
     qtbot.waitUntil(lambda: window.workspace.position_basket.table.rowCount() == 0)
     assert window._open_position.basket is None
+
+
+def test_clearing_the_database_wipes_the_chart_badges(qtbot: QtBot) -> None:
+    """The Buy/Sell badges are drawings of rows that no longer exist.
+
+    Clearing the database deletes every fill, but the chart kept holding the
+    ones it had already read — so a wiped installation went on showing badges
+    for trades nothing could open, close, or list any more. The clear has to
+    read the fills back, the way it already reads the Position tab back.
+    """
+    session = configured_spot_session()
+    clock = lambda: datetime(2026, 1, 1, 1, 0, tzinfo=UTC)  # noqa: E731
+    stored_fills: list[TradeFill] = [
+        trade_fill(
+            session_id=session.config.session_id,
+            filled_at_utc=datetime(2026, 1, 1, 0, 50, tzinfo=UTC),
+        )
+    ]
+
+    async def load_chart(
+        loaded: ConfiguredPaperSession,
+        chart_range: ChartRange,
+    ) -> ChartSnapshot:
+        return ChartSnapshot(
+            session=loaded,
+            chart_range=chart_range,
+            observed_at_utc=chart_range.end,
+            candles=(flat_candle(datetime(2026, 1, 1, 0, 50, tzinfo=UTC), 100),),
+            fills=tuple(stored_fills),
+            state=ChartReadState.READY,
+        )
+
+    async def load_fills(
+        _loaded: ConfiguredPaperSession,
+        _visible_range: ChartRange,
+    ) -> tuple[TradeFill, ...]:
+        return tuple(stored_fills)
+
+    window = MainWindow(
+        create_session=unused_create,
+        load_active=lambda: session,
+        list_basket_history=empty_basket_history,
+        list_trade_fills=empty_trade_fills,
+        chart=ChartSources(load=load_chart, load_fills=load_fills, clock=clock),
+        clear_database=stored_fills.clear,
+    )
+    qtbot.addWidget(window)
+    window.show()
+    qtbot.waitUntil(lambda: window.workspace.chart.marker_labels != ())
+    _click_settings(window)
+
+    def confirm_clear() -> None:
+        confirm_dialog = QApplication.activeModalWidget()
+        assert isinstance(confirm_dialog, QMessageBox)
+        click(next(b for b in confirm_dialog.buttons() if b.text() == "Clear All"))
+
+    QTimer.singleShot(0, confirm_clear)
+    click(window.workspace.settings_panel.clear_database_button)
+
+    qtbot.waitUntil(lambda: window.workspace.chart.marker_labels == ())
 
 
 def test_settings_panel_stays_up_while_a_running_bot_keeps_publishing(

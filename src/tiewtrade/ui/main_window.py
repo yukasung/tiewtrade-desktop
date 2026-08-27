@@ -1213,8 +1213,13 @@ class MainWindow(QMainWindow):
         still read as available and, pressed, find nothing left to sell —
         so the tab is asked again, the way `_all_closed` already does after
         an actual sale.
+
+        The chart is read back for the same reason: its Buy/Sell badges are
+        drawings of fills whose rows are gone, and nothing else would ask
+        for them again until the next trade.
         """
         self._history_workflow.start()
+        self._chart_workflow.refresh_fills()
         session = self._current_session()
         if session is not None:
             self._open_position.read_for(session)
