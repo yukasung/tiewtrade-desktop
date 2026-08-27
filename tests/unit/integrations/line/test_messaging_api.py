@@ -1,21 +1,20 @@
 import asyncio
 import logging
+import threading
 from datetime import UTC, datetime
 from decimal import Decimal
 from uuid import uuid4
 
 import pytest
 
-from tiewtrade.application.entry_opened_notice import EntryOpenedNotice
+from tiewtrade.application.session_notice import EntryOpenedNotice, SessionMarket
 from tiewtrade.integrations.line.messaging_api import (
-    LineEntryOpenedNotifier,
+    LineNoticeNotifier,
     LinePushOutcome,
 )
 
 NOTICE = EntryOpenedNotice(
-    session_id=uuid4(),
-    symbol="BTCUSDT",
-    timeframe="5m",
+    market=SessionMarket(session_id=uuid4(), symbol="BTCUSDT", timeframe="5m"),
     basket_id=uuid4(),
     entry_number=1,
     price=Decimal("64120.50"),
@@ -42,7 +41,7 @@ class FakePush:
 
 def _notify_and_settle(push: FakePush, *, notices: int = 1) -> None:
     async def run() -> None:
-        async with LineEntryOpenedNotifier(
+        async with LineNoticeNotifier(
             push, retry_delay_seconds=0, queue_size=8
         ) as notifier:
             for _ in range(notices):
@@ -110,7 +109,7 @@ def test_notifying_never_waits_on_a_full_queue(
                 return LinePushOutcome.DELIVERED
 
         push = HeldPush([])
-        async with LineEntryOpenedNotifier(
+        async with LineNoticeNotifier(
             push, retry_delay_seconds=0, queue_size=1
         ) as notifier:
             for _ in range(5):
@@ -143,3 +142,46 @@ def test_a_failing_push_never_writes_the_token_into_the_log(
 
     assert "line.notification" in caplog.text
     assert "Bearer" not in caplog.text
+
+
+def test_a_notice_raised_off_the_runtime_thread_still_goes_out() -> None:
+    """A trader's ask arrives on their thread, not on the candle loop's.
+
+    Selling a Position and cancelling a Cooldown are both answered on the
+    thread the window asked from, and an asyncio queue takes work only from
+    its own loop — a notice handed to it from anywhere else would be lost, or
+    worse, would corrupt the queue the candle loop is using.
+    """
+    push = FakePush([LinePushOutcome.DELIVERED])
+    handed_over = threading.Event()
+
+    async def run() -> None:
+        async with LineNoticeNotifier(
+            push, retry_delay_seconds=0, queue_size=8
+        ) as notifier:
+
+            def ask_from_another_thread() -> None:
+                notifier.notify(NOTICE)
+                handed_over.set()
+
+            asker = threading.Thread(target=ask_from_another_thread)
+            asker.start()
+            asker.join()
+            assert handed_over.wait(1)
+
+    asyncio.run(run())
+
+    assert len(push.messages) == 1
+
+
+def test_a_notice_raised_after_the_notifier_closed_is_dropped_quietly(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    push = FakePush([])
+    notifier = LineNoticeNotifier(push, retry_delay_seconds=0, queue_size=8)
+
+    with caplog.at_level(logging.WARNING):
+        notifier.notify(NOTICE)
+
+    assert push.messages == []
+    assert "line.notification.dropped" in caplog.text

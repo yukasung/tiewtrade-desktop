@@ -14,21 +14,21 @@ moment a token can be checked without a message waiting on it.
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
-from tiewtrade.application.entry_opened_notice import (
-    EntryOpenedNotice,
-    EntryOpenedNotifier,
+from tiewtrade.application.session_notice import (
+    SessionNotice,
+    SessionNotifier,
 )
 from tiewtrade.integrations.keyring.line_notifications import (
     LineNotificationSettingsError,
     load_line_notification_settings,
     save_line_notification_settings,
 )
-from tiewtrade.integrations.line.messaging_api import LineEntryOpenedNotifier
+from tiewtrade.integrations.line.messaging_api import LineNoticeNotifier
 from tiewtrade.integrations.line.push_transport import LineMessagingApiPush
 
 __all__ = [
     "LineNotificationSettingsError",
-    "line_entry_notifier",
+    "line_session_notifier",
     "line_notification_reading",
     "save_line_notification_settings",
 ]
@@ -49,8 +49,8 @@ def line_notification_reading() -> tuple[bool, str, bool]:
 
 
 @asynccontextmanager
-async def line_entry_notifier() -> AsyncIterator[EntryOpenedNotifier]:
-    """Open whatever will say that an Entry filled, for the life of a Runtime.
+async def line_session_notifier() -> AsyncIterator[SessionNotifier]:
+    """Open whatever will say what the Bot did, for the life of a Runtime.
 
     Settings that are off, or half-filled, give a notifier that says nothing:
     a Runtime is composed the same way whether or not the trader wants LINE
@@ -64,9 +64,9 @@ async def line_entry_notifier() -> AsyncIterator[EntryOpenedNotifier]:
         channel_access_token=settings.channel_access_token,
         target_id=settings.target_id,
     ) as push:
-        async with LineEntryOpenedNotifier(push) as notifier:
+        async with LineNoticeNotifier(push) as notifier:
             yield notifier.notify
 
 
-def _say_nothing(notice: EntryOpenedNotice) -> None:
+def _say_nothing(notice: SessionNotice) -> None:
     del notice

@@ -14,7 +14,6 @@ from tiewtrade.application.bot_control import (
     BotLifecycleResult,
     workspace_with_runtime_state,
 )
-from tiewtrade.application.entry_opened_notice import EntryOpenedNotifier
 from tiewtrade.application.paper_session_setup import ConfiguredPaperSession
 from tiewtrade.application.paper_session_sink import (
     PaperPositionRestoreError as PaperPositionRestoreError,
@@ -22,9 +21,17 @@ from tiewtrade.application.paper_session_sink import (
 from tiewtrade.application.paper_session_sink import (
     PaperRuntimeSink,
     paper_session_sink,
+    session_market,
 )
 from tiewtrade.application.paper_session_sink import (
     read_open_basket_state as read_open_basket_state,
+)
+from tiewtrade.application.session_notice import (
+    BotErrorNotice,
+    MarketFeedLostNotice,
+    MarketFeedRestoredNotice,
+    SessionNotice,
+    SessionNotifier,
 )
 from tiewtrade.application.trading_workspace import (
     BasketSnapshot,
@@ -84,7 +91,7 @@ class PaperRuntimeController:
         source_factory: Callable[[BinancePublicEndpoints], MarketDataCandleSource],
         snapshot_callback: Callable[[TradingWorkspaceSnapshot], None],
         notifier_factory: (
-            Callable[[], AbstractAsyncContextManager[EntryOpenedNotifier]] | None
+            Callable[[], AbstractAsyncContextManager[SessionNotifier]] | None
         ) = None,
         completed_candle_callback: Callable[[Candle], None] | None = None,
         in_progress_candle_callback: Callable[[Candle], None] | None = None,
@@ -116,6 +123,14 @@ class PaperRuntimeController:
         self._thread: Thread | None = None
         self._active_session: ConfiguredPaperSession | None = None
         self._observed_runtime_states: list[MarketDataRuntimeState] = []
+        self._notify: SessionNotifier | None = None
+        # Whether the feed is currently believed to be delivering. A market
+        # that keeps dropping and coming back is one message each way, not one
+        # per transition it makes on its way there.
+        self._feed_delivering = False
+        # Blocked is published from more than one place, and more than once
+        # for the same stop. The Bot only stops once, so it only says so once.
+        self._error_said = False
 
     @property
     def current_workspace(self) -> TradingWorkspaceSnapshot:
@@ -296,8 +311,8 @@ class PaperRuntimeController:
         async with AsyncExitStack() as stack:
             await self._run_session(session, await self._open_notifier(stack))
 
-    async def _open_notifier(self, stack: AsyncExitStack) -> EntryOpenedNotifier | None:
-        """Open whatever says an Entry filled, or run without one.
+    async def _open_notifier(self, stack: AsyncExitStack) -> SessionNotifier | None:
+        """Open whatever says what the Bot did, or run without one.
 
         Settings that are wrong — a token that will not open a connection —
         are a reason for the Bot to say nothing, never a reason for it not to
@@ -310,16 +325,19 @@ class PaperRuntimeController:
         except asyncio.CancelledError:
             raise
         except Exception:
-            _logger.exception("the Entry notifier could not be opened")
+            _logger.exception("the notifier could not be opened")
             return None
 
     async def _run_session(
         self,
         session: ConfiguredPaperSession,
-        notify_entry_opened: EntryOpenedNotifier | None,
+        notify: SessionNotifier | None,
     ) -> None:
         with self._lock:
             self._loop = asyncio.get_running_loop()
+            self._notify = notify
+            self._feed_delivering = False
+            self._error_said = False
         terminal = asyncio.Event()
 
         def on_transition(snapshot: MarketDataRuntimeSnapshot) -> None:
@@ -340,7 +358,8 @@ class PaperRuntimeController:
             entry_lock=self._entry_lock,
             entries_enabled=self._entries_enabled.is_set,
             restored=self._publish_restored_basket,
-            notify_entry_opened=notify_entry_opened,
+            notify=notify,
+            clock=self._clock,
         )
         with self._lock:
             self._sink = sink
@@ -375,6 +394,7 @@ class PaperRuntimeController:
         with self._lock:
             self._observed_runtime_states.append(snapshot.state)
         if snapshot.state is MarketDataRuntimeState.LIVE:
+            self._say_the_feed_came_back(session, snapshot)
             with self._lock:
                 already_ready = self._readiness_result is not None
             if already_ready:
@@ -430,6 +450,7 @@ class PaperRuntimeController:
             MarketDataRuntimeState.BACKFILLING,
             MarketDataRuntimeState.RATE_LIMITED,
         }:
+            self._say_the_feed_went_away(session, snapshot)
             with self._lock:
                 ready = self._readiness_result is not None
             if ready:
@@ -438,6 +459,90 @@ class PaperRuntimeController:
                         workspace=stale_workspace_snapshot(self.current_workspace)
                     )
                 )
+
+    def _say_the_feed_went_away(
+        self,
+        session: ConfiguredPaperSession,
+        snapshot: MarketDataRuntimeSnapshot,
+    ) -> None:
+        """Say once that candles stopped arriving, however long they stay away.
+
+        A feed in trouble transitions repeatedly — stale, reconnecting, rate
+        limited, stale again — and every one of those is the same fact to
+        somebody reading a phone. Only the first is said, and nothing more is
+        until the feed has come back to go away again.
+        """
+        with self._lock:
+            if not self._feed_delivering:
+                return
+            self._feed_delivering = False
+        self._say(
+            MarketFeedLostNotice(
+                market=session_market(session),
+                reason=snapshot.reason.value,
+                observed_at=snapshot.transitioned_at,
+            )
+        )
+
+    def _say_the_feed_came_back(
+        self,
+        session: ConfiguredPaperSession,
+        snapshot: MarketDataRuntimeSnapshot,
+    ) -> None:
+        """Say that candles are arriving again, having said that they stopped.
+
+        The first time a Session goes live is a Bot starting rather than a
+        Bot recovering, and nobody needs telling that what they just started
+        has started.
+        """
+        with self._lock:
+            said_it_went = not self._feed_delivering and self._readiness_result
+            self._feed_delivering = True
+        if not said_it_went:
+            return
+        self._say(
+            MarketFeedRestoredNotice(
+                market=session_market(session),
+                observed_at=snapshot.transitioned_at,
+            )
+        )
+
+    def _say_the_bot_stopped(self, reason: str) -> None:
+        """Say that the Bot has gone Blocked, once per stop.
+
+        Blocked is published from wherever it is discovered, and one stop can
+        be discovered more than once — by the candle that failed, by the ask
+        the trader had in flight, and by the Runtime noticing afterwards. The
+        trader is told about the stop, not about each of its discoveries.
+        """
+        with self._lock:
+            session = self._active_session
+            if self._error_said or session is None:
+                return
+            self._error_said = True
+        self._say(
+            BotErrorNotice(
+                market=session_market(session),
+                reason=reason,
+                observed_at=self._clock(),
+            )
+        )
+
+    def _say(self, notice: SessionNotice) -> None:
+        """Hand one notice to whoever is listening, and never mind if nobody is.
+
+        Notices are raised from the Runtime thread and from whichever thread a
+        trader asked on. What that costs is the notifier's to answer for; what
+        it may never cost is the Session, so nothing thrown here gets out.
+        """
+        with self._lock:
+            notify = self._notify
+        if notify is None:
+            return
+        try:
+            notify(notice)
+        except Exception:
+            _logger.exception("saying what the Bot did failed")
 
     def close_entry(
         self,
@@ -615,6 +720,7 @@ class PaperRuntimeController:
                 )
             except Exception:
                 pass
+        self._say_the_bot_stopped(reason)
         result = BotLifecycleResult(
             workspace=workspace,
             blocked_reason=reason,

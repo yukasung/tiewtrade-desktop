@@ -18,16 +18,20 @@ from tests.support.paper_session_setup import (
     configured_futures_session,
     configured_spot_session,
 )
-from tiewtrade.application.entry_opened_notice import (
-    EntryOpenedNotice,
-    EntryOpenedNotifier,
-)
 from tiewtrade.application.open_basket import reopen_basket
 from tiewtrade.application.paper_runtime import (
     PaperRuntimeController,
     read_open_basket_state,
 )
 from tiewtrade.application.paper_session_setup import ConfiguredPaperSession
+from tiewtrade.application.session_notice import (
+    BotErrorNotice,
+    EntryOpenedNotice,
+    MarketFeedLostNotice,
+    MarketFeedRestoredNotice,
+    SessionNotice,
+    SessionNotifier,
+)
 from tiewtrade.application.trade_history import TradeHistoryFilter
 from tiewtrade.application.trading_workspace import (
     BotRuntimeState,
@@ -1621,15 +1625,15 @@ def test_a_filled_entry_is_said_out_loud_to_whoever_is_listening(
     session = _session(MarketType.SPOT)
     database = _database_with_session(tmp_path, session)
     source = _source()
-    notices: list[EntryOpenedNotice] = []
+    notices: list[SessionNotice] = []
     notice_ready = Event()
 
-    def notify(notice: EntryOpenedNotice) -> None:
+    def notify(notice: SessionNotice) -> None:
         notices.append(notice)
         notice_ready.set()
 
     @asynccontextmanager
-    async def notifier() -> AsyncIterator[EntryOpenedNotifier]:
+    async def notifier() -> AsyncIterator[SessionNotifier]:
         yield notify
 
     controller = PaperRuntimeController(
@@ -1647,10 +1651,11 @@ def test_a_filled_entry_is_said_out_loud_to_whoever_is_listening(
     assert notice_ready.wait(2)
     controller.stop(session)
     notice = notices[0]
-    assert notice.symbol == session.market_data.symbol
-    assert notice.timeframe == session.market_data.timeframe
+    assert isinstance(notice, EntryOpenedNotice)
+    assert notice.market.symbol == session.market_data.symbol
+    assert notice.market.timeframe == session.market_data.timeframe
     assert notice.entry_number == 1
-    assert notice.session_id == session.config.session_id
+    assert notice.market.session_id == session.config.session_id
 
 
 def test_a_notifier_that_cannot_be_opened_does_not_keep_the_bot_from_trading(
@@ -1668,7 +1673,7 @@ def test_a_notifier_that_cannot_be_opened_does_not_keep_the_bot_from_trading(
     source = _source()
 
     @asynccontextmanager
-    async def notifier() -> AsyncIterator[EntryOpenedNotifier]:
+    async def notifier() -> AsyncIterator[SessionNotifier]:
         raise RuntimeError("the notifier could not be opened")
         yield  # pragma: no cover - never reached
 
@@ -1687,4 +1692,125 @@ def test_a_notifier_that_cannot_be_opened_does_not_keep_the_bot_from_trading(
     assert result.blocked_reason is None
     assert result.workspace.header is not None
     assert result.workspace.header.runtime_state is BotRuntimeState.RUNNING
+    controller.stop(session)
+
+
+def test_a_feed_that_goes_away_and_comes_back_is_said_once_each_way(
+    tmp_path: Path,
+) -> None:
+    """One message when the candles stop, one when they start again.
+
+    A feed in trouble transitions repeatedly on its way back — stale,
+    reconnecting, stale again — and none of those are separate news to
+    somebody reading a phone.
+    """
+    session = _session(MarketType.SPOT)
+    database = _database_with_session(tmp_path, session)
+    source = _source()
+    notices: list[SessionNotice] = []
+
+    @asynccontextmanager
+    async def notifier() -> AsyncIterator[SessionNotifier]:
+        yield notices.append
+
+    controller = PaperRuntimeController(
+        lifecycle=SQLitePaperRuntimeLifecycle(database),
+        trade_history=SQLiteTradeHistory(database),
+        symbol_rules=_symbol_rules(),
+        source_factory=lambda _endpoints: source,
+        scheduler=ImmediateScheduler(),
+        snapshot_callback=lambda _snapshot: None,
+        notifier_factory=notifier,
+    )
+    controller.start(session)
+    notices.clear()
+
+    for state in (
+        MarketDataRuntimeState.STALE,
+        MarketDataRuntimeState.RECONNECTING,
+        MarketDataRuntimeState.STALE,
+    ):
+        controller._on_runtime_transition(session, _runtime_snapshot(state))  # noqa: SLF001
+    controller._on_runtime_transition(  # noqa: SLF001
+        session,
+        _runtime_snapshot(MarketDataRuntimeState.LIVE),
+    )
+
+    assert [type(notice) for notice in notices] == [
+        MarketFeedLostNotice,
+        MarketFeedRestoredNotice,
+    ]
+    lost = notices[0]
+    assert isinstance(lost, MarketFeedLostNotice)
+    assert lost.market.symbol == session.market_data.symbol
+    assert lost.reason == MarketDataRuntimeReason.DATA_STALE.value
+    controller.stop(session)
+
+
+def test_a_bot_that_went_live_without_trouble_says_nothing_about_the_feed(
+    tmp_path: Path,
+) -> None:
+    """Nobody needs telling that what they just started has started."""
+    session = _session(MarketType.SPOT)
+    database = _database_with_session(tmp_path, session)
+    source = _source()
+    notices: list[SessionNotice] = []
+
+    @asynccontextmanager
+    async def notifier() -> AsyncIterator[SessionNotifier]:
+        yield notices.append
+
+    controller = PaperRuntimeController(
+        lifecycle=SQLitePaperRuntimeLifecycle(database),
+        trade_history=SQLiteTradeHistory(database),
+        symbol_rules=_symbol_rules(),
+        source_factory=lambda _endpoints: source,
+        scheduler=ImmediateScheduler(),
+        snapshot_callback=lambda _snapshot: None,
+        notifier_factory=notifier,
+    )
+    controller.start(session)
+
+    assert [
+        notice for notice in notices if isinstance(notice, MarketFeedRestoredNotice)
+    ] == []
+    controller.stop(session)
+
+
+def test_a_bot_that_stopped_says_so_once_and_says_why(tmp_path: Path) -> None:
+    """One stop is one message, however many places notice it.
+
+    Blocked is published by whoever finds out first and then by everyone else
+    who was waiting on the same Session, and a trader wants to be told that
+    the Bot stopped — not how many parts of it found out.
+    """
+    session = _session(MarketType.SPOT)
+    database = _database_with_session(tmp_path, session)
+    source = _source()
+    notices: list[SessionNotice] = []
+
+    @asynccontextmanager
+    async def notifier() -> AsyncIterator[SessionNotifier]:
+        yield notices.append
+
+    controller = PaperRuntimeController(
+        lifecycle=SQLitePaperRuntimeLifecycle(database),
+        trade_history=SQLiteTradeHistory(database),
+        symbol_rules=_symbol_rules(),
+        source_factory=lambda _endpoints: source,
+        scheduler=ImmediateScheduler(),
+        snapshot_callback=lambda _snapshot: None,
+        notifier_factory=notifier,
+    )
+    controller.start(session)
+    notices.clear()
+
+    stopped = "Paper Bot stopped: the Session could not continue"
+    controller._publish_blocked(reason=stopped)  # noqa: SLF001
+    controller._publish_blocked(reason=stopped)  # noqa: SLF001
+
+    errors = [notice for notice in notices if isinstance(notice, BotErrorNotice)]
+    assert len(errors) == 1
+    assert errors[0].reason == stopped
+    assert errors[0].market.session_id == session.config.session_id
     controller.stop(session)

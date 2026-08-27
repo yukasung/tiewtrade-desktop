@@ -9,14 +9,12 @@ from uuid import uuid4
 import pytest
 
 import tiewtrade.line_notification_composition as composition
-from tiewtrade.application.entry_opened_notice import EntryOpenedNotice
+from tiewtrade.application.session_notice import EntryOpenedNotice, SessionMarket
 from tiewtrade.integrations.keyring.line_notifications import LineNotificationSettings
 from tiewtrade.integrations.line.messaging_api import LinePushOutcome
 
 NOTICE = EntryOpenedNotice(
-    session_id=uuid4(),
-    symbol="BTCUSDT",
-    timeframe="5m",
+    market=SessionMarket(session_id=uuid4(), symbol="BTCUSDT", timeframe="5m"),
     basket_id=uuid4(),
     entry_number=1,
     price=Decimal("64120.50"),
@@ -74,7 +72,7 @@ def _notify_once(monkeypatch: pytest.MonkeyPatch, settings: object) -> None:
     )
 
     async def run() -> None:
-        async with composition.line_entry_notifier() as notify:
+        async with composition.line_session_notifier() as notify:
             notify(NOTICE)
 
     asyncio.run(run())

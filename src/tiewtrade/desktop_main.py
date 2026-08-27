@@ -58,8 +58,8 @@ from tiewtrade.integrations.sqlite.paper_runtime_lifecycle import (
 )
 from tiewtrade.integrations.sqlite.trade_history import SQLiteTradeHistory
 from tiewtrade.line_notification_composition import (
-    line_entry_notifier,
     line_notification_reading,
+    line_session_notifier,
     save_line_notification_settings,
 )
 from tiewtrade.market_data.candle import Candle
@@ -308,7 +308,7 @@ class _PaperRuntimeActions:
             trade_history=self._trade_history,
             symbol_rules=_symbol_rules_for(session),
             source_factory=BinancePublicMarketData,
-            notifier_factory=line_entry_notifier,
+            notifier_factory=line_session_notifier,
             snapshot_callback=publish_current_result,
             completed_candle_callback=publish.completed_candle,
             in_progress_candle_callback=publish.in_progress_candle,
