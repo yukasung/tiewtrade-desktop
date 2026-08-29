@@ -1260,8 +1260,9 @@ def _assert_overview_matches_case(
     )
 
     if case.market_type == "spot":
-        assert window.overview.margin_mode_value.text() == "—"
-        assert window.overview.position_mode_value.text() == "—"
+        # Spot has no policy rows at all, rather than rows reading blank.
+        assert "Leverage" not in window.overview.visible_labels
+        assert "Margin Mode" not in window.overview.visible_labels
         return
 
     assert case.futures_leverage is not None

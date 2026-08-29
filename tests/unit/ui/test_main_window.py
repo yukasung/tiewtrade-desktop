@@ -840,7 +840,11 @@ def test_futures_overview_marks_missing_required_policy_unavailable(
 def test_spot_overview_marks_a_mixed_futures_policy_unavailable(
     qtbot: QtBot,
 ) -> None:
-    """A Spot Session carries no policy, so holding one is malformed."""
+    """A Spot Session carries no policy, so holding one is malformed.
+
+    The rows are laid out for this one — a Session assembled wrongly is worth
+    a row that says so, rather than one the card quietly leaves out.
+    """
     session = _session_with_policy_changes(
         configured_spot_session(),
         futures_policy=FuturesTradingPolicy.v1(leverage=3),
@@ -850,22 +854,81 @@ def test_spot_overview_marks_a_mixed_futures_policy_unavailable(
 
     overview.show_session(session)
 
+    assert "Leverage" in overview.visible_labels
     assert overview.leverage_value.text() == "Unavailable"
     assert overview.margin_mode_value.text() == "Unavailable"
     assert overview.position_mode_value.text() == "Unavailable"
 
 
-def test_spot_overview_leaves_the_futures_rows_blank(qtbot: QtBot) -> None:
+def test_spot_overview_leaves_the_futures_rows_out(qtbot: QtBot) -> None:
+    """Spot has no leverage at all, so the card does not keep a row for it.
+
+    Three rows reading blank take half the card to repeat what the Market
+    Type at the top of it already said.
+    """
     overview = SessionOverviewWidget()
     qtbot.addWidget(overview)
 
     overview.show_session(configured_spot_session())
 
-    assert overview.leverage_value.text() == "—"
-    assert overview.margin_mode_value.text() == "—"
-    assert overview.position_mode_value.text() == "—"
+    assert overview.visible_labels == (
+        "Market Type",
+        "Pair",
+        "Timeframe",
+        "Strategy Preset",
+        "Amount",
+        "Max Entries",
+        "Created at",
+    )
+    for value in (
+        overview.leverage_value,
+        overview.margin_mode_value,
+        overview.position_mode_value,
+    ):
+        assert value.isHidden()
+        # A row out of the layout holds nothing either, so text meant for a
+        # market this Session is not in cannot be read off it.
+        assert value.text() == "—"
     assert not hasattr(overview, "spot_ratio_value")
     assert not hasattr(overview, "spot_reserve_ratio_value")
+
+
+def test_futures_overview_keeps_the_policy_rows(qtbot: QtBot) -> None:
+    overview = SessionOverviewWidget()
+    qtbot.addWidget(overview)
+
+    overview.show_session(configured_futures_session(leverage=3))
+
+    assert overview.visible_labels == (
+        "Market Type",
+        "Pair",
+        "Timeframe",
+        "Strategy Preset",
+        "Amount",
+        "Max Entries",
+        "Leverage",
+        "Margin Mode",
+        "Position Mode",
+        "Created at",
+    )
+
+
+def test_the_policy_rows_come_and_go_with_the_market_shown(qtbot: QtBot) -> None:
+    """One widget shows both markets, so the rows have to be taken out and
+    put back rather than filled in and blanked."""
+    overview = SessionOverviewWidget()
+    qtbot.addWidget(overview)
+
+    overview.show_session(configured_futures_session(leverage=3))
+    overview.show_session(configured_spot_session())
+
+    assert "Leverage" not in overview.visible_labels
+    assert overview.leverage_value.isHidden()
+
+    overview.show_session(configured_futures_session(leverage=3))
+
+    assert "Leverage" in overview.visible_labels
+    assert overview.leverage_value.text() == "3x"
 
 
 def test_repeated_submit_while_worker_is_running_calls_create_once(
