@@ -98,12 +98,14 @@ class BasketEntryTarget:
     so a screen and the Session that sells cannot disagree about the price an
     Entry is waiting for. The Group is carried beside the target because two
     rows reading the same price is only legible once it says which Entries
-    are leaving together.
+    are leaving together, and the Group's average because that is the figure
+    the target was measured from — the three read as one statement.
     """
 
     entry_number: int
     group_id: int
     entry_price: Decimal
+    group_average_entry_price: Decimal
     take_profit_price: Decimal
 
 
@@ -325,6 +327,9 @@ class Basket:
                     entry_number=entry.entry_number,
                     group_id=entry.group_id,
                     entry_price=entry.price,
+                    group_average_entry_price=self._group_average_entry_price(
+                        entry.group_id
+                    ),
                     take_profit_price=target,
                 )
             )

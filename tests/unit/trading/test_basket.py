@@ -924,19 +924,29 @@ def test_a_short_group_target_moves_closer_but_never_further_away() -> None:
 
 
 def test_every_open_entry_is_shown_with_the_group_it_belongs_to() -> None:
+    """Each row carries the figure its target was measured from, which is
+    its Group's average — not the Basket's, which explains neither Group."""
     basket = _basket()
     _fill(basket, 1, price="100")
     _fill(basket, 2, price="90")
     _fill(basket, 3, price="200")
 
     assert [
-        (view.entry_number, view.group_id, view.take_profit_price)
+        (
+            view.entry_number,
+            view.group_id,
+            view.entry_price,
+            view.group_average_entry_price,
+            view.take_profit_price,
+        )
         for view in basket.open_entry_targets()
     ] == [
-        (1, 1, Decimal("101.0")),
-        (2, 1, Decimal("101.0")),
-        (3, 2, Decimal("206.0")),
+        (1, 1, Decimal("100"), Decimal("95"), Decimal("101.0")),
+        (2, 1, Decimal("90"), Decimal("95"), Decimal("101.0")),
+        (3, 2, Decimal("200"), Decimal("200"), Decimal("206.0")),
     ]
+    # The Basket paid 130 across all three, which is neither Group's figure.
+    assert basket.average_entry_price == Decimal("130")
 
 
 def test_a_replayed_basket_takes_back_the_groups_and_targets_it_had() -> None:

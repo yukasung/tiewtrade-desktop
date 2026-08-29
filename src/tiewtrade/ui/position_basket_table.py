@@ -96,20 +96,25 @@ def _notional(row: _Row) -> str:
 
 
 def _average_entry_price(row: _Row) -> str:
-    """What the whole Basket paid, repeated down the column.
+    """What this row's Group paid on average, which its target is measured from.
 
-    Not what a row's target is measured from — that is its Group's average,
-    and the Group column says which rows share it. This is the Basket's
-    figure, and what it says is where a row's price stands among the others.
+    The Group's rather than the Basket's, so the three figures on a row read
+    as one statement: this Group paid that, so it leaves at this. A Basket
+    holding two Groups has no single average that explains either of their
+    targets, and printing one would put a number beside a target it had
+    nothing to do with.
 
     Shown at the scale the Entries were quoted at. An average is a division,
     so it can be left with no last decimal place at all, and the exact answer
     read as a wall of digits wide enough to push the rest of the row off. The
-    Basket keeps every place — what it states is measured from the exact
-    figure, not from this one.
+    Basket keeps every place — the target is measured from the exact figure,
+    not from this one.
     """
+    target = row.basket.target_for(row.entry.entry_number)
+    if target is None:
+        return BLANK
     return price_text(
-        row.basket.average_entry_price.quantize(
+        target.group_average_entry_price.quantize(
             _quoted_scale(row.basket), rounding=ROUND_HALF_EVEN
         )
     )
@@ -153,9 +158,9 @@ class PositionBasketTable(QWidget):
 
     The target beside a row's price is its Group's, so rows of one Group read
     the same figure and are sold together at it — which is why the Group they
-    are in is printed next to it. The average is the Basket's and repeats down
-    the column, saying where this row's price stands among the rest. The
-    lifecycle gate is the Basket's too, and repeats throughout.
+    are in is printed next to it, and the average that target was measured
+    from beside that. Rows of different Groups therefore differ all the way
+    across. The lifecycle gate is the Basket's, and repeats throughout.
     """
 
     # Measured numbers hang on the right so their digits line up and a minus
@@ -169,9 +174,9 @@ class PositionBasketTable(QWidget):
         # Straight after the target it explains: the rows sharing a number are
         # the rows sharing the price in the column before it.
         Column("Group", CENTER, _group),
-        # Straight after the target, so the row's own two prices and the
-        # Basket's average read together rather than with the row's own
-        # quantity between them.
+        # The figure the target was measured from, beside the Group whose
+        # average it is — so the row reads as what it paid, what its Group
+        # paid, and where that Group leaves.
         Column("Average", RIGHT, _average_entry_price),
         Column("Quantity", RIGHT, _quantity),
         Column("Total", RIGHT, _notional),

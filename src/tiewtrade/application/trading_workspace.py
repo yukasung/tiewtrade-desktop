@@ -132,6 +132,7 @@ class BasketEntryTargetSnapshot:
     entry_number: int
     group_id: int
     entry_price: Decimal
+    group_average_entry_price: Decimal
     take_profit_price: Decimal
 
     def __post_init__(self) -> None:
@@ -140,6 +141,7 @@ class BasketEntryTargetSnapshot:
         if type(self.group_id) is not int or self.group_id < 1:
             raise ValueError("group_id must be a positive integer")
         _require_decimal(self.entry_price, "entry_price")
+        _require_decimal(self.group_average_entry_price, "group_average_entry_price")
         _require_decimal(self.take_profit_price, "take_profit_price")
 
 

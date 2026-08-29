@@ -16,6 +16,7 @@ from tests.support.workspace_snapshots import (
 from tiewtrade.application.trading_workspace import (
     BasketEntryGate,
     BasketEntrySnapshot,
+    BasketEntryTargetSnapshot,
     BasketSnapshot,
     empty_position_basket_tab,
     failed_position_basket_tab,
@@ -119,7 +120,7 @@ def test_each_entry_of_the_basket_is_its_own_row(qtbot: QtBot) -> None:
         "Group": "2",
         "Quantity": "0.00300000",
         "Total": "198.00 USDT",
-        "Average": "66,000.1250",
+        "Average": "66,000.2500",
         "Unrealized P/L": "0.96 USDT",
         "Status": "Active",
     }
@@ -234,9 +235,11 @@ def test_the_average_is_a_column_and_not_a_label_beside_the_table(
 ) -> None:
     """The average reads on every row because the target is measured from it.
 
-    It is the Pair's, so it repeats across the Entries of one Pair the way
-    Take Profit does. Nothing summarises it beside the rows — no label and no
-    total — because a figure printed twice can disagree with itself.
+    It is the Group's, so it repeats across the Entries of one Group the way
+    Take Profit does — and here, where the two Entries averaged up into a
+    Group each, it says what each of them alone paid. Nothing summarises it
+    beside the rows — no label and no total — because a figure printed twice
+    can disagree with itself.
     """
     widget = PositionBasketTable()
     qtbot.addWidget(widget)
@@ -245,10 +248,12 @@ def test_the_average_is_a_column_and_not_a_label_beside_the_table(
         ready_position_basket_tab(_futures_basket(), observed_at_utc=OBSERVED_AT)
     )
 
-    assert _cell(widget, "Average", 0).text() == "66,000.1250"
-    assert _cell(widget, "Average", 1).text() == "66,000.1250"
+    assert _cell(widget, "Average", 0).text() == "66,000.2500"
+    assert _cell(widget, "Average", 1).text() == "66,000.0000"
     assert _cell(widget, "Entry Price", 0).text() == "66,000.2500"
     assert _cell(widget, "Entry Price", 1).text() == "66,000.0000"
+    # The Basket's own average, 66,000.1250, is not what either row reads:
+    # it is measured across two Groups and explains neither of their targets.
     assert not hasattr(widget, "total_label")
     assert not hasattr(widget, "basket_label")
 
@@ -256,7 +261,7 @@ def test_the_average_is_a_column_and_not_a_label_beside_the_table(
 def test_an_average_that_does_not_divide_evenly_reads_at_the_quoted_scale(
     qtbot: QtBot,
 ) -> None:
-    """A Basket whose Entries are different sizes averages to no last decimal.
+    """A Group whose Entries are different sizes averages to no last decimal.
 
     Paper buys a fixed amount of money rather than a fixed amount of the
     asset, so two Entries rarely hold the same quantity and the weighted
@@ -274,13 +279,25 @@ def test_an_average_that_does_not_divide_evenly_reads_at_the_quoted_scale(
         replace(entry, notional=entry.price * entry.quantity) for entry in sized
     )
 
+    group_average = Decimal("302") / Decimal("3")
+
     widget.show_snapshot(
         ready_position_basket_tab(
             basket_snapshot(
                 entry_count=2,
                 entries=entries,
-                targets=basket_targets(entries, take_profit_offset="10"),
-                average_entry_price=Decimal("302") / Decimal("3"),
+                # One Group holding both, so its average is the Basket's here.
+                targets=tuple(
+                    BasketEntryTargetSnapshot(
+                        entry_number=entry.entry_number,
+                        group_id=1,
+                        entry_price=entry.price,
+                        group_average_entry_price=group_average,
+                        take_profit_price=Decimal("110.67"),
+                    )
+                    for entry in entries
+                ),
+                average_entry_price=group_average,
                 take_profit_price=Decimal("110.67"),
             ),
             observed_at_utc=OBSERVED_AT,
@@ -288,12 +305,12 @@ def test_an_average_that_does_not_divide_evenly_reads_at_the_quoted_scale(
     )
 
     # 100.666666..., read at the two places the Entries were quoted at, and
-    # the same figure on both rows because it is the Basket's.
+    # the same figure on both rows because it is the one Group's.
     for row in (0, 1):
         assert _cell(widget, "Average", row).text() == "100.67"
-    # The targets are the rows' own, measured from the prices beside them.
-    assert _cell(widget, "Take Profit", 0).text() == "111.00"
-    assert _cell(widget, "Take Profit", 1).text() == "110.00"
+    # One Group, so both rows leave at the one price measured from it.
+    for row in (0, 1):
+        assert _cell(widget, "Take Profit", row).text() == "110.67"
 
 
 def test_a_single_entry_basket_reads_the_one_price_it_paid(

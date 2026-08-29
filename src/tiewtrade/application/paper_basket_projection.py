@@ -281,6 +281,7 @@ def _updated_basket_snapshot(
                 entry_number=target.entry_number,
                 group_id=target.group_id,
                 entry_price=target.entry_price,
+                group_average_entry_price=target.group_average_entry_price,
                 take_profit_price=target.take_profit_price,
             )
             for target in targets

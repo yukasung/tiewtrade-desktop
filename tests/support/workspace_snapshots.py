@@ -61,6 +61,8 @@ def basket_targets(
                 entry_number=entry.entry_number,
                 group_id=group_id,
                 entry_price=entry.price,
+                # One Entry per Group, so the Group paid what that Entry paid.
+                group_average_entry_price=entry.price,
                 take_profit_price=(entry.price + offset).quantize(
                     Decimal(1).scaleb(scale)
                 ),
