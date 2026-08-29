@@ -46,7 +46,7 @@ def _entry(
 
 
 def _futures_basket() -> BasketSnapshot:
-    """Two Entries at different prices, each with a target of its own."""
+    """Two Entries at different prices, each in a Group of its own."""
     entries = (
         _entry(1, "66000.0000", "0.96336"),
         _entry(2, "66000.2500", "0.96264"),
@@ -59,7 +59,8 @@ def _futures_basket() -> BasketSnapshot:
         total_quantity=Decimal("0.00600000"),
         average_entry_price=Decimal("66000.1250"),
         current_price=Decimal("66321.1200"),
-        # The Basket's own target — the net — which no row prints.
+        # The Basket's own figure — the nearest of the Groups — which no row
+        # prints, because it is not what either of these rows is waiting for.
         take_profit_price=Decimal("68000.0000"),
         targets=basket_targets(entries, take_profit_offset="1000.0000"),
         unrealized_pnl=Decimal("1.92600000"),
@@ -101,6 +102,7 @@ def test_each_entry_of_the_basket_is_its_own_row(qtbot: QtBot) -> None:
         "Date",
         "Entry Price",
         "Take Profit",
+        "Group",
         "Average",
         "Quantity",
         "Total",
@@ -114,6 +116,7 @@ def test_each_entry_of_the_basket_is_its_own_row(qtbot: QtBot) -> None:
         "Date": "2026-08-02 09:00:00",
         "Entry Price": "66,000.2500",
         "Take Profit": "67,000.2500",
+        "Group": "2",
         "Quantity": "0.00300000",
         "Total": "198.00 USDT",
         "Average": "66,000.1250",
@@ -126,15 +129,15 @@ def test_each_entry_of_the_basket_is_its_own_row(qtbot: QtBot) -> None:
     assert widget.state_label.accessibleName() == "Position status"
 
 
-def test_each_entry_reads_the_target_it_alone_leaves_at(
+def test_each_entry_reads_the_target_of_the_group_it_is_in(
     qtbot: QtBot,
 ) -> None:
-    """Entries bought at different prices wait for different prices.
+    """Entries in different Groups wait for different prices.
 
-    The column varies by row rather than repeating, which is the fact: each
-    Entry is sold at a target measured from what it paid. The Basket's own
-    target — 68,000 here, the net under every Entry — is not what any one
-    Entry is waiting for, so it is not what a row shows.
+    The column varies by row rather than repeating, which is the fact: these
+    two averaged up, so each opened a Group and each Group is measured from
+    what it alone paid. The Basket's own figure — 68,000 here, the nearest of
+    its Groups — is not what either row is waiting for, so no row shows it.
     """
     widget = PositionBasketTable()
     qtbot.addWidget(widget)
@@ -357,6 +360,9 @@ def test_columns_align_numbers_right_and_text_left(qtbot: QtBot) -> None:
         left,
         right,
         right,
+        # The Group is a name for a set of rows rather than a measurement, so
+        # it is centred rather than lined up with the figures around it.
+        centre,
         right,
         right,
         right,

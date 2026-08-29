@@ -230,7 +230,7 @@ def test_migration_from_v2_preserves_trade_history_record(tmp_path: Path) -> Non
             """
         ).fetchone()
 
-    assert version == 15
+    assert version == 16
     assert basket_id == "basket-sentinel"
     assert bot_sessions_exists is not None
 
@@ -271,7 +271,7 @@ def test_migration_to_v11_takes_the_spot_ratio_out_of_a_session(
             )
         )
 
-    assert version == 15
+    assert version == 16
     assert "spot_trading_capital_ratio" not in columns
     # The one guarantee the rebuilt table has to keep carrying.
     assert "bot_sessions_single_active_idx" in indexes

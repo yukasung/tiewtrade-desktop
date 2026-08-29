@@ -54,6 +54,8 @@ def paper_fill_record(
     realized_pnl: Decimal = Decimal("0"),
     entry_atr: Decimal | None = None,
     closes_entry_number: int | None = None,
+    entry_group_id: int | None = None,
+    group_take_profit_price: Decimal | None = None,
 ) -> TradeFill:
     """The Trade History record for one Paper Fill.
 
@@ -77,4 +79,6 @@ def paper_fill_record(
         source=FillSource.PAPER_EXECUTOR,
         entry_atr=entry_atr,
         closes_entry_number=closes_entry_number,
+        entry_group_id=entry_group_id,
+        group_take_profit_price=group_take_profit_price,
     )

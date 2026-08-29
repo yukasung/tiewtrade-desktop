@@ -93,6 +93,8 @@ def spot_snapshot(
         waived_pair=None,
         waived_at=None,
         entry_completed_pairs=entry_completed_pairs,
+        entry_group_id=None,
+        entry_group_take_profit_price=None,
     )
 
 
@@ -122,6 +124,8 @@ def futures_snapshot(
         failure_reason=None,
         entry_gate=OPEN_GATE,
         entry_completed_pairs=0,
+        entry_group_id=None,
+        entry_group_take_profit_price=None,
     )
 
 

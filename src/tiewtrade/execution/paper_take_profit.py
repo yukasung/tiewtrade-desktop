@@ -41,11 +41,10 @@ def paper_take_profit_sales(
 ) -> tuple[PaperTakeProfitSale, ...]:
     """Every Entry this candle sells, and the price each one sells at.
 
-    The Basket decides which Entries those are and what target each leaves at
-    — its Pair's, or the Basket's own where the Pair was left behind. One sale
-    per Entry, so a candle that takes some Entries at one price and the rest at
-    another says so rather than averaging two sales into a figure neither of
-    them made.
+    The Basket decides which Entries those are and what target each leaves at,
+    which is the target of the Group each one is in. One sale per Entry, so a
+    candle that reaches two Groups says what each of them sold at rather than
+    averaging two sales into a figure neither of them made.
     """
     require_matching_symbol(candle, symbol_rules)
 

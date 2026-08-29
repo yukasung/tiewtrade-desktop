@@ -24,7 +24,7 @@ class UnsupportedDatabaseSchemaError(ValueError):
 
 
 class SQLiteDatabase:
-    _SCHEMA_VERSION = 15
+    _SCHEMA_VERSION = 16
     _BUSY_TIMEOUT_MS = 5_000
 
     def __init__(self, path: Path) -> None:
@@ -122,6 +122,20 @@ class SQLiteDatabase:
                     _create_paper_cooldown_waiver_schema(connection)
                 if 1 <= version <= 14:
                     _migrate_drop_maintenance_margin_rate_v15(connection)
+                if 1 <= version <= 15 and _column_is_missing(
+                    connection, "trade_fills", "entry_group_id"
+                ):
+                    # A Basket already open keeps its Entries and comes back
+                    # with the Groups replaying them gives it. What is lost is
+                    # only how far a target had already been ratcheted in,
+                    # which no row before now recorded.
+                    connection.execute(
+                        "ALTER TABLE trade_fills ADD COLUMN entry_group_id INTEGER"
+                    )
+                    connection.execute(
+                        "ALTER TABLE trade_fills "
+                        "ADD COLUMN group_take_profit_price TEXT"
+                    )
                 connection.execute(f"PRAGMA user_version = {self._SCHEMA_VERSION}")
         finally:
             connection.close()
@@ -192,6 +206,14 @@ def _create_schema(connection: sqlite3.Connection) -> None:
             -- The Entry this Exit sold, when it sold one rather than the
             -- whole Basket. NULL for an Entry and for a manual close.
             closes_entry_number INTEGER,
+            -- The Entry Group this Fill bought into or sold out of, and where
+            -- that Group's target stood once the Fill had moved it. A target
+            -- only ever moves closer, so the Group's price is the nearest of
+            -- these its Fills ever recorded — which is the only way back to it
+            -- for a Basket whose Runtime is gone. Both NULL for a Fill that
+            -- took the whole Basket at once.
+            entry_group_id INTEGER,
+            group_take_profit_price TEXT,
             UNIQUE (source, order_id, exchange_trade_id)
         )
         """

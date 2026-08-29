@@ -2,7 +2,7 @@
 
 A Basket left open goes on being marked while the Bot is stopped, so the
 price can run past a target with nothing running to act on it. The first live
-tick after a Start sells every Entry that is past its own target at that
+tick after a Start sells every Entry Group that is past its target at that
 target rather than at the price now — instantly, and with no way back. The
 trader is asked first, and asked in these words wherever the question is put.
 """
@@ -28,9 +28,9 @@ with no question put at all.
 def sells_on_start(reopened: ReopenedBasket, current_price: Decimal) -> bool:
     """Whether a Start would sell anything at once, by the Basket's own rule.
 
-    Anything, not everything: an Entry past its own target goes on the first
-    tick whether or not the Basket's net was reached, so a question asked
-    only about the net would leave that sale unannounced.
+    Anything, not everything: a Group past its target goes on the first tick
+    whether or not any other Group is anywhere near its own, so a question
+    asked about the Basket as a whole would leave that sale unannounced.
 
     The price is asked as both the high and the low of the moment, which is
     the question a forming candle puts to the same rule: the price is at this
@@ -53,8 +53,8 @@ def sells_on_start_message(
         return None
     return (
         "The Position is already at its Take Profit. Starting the Bot sells "
-        "every Entry that has reached its target at once at that target, not "
-        "at the price now."
+        "every Entry whose Group has reached its target at once at that "
+        "target, not at the price now."
     )
 
 

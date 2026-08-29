@@ -42,6 +42,7 @@ def _reopened() -> ReopenedBasket:
                     quantity=Decimal("2"),
                     filled_at=datetime(2026, 8, 1, 12, tzinfo=UTC),
                     atr=Decimal("2"),
+                    group_id=1,
                 ),
             ),
             closed_basket_count=0,

@@ -75,6 +75,12 @@ class PaperFuturesSessionSnapshot:
     entry_fill: PaperFuturesEntryFill | None
     # The number of the Entry just filled, which the tab reads per Entry.
     entry_number: int | None
+    # The Entry Group this Entry bought into, and where that Group's target
+    # stood once it had. Present exactly when entry_fill is: a Group's target
+    # only ever moves closer, so where it stopped is history rather than a
+    # reading, and only a record of every move it made brings it back.
+    entry_group_id: int | None
+    entry_group_take_profit_price: Decimal | None
     # Entries a target sold this candle, each at the price its own rule gave
     # it. Futures has no other way out — no sale the trader asks for — so
     # every exit this Session books arrives here.
@@ -430,6 +436,12 @@ class PaperFuturesSession:
             pending_intent=self._pending_intent,
             entry_fill=entry_fill,
             entry_number=None if filled_entry is None else filled_entry.entry_number,
+            entry_group_id=None if filled_entry is None else filled_entry.group_id,
+            entry_group_take_profit_price=(
+                None
+                if filled_entry is None or self._basket is None
+                else self._basket.entry_take_profit_price(filled_entry.entry_number)
+            ),
             entry_exits=entry_exits,
             closed_basket=closed_basket,
             basket_id=basket_id,

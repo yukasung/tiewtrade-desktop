@@ -23,6 +23,7 @@ def _entry(number: int, price: str, *, day: int) -> OpenBasketEntry:
         quantity=Decimal("1"),
         filled_at=datetime(2026, 1, day, tzinfo=UTC),
         atr=Decimal("1"),
+        group_id=1,
     )
 
 

@@ -39,7 +39,12 @@ def basket_targets(
     *,
     take_profit_offset: str = "1000",
 ) -> tuple[BasketEntryTargetSnapshot, ...]:
-    """What each of those Entries leaves at, measured from what it paid.
+    """What each of those Entries leaves at, one Group per Entry.
+
+    A Group of its own for each, so a fixture with two Entries has two
+    targets and the column varies down the page. A Basket really does this
+    whenever it averages up, and it is the arrangement that puts the most in
+    front of whatever is being tested.
 
     The target is rounded to the scale the Entry was quoted at, because a
     real one is rounded to the Symbol's tick before anything is asked to show
@@ -48,12 +53,13 @@ def basket_targets(
     """
     offset = Decimal(take_profit_offset)
     targets: list[BasketEntryTargetSnapshot] = []
-    for entry in entries:
+    for group_id, entry in enumerate(entries, start=1):
         scale = entry.price.as_tuple().exponent
         assert isinstance(scale, int)
         targets.append(
             BasketEntryTargetSnapshot(
                 entry_number=entry.entry_number,
+                group_id=group_id,
                 entry_price=entry.price,
                 take_profit_price=(entry.price + offset).quantize(
                     Decimal(1).scaleb(scale)

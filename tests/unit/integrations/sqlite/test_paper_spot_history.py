@@ -134,6 +134,8 @@ def test_entry_fill_creates_exact_open_basket_and_buy_fill(
         entry_number=1,
         fill=fill,
         entry_atr=ENTRY_ATR,
+        entry_group_id=1,
+        group_take_profit_price=Decimal("106"),
     )
 
     assert result is True
@@ -168,6 +170,8 @@ def test_entry_fill_creates_exact_open_basket_and_buy_fill(
             realized_pnl=Decimal("0"),
             source=FillSource.PAPER_EXECUTOR,
             entry_atr=ENTRY_ATR,
+            entry_group_id=1,
+            group_take_profit_price=Decimal("106"),
         ),
     )
 
@@ -181,6 +185,8 @@ def test_second_entry_replaces_open_aggregate_and_records_another_buy_fill(
         entry_number=1,
         fill=entry_fill(),
         entry_atr=ENTRY_ATR,
+        entry_group_id=1,
+        group_take_profit_price=Decimal("106"),
     )
     second_fill = PaperSpotEntryFill(
         intent_id="intent-2",
@@ -196,6 +202,8 @@ def test_second_entry_replaces_open_aggregate_and_records_another_buy_fill(
         entry_number=2,
         fill=second_fill,
         entry_atr=ENTRY_ATR,
+        entry_group_id=1,
+        group_take_profit_price=Decimal("106"),
     )
 
     basket = store.get_basket(BASKET_ID)
@@ -232,10 +240,20 @@ def test_partial_fill_for_same_spot_order_does_not_increment_entry_count(
     )
 
     assert history.record_entry(
-        basket_id=BASKET_ID, entry_number=1, fill=first, entry_atr=ENTRY_ATR
+        basket_id=BASKET_ID,
+        entry_number=1,
+        fill=first,
+        entry_atr=ENTRY_ATR,
+        entry_group_id=1,
+        group_take_profit_price=Decimal("106"),
     )
     assert history.record_entry(
-        basket_id=BASKET_ID, entry_number=1, fill=partial, entry_atr=ENTRY_ATR
+        basket_id=BASKET_ID,
+        entry_number=1,
+        fill=partial,
+        entry_atr=ENTRY_ATR,
+        entry_group_id=1,
+        group_take_profit_price=Decimal("106"),
     )
 
     basket = store.get_basket(BASKET_ID)
@@ -290,12 +308,22 @@ def test_concurrent_partial_fills_update_spot_basket_aggregate_atomically(
         ),
     )
     assert history.record_entry(
-        basket_id=BASKET_ID, entry_number=1, fill=first, entry_atr=ENTRY_ATR
+        basket_id=BASKET_ID,
+        entry_number=1,
+        fill=first,
+        entry_atr=ENTRY_ATR,
+        entry_group_id=1,
+        group_take_profit_price=Decimal("106"),
     )
 
     def record(fill: PaperSpotEntryFill) -> bool:
         return history.record_entry(
-            basket_id=BASKET_ID, entry_number=1, fill=fill, entry_atr=ENTRY_ATR
+            basket_id=BASKET_ID,
+            entry_number=1,
+            fill=fill,
+            entry_atr=ENTRY_ATR,
+            entry_group_id=1,
+            group_take_profit_price=Decimal("106"),
         )
 
     with ThreadPoolExecutor(max_workers=2) as pool:
@@ -322,6 +350,8 @@ def test_entry_exit_keeps_the_basket_open_and_adds_what_it_realised(
         entry_number=1,
         fill=entry_fill(),
         entry_atr=ENTRY_ATR,
+        entry_group_id=1,
+        group_take_profit_price=Decimal("106"),
     )
     sale = PaperSpotExitFill(
         order_id=f"take-profit:{BASKET_ID}:1",
@@ -342,6 +372,7 @@ def test_entry_exit_keeps_the_basket_open_and_adds_what_it_realised(
             exit_price=Decimal("110"),
             realized_pnl=Decimal("20"),
             closed_at=OPENED_AT + timedelta(hours=1),
+            group_id=1,
         ),
         closed_basket=None,
     )
@@ -383,6 +414,8 @@ def test_the_last_entry_closes_the_basket_on_the_totals_the_store_kept(
                 price=Decimal(price),
             ),
             entry_atr=ENTRY_ATR,
+            entry_group_id=1,
+            group_take_profit_price=Decimal("106"),
         )
     history.record_entry_exit(
         basket_id=BASKET_ID,
@@ -399,6 +432,7 @@ def test_the_last_entry_closes_the_basket_on_the_totals_the_store_kept(
             exit_price=Decimal("105.67"),
             realized_pnl=Decimal("11.34"),
             closed_at=OPENED_AT + timedelta(hours=1),
+            group_id=1,
         ),
         closed_basket=None,
     )
@@ -420,6 +454,7 @@ def test_the_last_entry_closes_the_basket_on_the_totals_the_store_kept(
             exit_price=Decimal("120"),
             realized_pnl=Decimal("20"),
             closed_at=OPENED_AT + timedelta(hours=2),
+            group_id=1,
         ),
         closed_basket=ClosedBasket(
             basket_id=BASKET_ID,
@@ -455,6 +490,8 @@ def test_an_exit_fill_and_the_entry_it_closed_must_name_the_same_entry(
         entry_number=1,
         fill=entry_fill(),
         entry_atr=ENTRY_ATR,
+        entry_group_id=1,
+        group_take_profit_price=Decimal("106"),
     )
 
     with pytest.raises(ValueError, match="different Entries"):
@@ -468,6 +505,7 @@ def test_an_exit_fill_and_the_entry_it_closed_must_name_the_same_entry(
                 exit_price=Decimal("110"),
                 realized_pnl=Decimal("20"),
                 closed_at=CLOSED_AT,
+                group_id=1,
             ),
             closed_basket=None,
         )
@@ -482,6 +520,8 @@ def test_close_records_exact_closed_basket_and_sell_fill(
         entry_number=1,
         fill=entry_fill(),
         entry_atr=ENTRY_ATR,
+        entry_group_id=1,
+        group_take_profit_price=Decimal("106"),
     )
 
     history.record_close(
@@ -528,6 +568,8 @@ def test_mapper_propagates_duplicate_write_result(
             entry_number=1,
             fill=fill,
             entry_atr=ENTRY_ATR,
+            entry_group_id=1,
+            group_take_profit_price=Decimal("106"),
         )
         is True
     )
@@ -537,6 +579,8 @@ def test_mapper_propagates_duplicate_write_result(
             entry_number=1,
             fill=fill,
             entry_atr=ENTRY_ATR,
+            entry_group_id=1,
+            group_take_profit_price=Decimal("106"),
         )
         is False
     )

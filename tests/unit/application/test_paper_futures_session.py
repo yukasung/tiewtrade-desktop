@@ -241,11 +241,13 @@ def test_waive_cooldown_rejects_a_futures_session_with_no_basket() -> None:
 
 
 def make_session_holding_far_apart_entries() -> tuple[PaperFuturesSession, Candle]:
-    """A Basket of three Entries that paid very different prices.
+    """A Basket of three Entries in two Groups, waiting at prices far apart.
 
-    Entries 1 and 2 fill at 120. The Cooldown that Pair starts is waived, and
-    Entry 3 fills far below at 60. Three prices paid is what gives the Basket
-    three targets to be judged by, with its own net among them.
+    Entry 1 fills at 120 and opens Group 1. Entry 2 fills at 120 too, which
+    does not average Group 1 down, so it opens Group 2. The Cooldown that Pair
+    starts is waived, and Entry 3 fills far below at 60, averaging Group 2
+    down to 90 and bringing that Group's target with it. Group 1 is left
+    waiting far above, which is what lets a candle reach one and not the other.
     """
     session = make_session(
         replace(futures_session(), entry_policy=EntryPolicy(max_entries=4))
@@ -281,19 +283,21 @@ def entry_targets(session: PaperFuturesSession) -> dict[int, Decimal]:
     }
 
 
-def test_a_futures_entry_leaves_at_its_own_target_and_leaves_the_others_holding() -> (
-    None
-):
-    """The cheap Entry reaches its target first and goes on its own.
+def test_a_futures_group_leaves_at_its_target_and_leaves_the_others_holding() -> None:
+    """The Group that averaged down reaches its target first and goes.
 
-    The Basket keeps trading with what is left, and what the sale realised
-    reaches the wallet as it goes rather than waiting for the round to end.
+    Both its Entries go together and at the one price, the Basket keeps
+    trading with the Group that is left, and what the sale realised reaches
+    the wallet as it goes rather than waiting for the round to end.
     """
     session, entry_candle = make_session_holding_far_apart_entries()
     targets = entry_targets(session)
     basket_target = session.snapshot.take_profit_price
     assert basket_target is not None
-    assert targets[3] < basket_target < targets[1]
+    # Entries 2 and 3 are one Group and read one figure; Entry 1 is a Group of
+    # its own, far above. The Basket's own figure is the nearer of the two.
+    assert targets[2] == targets[3] < targets[1]
+    assert basket_target == targets[3]
     wallet_before = session._wallet_balance
 
     reached = next_candle(
@@ -305,15 +309,15 @@ def test_a_futures_entry_leaves_at_its_own_target_and_leaves_the_others_holding(
     )
     snapshot = session.process_completed_candle(reached, received_at=reached.close_time)
 
-    assert snapshot.sold_entry_numbers == (3,)
-    assert snapshot.entry_exits[0].fill.price == targets[3]
+    assert sorted(snapshot.sold_entry_numbers) == [2, 3]
+    assert {exit.fill.price for exit in snapshot.entry_exits} == {targets[3]}
     assert snapshot.closed_basket is None
-    assert snapshot.basket_entry_count == 2
-    # Entries 1 and 2 are still waiting for the prices they were always
-    # waiting for — nothing Entry 3 did moved them.
-    assert entry_targets(session) == {1: targets[1], 2: targets[2]}
-    assert session._wallet_balance == (
-        wallet_before + snapshot.entry_exits[0].closed.realized_pnl
+    assert snapshot.basket_entry_count == 1
+    # Entry 1 is still waiting for the price it was always waiting for —
+    # nothing the other Group did moved it.
+    assert entry_targets(session) == {1: targets[1]}
+    assert session._wallet_balance == wallet_before + sum(
+        (exit.closed.realized_pnl for exit in snapshot.entry_exits), Decimal("0")
     )
 
 
@@ -335,32 +339,30 @@ def test_a_sold_futures_entry_does_not_hand_its_number_to_the_next_one() -> None
         close=str(target - Decimal("1")),
     )
     sold = session.process_completed_candle(reached, received_at=reached.close_time)
-    assert sold.sold_entry_numbers == (3,)
+    assert sorted(sold.sold_entry_numbers) == [2, 3]
 
     pending = arm_next_entry_intent(session, reached)
 
     assert pending.entry_number == 4
 
 
-def test_the_futures_basket_target_sweeps_out_the_entry_left_behind() -> None:
-    """One candle clears the Basket's target, and everything goes with it.
+def test_a_candle_that_reaches_both_groups_empties_the_basket_at_two_prices() -> None:
+    """Each Group sells at its own price, and the last of them closes the Basket.
 
-    Entry 3 still sells at its own target rather than at the Basket's: a limit
-    order left there would have filled long before the price came any higher.
-    Entries 1 and 2 never reached theirs and are swept at the Basket's.
+    The nearer Group goes at its target first — a limit order left there would
+    have filled long before the price came any higher — and only then does the
+    candle reach the Group waiting above.
     """
     session, entry_candle = make_session_holding_far_apart_entries()
     targets = entry_targets(session)
-    basket_target = session.snapshot.take_profit_price
-    assert basket_target is not None
     wallet_before = session._wallet_balance
 
     swept = next_candle(
         entry_candle,
-        open=str(basket_target - Decimal("1")),
-        high=str(basket_target),
-        low=str(basket_target - Decimal("2")),
-        close=str(basket_target - Decimal("1")),
+        open=str(targets[3] - Decimal("1")),
+        high=str(targets[1]),
+        low=str(targets[3] - Decimal("2")),
+        close=str(targets[1] - Decimal("1")),
     )
     snapshot = session.process_completed_candle(swept, received_at=swept.close_time)
 
@@ -368,9 +370,9 @@ def test_the_futures_basket_target_sweeps_out_the_entry_left_behind() -> None:
     assert {
         exit.fill.entry_number: exit.fill.price for exit in snapshot.entry_exits
     } == {
+        2: targets[2],
         3: targets[3],
-        1: basket_target,
-        2: basket_target,
+        1: targets[1],
     }
     closed = snapshot.closed_basket
     assert closed is not None

@@ -58,16 +58,27 @@ def _price(row: _Row) -> str:
 
 
 def _take_profit_price(row: _Row) -> str:
-    """The price this row's Entry leaves at.
+    """The price this row's Entry leaves at, which is its Group's.
 
-    An Entry is the unit that is sold, so every row reads a figure of its
-    own: one that averaged down further reads a lower one than one that did
-    not. The Basket's own target — the net that takes whatever is left — is
-    not printed per row, because it is not the price this Entry is waiting
-    for.
+    Rows in one Group read the same figure and are sold together at it, which
+    is what the Group column beside this one says. A Group that averaged down
+    reads a lower figure than a Group opened above it, and neither waits on
+    the other.
     """
     target = row.basket.target_for(row.entry.entry_number)
     return BLANK if target is None else price_text(target.take_profit_price)
+
+
+def _group(row: _Row) -> str:
+    """Which Entries this row leaves with.
+
+    Two rows showing one target is only legible once it says which rows those
+    are. The number is the Basket's own count of the Groups it has opened, so
+    a Group sold out of does not hand its number to the next one and a reader
+    watching the tab does not see two different sets of Entries called Group 2.
+    """
+    target = row.basket.target_for(row.entry.entry_number)
+    return BLANK if target is None else str(target.group_id)
 
 
 def _entry_gate(row: _Row) -> str:
@@ -87,16 +98,15 @@ def _notional(row: _Row) -> str:
 def _average_entry_price(row: _Row) -> str:
     """What the whole Basket paid, repeated down the column.
 
-    The row's own target is measured from the price beside it, so this column
-    no longer explains that one. It is the Basket's figure — what the net
-    under every Entry is measured from — and it is what says where a row's
-    price stands among the others.
+    Not what a row's target is measured from — that is its Group's average,
+    and the Group column says which rows share it. This is the Basket's
+    figure, and what it says is where a row's price stands among the others.
 
     Shown at the scale the Entries were quoted at. An average is a division,
     so it can be left with no last decimal place at all, and the exact answer
     read as a wall of digits wide enough to push the rest of the row off. The
-    Basket keeps every place — the net is measured from the exact figure, not
-    from this one.
+    Basket keeps every place — what it states is measured from the exact
+    figure, not from this one.
     """
     return price_text(
         row.basket.average_entry_price.quantize(
@@ -141,12 +151,11 @@ class PositionBasketTable(QWidget):
     hides the prices actually paid. The rows are the Entries, each with the
     price it paid.
 
-    The target beside a row's price is that Entry's own: it is measured from
-    the price on the row, so the two read together and no two rows have to
-    agree. The average is the Basket's and repeats down the column — what the
-    net under every Entry is measured from, and what says where this row's
-    price stands among the rest. The lifecycle gate is the Basket's too, and
-    repeats throughout.
+    The target beside a row's price is its Group's, so rows of one Group read
+    the same figure and are sold together at it — which is why the Group they
+    are in is printed next to it. The average is the Basket's and repeats down
+    the column, saying where this row's price stands among the rest. The
+    lifecycle gate is the Basket's too, and repeats throughout.
     """
 
     # Measured numbers hang on the right so their digits line up and a minus
@@ -157,6 +166,9 @@ class PositionBasketTable(QWidget):
         Column("Entry Price", RIGHT, _price),
         # Beside the price paid, so the distance left to run reads at a glance.
         Column("Take Profit", RIGHT, _take_profit_price),
+        # Straight after the target it explains: the rows sharing a number are
+        # the rows sharing the price in the column before it.
+        Column("Group", CENTER, _group),
         # Straight after the target, so the row's own two prices and the
         # Basket's average read together rather than with the row's own
         # quantity between them.

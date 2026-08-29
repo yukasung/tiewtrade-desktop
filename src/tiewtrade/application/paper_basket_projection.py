@@ -279,6 +279,7 @@ def _updated_basket_snapshot(
         targets=tuple(
             BasketEntryTargetSnapshot(
                 entry_number=target.entry_number,
+                group_id=target.group_id,
                 entry_price=target.entry_price,
                 take_profit_price=target.take_profit_price,
             )

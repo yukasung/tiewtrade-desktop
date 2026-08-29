@@ -12,7 +12,7 @@ thread, a loop, and a stream of snapshots.
 """
 
 import logging
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from decimal import Decimal
@@ -75,6 +75,7 @@ from tiewtrade.trading.basket import ClosedBasket, SettledEntries
 from tiewtrade.trading.entry_pair import EntryGate, EntryGateState
 from tiewtrade.trading.session_config import MarketType
 from tiewtrade.trading.symbol_rules import SymbolRules
+from tiewtrade.trading.trade_history import TradeFill
 
 _logger = logging.getLogger(__name__)
 
@@ -861,6 +862,9 @@ def read_open_basket_state(
                 quantity=fill.quantity,
                 filled_at=fill.filled_at_utc,
                 atr=fill.entry_atr,
+                # A Fill written before Groups were kept names none, and the
+                # Basket is told to work its Groups out from the Entries again.
+                group_id=fill.entry_group_id or 1,
             )
         )
     if not entries:
@@ -869,6 +873,40 @@ def read_open_basket_state(
         basket_id=basket.basket_id,
         entries=tuple(entries),
         closed_basket_count=trade_history.count_closed_baskets(session_id),
+        group_take_profit_prices=_group_take_profit_prices(
+            fills, open_groups={entry.group_id for entry in entries}
+        ),
         settled=settled,
         waived_pair=trade_history.find_cooldown_waiver(basket.basket_id),
     )
+
+
+def _group_take_profit_prices(
+    fills: Sequence[TradeFill],
+    *,
+    open_groups: set[int],
+) -> dict[int, Decimal]:
+    """Where each still-open Group's target had been ratcheted to.
+
+    Every Fill that moved a Group's target recorded where it moved it to, and
+    the Fills come back in the order they happened, so the last figure a
+    Group's Fills wrote is where its target stands. Reading the last rather
+    than the nearest keeps this free of which way "closer" lies — a Long
+    ratchets its target down and a Short ratchets it up, and the Fill that
+    wrote last had already settled that.
+
+    Nothing is returned unless every open Group has a figure. A Basket
+    recorded before Groups were kept has none at all, and one measured from
+    part of its history would be worse than measuring all of it again.
+    """
+    measured: dict[int, Decimal] = {}
+    for fill in fills:
+        group_id = fill.entry_group_id
+        if group_id is None or group_id not in open_groups:
+            continue
+        if fill.group_take_profit_price is None:
+            continue
+        measured[group_id] = fill.group_take_profit_price
+    if set(measured) != open_groups:
+        return {}
+    return measured

@@ -2491,6 +2491,7 @@ def test_an_open_position_shows_before_any_bot_is_started(qtbot: QtBot) -> None:
                     quantity=Decimal("2"),
                     filled_at=datetime(2026, 8, 1, 12, tzinfo=UTC),
                     atr=Decimal("2"),
+                    group_id=1,
                 ),
             ),
             closed_basket_count=0,
@@ -2645,6 +2646,7 @@ def _open_position_window(
             quantity=Decimal("2"),
             filled_at=datetime(2026, 8, 1, 12, tzinfo=UTC),
             atr=Decimal("2"),
+            group_id=1,
         ),
     )
     if second_entry_price is not None:
@@ -2655,6 +2657,7 @@ def _open_position_window(
                 quantity=Decimal("2"),
                 filled_at=datetime(2026, 8, 2, 12, tzinfo=UTC),
                 atr=Decimal("2"),
+                group_id=1,
             ),
         )
     reopened = reopen_basket(
@@ -3542,6 +3545,7 @@ def _basket_of(session: ConfiguredPaperSession, price: str) -> ReopenedBasket:
                     quantity=Decimal("2"),
                     filled_at=datetime(2026, 8, 1, 12, tzinfo=UTC),
                     atr=Decimal("2"),
+                    group_id=1,
                 ),
             ),
             closed_basket_count=0,

@@ -127,15 +127,18 @@ class BasketEntrySnapshot:
 
 @dataclass(frozen=True, slots=True)
 class BasketEntryTargetSnapshot:
-    """What one Entry paid and leaves at, as the Basket stated it."""
+    """What one Entry paid, the Group it is in, and what that Group leaves at."""
 
     entry_number: int
+    group_id: int
     entry_price: Decimal
     take_profit_price: Decimal
 
     def __post_init__(self) -> None:
         if type(self.entry_number) is not int or self.entry_number < 1:
             raise ValueError("entry_number must be a positive integer")
+        if type(self.group_id) is not int or self.group_id < 1:
+            raise ValueError("group_id must be a positive integer")
         _require_decimal(self.entry_price, "entry_price")
         _require_decimal(self.take_profit_price, "take_profit_price")
 
@@ -152,9 +155,9 @@ class BasketSnapshot:
     # Basket read back out of the database stands before its first candle.
     current_price: Decimal | None
     take_profit_price: Decimal
-    # Every open Entry, so a row can read the target of its own Entry rather
-    # than the Basket-wide one. That one is the net under all the Entries at
-    # once, not the price any single Entry is waiting for.
+    # Every open Entry, so a row can read the target of the Group it is in
+    # rather than the Basket-wide one. That one is only the nearest of the
+    # Groups, not the price this row's Entry is waiting for.
     targets: tuple[BasketEntryTargetSnapshot, ...]
     unrealized_pnl: Decimal | None
     entry_gate: BasketEntryGate
@@ -185,7 +188,7 @@ class BasketSnapshot:
         _require_utc(self.updated_at_utc, "updated_at_utc")
 
     def target_for(self, entry_number: int) -> BasketEntryTargetSnapshot | None:
-        """The price this Entry leaves at, as the Basket last stated it."""
+        """The Group this Entry is in and the price it leaves at."""
         return next(
             (target for target in self.targets if target.entry_number == entry_number),
             None,

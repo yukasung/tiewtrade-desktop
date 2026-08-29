@@ -9,6 +9,7 @@ from uuid import UUID
 import pytest
 
 from tests.support.paper_session_setup import configured_spot_session
+from tiewtrade.application.open_basket import reopen_basket
 from tiewtrade.application.paper_manual_close import ClosePaperPosition
 from tiewtrade.application.paper_session_sink import (
     close_one_entry_at_rest,
@@ -46,7 +47,10 @@ def history(tmp_path: Path) -> SQLiteTradeHistory:
 
 
 def _record_two_entries(history: SQLiteTradeHistory, *, waived: bool = False) -> None:
-    """A Basket left open with Entries at 100 and 110, targets 106 and 116.
+    """A Basket left open with Entries at 100 and 110, in a Group each.
+
+    110 does not average 100 down, so the second Entry opened a Group of its
+    own, and the two Groups leave at 106 and 116.
 
     The Cooldown these two Entries leave behind does not stand in the way of
     selling one of them, so the Basket is left exactly as it stands — pass
@@ -62,7 +66,7 @@ def _record_two_entries(history: SQLiteTradeHistory, *, waived: bool = False) ->
         ),
         history,
     )
-    for number, price in ((1, "100"), (2, "110")):
+    for number, price, group_target in ((1, "100", "106"), (2, "110", "116")):
         spot.record_entry(
             basket_id=BASKET_ID,
             entry_number=number,
@@ -75,6 +79,8 @@ def _record_two_entries(history: SQLiteTradeHistory, *, waived: bool = False) ->
                 filled_at=OPENED_AT + timedelta(days=number - 1),
             ),
             entry_atr=Decimal("2"),
+            entry_group_id=number,
+            group_take_profit_price=Decimal(group_target),
         )
     if waived:
         history.record_cooldown_waiver(BASKET_ID, 1, OPENED_AT)
@@ -233,8 +239,11 @@ def test_a_basket_read_back_knows_what_it_already_settled(
     state = read_open_basket_state(history, configured_spot_session().config.session_id)
 
     assert state is not None
-    # The Entry still open is the only one to replay.
+    # The Entry still open is the only one to replay, in the Group it bought
+    # into. The Group the sold Entry emptied is not handed back.
     assert [entry.entry_number for entry in state.entries] == [2]
+    assert [entry.group_id for entry in state.entries] == [2]
+    assert state.group_take_profit_prices == {2: Decimal("116")}
     assert state.settled.count == 1
     assert state.settled.quantity == Decimal("2")
     assert state.settled.notional == Decimal("200")
@@ -288,6 +297,8 @@ def test_waiving_a_basket_with_no_cooldown_does_nothing(
             filled_at=OPENED_AT,
         ),
         entry_atr=Decimal("2"),
+        entry_group_id=1,
+        group_take_profit_price=Decimal("106"),
     )
 
     assert _waive(history, datetime(2026, 8, 5, tzinfo=UTC)) is False
@@ -310,3 +321,55 @@ def test_a_basket_read_back_carries_its_cooldown_waiver(
 
     assert state is not None
     assert state.waived_pair == 24313
+
+
+def test_a_group_comes_back_at_the_price_it_was_ratcheted_to(
+    history: SQLiteTradeHistory,
+) -> None:
+    """The target a Group had moved to is read back, not measured again.
+
+    Both Entries are one Group here, and the second Fill recorded a target of
+    103 — closer than the 106 the first Fill left, and closer than measuring
+    the pair afresh would give. Measuring again on the way back would push it
+    out to a price the Group had already come in from.
+    """
+    session = configured_spot_session()
+    spot = PaperSpotSQLiteHistory(
+        PaperSpotHistoryContext(
+            session_id=session.config.session_id,
+            symbol=session.market_data.symbol,
+            timeframe=session.market_data.timeframe,
+            preset_version=session.config.preset_version,
+        ),
+        history,
+    )
+    for number, price, group_target in ((1, "100", "106"), (2, "98", "103")):
+        spot.record_entry(
+            basket_id=BASKET_ID,
+            entry_number=number,
+            fill=PaperSpotEntryFill(
+                order_id=f"entry:{number}",
+                fill_id=f"paper:entry:{number}:fill",
+                intent_id=f"intent-{number}",
+                price=Decimal(price),
+                quantity=Decimal("2"),
+                filled_at=OPENED_AT + timedelta(days=number - 1),
+            ),
+            entry_atr=Decimal("2"),
+            entry_group_id=1,
+            group_take_profit_price=Decimal(group_target),
+        )
+
+    state = read_open_basket_state(history, session.config.session_id)
+
+    assert state is not None
+    assert [entry.group_id for entry in state.entries] == [1, 1]
+    assert state.group_take_profit_prices == {1: Decimal("103")}
+    reopened = reopen_basket(
+        state,
+        entry_policy=session.config.entry_policy,
+        take_profit_atr_multiplier=Decimal("3"),
+        tick_size=_rules().tick_size,
+    )
+    assert reopened.basket.take_profit_price == Decimal("103")
+    assert reopened.basket.entry_take_profit_price(1) == Decimal("103")

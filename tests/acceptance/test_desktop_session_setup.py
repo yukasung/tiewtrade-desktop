@@ -510,6 +510,8 @@ def test_spot_partial_fills_keep_one_order_and_basket_entry_across_tabs(
             entry_number=1,
             fill=fill,
             entry_atr=Decimal("12.5"),
+            entry_group_id=1,
+            group_take_profit_price=Decimal("106"),
         )
 
     basket_id = UUID("00000000-0000-0000-0000-000000000135")

@@ -70,6 +70,12 @@ class PaperSpotSessionSnapshot:
     entry_atr: Decimal | None
     # The number this Entry took in its Basket, which outlives the Entry.
     entry_number: int | None
+    # The Entry Group this Entry bought into, and where that Group's target
+    # stood once it had. Present exactly when entry_fill is: a Group's target
+    # only ever moves closer, so where it stopped is history rather than a
+    # reading, and only a record of every move it made brings it back.
+    entry_group_id: int | None
+    entry_group_take_profit_price: Decimal | None
     # Entries the trader sold one at a time, rather than with the Basket.
     entry_exits: tuple[PaperSpotEntryExit, ...]
     # A Fill that took the whole position at once, which take profit, a stop
@@ -80,9 +86,9 @@ class PaperSpotSessionSnapshot:
     basket_id: UUID | None
     basket_entry_count: int
     take_profit_price: Decimal | None
-    # What each open Entry paid and leaves at. A row on screen reads its own
-    # Entry's target off this rather than the Basket-wide one, which is the
-    # net under every Entry rather than the price any one of them awaits.
+    # What each open Entry paid, the Group it is in, and what that Group
+    # leaves at. A row on screen reads its Group's target off this rather than
+    # the Basket-wide one, which is only the nearest of the Groups.
     entry_targets: tuple[BasketEntryTarget, ...]
     # Read against the last candle the Session accepted, so it answers for the
     # same moment the Session used to decide entries. None until one arrives.
@@ -559,6 +565,20 @@ class PaperSpotSession:
             entry_fill=entry_fill,
             entry_atr=entry_atr,
             entry_number=entry_number,
+            # Read off the Basket rather than handed in: the Group an Entry
+            # joined and the price that Group now waits at are the Basket's
+            # answer, and asking it here is what keeps the record and the
+            # Position tab reading the same figure.
+            entry_group_id=(
+                None
+                if entry_fill is None or self._basket is None or entry_number is None
+                else self._basket.entry_group_id(entry_number)
+            ),
+            entry_group_take_profit_price=(
+                None
+                if entry_fill is None or self._basket is None or entry_number is None
+                else self._basket.entry_take_profit_price(entry_number)
+            ),
             entry_exits=entry_exits,
             exit_fill=exit_fill,
             closed_basket=closed_basket,

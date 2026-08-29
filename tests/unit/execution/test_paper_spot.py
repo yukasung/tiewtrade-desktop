@@ -178,27 +178,27 @@ def test_take_profit_target_touch_uses_sell_floor_price_and_exact_fee() -> None:
         tick_size=rules.tick_size,
     )
     basket.add_entry(
-        price=Decimal("90"),
+        price=Decimal("110"),
         quantity=Decimal("2"),
         filled_at=datetime(2026, 1, 2, tzinfo=UTC),
         atr=Decimal("1"),
         tick_size=rules.tick_size,
     )
-    # Entry 2 paid 90 and leaves at 91; Entry 1 paid 100 and never reached
-    # its 101, so the Basket's own 96 — 95 + 1 x 1 — carries it out anyway.
-    touch_candle = candle_at(5, open_price="95", high="96", low="94", close="95")
+    # Averaging up, so two Groups: the first leaves at 101 and the second at
+    # 111, and one candle wide enough reaches both at their own prices.
+    touch_candle = candle_at(5, open_price="100", high="111", low="99", close="110")
 
     fills = PaperSpotExecutor(session, rules).fill_take_profit(
         basket, touch_candle, filled_at=touch_candle.close_time
     )
 
     assert len(fills) == 2
-    assert [fill.price for fill in fills] == [Decimal("91"), Decimal("96")]
+    assert [fill.price for fill in fills] == [Decimal("101"), Decimal("111")]
     assert [fill.quantity for fill in fills] == [Decimal("2"), Decimal("2")]
     assert [fill.filled_at for fill in fills] == [touch_candle.close_time] * 2
     # Each Fill names the Entry it sold, so a candle reads as the sales it made.
-    assert [fill.entry_number for fill in fills] == [2, 1]
-    exit_order_id = f"take-profit:{basket.basket_id}:2"
+    assert [fill.entry_number for fill in fills] == [1, 2]
+    exit_order_id = f"take-profit:{basket.basket_id}:1"
     assert fills[0].order_id == exit_order_id
     assert fills[0].fill_id == f"paper:{session.session_id}:{exit_order_id}:fill"
 

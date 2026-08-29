@@ -105,6 +105,7 @@ def entry_exit(
             exit_price=Decimal("110"),
             realized_pnl=Decimal("20"),
             closed_at=FILLED_AT,
+            group_id=1,
         ),
     )
 
@@ -150,6 +151,8 @@ def snapshot(
         failure_reason=None,
         entry_gate=EntryGate(EntryGateState.OPEN),
         entry_completed_pairs=0,
+        entry_group_id=1 if entry is not None else None,
+        entry_group_take_profit_price=(Decimal("105") if entry is not None else None),
     )
 
 
@@ -191,6 +194,8 @@ def test_entry_is_durable_before_ready_snapshot_returns() -> None:
         basket_id=BASKET_ID,
         entry_number=1,
         fill=entry_fill(),
+        entry_group_id=1,
+        group_take_profit_price=Decimal("105"),
     )
     assert result.session == core_snapshot
     assert result.persistence_state is PersistenceState.READY
@@ -304,6 +309,8 @@ def test_same_candle_entry_and_exit_use_closed_entry_count() -> None:
         basket_id=BASKET_ID,
         entry_number=closed.entry_count,
         fill=entry,
+        entry_group_id=1,
+        group_take_profit_price=Decimal("105"),
     )
     history.record_entry_exit.assert_called_once_with(
         basket_id=BASKET_ID,
