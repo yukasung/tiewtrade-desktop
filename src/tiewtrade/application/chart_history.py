@@ -8,12 +8,12 @@ from tiewtrade.application.chart_data import (
     follows,
 )
 from tiewtrade.application.chart_indicators import (
-    CHART_RSI_WARM_UP_CANDLES,
     AtrSeries,
     RsiSeries,
 )
 from tiewtrade.application.paper_session_setup import ConfiguredPaperSession
 from tiewtrade.market_data.candle import Candle
+from tiewtrade.strategies.indicators import WILDER_WARM_UP_CANDLES
 from tiewtrade.trading.trade_history import TradeFill
 
 LoadChartCandles = Callable[
@@ -126,7 +126,7 @@ class ChartHistory:
         loaded = await self._load_candles(
             session,
             ChartRange(
-                start=chart_range.start - interval * CHART_RSI_WARM_UP_CANDLES,
+                start=chart_range.start - interval * WILDER_WARM_UP_CANDLES,
                 end=chart_range.end,
             ),
         )

@@ -7,12 +7,12 @@ from tests.support.chart_candles import FIVE_MINUTES, candle_run, flat_candle
 from tiewtrade.application.chart_data import ChartRange, ChartReadState, ChartSnapshot
 from tiewtrade.application.chart_history import ChartHistory
 from tiewtrade.application.chart_indicators import (
-    CHART_RSI_WARM_UP_CANDLES,
     RsiSeries,
 )
 from tiewtrade.application.paper_session_setup import ConfiguredPaperSession
 from tiewtrade.market_data.candle import Candle
 from tiewtrade.market_data.config import MarketDataConfig
+from tiewtrade.strategies.indicators import WILDER_WARM_UP_CANDLES
 from tiewtrade.trading.entry_policy import EntryPolicy
 from tiewtrade.trading.session_config import MarketType, SessionConfig, TradeMode
 from tiewtrade.trading.trade_history import FillSide, FillSource, TradeFill
@@ -262,7 +262,7 @@ def chart_range() -> ChartRange:
 def warm_up_range(visible: ChartRange) -> ChartRange:
     """The wider range read so each candle's RSI stays stable across zoom."""
     return ChartRange(
-        visible.start - session().market_data.interval * CHART_RSI_WARM_UP_CANDLES,
+        visible.start - session().market_data.interval * WILDER_WARM_UP_CANDLES,
         visible.end,
     )
 

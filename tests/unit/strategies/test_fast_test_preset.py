@@ -17,7 +17,7 @@ def test_preset_v1_measures_the_way_a_traded_preset_measures() -> None:
     assert preset.rsi_period == traded.rsi_period == 14
     assert preset.atr_period == traded.atr_period == 14
     assert preset.take_profit_atr_multiplier == Decimal("3")
-    assert preset.minimum_warm_up_candles == 15
+    assert preset.minimum_warm_up_candles == 250
 
 
 def test_preset_is_immutable() -> None:

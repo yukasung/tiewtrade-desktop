@@ -49,6 +49,7 @@ from tiewtrade.integrations.sqlite.trade_history import SQLiteTradeHistory
 from tiewtrade.market_data.candle import Candle
 from tiewtrade.market_data.candle_source import MarketDataKlineUpdate
 from tiewtrade.market_data.config import MarketDataConfig
+from tiewtrade.strategies.rsi_step_grid.preset import RsiStepGridPreset
 from tiewtrade.trading.symbol_rules import SymbolRules
 from tiewtrade.trading.trade_history import FillSide
 from tiewtrade.ui.bot_lifecycle_workflow import RuntimeSnapshotRelay
@@ -377,7 +378,7 @@ def test_running_paper_session_shows_open_candle_then_commits_closed_candle(
     completed_before_open = _completed_chart_candles(session.market_data)
     source = _QueuedPaperCandleSource(
         config=session.market_data,
-        warm_up=completed_before_open,
+        warm_up=_warm_up_candles(session.market_data),
     )
     relay = RuntimeSnapshotRelay()
     controller: PaperRuntimeController | None = None
@@ -525,10 +526,16 @@ def test_running_paper_session_shows_open_candle_then_commits_closed_candle(
     assert source.closed.wait(1)
 
 
-def _completed_chart_candles(config: MarketDataConfig) -> tuple[Candle, ...]:
-    first_open = datetime(2026, 8, 2, 8, 45, tzinfo=UTC)
+def _warm_up_candles(config: MarketDataConfig) -> tuple[Candle, ...]:
+    """The whole run the Strategy warms up on, ending as the live candle opens.
+
+    A longer warm-up starts earlier rather than running later, so the candle
+    the live one follows stays where it is.
+    """
+    count = RsiStepGridPreset.v1().minimum_warm_up_candles
+    first_open = datetime(2026, 8, 2, 9, 55, tzinfo=UTC) - config.interval * (count - 1)
     candles: list[Candle] = []
-    for index in range(15):
+    for index in range(count):
         close = Decimal("100") + Decimal(index)
         candles.append(
             Candle(
@@ -542,6 +549,11 @@ def _completed_chart_candles(config: MarketDataConfig) -> tuple[Candle, ...]:
             )
         )
     return tuple(candles)
+
+
+def _completed_chart_candles(config: MarketDataConfig) -> tuple[Candle, ...]:
+    """The tail of that run the chart's opening window actually holds."""
+    return _warm_up_candles(config)[-15:]
 
 
 def _chart_candle(*, open: Decimal, high: Decimal, close: Decimal) -> Candle:

@@ -64,6 +64,7 @@ from tiewtrade.integrations.sqlite.trade_history import SQLiteTradeHistory
 from tiewtrade.market_data.candle import Candle
 from tiewtrade.market_data.candle_source import MarketDataKlineUpdate
 from tiewtrade.market_data.config import MarketDataConfig
+from tiewtrade.strategies.rsi_step_grid.preset import RsiStepGridPreset
 from tiewtrade.trading.futures_policy import MarginMode, PositionMode
 from tiewtrade.trading.session_config import MarketType, TradeMode
 from tiewtrade.trading.symbol_rules import SymbolRules
@@ -1143,14 +1144,19 @@ def _paper_runtime_candles(
     config: MarketDataConfig,
 ) -> tuple[tuple[Candle, ...], tuple[Candle, ...]]:
     assert config.timeframe == "5m"
-    close = Decimal("100")
+    # A longer warm-up starts earlier rather than running later: it still ends
+    # on the candle before the live ones, closing at 86, so the prices and
+    # times under test do not move with the length the Preset asks for.
+    live_from = 15
+    warm_up_count = RsiStepGridPreset.v1().minimum_warm_up_candles
     warm_up: list[Candle] = []
-    for index in range(15):
+    for index in range(live_from - warm_up_count, live_from):
+        close = Decimal(86 + live_from - 1 - index)
         warm_up.append(_paper_runtime_candle(config, index=index, close=close))
-        close -= Decimal("1")
 
+    close = Decimal("86")
     live: list[Candle] = []
-    for index in range(15, 26):
+    for index in range(live_from, live_from + 11):
         close += Decimal("1")
         live.append(_paper_runtime_candle(config, index=index, close=close))
     return tuple(warm_up), tuple(live)

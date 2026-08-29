@@ -65,6 +65,7 @@ from tiewtrade.market_data.source_errors import (
     MarketDataFailureKind,
     MarketDataFatalError,
 )
+from tiewtrade.strategies.rsi_step_grid.preset import RsiStepGridPreset
 from tiewtrade.trading.basket import BasketCloseReason
 from tiewtrade.trading.session_config import MarketType, TradeMode
 from tiewtrade.trading.symbol_rules import SymbolRules
@@ -76,6 +77,8 @@ from tiewtrade.trading.trade_history import (
     TradeFill,
 )
 
+_WARM_UP_COUNT = RsiStepGridPreset.v1().minimum_warm_up_candles
+_LIVE_FROM = 15
 _NOW = datetime(2026, 8, 2, 3, tzinfo=UTC)
 _STOPPED_AT = datetime(2026, 8, 2, 4, tzinfo=UTC)
 _T = TypeVar("_T")
@@ -330,7 +333,7 @@ def test_in_progress_candle_is_published_without_changing_workspace(
     )
     controller.start(session)
     before = controller.current_workspace
-    forming = _candle(15, close=Decimal("87.25"))
+    forming = _candle(_LIVE_FROM, close=Decimal("87.25"))
 
     source.emit_open(forming)
 
@@ -384,7 +387,7 @@ def test_in_progress_candle_observer_failure_does_not_block_runtime(
     )
     controller.start(session)
 
-    source.emit_open(_candle(15, close=Decimal("87.25")))
+    source.emit_open(_candle(_LIVE_FROM, close=Decimal("87.25")))
 
     assert source.delivery_completed.wait(1)
     assert controller.current_result.workspace.header is not None
@@ -1570,18 +1573,23 @@ def _symbol_rules() -> SymbolRules:
 
 
 def _warm_up_candles() -> tuple[Candle, ...]:
-    close = Decimal("100")
+    """A run down to the close the live candles then climb back from.
+
+    As many candles as the Preset asks for, and it is the *start* that moves
+    when the Preset asks for more: the warm-up still ends on the candle before
+    the live ones, closing at 86, so every price and time asserted off them
+    stays where it was.
+    """
     candles: list[Candle] = []
-    for index in range(15):
-        candles.append(_candle(index, close=close))
-        close -= Decimal("1")
+    for index in range(_LIVE_FROM - _WARM_UP_COUNT, _LIVE_FROM):
+        candles.append(_candle(index, close=Decimal(86 + _LIVE_FROM - 1 - index)))
     return tuple(candles)
 
 
 def _live_candles() -> tuple[Candle, ...]:
     close = Decimal("86")
     candles: list[Candle] = []
-    for index in range(15, 26):
+    for index in range(_LIVE_FROM, _LIVE_FROM + 11):
         close += Decimal("1")
         candles.append(_candle(index, close=close))
     return tuple(candles)

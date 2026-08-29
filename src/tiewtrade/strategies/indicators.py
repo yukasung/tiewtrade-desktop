@@ -4,6 +4,14 @@ from typing import Protocol
 
 from tiewtrade.market_data.candle import Candle
 
+# Wilder smoothing never fully forgets the average it was seeded with, so a
+# reading is only the market's once enough candles have passed for the seed to
+# wash out. Seeded on the bare period, a quiet stretch teaches the averages
+# that nothing ever moves and the next ordinary candle reads as an extreme.
+# Everything that reads these indicators — Strategy and chart alike — starts
+# from this many candles, so the same candle reads the same either side.
+WILDER_WARM_UP_CANDLES = 250
+
 
 class IndicatorPeriods(Protocol):
     @property
