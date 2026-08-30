@@ -8,3 +8,6 @@ __pycache__/
 /tiewtrade.code-workspace
 /.mcp.json
 /.superpowers/
+
+/build/
+/dist/
