@@ -50,7 +50,7 @@ def test_default_form_builds_paper_spot_values(qtbot: QtBot) -> None:
     ] == ["spot", "futures"]
     assert widget.market_type.isEnabled()
     assert widget.symbol.isEnabled()
-    assert widget.strategy.currentText() == "RSI Step Grid v1"
+    assert widget.strategy.currentText() == "RSI Step Grid"
     assert [
         widget.strategy.itemData(index) for index in range(widget.strategy.count())
     ] == ["rsi-step-grid-v1", "fast-test-v1"]

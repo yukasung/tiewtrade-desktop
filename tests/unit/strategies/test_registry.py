@@ -23,7 +23,7 @@ def test_strategy_definitions_lists_every_registered_strategy() -> None:
 def test_strategy_definition_for_resolves_step_grid() -> None:
     definition = strategy_definition_for("rsi-step-grid-v1")
 
-    assert definition.display_name == "RSI Step Grid v1"
+    assert definition.display_name == "RSI Step Grid"
     assert definition.market_types == frozenset({MarketType.SPOT, MarketType.FUTURES})
     assert isinstance(definition.build_preset(), RsiStepGridPreset)
     assert isinstance(
@@ -35,8 +35,7 @@ def test_strategy_definition_for_resolves_step_grid() -> None:
 def test_strategy_definition_for_resolves_fast_test() -> None:
     definition = strategy_definition_for("fast-test-v1")
 
-    # The name has to say so wherever a strategy is picked.
-    assert definition.display_name == "Fast Test (testing only)"
+    assert definition.display_name == "Fast Test"
     assert definition.market_types == frozenset({MarketType.SPOT, MarketType.FUTURES})
     assert isinstance(definition.build_preset(), FastTestPreset)
     assert isinstance(

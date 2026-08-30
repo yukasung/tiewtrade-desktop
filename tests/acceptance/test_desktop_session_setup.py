@@ -1258,7 +1258,7 @@ def _assert_overview_matches_case(
     assert window.overview.market_value.text() == case.market_type.title()
     assert window.overview.symbol_value.text() == "BTCUSDT"
     assert window.overview.timeframe_value.text() == case.timeframe
-    assert window.overview.preset_value.text() == "RSI Step Grid v1"
+    assert window.overview.preset_value.text() == "RSI Step Grid"
     assert window.overview.capital_per_entry_value.text() == "200000 USDT"
     assert window.overview.max_entries_value.text() == str(case.max_entries)
     assert window.overview.created_at_value.text() == display_timestamp(
