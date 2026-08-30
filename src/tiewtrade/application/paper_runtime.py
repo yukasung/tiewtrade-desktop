@@ -178,8 +178,22 @@ class PaperRuntimeController:
                 raise RuntimeError("Paper Runtime readiness was not published")
             return self._readiness_result
 
-    def inspect_startup(self, session: ConfiguredPaperSession) -> BotLifecycleResult:
-        """Project durable lifecycle state without starting market data."""
+    def inspect_startup(
+        self,
+        session: ConfiguredPaperSession,
+        *,
+        sole_process: bool = False,
+    ) -> BotLifecycleResult:
+        """Project durable lifecycle state without starting market data.
+
+        `sole_process` states that nothing else is running this installation.
+        Only the caller that claimed the installation can say so, and only it
+        can tell a marker left by a killed Bot from one a live Bot is keeping
+        — the marker itself reads identically either way. Told that, a
+        "running" marker is recovered here rather than left as a Blocked
+        Session with no way out of it; left unsaid, the Bot stays Blocked,
+        because two Bots on one Session is the thing this guards against.
+        """
         self._validate_session(session)
         baseline = configured_workspace_snapshot(
             session,
@@ -196,7 +210,12 @@ class PaperRuntimeController:
             if marker.session_id != session.config.session_id:
                 return self._startup_blocked_result(_RECOVERY_BLOCKED_REASON)
             if marker.state is PaperRuntimeLifecycleState.RUNNING:
-                return self._startup_blocked_result(_RECOVERY_REQUIRED_REASON)
+                if not sole_process:
+                    return self._startup_blocked_result(_RECOVERY_REQUIRED_REASON)
+                # Recovery is what a stale marker needs, and `recover` is
+                # already it: no market data, no Basket taken up, the marker
+                # cleared only if the write is confirmed.
+                return self.recover(session)
             return self._publish_result_or_block(
                 BotLifecycleResult(workspace=baseline),
                 blocked_reason=_RECOVERY_BLOCKED_REASON,

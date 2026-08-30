@@ -1,4 +1,5 @@
 import asyncio
+import signal
 import sqlite3
 from collections.abc import Awaitable, Callable
 from concurrent.futures import ThreadPoolExecutor
@@ -53,6 +54,7 @@ from tiewtrade.integrations.binance.public_endpoints import (
     BinancePublicEndpoints,
 )
 from tiewtrade.integrations.binance.public_market_data import BinancePublicMarketData
+from tiewtrade.integrations.process_lock.installation_lock import InstallationLock
 from tiewtrade.integrations.sqlite.database import (
     SQLiteDatabase,
     UnsupportedDatabaseSchemaError,
@@ -402,7 +404,10 @@ def test_desktop_composes_concrete_paper_runtime_actions(
         def inspect_startup(
             self,
             session: ConfiguredPaperSession,
+            *,
+            sole_process: bool = False,
         ) -> BotLifecycleResult:
+            self.sole_process = sole_process
             workspace = configured_bot_control(
                 session,
                 observed_at_utc=datetime(2026, 8, 2, tzinfo=UTC),
@@ -1020,6 +1025,13 @@ def test_desktop_composition_defers_database_directory_creation_to_load_worker(
     tmp_path: Path,
     monkeypatch: MonkeyPatch,
 ) -> None:
+    """Composition still touches no disk — except to claim the installation.
+
+    A lock has to be a file, and this one has to be taken before anything
+    reads durable state, so its directory is the one thing made up front. The
+    database, its migration and the log file stay deferred to the workers
+    that can report a failure to the trader.
+    """
     captured: dict[str, object] = {}
     mkdir_calls: list[tuple[Path, int, bool, bool]] = []
     original_mkdir = Path.mkdir
@@ -1050,7 +1062,14 @@ def test_desktop_composition_defers_database_directory_creation_to_load_worker(
     result = desktop_main.run_desktop()
 
     assert result == 0
-    assert mkdir_calls == []
+    installation_directory = tmp_path / "Library" / "Application Support" / "TiewTrade"
+    # `parents=True` records the whole chain it walks, so the fact under
+    # test is that nothing outside that one directory was made.
+    assert mkdir_calls != []
+    assert all(
+        made == installation_directory or made in installation_directory.parents
+        for made, _mode, _parents, _exist_ok in mkdir_calls
+    )
 
     load_active = cast(LoadActiveSession, captured["load_active"])
     assert load_active() is None
@@ -1089,3 +1108,393 @@ def test_open_entry_numbers_is_none_when_the_bot_was_only_initialized(
     )
 
     assert actions.open_entry_numbers(session) is None
+
+
+def test_desktop_claims_the_installation_before_touching_the_database(
+    tmp_path: Path,
+    monkeypatch: MonkeyPatch,
+) -> None:
+    """Nothing may read or write the database until this process owns it.
+
+    The claim is what makes a lifecycle marker readable at all: until it is
+    held, a marker saying "running" could be a live Bot in another window.
+    """
+    events: list[str] = []
+    original_acquire = InstallationLock.acquire
+    original_database = SQLiteDatabase
+
+    def capture_acquire(self: InstallationLock) -> bool:
+        events.append("lock")
+        return original_acquire(self)
+
+    def capture_database(path: Path) -> object:
+        events.append("database")
+        return original_database(path)
+
+    monkeypatch.setattr(InstallationLock, "acquire", capture_acquire)
+    monkeypatch.setattr(desktop_main, "SQLiteDatabase", capture_database)
+    monkeypatch.setattr(desktop_main, "run_desktop_ui", lambda **kwargs: 0)
+
+    assert desktop_main.run_desktop(tmp_path / "tiewtrade.sqlite3") == 0
+    assert events == ["lock", "database"]
+
+
+def test_desktop_refuses_a_second_window_on_one_installation(
+    tmp_path: Path,
+    monkeypatch: MonkeyPatch,
+) -> None:
+    """One installation, one Bot: the rule the whole session model rests on.
+
+    Two windows on one database would run two Bots on one Session, each
+    unaware of the Entries the other opened.
+    """
+    database_path = tmp_path / "tiewtrade.sqlite3"
+    opened: list[object] = []
+    said: list[str] = []
+    held = InstallationLock(database_path)
+    assert held.acquire() is True
+
+    def capture_open(**kwargs: object) -> int:
+        opened.append(kwargs)
+        return 0
+
+    monkeypatch.setattr(desktop_main, "run_desktop_ui", capture_open)
+    monkeypatch.setattr(desktop_main, "report_installation_in_use", said.append)
+
+    try:
+        result = desktop_main.run_desktop(database_path)
+    finally:
+        held.release()
+
+    assert result != 0
+    assert opened == []
+    assert len(said) == 1
+    assert not database_path.exists()
+
+
+def test_desktop_hands_the_installation_back_when_the_window_closes(
+    tmp_path: Path,
+    monkeypatch: MonkeyPatch,
+) -> None:
+    """A closed app must not lock the next one out of its own database."""
+    database_path = tmp_path / "tiewtrade.sqlite3"
+    monkeypatch.setattr(desktop_main, "run_desktop_ui", lambda **kwargs: 0)
+
+    assert desktop_main.run_desktop(database_path) == 0
+
+    after = InstallationLock(database_path)
+    assert after.acquire() is True
+    after.release()
+
+
+def test_desktop_hands_the_installation_back_when_the_window_fails(
+    tmp_path: Path,
+    monkeypatch: MonkeyPatch,
+) -> None:
+    """A crash on the way up must not leave the installation claimed."""
+    database_path = tmp_path / "tiewtrade.sqlite3"
+
+    def fail(**kwargs: object) -> int:
+        raise RuntimeError("the window failed to open")
+
+    monkeypatch.setattr(desktop_main, "run_desktop_ui", fail)
+
+    with pytest.raises(RuntimeError):
+        desktop_main.run_desktop(database_path)
+
+    after = InstallationLock(database_path)
+    assert after.acquire() is True
+    after.release()
+
+
+def test_desktop_startup_inspection_states_that_nothing_else_is_running(
+    tmp_path: Path,
+    monkeypatch: MonkeyPatch,
+) -> None:
+    """Holding the installation is what licenses recovering a stale marker.
+
+    The controller cannot tell a marker left by a killed Bot from one a live
+    Bot is keeping. This composition holds the lock for the life of the app,
+    so it is the one place that can say which it is.
+    """
+    controllers: list[object] = []
+
+    class RecordingController:
+        def __init__(self, **dependencies: object) -> None:
+            self.sole_process: bool | None = None
+            self.result: BotLifecycleResult | None = None
+            self.snapshot_callback = cast(
+                Callable[[object], None], dependencies["snapshot_callback"]
+            )
+            controllers.append(self)
+
+        @property
+        def current_result(self) -> BotLifecycleResult:
+            assert self.result is not None
+            return self.result
+
+        def inspect_startup(
+            self,
+            session: ConfiguredPaperSession,
+            *,
+            sole_process: bool = False,
+        ) -> BotLifecycleResult:
+            self.sole_process = sole_process
+            workspace = configured_bot_control(
+                session,
+                observed_at_utc=datetime(2026, 8, 2, tzinfo=UTC),
+            ).workspace
+            self.result = BotLifecycleResult(workspace=workspace)
+            self.snapshot_callback(workspace)
+            return self.result
+
+    captured: dict[str, object] = {}
+    monkeypatch.setattr(
+        desktop_main,
+        "PaperRuntimeController",
+        RecordingController,
+        raising=False,
+    )
+
+    def capture_open(**kwargs: object) -> int:
+        captured.update(kwargs)
+        return 0
+
+    monkeypatch.setattr(desktop_main, "run_desktop_ui", capture_open)
+
+    assert desktop_main.run_desktop(tmp_path / "tiewtrade.sqlite3") == 0
+
+    bot = cast(BotActions, captured["bot"])
+    initialize_bot = cast(LifecycleAction, bot.initialize)
+    session = configured_spot_session()
+    initialize_bot(
+        configured_bot_control(
+            session, observed_at_utc=datetime(2026, 8, 2, tzinfo=UTC)
+        )
+    )
+
+    assert len(controllers) == 1
+    assert cast(RecordingController, controllers[0]).sole_process is True
+
+
+def test_ui_desktop_closes_the_window_on_an_interrupt(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    """Ctrl+C must put the app through the same door the close button does.
+
+    Killed where it stands, the Bot leaves an open WebSocket, a market-data
+    runtime stopped out of order and a lifecycle marker still saying it is
+    running. `closeEvent` already answers all three, so an interrupt asks for
+    it rather than for anything of its own.
+    """
+    closed: list[str] = []
+    handlers: dict[int, object] = {}
+
+    class FakeApplication:
+        @classmethod
+        def instance(cls) -> "FakeApplication":
+            return cls()
+
+        def exec(self) -> int:
+            # Standing in for the C++ loop: the interrupt lands while it runs.
+            for received in (signal.SIGINT, signal.SIGTERM):
+                cast(Callable[[int, object], None], handlers[received])(received, None)
+            return 0
+
+    class FakeMainWindow:
+        def __init__(self, **dependencies: object) -> None:
+            pass
+
+        def setStyleSheet(self, style_sheet: str) -> None:
+            pass
+
+        def show(self) -> None:
+            pass
+
+        def close(self) -> None:
+            closed.append("close")
+
+    def record_handler(received: int, handler: object) -> object:
+        previous = handlers.get(received)
+        handlers[received] = handler
+        return previous
+
+    monkeypatch.setattr(ui_desktop, "QApplication", FakeApplication)
+    monkeypatch.setattr(ui_desktop, "MainWindow", FakeMainWindow)
+    monkeypatch.setattr(signal, "signal", record_handler)
+
+    assert (
+        ui_desktop.run_desktop(
+            create_session=lambda values: None,  # type: ignore[arg-type,return-value]
+            load_active=lambda: None,
+        )
+        == 0
+    )
+    assert closed == ["close", "close"]
+
+
+def test_ui_desktop_gives_the_interpreter_time_to_run_a_handler(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    """A handler that never runs is the same as no handler at all.
+
+    Python runs signal handlers between its own bytecodes, and `exec` spends
+    its time inside Qt. Something has to hand control back periodically or
+    the interrupt sits unnoticed until the next mouse click.
+    """
+    timers: list[object] = []
+
+    class FakeApplication:
+        @classmethod
+        def instance(cls) -> "FakeApplication":
+            return cls()
+
+        def exec(self) -> int:
+            return 0
+
+    class FakeMainWindow:
+        def __init__(self, **dependencies: object) -> None:
+            pass
+
+        def setStyleSheet(self, style_sheet: str) -> None:
+            pass
+
+        def show(self) -> None:
+            pass
+
+        def close(self) -> None:
+            pass
+
+    class FakeTimer:
+        def __init__(self) -> None:
+            self.interval: int | None = None
+            self.timeout = _FakeSignal()
+            timers.append(self)
+
+        def start(self, interval: int) -> None:
+            self.interval = interval
+
+        def stop(self) -> None:
+            self.interval = None
+
+    monkeypatch.setattr(ui_desktop, "QApplication", FakeApplication)
+    monkeypatch.setattr(ui_desktop, "MainWindow", FakeMainWindow)
+    monkeypatch.setattr(ui_desktop, "QTimer", FakeTimer)
+    monkeypatch.setattr(signal, "signal", lambda received, handler: None)
+
+    ui_desktop.run_desktop(
+        create_session=lambda values: None,  # type: ignore[arg-type,return-value]
+        load_active=lambda: None,
+    )
+
+    assert len(timers) == 1
+    timer = cast(FakeTimer, timers[0])
+    assert timer.timeout.connected != []
+
+
+def test_ui_desktop_puts_back_the_handlers_it_found(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    """The app is a guest in this interpreter, tests and shells included."""
+    installed: list[tuple[signal.Signals, object]] = []
+    original: dict[signal.Signals, object] = {
+        signal.SIGINT: object(),
+        signal.SIGTERM: object(),
+    }
+
+    class FakeApplication:
+        @classmethod
+        def instance(cls) -> "FakeApplication":
+            return cls()
+
+        def exec(self) -> int:
+            return 0
+
+    class FakeMainWindow:
+        def __init__(self, **dependencies: object) -> None:
+            pass
+
+        def setStyleSheet(self, style_sheet: str) -> None:
+            pass
+
+        def show(self) -> None:
+            pass
+
+        def close(self) -> None:
+            pass
+
+    def record_handler(received: signal.Signals, handler: object) -> object:
+        installed.append((received, handler))
+        return original[received]
+
+    monkeypatch.setattr(ui_desktop, "QApplication", FakeApplication)
+    monkeypatch.setattr(ui_desktop, "MainWindow", FakeMainWindow)
+    monkeypatch.setattr(signal, "signal", record_handler)
+
+    ui_desktop.run_desktop(
+        create_session=lambda values: None,  # type: ignore[arg-type,return-value]
+        load_active=lambda: None,
+    )
+
+    assert [received for received, _handler in installed[-2:]] == [
+        signal.SIGINT,
+        signal.SIGTERM,
+    ]
+    assert [handler for _received, handler in installed[-2:]] == [
+        original[signal.SIGINT],
+        original[signal.SIGTERM],
+    ]
+
+
+def test_ui_desktop_opens_where_signals_cannot_be_handled(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    """Only the main thread may install handlers, and the app still has to run.
+
+    A window that refused to open because it could not register for Ctrl+C
+    would be trading tidiness for the whole application.
+    """
+
+    class FakeApplication:
+        @classmethod
+        def instance(cls) -> "FakeApplication":
+            return cls()
+
+        def exec(self) -> int:
+            return 0
+
+    class FakeMainWindow:
+        def __init__(self, **dependencies: object) -> None:
+            pass
+
+        def setStyleSheet(self, style_sheet: str) -> None:
+            pass
+
+        def show(self) -> None:
+            pass
+
+        def close(self) -> None:
+            pass
+
+    def refuse(received: int, handler: object) -> object:
+        raise ValueError("signal only works in main thread")
+
+    monkeypatch.setattr(ui_desktop, "QApplication", FakeApplication)
+    monkeypatch.setattr(ui_desktop, "MainWindow", FakeMainWindow)
+    monkeypatch.setattr(signal, "signal", refuse)
+
+    assert (
+        ui_desktop.run_desktop(
+            create_session=lambda values: None,  # type: ignore[arg-type,return-value]
+            load_active=lambda: None,
+        )
+        == 0
+    )
+
+
+class _FakeSignal:
+    def __init__(self) -> None:
+        self.connected: list[object] = []
+
+    def connect(self, slot: object) -> None:
+        self.connected.append(slot)

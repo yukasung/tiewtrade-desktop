@@ -1,4 +1,5 @@
 import asyncio
+import logging
 from collections.abc import AsyncIterator, Awaitable, Callable, Coroutine
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
@@ -45,6 +46,7 @@ from tiewtrade.decimal_context import configure_decimal_context
 from tiewtrade.desktop_logging import configure_desktop_logging
 from tiewtrade.integrations.binance.public_endpoints import BinancePublicEndpoints
 from tiewtrade.integrations.binance.public_market_data import BinancePublicMarketData
+from tiewtrade.integrations.process_lock.installation_lock import InstallationLock
 from tiewtrade.integrations.sqlite.active_paper_sessions import (
     SQLiteActivePaperSessions,
 )
@@ -70,11 +72,22 @@ from tiewtrade.trading.symbol_rules import SymbolRules
 from tiewtrade.trading.trade_history import TradeFill
 from tiewtrade.ui.bot_lifecycle_workflow import RuntimeSnapshotRelay
 from tiewtrade.ui.chart_workflow import ChartFactRelay
+from tiewtrade.ui.desktop import report_installation_in_use
 from tiewtrade.ui.desktop import run_desktop as run_desktop_ui
 from tiewtrade.ui.main_window import BotActions, ChartSources
 
+_logger = logging.getLogger(__name__)
+
 _RUNTIME_SHUTDOWN_TIMEOUT_SECONDS = 30.0
 _MANUAL_CLOSE_PRICE_MAX_AGE = timedelta(seconds=30)
+# Not 0: a shell, a launcher, or a packaging script has to be able to tell
+# "the app ran and closed" from "the app never opened".
+_INSTALLATION_IN_USE_EXIT_CODE = 1
+_INSTALLATION_IN_USE_MESSAGE = (
+    "TiewTrade is already open in another window. "
+    "One installation runs one Bot Session at a time, so close the other "
+    "window before opening this one."
+)
 
 
 class _PaperRuntimeActions:
@@ -108,7 +121,10 @@ class _PaperRuntimeActions:
             with self._lock:
                 self._controller = controller
                 self._session = snapshot.session
-            result = controller.inspect_startup(snapshot.session)
+            # The composition root holds the installation lock for the life
+            # of the app, so nothing else can be running this Session — which
+            # is what lets a marker left by a killed Bot be read as stale.
+            result = controller.inspect_startup(snapshot.session, sole_process=True)
         finally:
             self._finish_operation(
                 "initialize",
@@ -666,6 +682,27 @@ def run_desktop(database_path: Path | None = None) -> int:
     # Beside the database, because the two answer the same question together:
     # what the Bot did, and why it stopped doing it.
     configure_desktop_logging(resolved_database_path.parent)
+    installation = InstallationLock(resolved_database_path)
+    if not installation.acquire():
+        _logger.error(
+            "another process is already running this installation",
+            extra={"event_name": "desktop.installation.in_use"},
+        )
+        report_installation_in_use(_INSTALLATION_IN_USE_MESSAGE)
+        return _INSTALLATION_IN_USE_EXIT_CODE
+    try:
+        return _run_desktop_holding_the_installation(resolved_database_path)
+    finally:
+        installation.release()
+
+
+def _run_desktop_holding_the_installation(resolved_database_path: Path) -> int:
+    """Everything that may only run while this process owns the database.
+
+    Split out so the claim reads as the precondition it is: the body below
+    reads and writes durable state, and recovers a lifecycle marker on the
+    strength of nothing else being able to be running.
+    """
     database = SQLiteDatabase(resolved_database_path)
     store = SQLiteActivePaperSessions(database)
     history = SQLiteTradeHistory(database)
