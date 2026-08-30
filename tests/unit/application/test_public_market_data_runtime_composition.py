@@ -107,7 +107,9 @@ def test_session_market_type_selects_public_endpoint_before_source_creation() ->
         )
     ]
     asyncio.run(runtime.run())
-    assert fake_source.requested_warm_up_counts == [15]
+    assert fake_source.requested_warm_up_counts == [
+        RsiStepGridPreset.v1().minimum_warm_up_candles
+    ]
 
 
 def test_a_futures_session_has_no_public_market_to_read() -> None:

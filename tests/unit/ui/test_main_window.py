@@ -34,7 +34,7 @@ from tests.support.trade_history_ui import (
     empty_basket_history,
     empty_trade_fills,
 )
-from tests.support.workspace_snapshots import basket_entries, basket_pairs
+from tests.support.workspace_snapshots import basket_entries, basket_targets
 from tiewtrade.application.bot_control import (
     BotControlAction,
     BotControlSnapshot,
@@ -84,6 +84,7 @@ from tiewtrade.integrations.sqlite.active_paper_sessions import (
 from tiewtrade.integrations.sqlite.database import SQLiteDatabase
 from tiewtrade.trading.futures_policy import FuturesTradingPolicy
 from tiewtrade.trading.session_config import MarketType, TradeMode
+from tiewtrade.trading.trade_history import TradeFill
 from tiewtrade.ui.blank_text import BLANK
 from tiewtrade.ui.bot_lifecycle_workflow import RuntimeSnapshotRelay
 from tiewtrade.ui.chart_workflow import ChartFactRelay
@@ -839,7 +840,11 @@ def test_futures_overview_marks_missing_required_policy_unavailable(
 def test_spot_overview_marks_a_mixed_futures_policy_unavailable(
     qtbot: QtBot,
 ) -> None:
-    """A Spot Session carries no policy, so holding one is malformed."""
+    """A Spot Session carries no policy, so holding one is malformed.
+
+    The rows are laid out for this one — a Session assembled wrongly is worth
+    a row that says so, rather than one the card quietly leaves out.
+    """
     session = _session_with_policy_changes(
         configured_spot_session(),
         futures_policy=FuturesTradingPolicy.v1(leverage=3),
@@ -849,22 +854,81 @@ def test_spot_overview_marks_a_mixed_futures_policy_unavailable(
 
     overview.show_session(session)
 
+    assert "Leverage" in overview.visible_labels
     assert overview.leverage_value.text() == "Unavailable"
     assert overview.margin_mode_value.text() == "Unavailable"
     assert overview.position_mode_value.text() == "Unavailable"
 
 
-def test_spot_overview_leaves_the_futures_rows_blank(qtbot: QtBot) -> None:
+def test_spot_overview_leaves_the_futures_rows_out(qtbot: QtBot) -> None:
+    """Spot has no leverage at all, so the card does not keep a row for it.
+
+    Three rows reading blank take half the card to repeat what the Market
+    Type at the top of it already said.
+    """
     overview = SessionOverviewWidget()
     qtbot.addWidget(overview)
 
     overview.show_session(configured_spot_session())
 
-    assert overview.leverage_value.text() == "—"
-    assert overview.margin_mode_value.text() == "—"
-    assert overview.position_mode_value.text() == "—"
+    assert overview.visible_labels == (
+        "Market Type",
+        "Pair",
+        "Timeframe",
+        "Strategy Preset",
+        "Amount",
+        "Max Entries",
+        "Created at",
+    )
+    for value in (
+        overview.leverage_value,
+        overview.margin_mode_value,
+        overview.position_mode_value,
+    ):
+        assert value.isHidden()
+        # A row out of the layout holds nothing either, so text meant for a
+        # market this Session is not in cannot be read off it.
+        assert value.text() == "—"
     assert not hasattr(overview, "spot_ratio_value")
     assert not hasattr(overview, "spot_reserve_ratio_value")
+
+
+def test_futures_overview_keeps_the_policy_rows(qtbot: QtBot) -> None:
+    overview = SessionOverviewWidget()
+    qtbot.addWidget(overview)
+
+    overview.show_session(configured_futures_session(leverage=3))
+
+    assert overview.visible_labels == (
+        "Market Type",
+        "Pair",
+        "Timeframe",
+        "Strategy Preset",
+        "Amount",
+        "Max Entries",
+        "Leverage",
+        "Margin Mode",
+        "Position Mode",
+        "Created at",
+    )
+
+
+def test_the_policy_rows_come_and_go_with_the_market_shown(qtbot: QtBot) -> None:
+    """One widget shows both markets, so the rows have to be taken out and
+    put back rather than filled in and blanked."""
+    overview = SessionOverviewWidget()
+    qtbot.addWidget(overview)
+
+    overview.show_session(configured_futures_session(leverage=3))
+    overview.show_session(configured_spot_session())
+
+    assert "Leverage" not in overview.visible_labels
+    assert overview.leverage_value.isHidden()
+
+    overview.show_session(configured_futures_session(leverage=3))
+
+    assert "Leverage" in overview.visible_labels
+    assert overview.leverage_value.text() == "3x"
 
 
 def test_repeated_submit_while_worker_is_running_calls_create_once(
@@ -1952,7 +2016,9 @@ def test_stop_with_open_position_reopens_editable_setup_without_closing(
         average_entry_price=Decimal("100"),
         current_price=Decimal("110"),
         take_profit_price=Decimal("120"),
-        pairs=basket_pairs(basket_entries("100", quantity="1", current_price="110")),
+        targets=basket_targets(
+            basket_entries("100", quantity="1", current_price="110")
+        ),
         unrealized_pnl=Decimal("10"),
         entry_gate=BasketEntryGate.OPEN,
         updated_at_utc=observed_at,
@@ -2488,13 +2554,13 @@ def test_an_open_position_shows_before_any_bot_is_started(qtbot: QtBot) -> None:
                     quantity=Decimal("2"),
                     filled_at=datetime(2026, 8, 1, 12, tzinfo=UTC),
                     atr=Decimal("2"),
+                    group_id=1,
                 ),
             ),
             closed_basket_count=0,
         ),
         entry_policy=session.config.entry_policy,
         take_profit_atr_multiplier=Decimal("3"),
-        stop_loss_atr_multiplier=None,
         tick_size=Decimal("0.01"),
     )
 
@@ -2643,6 +2709,7 @@ def _open_position_window(
             quantity=Decimal("2"),
             filled_at=datetime(2026, 8, 1, 12, tzinfo=UTC),
             atr=Decimal("2"),
+            group_id=1,
         ),
     )
     if second_entry_price is not None:
@@ -2653,6 +2720,7 @@ def _open_position_window(
                 quantity=Decimal("2"),
                 filled_at=datetime(2026, 8, 2, 12, tzinfo=UTC),
                 atr=Decimal("2"),
+                group_id=1,
             ),
         )
     reopened = reopen_basket(
@@ -2663,7 +2731,6 @@ def _open_position_window(
         ),
         entry_policy=session.config.entry_policy,
         take_profit_atr_multiplier=Decimal("3"),
-        stop_loss_atr_multiplier=None,
         tick_size=Decimal("0.01"),
     )
 
@@ -3185,6 +3252,178 @@ def test_clearing_the_database_refreshes_the_position_tab(qtbot: QtBot) -> None:
     assert window._open_position.basket is None
 
 
+def test_clearing_the_database_leaves_no_session_for_the_next_start_to_replace(
+    qtbot: QtBot,
+) -> None:
+    """A wiped database holds no Session left to retire.
+
+    The window went on holding the Session it had read before the clear, so
+    the next Start took the replacement course and asked the database to
+    retire a row that had just been deleted — and told the trader the Session
+    was "still running somewhere", about a Session nothing was running. What
+    a clear leaves is an installation with no Session at all, which is what
+    the next Start has to make.
+    """
+    session = configured_spot_session()
+    created: list[PaperSessionSetupValues] = []
+    events: list[str] = []
+    # Wiped along with everything else, the way the database answers after a
+    # clear: no row is left for either question to find.
+    stored_session: list[ConfiguredPaperSession] = [session]
+
+    def start(snapshot: BotControlSnapshot) -> BotLifecycleResult:
+        return BotLifecycleResult(
+            workspace=workspace_with_runtime_state(
+                snapshot.workspace,
+                BotRuntimeState.RUNNING,
+                data_freshness=DataFreshness.FRESH,
+            )
+        )
+
+    def stop(snapshot: BotControlSnapshot) -> BotLifecycleResult:
+        return BotLifecycleResult(
+            workspace=workspace_with_runtime_state(
+                snapshot.workspace, BotRuntimeState.STOPPED
+            )
+        )
+
+    def create(values: PaperSessionSetupValues) -> PaperSessionCreateOutcome:
+        created.append(values)
+        return PaperSessionCreateOutcome(session=session, created=True)
+
+    window = MainWindow(
+        create_session=create,
+        load_active=lambda: session,
+        list_basket_history=empty_basket_history,
+        list_trade_fills=empty_trade_fills,
+        bot=BotActions(
+            start=start,
+            stop=stop,
+            close_position=lambda _session: events.append("close"),
+            has_open_position=lambda _session: bool(stored_session),
+            retire_session=lambda _session: events.append("retire"),
+        ),
+        clear_database=stored_session.clear,
+    )
+    qtbot.addWidget(window)
+    window.show()
+    control = window.workspace.bot_control_widget
+    qtbot.waitUntil(control.start_button.isEnabled)
+    click(control.start_button)
+    qtbot.waitUntil(lambda: _runtime_state(window) is BotRuntimeState.RUNNING)
+    click(control.stop_button)
+    stop_dialog = window.findChild(QMessageBox)
+    assert stop_dialog is not None
+    click(
+        next(button for button in stop_dialog.buttons() if button.text() == "Stop Bot")
+    )
+    qtbot.waitUntil(window.setup.isVisible)
+    _click_settings(window)
+
+    def confirm_clear() -> None:
+        confirm_dialog = QApplication.activeModalWidget()
+        assert isinstance(confirm_dialog, QMessageBox)
+        click(next(b for b in confirm_dialog.buttons() if b.text() == "Clear All"))
+
+    QTimer.singleShot(0, confirm_clear)
+    click(window.workspace.settings_panel.clear_database_button)
+    qtbot.waitUntil(lambda: not window.workspace.is_showing_settings)
+
+    window.setup.capital_per_entry.setText("2500")
+    click(window.setup.create_button)
+
+    qtbot.waitUntil(lambda: len(created) == 1)
+    assert events == []
+
+
+def test_a_session_that_is_gone_is_not_reported_as_one_still_running(
+    qtbot: QtBot,
+) -> None:
+    """Two reasons a retirement fails, and only one of them is a running Bot.
+
+    Told the row it went to retire was not there, the form used to say the
+    Session was still running somewhere and ask the trader to stop it — an
+    instruction with nothing to carry it out on.
+    """
+    window = MainWindow(
+        create_session=unused_create,
+        load_active=no_active_session,
+        list_basket_history=empty_basket_history,
+        list_trade_fills=empty_trade_fills,
+    )
+    qtbot.addWidget(window)
+    window.show()
+
+    window._replacement_failed(
+        PaperSessionUnavailableError("Active Paper Session is no longer there")
+    )
+
+    assert window.setup.capital_per_entry_error.text() == (
+        "The existing Paper Session is no longer in the database. "
+        "Try Start Paper Bot again."
+    )
+
+
+def test_clearing_the_database_wipes_the_chart_badges(qtbot: QtBot) -> None:
+    """The Buy/Sell badges are drawings of rows that no longer exist.
+
+    Clearing the database deletes every fill, but the chart kept holding the
+    ones it had already read — so a wiped installation went on showing badges
+    for trades nothing could open, close, or list any more. The clear has to
+    read the fills back, the way it already reads the Position tab back.
+    """
+    session = configured_spot_session()
+    clock = lambda: datetime(2026, 1, 1, 1, 0, tzinfo=UTC)  # noqa: E731
+    stored_fills: list[TradeFill] = [
+        trade_fill(
+            session_id=session.config.session_id,
+            filled_at_utc=datetime(2026, 1, 1, 0, 50, tzinfo=UTC),
+        )
+    ]
+
+    async def load_chart(
+        loaded: ConfiguredPaperSession,
+        chart_range: ChartRange,
+    ) -> ChartSnapshot:
+        return ChartSnapshot(
+            session=loaded,
+            chart_range=chart_range,
+            observed_at_utc=chart_range.end,
+            candles=(flat_candle(datetime(2026, 1, 1, 0, 50, tzinfo=UTC), 100),),
+            fills=tuple(stored_fills),
+            state=ChartReadState.READY,
+        )
+
+    async def load_fills(
+        _loaded: ConfiguredPaperSession,
+        _visible_range: ChartRange,
+    ) -> tuple[TradeFill, ...]:
+        return tuple(stored_fills)
+
+    window = MainWindow(
+        create_session=unused_create,
+        load_active=lambda: session,
+        list_basket_history=empty_basket_history,
+        list_trade_fills=empty_trade_fills,
+        chart=ChartSources(load=load_chart, load_fills=load_fills, clock=clock),
+        clear_database=stored_fills.clear,
+    )
+    qtbot.addWidget(window)
+    window.show()
+    qtbot.waitUntil(lambda: window.workspace.chart.marker_labels != ())
+    _click_settings(window)
+
+    def confirm_clear() -> None:
+        confirm_dialog = QApplication.activeModalWidget()
+        assert isinstance(confirm_dialog, QMessageBox)
+        click(next(b for b in confirm_dialog.buttons() if b.text() == "Clear All"))
+
+    QTimer.singleShot(0, confirm_clear)
+    click(window.workspace.settings_panel.clear_database_button)
+
+    qtbot.waitUntil(lambda: window.workspace.chart.marker_labels == ())
+
+
 def test_settings_panel_stays_up_while_a_running_bot_keeps_publishing(
     qtbot: QtBot,
 ) -> None:
@@ -3369,13 +3608,13 @@ def _basket_of(session: ConfiguredPaperSession, price: str) -> ReopenedBasket:
                     quantity=Decimal("2"),
                     filled_at=datetime(2026, 8, 1, 12, tzinfo=UTC),
                     atr=Decimal("2"),
+                    group_id=1,
                 ),
             ),
             closed_basket_count=0,
         ),
         entry_policy=session.config.entry_policy,
         take_profit_atr_multiplier=Decimal("3"),
-        stop_loss_atr_multiplier=None,
         tick_size=Decimal("0.01"),
     )
 
@@ -4046,3 +4285,98 @@ def _session_with_policy_changes(
     for field, value in changes.items():
         object.__setattr__(inconsistent_config, field, value)
     return replace(session, config=inconsistent_config)
+
+
+def test_opening_settings_fills_the_line_form_from_what_is_stored(
+    qtbot: QtBot,
+) -> None:
+    window = MainWindow(
+        create_session=unused_create,
+        load_active=no_active_session,
+        list_basket_history=empty_basket_history,
+        list_trade_fills=empty_trade_fills,
+        read_line_notifications=lambda: (True, "U123", "token-value"),
+    )
+    qtbot.addWidget(window)
+    window.show()
+    qtbot.waitUntil(window.setup.isVisible)
+
+    _click_settings(window)
+
+    panel = window.workspace.settings_panel
+    qtbot.waitUntil(lambda: panel.line_target_id.text() == "U123")
+    assert panel.line_enabled.isChecked()
+    assert panel.line_access_token.text() == "token-value"
+
+
+def test_saving_line_settings_hands_them_off_and_reads_them_back(
+    qtbot: QtBot,
+) -> None:
+    """What the form shows after saving is what was stored, not what was typed.
+
+    The two are not the same thing — a token that never reached the machine
+    would leave a form claiming it had — so the window hands the settings off
+    and fills the form from the reading that comes back.
+    """
+    saved: list[tuple[bool, str, str]] = []
+    readings = [(False, "", ""), (True, "U123", "stored-token")]
+
+    def save(enabled: bool, target_id: str, access_token: str) -> None:
+        saved.append((enabled, target_id, access_token))
+
+    window = MainWindow(
+        create_session=unused_create,
+        load_active=no_active_session,
+        list_basket_history=empty_basket_history,
+        list_trade_fills=empty_trade_fills,
+        save_line_notifications=save,
+        read_line_notifications=lambda: readings[min(len(saved), 1)],
+    )
+    qtbot.addWidget(window)
+    window.show()
+    qtbot.waitUntil(window.setup.isVisible)
+    _click_settings(window)
+    panel = window.workspace.settings_panel
+    qtbot.waitUntil(lambda: panel.save_line_button.isEnabled())
+
+    panel.line_enabled.setChecked(True)
+    panel.line_target_id.setText("U123")
+    panel.line_access_token.setText("token-value")
+    click(panel.save_line_button)
+
+    qtbot.waitUntil(lambda: saved == [(True, "U123", "token-value")])
+    qtbot.waitUntil(lambda: panel.line_access_token.text() == "stored-token")
+
+
+def test_line_settings_that_cannot_be_stored_are_reported_where_they_were_typed(
+    qtbot: QtBot,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def save(enabled: bool, target_id: str, access_token: str) -> None:
+        del enabled, target_id, access_token
+        raise RuntimeError("nowhere to keep them")
+
+    seen: list[str] = []
+    monkeypatch.setattr(
+        QMessageBox,
+        "warning",
+        lambda parent, title, text, *args: seen.append(text),
+    )
+    window = MainWindow(
+        create_session=unused_create,
+        load_active=no_active_session,
+        list_basket_history=empty_basket_history,
+        list_trade_fills=empty_trade_fills,
+        save_line_notifications=save,
+    )
+    qtbot.addWidget(window)
+    window.show()
+    qtbot.waitUntil(window.setup.isVisible)
+    _click_settings(window)
+    panel = window.workspace.settings_panel
+
+    click(panel.save_line_button)
+
+    qtbot.waitUntil(lambda: bool(seen))
+    assert "Could not save the LINE settings." in seen[0]
+    qtbot.waitUntil(panel.save_line_button.isEnabled)

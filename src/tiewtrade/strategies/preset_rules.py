@@ -13,6 +13,8 @@ to the preset, and stays there.
 
 from decimal import Decimal
 
+from tiewtrade.strategies.indicators import WILDER_WARM_UP_CANDLES
+
 
 def require_shared_preset_rules(
     *,
@@ -20,7 +22,6 @@ def require_shared_preset_rules(
     rsi_period: int,
     atr_period: int,
     take_profit_atr_multiplier: Decimal,
-    stop_loss_atr_multiplier: Decimal | None,
 ) -> None:
     if not version:
         raise ValueError("version must not be empty")
@@ -30,8 +31,6 @@ def require_shared_preset_rules(
         raise ValueError("atr_period must be positive")
     if take_profit_atr_multiplier <= 0:
         raise ValueError("take_profit_atr_multiplier must be positive")
-    if stop_loss_atr_multiplier is not None and stop_loss_atr_multiplier <= 0:
-        raise ValueError("stop_loss_atr_multiplier must be positive")
 
 
 def minimum_warm_up_candles(rsi_period: int, atr_period: int) -> int:
@@ -41,5 +40,9 @@ def minimum_warm_up_candles(rsi_period: int, atr_period: int) -> int:
     establishes the price the second one moved from. The longer of the two
     wins: a Session that started on the shorter would be reading one
     indicator that is ready and one that is still filling.
+
+    Having a reading is not the same as having the market's reading, so the
+    Wilder warm-up sets the floor. Below it a Session reads its own seed for
+    long enough to act on it.
     """
-    return max(rsi_period + 1, atr_period)
+    return max(rsi_period + 1, atr_period, WILDER_WARM_UP_CANDLES)

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import AsyncIterator, Awaitable, Callable
+from contextlib import asynccontextmanager
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
@@ -23,6 +24,14 @@ from tiewtrade.application.paper_runtime import (
     read_open_basket_state,
 )
 from tiewtrade.application.paper_session_setup import ConfiguredPaperSession
+from tiewtrade.application.session_notice import (
+    BotErrorNotice,
+    EntryOpenedNotice,
+    MarketFeedLostNotice,
+    MarketFeedRestoredNotice,
+    SessionNotice,
+    SessionNotifier,
+)
 from tiewtrade.application.trade_history import TradeHistoryFilter
 from tiewtrade.application.trading_workspace import (
     BotRuntimeState,
@@ -56,6 +65,7 @@ from tiewtrade.market_data.source_errors import (
     MarketDataFailureKind,
     MarketDataFatalError,
 )
+from tiewtrade.strategies.rsi_step_grid.preset import RsiStepGridPreset
 from tiewtrade.trading.basket import BasketCloseReason
 from tiewtrade.trading.session_config import MarketType, TradeMode
 from tiewtrade.trading.symbol_rules import SymbolRules
@@ -67,6 +77,8 @@ from tiewtrade.trading.trade_history import (
     TradeFill,
 )
 
+_WARM_UP_COUNT = RsiStepGridPreset.v1().minimum_warm_up_candles
+_LIVE_FROM = 15
 _NOW = datetime(2026, 8, 2, 3, tzinfo=UTC)
 _STOPPED_AT = datetime(2026, 8, 2, 4, tzinfo=UTC)
 _T = TypeVar("_T")
@@ -321,7 +333,7 @@ def test_in_progress_candle_is_published_without_changing_workspace(
     )
     controller.start(session)
     before = controller.current_workspace
-    forming = _candle(15, close=Decimal("87.25"))
+    forming = _candle(_LIVE_FROM, close=Decimal("87.25"))
 
     source.emit_open(forming)
 
@@ -375,7 +387,7 @@ def test_in_progress_candle_observer_failure_does_not_block_runtime(
     )
     controller.start(session)
 
-    source.emit_open(_candle(15, close=Decimal("87.25")))
+    source.emit_open(_candle(_LIVE_FROM, close=Decimal("87.25")))
 
     assert source.delivery_completed.wait(1)
     assert controller.current_result.workspace.header is not None
@@ -1077,8 +1089,8 @@ def test_a_basket_taken_back_closes_on_the_entries_that_already_sold_too(
     """A restart must not lose what the Basket had already made.
 
     The Runtime replays the Entries still open — the ones that sold are not
-    in the position to replay — so a stop loss on the rest wrote a result and
-    a count that left them out: 20 on a Basket that had made 25.8, over two
+    in the position to replay — so closing the rest wrote a result and a
+    count that left them out: 20 on a Basket that had made 25.8, over two
     Entries reported as one.
     """
     session = configured_spot_session()
@@ -1135,14 +1147,13 @@ def test_a_basket_taken_back_closes_on_the_entries_that_already_sold_too(
         state,
         entry_policy=session.config.entry_policy,
         take_profit_atr_multiplier=Decimal("3"),
-        stop_loss_atr_multiplier=None,
         tick_size=Decimal("0.01"),
     )
 
     closed = reopened.basket.close(
         exit_price=Decimal("120"),
         closed_at=_NOW + timedelta(minutes=20),
-        close_reason=BasketCloseReason.STOP_LOSS,
+        close_reason=BasketCloseReason.MANUAL,
     )
 
     # 5.8 from the Entry that sold before, 20 from the one taken back.
@@ -1562,18 +1573,23 @@ def _symbol_rules() -> SymbolRules:
 
 
 def _warm_up_candles() -> tuple[Candle, ...]:
-    close = Decimal("100")
+    """A run down to the close the live candles then climb back from.
+
+    As many candles as the Preset asks for, and it is the *start* that moves
+    when the Preset asks for more: the warm-up still ends on the candle before
+    the live ones, closing at 86, so every price and time asserted off them
+    stays where it was.
+    """
     candles: list[Candle] = []
-    for index in range(15):
-        candles.append(_candle(index, close=close))
-        close -= Decimal("1")
+    for index in range(_LIVE_FROM - _WARM_UP_COUNT, _LIVE_FROM):
+        candles.append(_candle(index, close=Decimal(86 + _LIVE_FROM - 1 - index)))
     return tuple(candles)
 
 
 def _live_candles() -> tuple[Candle, ...]:
     close = Decimal("86")
     candles: list[Candle] = []
-    for index in range(15, 26):
+    for index in range(_LIVE_FROM, _LIVE_FROM + 11):
         close += Decimal("1")
         candles.append(_candle(index, close=close))
     return tuple(candles)
@@ -1608,3 +1624,254 @@ def _runtime_snapshot(state: MarketDataRuntimeState) -> MarketDataRuntimeSnapsho
 
 def _history_filter(market_type: MarketType) -> TradeHistoryFilter:
     return TradeHistoryFilter(market_type=market_type)
+
+
+def test_a_filled_entry_is_said_out_loud_to_whoever_is_listening(
+    tmp_path: Path,
+) -> None:
+    session = _session(MarketType.SPOT)
+    database = _database_with_session(tmp_path, session)
+    source = _source()
+    notices: list[SessionNotice] = []
+    notice_ready = Event()
+
+    def notify(notice: SessionNotice) -> None:
+        notices.append(notice)
+        notice_ready.set()
+
+    @asynccontextmanager
+    async def notifier() -> AsyncIterator[SessionNotifier]:
+        yield notify
+
+    controller = PaperRuntimeController(
+        lifecycle=SQLitePaperRuntimeLifecycle(database),
+        trade_history=SQLiteTradeHistory(database),
+        symbol_rules=_symbol_rules(),
+        source_factory=lambda _endpoints: source,
+        scheduler=ImmediateScheduler(),
+        snapshot_callback=lambda _snapshot: None,
+        notifier_factory=notifier,
+    )
+
+    controller.start(session)
+
+    assert notice_ready.wait(2)
+    controller.stop(session)
+    notice = notices[0]
+    assert isinstance(notice, EntryOpenedNotice)
+    assert notice.market.symbol == session.market_data.symbol
+    assert notice.market.timeframe == session.market_data.timeframe
+    assert notice.entry_number == 1
+    assert notice.market.session_id == session.config.session_id
+
+
+def test_a_notifier_that_cannot_be_opened_does_not_keep_the_bot_from_trading(
+    tmp_path: Path,
+) -> None:
+    """Settings that are wrong cost the message, never the Session.
+
+    A token that has been withdrawn is found out here, on the way up, at the
+    moment the trader has just asked the Bot to start. Refusing to start on
+    it would make a chat notification a precondition of trading, which it is
+    not — the Position tab remains the thing that says what is open.
+    """
+    session = _session(MarketType.SPOT)
+    database = _database_with_session(tmp_path, session)
+    source = _source()
+
+    @asynccontextmanager
+    async def notifier() -> AsyncIterator[SessionNotifier]:
+        raise RuntimeError("the notifier could not be opened")
+        yield  # pragma: no cover - never reached
+
+    controller = PaperRuntimeController(
+        lifecycle=SQLitePaperRuntimeLifecycle(database),
+        trade_history=SQLiteTradeHistory(database),
+        symbol_rules=_symbol_rules(),
+        source_factory=lambda _endpoints: source,
+        scheduler=ImmediateScheduler(),
+        snapshot_callback=lambda _snapshot: None,
+        notifier_factory=notifier,
+    )
+
+    result = controller.start(session)
+
+    assert result.blocked_reason is None
+    assert result.workspace.header is not None
+    assert result.workspace.header.runtime_state is BotRuntimeState.RUNNING
+    controller.stop(session)
+
+
+def test_a_feed_that_goes_away_and_comes_back_is_said_once_each_way(
+    tmp_path: Path,
+) -> None:
+    """One message when the candles stop, one when they start again.
+
+    A feed in trouble transitions repeatedly on its way back — stale,
+    reconnecting, stale again — and none of those are separate news to
+    somebody reading a phone.
+    """
+    session = _session(MarketType.SPOT)
+    database = _database_with_session(tmp_path, session)
+    source = _source()
+    notices: list[SessionNotice] = []
+
+    @asynccontextmanager
+    async def notifier() -> AsyncIterator[SessionNotifier]:
+        yield notices.append
+
+    controller = PaperRuntimeController(
+        lifecycle=SQLitePaperRuntimeLifecycle(database),
+        trade_history=SQLiteTradeHistory(database),
+        symbol_rules=_symbol_rules(),
+        source_factory=lambda _endpoints: source,
+        scheduler=ImmediateScheduler(),
+        snapshot_callback=lambda _snapshot: None,
+        notifier_factory=notifier,
+    )
+    controller.start(session)
+    notices.clear()
+
+    for state in (
+        MarketDataRuntimeState.STALE,
+        MarketDataRuntimeState.RECONNECTING,
+        MarketDataRuntimeState.STALE,
+    ):
+        controller._on_runtime_transition(session, _runtime_snapshot(state))  # noqa: SLF001
+    controller._on_runtime_transition(  # noqa: SLF001
+        session,
+        _runtime_snapshot(MarketDataRuntimeState.LIVE),
+    )
+
+    assert [type(notice) for notice in notices] == [
+        MarketFeedLostNotice,
+        MarketFeedRestoredNotice,
+    ]
+    lost = notices[0]
+    assert isinstance(lost, MarketFeedLostNotice)
+    assert lost.market.symbol == session.market_data.symbol
+    assert lost.reason == MarketDataRuntimeReason.DATA_STALE.value
+    controller.stop(session)
+
+
+def test_a_bot_that_went_live_without_trouble_says_nothing_about_the_feed(
+    tmp_path: Path,
+) -> None:
+    """Nobody needs telling that what they just started has started."""
+    session = _session(MarketType.SPOT)
+    database = _database_with_session(tmp_path, session)
+    source = _source()
+    notices: list[SessionNotice] = []
+
+    @asynccontextmanager
+    async def notifier() -> AsyncIterator[SessionNotifier]:
+        yield notices.append
+
+    controller = PaperRuntimeController(
+        lifecycle=SQLitePaperRuntimeLifecycle(database),
+        trade_history=SQLiteTradeHistory(database),
+        symbol_rules=_symbol_rules(),
+        source_factory=lambda _endpoints: source,
+        scheduler=ImmediateScheduler(),
+        snapshot_callback=lambda _snapshot: None,
+        notifier_factory=notifier,
+    )
+    controller.start(session)
+
+    assert [
+        notice for notice in notices if isinstance(notice, MarketFeedRestoredNotice)
+    ] == []
+    controller.stop(session)
+
+
+def test_a_bot_that_stopped_says_so_once_and_says_why(tmp_path: Path) -> None:
+    """One stop is one message, however many places notice it.
+
+    Blocked is published by whoever finds out first and then by everyone else
+    who was waiting on the same Session, and a trader wants to be told that
+    the Bot stopped — not how many parts of it found out.
+    """
+    session = _session(MarketType.SPOT)
+    database = _database_with_session(tmp_path, session)
+    source = _source()
+    notices: list[SessionNotice] = []
+
+    @asynccontextmanager
+    async def notifier() -> AsyncIterator[SessionNotifier]:
+        yield notices.append
+
+    controller = PaperRuntimeController(
+        lifecycle=SQLitePaperRuntimeLifecycle(database),
+        trade_history=SQLiteTradeHistory(database),
+        symbol_rules=_symbol_rules(),
+        source_factory=lambda _endpoints: source,
+        scheduler=ImmediateScheduler(),
+        snapshot_callback=lambda _snapshot: None,
+        notifier_factory=notifier,
+    )
+    controller.start(session)
+    notices.clear()
+
+    stopped = "Paper Bot stopped: the Session could not continue"
+    controller._publish_blocked(reason=stopped)  # noqa: SLF001
+    controller._publish_blocked(reason=stopped)  # noqa: SLF001
+
+    errors = [notice for notice in notices if isinstance(notice, BotErrorNotice)]
+    assert len(errors) == 1
+    assert errors[0].reason == stopped
+    assert errors[0].market.session_id == session.config.session_id
+    controller.stop(session)
+
+
+def test_a_controller_that_only_inspected_startup_is_not_holding_the_session(
+    tmp_path: Path,
+) -> None:
+    """Reading durable lifecycle state is not taking a Basket in hand.
+
+    A controller is put in place before any Bot runs so the tab can say what
+    the last one left behind. Nothing is driving candles yet, so a sale asked
+    for now belongs to the database, not to this.
+    """
+    session = configured_spot_session()
+    database = _database_with_session(tmp_path, session)
+    controller = PaperRuntimeController(
+        lifecycle=SQLitePaperRuntimeLifecycle(database),
+        trade_history=SQLiteTradeHistory(database),
+        symbol_rules=_symbol_rules(),
+        source_factory=lambda _endpoints: _source(),
+        scheduler=ImmediateScheduler(),
+        snapshot_callback=lambda _snapshot: None,
+    )
+
+    controller.inspect_startup(session)
+
+    assert controller.is_holding(session) is False
+
+
+def test_a_running_controller_holds_its_session_until_it_is_stopped(
+    tmp_path: Path,
+) -> None:
+    """What a Runtime holds it must be asked for, and only while it holds it.
+
+    A stopped Bot leaves its Basket in the database, so the same question has
+    to answer the other way round the moment it stops — otherwise a sale is
+    asked of a Runtime that will never write it.
+    """
+    session = configured_spot_session()
+    database = _database_with_session(tmp_path, session)
+    controller = PaperRuntimeController(
+        lifecycle=SQLitePaperRuntimeLifecycle(database),
+        trade_history=SQLiteTradeHistory(database),
+        symbol_rules=_symbol_rules(),
+        source_factory=lambda _endpoints: _source(),
+        scheduler=ImmediateScheduler(),
+        snapshot_callback=lambda _snapshot: None,
+    )
+
+    controller.start(session)
+
+    assert controller.is_holding(session) is True
+
+    controller.stop(session)
+
+    assert controller.is_holding(session) is False

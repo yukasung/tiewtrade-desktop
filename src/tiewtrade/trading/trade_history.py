@@ -70,6 +70,15 @@ class TradeFill:
     # The Entry number this Fill sold. An Exit that took the whole Basket
     # sold no single Entry and leaves it None.
     closes_entry_number: int | None = None
+    # The Entry Group this Fill bought into or sold out of. A Group's target
+    # only ever moved closer, and where it stopped depends on Entries that
+    # have since gone, so it cannot be worked out again from the Entries left
+    # open — every Fill that moved it records where it moved to instead. The
+    # target is None where the Fill's sale left the Group with nothing, and
+    # both are None for a Fill that took the whole Basket at once and for
+    # Fills recorded before Groups were kept.
+    entry_group_id: int | None = None
+    group_take_profit_price: Decimal | None = None
 
     def __post_init__(self) -> None:
         _require_non_empty(self.fill_id, "fill_id")
@@ -94,6 +103,12 @@ class TradeFill:
                 raise ValueError("closes_entry_number belongs to an Exit Fill")
             if self.closes_entry_number <= 0:
                 raise ValueError("closes_entry_number must be positive")
+        if self.entry_group_id is not None and self.entry_group_id <= 0:
+            raise ValueError("entry_group_id must be positive when present")
+        if self.group_take_profit_price is not None:
+            if self.entry_group_id is None:
+                raise ValueError("a take profit price belongs to a Group")
+            _require_positive(self.group_take_profit_price, "group_take_profit_price")
 
 
 @dataclass(frozen=True, slots=True)

@@ -1,6 +1,9 @@
 import ast
 from pathlib import Path
+from types import SimpleNamespace
 
+from _pytest.monkeypatch import MonkeyPatch
+from PySide6.QtCore import Qt
 from PySide6.QtGui import QColor, QPalette
 from PySide6.QtWidgets import (
     QAbstractItemView,
@@ -11,7 +14,8 @@ from PySide6.QtWidgets import (
 )
 from pytestqt.qtbot import QtBot
 
-from tiewtrade.ui.theme import DARK_THEME
+import tiewtrade.ui.theme as theme
+from tiewtrade.ui.theme import DARK_THEME, apply_dark_appearance
 from tiewtrade.ui.trade_history_page import TradeHistoryPage
 from tiewtrade.ui.trading_workspace import TradingWorkspace
 
@@ -356,3 +360,25 @@ def _parentless(args: list[ast.expr], index: int) -> bool:
         return True
     parent = args[index]
     return isinstance(parent, ast.Constant) and parent.value is None
+
+
+def test_the_app_asks_the_platform_for_dark_controls(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    """The native controls have to be told which window they are drawn into.
+
+    Asked of a stand-in rather than of the real application, because whether
+    a platform honours the request is the platform's business — the offscreen
+    one used by these tests reports back Unknown either way.
+    """
+    asked: list[Qt.ColorScheme] = []
+
+    class Hints:
+        def setColorScheme(self, scheme: Qt.ColorScheme) -> None:  # noqa: N802
+            asked.append(scheme)
+
+    monkeypatch.setattr(theme, "QGuiApplication", SimpleNamespace(styleHints=Hints))
+
+    apply_dark_appearance()
+
+    assert asked == [Qt.ColorScheme.Dark]

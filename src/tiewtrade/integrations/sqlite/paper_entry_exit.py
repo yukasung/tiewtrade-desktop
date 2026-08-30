@@ -27,7 +27,7 @@ class PaperEntryExitFill(PaperFill, Protocol):
     """A Paper Fill that sold one Entry rather than a whole Basket.
 
     `entry_number` is optional because a Spot Fill carries None when it took
-    everything — a stop loss or a manual close — which is exactly the Fill
+    everything — a manual close — which is exactly the Fill
     that must never reach this path.
     """
 
@@ -70,6 +70,11 @@ def record_paper_entry_exit(
         # keeps the round while each Fill keeps only its own sale.
         realized_pnl=closed.realized_pnl,
         closes_entry_number=closed.entry_number,
+        # Where the Group this sale left stands now. A Group whose last Entry
+        # this was records no price, because there is no Group left to hold
+        # one — the row still names it, so what emptied it can be read back.
+        entry_group_id=closed.group_id,
+        group_take_profit_price=closed.group_take_profit_price,
     )
     realized_pnl = existing.realized_pnl + closed.realized_pnl
     if closed_basket is not None:

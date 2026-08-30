@@ -119,23 +119,23 @@ def test_short_take_profit_fills_at_its_target() -> None:
     )
 
 
-def test_each_pair_leaves_at_the_target_its_own_rule_gave_it() -> None:
-    """One candle, two prices: a Pair at its own target, the rest at the net.
+def test_each_group_leaves_at_the_target_its_own_rule_gave_it() -> None:
+    """One candle, two prices: each Group at the price it was waiting for.
 
-    Pair 2 paid 60 and leaves at 66; Pair 1 paid 105 and never reached its
-    111, so the Basket's own 96 carries it out. Booked as one Fill per Entry,
-    each naming the Entry it sold and the price that Entry got.
+    Group 2 is reached first at 91 and takes both its Entries there, and only
+    then does the candle come as far as Group 1's 106. Booked as one Fill per
+    Entry, each naming the Entry it sold and the price its Group got.
     """
     executor = make_executor()
-    swept = pair_basket()
-    current = candle(open="95", high="96", low="94")
+    swept = spread_basket()
+    current = candle(open="95", high="106", low="90")
 
     fills = executor.fill_take_profit(swept, current)
 
     assert [(fill.entry_number, fill.price) for fill in fills] == [
-        (3, Decimal("66")),
-        (1, Decimal("96")),
-        (2, Decimal("96")),
+        (2, Decimal("91")),
+        (3, Decimal("91")),
+        (1, Decimal("106")),
     ]
     assert {fill.order_id for fill in fills} == {
         "take_profit:00000000-0000-0000-0000-000000000108:1",
@@ -144,13 +144,16 @@ def test_each_pair_leaves_at_the_target_its_own_rule_gave_it() -> None:
     }
 
 
-def test_a_pair_that_reached_its_target_goes_without_the_others() -> None:
+def test_a_group_that_reached_its_target_goes_without_the_others() -> None:
     executor = make_executor()
-    held = pair_basket()
+    held = spread_basket()
 
-    fills = executor.fill_take_profit(held, candle(open="65", high="66", low="64"))
+    fills = executor.fill_take_profit(held, candle(open="90", high="91", low="89"))
 
-    assert [(fill.entry_number, fill.price) for fill in fills] == [(3, Decimal("66"))]
+    assert [(fill.entry_number, fill.price) for fill in fills] == [
+        (2, Decimal("91")),
+        (3, Decimal("91")),
+    ]
 
 
 def test_take_profit_sells_nothing_until_the_target_is_touched() -> None:
@@ -320,12 +323,13 @@ def basket(
     return result
 
 
-def pair_basket() -> Basket:
-    """Two Pairs at different averages, so their targets differ.
+def spread_basket() -> Basket:
+    """Three Entries in two Groups, so the Basket has two targets.
 
-    Entries 1 and 2 make Pair 1, which paid 105 and leaves at 111. Entry 3
-    opens Pair 2 alone at 60 and leaves at 66. The Basket paid 90 across all
-    three, so the net it takes everything at sits at 96, between them.
+    Entry 1 paid 100 and opened Group 1, which leaves at 106. Entry 2 paid
+    110, which averages up, so it opened Group 2 of its own. Entry 3 paid 60,
+    which averages Group 2 down to 85 and brings that Group's target to 91,
+    Entry 2 included. Group 1 is untouched by any of it.
     """
     result = Basket(
         basket_id=UUID("00000000-0000-0000-0000-000000000108"),
@@ -340,7 +344,9 @@ def pair_basket() -> Basket:
             atr=Decimal("2"),
             tick_size=Decimal("0.1"),
         )
-    assert result.pair_take_profit_price(1) == Decimal("111")
-    assert result.pair_take_profit_price(2) == Decimal("66")
-    assert result.take_profit_price == Decimal("96")
+    assert result.entry_take_profit_price(1) == Decimal("106")
+    assert result.entry_take_profit_price(2) == Decimal("91")
+    assert result.entry_take_profit_price(3) == Decimal("91")
+    # The Basket's own figure is the nearer of the two Groups.
+    assert result.take_profit_price == Decimal("91")
     return result

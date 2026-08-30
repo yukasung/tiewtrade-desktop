@@ -22,7 +22,7 @@ from tests.support.trade_history_ui import (
     empty_basket_history,
     empty_trade_fills,
 )
-from tests.support.workspace_snapshots import basket_entries, basket_pairs
+from tests.support.workspace_snapshots import basket_entries, basket_targets
 from tiewtrade.application.bot_control import (
     BotControlSnapshot,
     BotLifecycleResult,
@@ -64,6 +64,7 @@ from tiewtrade.integrations.sqlite.trade_history import SQLiteTradeHistory
 from tiewtrade.market_data.candle import Candle
 from tiewtrade.market_data.candle_source import MarketDataKlineUpdate
 from tiewtrade.market_data.config import MarketDataConfig
+from tiewtrade.strategies.rsi_step_grid.preset import RsiStepGridPreset
 from tiewtrade.trading.futures_policy import MarginMode, PositionMode
 from tiewtrade.trading.session_config import MarketType, TradeMode
 from tiewtrade.trading.symbol_rules import SymbolRules
@@ -510,6 +511,8 @@ def test_spot_partial_fills_keep_one_order_and_basket_entry_across_tabs(
             entry_number=1,
             fill=fill,
             entry_atr=Decimal("12.5"),
+            entry_group_id=1,
+            group_take_profit_price=Decimal("106"),
         )
 
     basket_id = UUID("00000000-0000-0000-0000-000000000135")
@@ -1018,6 +1021,23 @@ def test_desktop_session_setup_sources_exclude_runtime_and_sensitive_imports() -
     )
 
 
+def test_line_notification_composition_is_the_only_place_a_token_is_reached() -> None:
+    """The credential seam is one file, and it faces away from the screen.
+
+    `desktop_main` composes everything and is forbidden a keyring for exactly
+    that reason: a composition root that can read a token is a composition
+    root that can hand one anywhere. This module is where the keyring is
+    reached instead, and it may not import `ui` — nothing on screen gets to
+    ask it for the value it holds.
+    """
+    composition_path = Path("src/tiewtrade/line_notification_composition.py")
+    imports = _imported_modules(composition_path)
+
+    assert "tiewtrade.integrations.keyring.line_notifications" in imports
+    assert not {module for module in imports if module.startswith("tiewtrade.ui")}
+    assert "keyring" not in _imported_modules(Path("src/tiewtrade/desktop_main.py"))
+
+
 def test_desktop_session_setup_smoke_composes_without_network(
     qapp: QApplication,
     monkeypatch: MonkeyPatch,
@@ -1065,7 +1085,7 @@ def _fake_running_workspace(
                 average_entry_price=Decimal("66000.1250"),
                 current_price=Decimal("66321.1200"),
                 take_profit_price=Decimal("67000.0000"),
-                pairs=basket_pairs(
+                targets=basket_targets(
                     basket_entries(
                         "66000.1250", quantity="0.00150000", current_price="66321.1200"
                     )
@@ -1124,14 +1144,19 @@ def _paper_runtime_candles(
     config: MarketDataConfig,
 ) -> tuple[tuple[Candle, ...], tuple[Candle, ...]]:
     assert config.timeframe == "5m"
-    close = Decimal("100")
+    # A longer warm-up starts earlier rather than running later: it still ends
+    # on the candle before the live ones, closing at 86, so the prices and
+    # times under test do not move with the length the Preset asks for.
+    live_from = 15
+    warm_up_count = RsiStepGridPreset.v1().minimum_warm_up_candles
     warm_up: list[Candle] = []
-    for index in range(15):
+    for index in range(live_from - warm_up_count, live_from):
+        close = Decimal(86 + live_from - 1 - index)
         warm_up.append(_paper_runtime_candle(config, index=index, close=close))
-        close -= Decimal("1")
 
+    close = Decimal("86")
     live: list[Candle] = []
-    for index in range(15, 26):
+    for index in range(live_from, live_from + 11):
         close += Decimal("1")
         live.append(_paper_runtime_candle(config, index=index, close=close))
     return tuple(warm_up), tuple(live)
@@ -1233,7 +1258,7 @@ def _assert_overview_matches_case(
     assert window.overview.market_value.text() == case.market_type.title()
     assert window.overview.symbol_value.text() == "BTCUSDT"
     assert window.overview.timeframe_value.text() == case.timeframe
-    assert window.overview.preset_value.text() == "RSI Step Grid v1"
+    assert window.overview.preset_value.text() == "RSI Step Grid"
     assert window.overview.capital_per_entry_value.text() == "200000 USDT"
     assert window.overview.max_entries_value.text() == str(case.max_entries)
     assert window.overview.created_at_value.text() == display_timestamp(
@@ -1241,8 +1266,9 @@ def _assert_overview_matches_case(
     )
 
     if case.market_type == "spot":
-        assert window.overview.margin_mode_value.text() == "—"
-        assert window.overview.position_mode_value.text() == "—"
+        # Spot has no policy rows at all, rather than rows reading blank.
+        assert "Leverage" not in window.overview.visible_labels
+        assert "Margin Mode" not in window.overview.visible_labels
         return
 
     assert case.futures_leverage is not None

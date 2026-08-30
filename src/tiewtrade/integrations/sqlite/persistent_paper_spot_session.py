@@ -33,11 +33,18 @@ class _PaperSpotSnapshotRecorder:
                 raise ValueError("entry Fill requires the ATR it was read against")
             if snapshot.entry_number is None:
                 raise ValueError("entry Fill requires its Entry number")
+            if (
+                snapshot.entry_group_id is None
+                or snapshot.entry_group_take_profit_price is None
+            ):
+                raise ValueError("entry Fill requires the Group it bought into")
             self._history.record_entry(
                 basket_id=snapshot.basket_id,
                 entry_number=snapshot.entry_number,
                 fill=snapshot.entry_fill,
                 entry_atr=snapshot.entry_atr,
+                entry_group_id=snapshot.entry_group_id,
+                group_take_profit_price=snapshot.entry_group_take_profit_price,
             )
         if snapshot.entry_exits:
             if snapshot.exit_fill is not None:

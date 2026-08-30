@@ -1,6 +1,7 @@
 from collections.abc import Iterable
 
-from PySide6.QtCore import Signal, Slot
+from PySide6.QtCore import QLocale, Signal, Slot
+from PySide6.QtGui import QDoubleValidator
 from PySide6.QtWidgets import (
     QComboBox,
     QFrame,
@@ -27,6 +28,8 @@ from tiewtrade.ui.money_text import QUOTE_ASSET
 from tiewtrade.ui.pair_text import pair_text
 
 _AMOUNT_LABEL = f"Amount ({QUOTE_ASSET})"
+_AMOUNT_DECIMALS = 8
+"""As many decimals as the quote asset is ever stated in."""
 
 
 class SessionSetupWidget(QWidget):
@@ -63,6 +66,17 @@ class SessionSetupWidget(QWidget):
         self.capital_per_entry = QLineEdit()
         self.capital_per_entry.setObjectName("capitalPerEntry")
         self.capital_per_entry.setPlaceholderText(f"Enter {QUOTE_ASSET} amount")
+        # An Amount is a number, so the field turns away what is not one as it
+        # is typed rather than letting the form be submitted to find out. It
+        # still lets an empty field through — a blank Amount is a missing
+        # Amount, which the application is the one to say. The C locale is
+        # what keeps the decimal point a point, whatever the machine is set to.
+        amount_validator = QDoubleValidator(self.capital_per_entry)
+        amount_validator.setBottom(0)
+        amount_validator.setDecimals(_AMOUNT_DECIMALS)
+        amount_validator.setNotation(QDoubleValidator.Notation.StandardNotation)
+        amount_validator.setLocale(QLocale.c())
+        self.capital_per_entry.setValidator(amount_validator)
         self.capital_per_entry_error = self._error_label(
             "capital_per_entry", self.capital_per_entry
         )

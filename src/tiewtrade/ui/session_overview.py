@@ -17,6 +17,28 @@ _UNAVAILABLE = "Unavailable"
 
 
 class SessionOverviewWidget(QWidget):
+    """What a Session was pinned to, as rows a reader can run down.
+
+    Only the rows that have something to say are laid out. A Spot Session has
+    no leverage, no margin mode and no position mode — not "none yet", but
+    none at all — and three rows reading blank take up half the card to repeat
+    what the Market Type at the top already said.
+    """
+
+    # Every row the card can show, in reading order. What is actually laid
+    # out is chosen per Session, so the two-column pairing below follows the
+    # rows on screen rather than the rows that exist.
+    _SHARED_LABELS = (
+        "Market Type",
+        "Pair",
+        "Timeframe",
+        "Strategy Preset",
+        "Amount",
+        "Max Entries",
+    )
+    _FUTURES_LABELS = ("Leverage", "Margin Mode", "Position Mode")
+    _CREATED_LABEL = "Created at"
+
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.setObjectName("sessionOverview")
@@ -32,7 +54,30 @@ class SessionOverviewWidget(QWidget):
         self.position_mode_value = self._value_label()
         self.created_at_value = self._value_label()
 
+        self._values = {
+            "Market Type": self.market_value,
+            "Pair": self.symbol_value,
+            "Timeframe": self.timeframe_value,
+            "Strategy Preset": self.preset_value,
+            "Amount": self.capital_per_entry_value,
+            "Max Entries": self.max_entries_value,
+            "Leverage": self.leverage_value,
+            "Margin Mode": self.margin_mode_value,
+            "Position Mode": self.position_mode_value,
+            "Created at": self.created_at_value,
+        }
+        self._labels = {label: self._label(label) for label in self._values}
+        self._laid_out: tuple[str, ...] = ()
+
         self._build_layout()
+        self._lay_out_rows(
+            (*self._SHARED_LABELS, *self._FUTURES_LABELS, self._CREATED_LABEL)
+        )
+
+    @property
+    def visible_labels(self) -> tuple[str, ...]:
+        """The rows the card is showing now, in the order they are read."""
+        return self._laid_out
 
     def show_session(self, session: ConfiguredPaperSession) -> None:
         config = session.config
@@ -54,48 +99,66 @@ class SessionOverviewWidget(QWidget):
 
         details = QFrame()
         details.setObjectName("card")
-        grid = QGridLayout(details)
-        grid.setContentsMargins(24, 24, 24, 24)
-        grid.setHorizontalSpacing(48)
-        grid.setVerticalSpacing(18)
-        rows = (
-            ("Market Type", self.market_value),
-            ("Pair", self.symbol_value),
-            ("Timeframe", self.timeframe_value),
-            ("Strategy Preset", self.preset_value),
-            ("Amount", self.capital_per_entry_value),
-            ("Max Entries", self.max_entries_value),
-            ("Leverage", self.leverage_value),
-            ("Margin Mode", self.margin_mode_value),
-            ("Position Mode", self.position_mode_value),
-            ("Created at", self.created_at_value),
-        )
-        for index, (label, value) in enumerate(rows):
-            column = index % 2
-            row = (index // 2) * 2
-            # An odd count leaves the last pair alone on its line; let it use
-            # the whole width rather than clipping inside half of it.
-            span = 2 if column == 0 and index == len(rows) - 1 else 1
-            label_widget = QLabel(label)
-            label_widget.setObjectName("detailLabel")
-            grid.addWidget(label_widget, row, column, 1, span)
-            grid.addWidget(value, row + 1, column, 1, span)
+        self._grid = QGridLayout(details)
+        self._grid.setContentsMargins(24, 24, 24, 24)
+        self._grid.setHorizontalSpacing(48)
+        self._grid.setVerticalSpacing(18)
         root.addWidget(details)
         root.addStretch()
 
+    def _lay_out_rows(self, labels: tuple[str, ...]) -> None:
+        """Put these rows in the card, two to a line, and take the rest out.
+
+        Taken out rather than left blank, so the pairing closes up behind a
+        row that is not shown instead of leaving a hole where it would have
+        been. A widget out of the layout is hidden as well, or it would float
+        at the corner of the card with nothing placing it.
+        """
+        if labels == self._laid_out:
+            return
+        for label in self._laid_out:
+            for widget in (self._labels[label], self._values[label]):
+                self._grid.removeWidget(widget)
+                widget.hide()
+        for index, label in enumerate(labels):
+            column = index % 2
+            row = (index // 2) * 2
+            # An odd count leaves the last row alone on its line; let it use
+            # the whole width rather than clipping inside half of it.
+            span = 2 if column == 0 and index == len(labels) - 1 else 1
+            for offset, widget in enumerate((self._labels[label], self._values[label])):
+                self._grid.addWidget(widget, row + offset, column, 1, span)
+                widget.show()
+        self._laid_out = labels
+
     def _show_market_policy(self, session: ConfiguredPaperSession) -> None:
-        """Fill the Futures rows, and blank them for the market that has none.
+        """Fill the Futures rows, or take them out for the market with none.
 
         Only Futures carries a policy of its own. A Spot Session trades the
         capital it was given under nothing but its Entry count, so the rows
-        read as blank — unless it holds a Futures policy, which is malformed:
-        then they read Unavailable rather than showing settings a Spot Session
-        never chose.
+        are not laid out at all — unless it holds a Futures policy, which is
+        malformed: then they are shown reading Unavailable, because a Session
+        assembled wrongly is worth a row that says so rather than one the
+        card quietly leaves out.
         """
         config = session.config
+        futures_rows = (
+            config.market_type is not MarketType.SPOT
+            or config.futures_policy is not None
+        )
+        self._lay_out_rows(
+            (
+                *self._SHARED_LABELS,
+                *(self._FUTURES_LABELS if futures_rows else ()),
+                self._CREATED_LABEL,
+            )
+        )
         if config.market_type is MarketType.SPOT:
-            blank = config.futures_policy is None
-            self._show_futures_policy(None, missing=BLANK if blank else _UNAVAILABLE)
+            # A row that is not laid out still holds text, and text saying a
+            # setting is Unavailable is not what a Spot Session's rows mean.
+            self._show_futures_policy(
+                None, missing=BLANK if futures_rows is False else _UNAVAILABLE
+            )
             return
         self._show_futures_policy(config.futures_policy)
 
@@ -118,6 +181,12 @@ class SessionOverviewWidget(QWidget):
         self.position_mode_value.setText(
             f"{policy.position_mode.value.replace('_', '-').capitalize()} Mode"
         )
+
+    @staticmethod
+    def _label(text: str) -> QLabel:
+        label = QLabel(text)
+        label.setObjectName("detailLabel")
+        return label
 
     @staticmethod
     def _value_label() -> QLabel:

@@ -88,11 +88,13 @@ def spot_snapshot(
         basket_id=None,
         basket_entry_count=basket_entry_count,
         take_profit_price=take_profit_price,
-        entry_pairs=(),
+        entry_targets=(),
         entry_gate=entry_gate,
         waived_pair=None,
         waived_at=None,
         entry_completed_pairs=entry_completed_pairs,
+        entry_group_id=None,
+        entry_group_take_profit_price=None,
     )
 
 
@@ -113,7 +115,7 @@ def futures_snapshot(
         basket_entry_count=basket_entry_count,
         position_side=position_side,
         take_profit_price=Decimal("90"),
-        entry_pairs=(),
+        entry_targets=(),
         account_equity=Decimal("200000"),
         capital_plan=FuturesCapitalPlan(
             initial_margin_per_entry=Decimal("10000"),
@@ -122,6 +124,8 @@ def futures_snapshot(
         failure_reason=None,
         entry_gate=OPEN_GATE,
         entry_completed_pairs=0,
+        entry_group_id=None,
+        entry_group_take_profit_price=None,
     )
 
 

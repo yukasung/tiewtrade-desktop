@@ -57,6 +57,11 @@ from tiewtrade.integrations.sqlite.paper_runtime_lifecycle import (
     SQLitePaperRuntimeLifecycle,
 )
 from tiewtrade.integrations.sqlite.trade_history import SQLiteTradeHistory
+from tiewtrade.line_notification_composition import (
+    line_notification_reading,
+    line_session_notifier,
+    save_line_notification_settings,
+)
 from tiewtrade.market_data.candle import Candle
 from tiewtrade.strategies.protocols import StrategyPreset
 from tiewtrade.strategies.registry import strategy_definition_for
@@ -167,10 +172,17 @@ class _PaperRuntimeActions:
         to whatever the database has, the way a single row's close already
         does. A Runtime that holds it but has nothing open answers with an
         empty tuple, not None: there is a position, it is just closed.
+
+        Whether one holds it is the controller's own answer rather than a
+        reading of its workspace. A controller is put in place to inspect
+        durable lifecycle state before any Bot runs, and its workspace
+        carries no Basket until a running Runtime publishes one — read that
+        way, a stopped Bot says "nothing open" about a Position that is
+        sitting in the database, and Close All sells none of it.
         """
         with self._lock:
             controller = self._controller if self._session == session else None
-        if controller is None:
+        if controller is None or not controller.is_holding(session):
             return None
         basket = controller.current_workspace.position_basket.basket
         if basket is None:
@@ -303,6 +315,7 @@ class _PaperRuntimeActions:
             trade_history=self._trade_history,
             symbol_rules=_symbol_rules_for(session),
             source_factory=BinancePublicMarketData,
+            notifier_factory=line_session_notifier,
             snapshot_callback=publish_current_result,
             completed_candle_callback=publish.completed_candle,
             in_progress_candle_callback=publish.in_progress_candle,
@@ -521,7 +534,6 @@ def _bot_actions(
             state,
             entry_policy=session.config.entry_policy,
             take_profit_atr_multiplier=preset.take_profit_atr_multiplier,
-            stop_loss_atr_multiplier=preset.stop_loss_atr_multiplier,
             tick_size=_symbol_rules_for(session).tick_size,
         )
 
@@ -719,6 +731,20 @@ def run_desktop(database_path: Path | None = None) -> int:
             chart_feed=chart_feed,
         ),
         clear_database=_migrate_first(prepare_database, database.clear_all_data),
+        save_line_notifications=_keep_line_notifications,
+        read_line_notifications=line_notification_reading,
+    )
+
+
+def _keep_line_notifications(
+    enabled: bool,
+    target_id: str,
+    access_token: str,
+) -> None:
+    save_line_notification_settings(
+        enabled=enabled,
+        target_id=target_id,
+        channel_access_token=access_token,
     )
 
 

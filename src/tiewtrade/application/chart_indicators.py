@@ -1,9 +1,12 @@
 """Chart-only RSI and ATR series over completed candles.
 
 The Strategy indicators are stream-stateful and expose only the latest value,
-so the chart needs its own read-model. Both share the Wilder recurrence from
-`tiewtrade.strategies.indicators`, which keeps the displayed readings and the
-readings a Strategy acts on from ever drifting apart.
+so the chart needs its own read-model. Both share the Wilder recurrence *and*
+the warm-up it needs, from `tiewtrade.strategies.indicators`, which keeps the
+displayed readings and the readings a Strategy acts on from ever drifting
+apart. Sharing one and not the other is what let them drift before: the chart
+read 250 candles back and the Strategy fifteen, so the same candle showed an
+RSI above the reset threshold while the Strategy entered on one below it.
 """
 
 from collections.abc import Iterable, Mapping, Sequence
@@ -22,10 +25,6 @@ from tiewtrade.strategies.indicators import (
 
 CHART_RSI_PERIOD = 14
 CHART_ATR_PERIOD = 14
-# Wilder smoothing never fully forgets its seed, so the chart reads extra
-# candles before the visible range. Without them the same candle would show a
-# different reading after every zoom or pan.
-CHART_RSI_WARM_UP_CANDLES = 250
 
 _ZERO = Decimal("0")
 

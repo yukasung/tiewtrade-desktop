@@ -23,10 +23,17 @@ class _PaperFuturesSnapshotRecorder:
             entry_number = snapshot.basket_entry_count
             if snapshot.closed_basket is not None:
                 entry_number = snapshot.closed_basket.entry_count
+            if (
+                snapshot.entry_group_id is None
+                or snapshot.entry_group_take_profit_price is None
+            ):
+                raise ValueError("entry Fill requires the Group it bought into")
             self._history.record_entry(
                 basket_id=snapshot.basket_id,
                 entry_number=entry_number,
                 fill=snapshot.entry_fill,
+                entry_group_id=snapshot.entry_group_id,
+                group_take_profit_price=snapshot.entry_group_take_profit_price,
             )
 
         if not snapshot.entry_exits:

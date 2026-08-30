@@ -26,7 +26,7 @@ from tiewtrade.strategies.registry import strategy_definition_for
 from tiewtrade.trading.basket import (
     Basket,
     BasketCloseReason,
-    BasketPair,
+    BasketEntryTarget,
     ClosedBasket,
     ClosedEntry,
 )
@@ -75,17 +75,23 @@ class PaperFuturesSessionSnapshot:
     entry_fill: PaperFuturesEntryFill | None
     # The number of the Entry just filled, which the tab reads per Entry.
     entry_number: int | None
+    # The Entry Group this Entry bought into, and where that Group's target
+    # stood once it had. Present exactly when entry_fill is: a Group's target
+    # only ever moves closer, so where it stopped is history rather than a
+    # reading, and only a record of every move it made brings it back.
+    entry_group_id: int | None
+    entry_group_take_profit_price: Decimal | None
     # Entries a target sold this candle, each at the price its own rule gave
-    # it. Futures has no other way out — no stop loss, and no sale the trader
-    # asks for — so every exit this Session books arrives here.
+    # it. Futures has no other way out — no sale the trader asks for — so
+    # every exit this Session books arrives here.
     entry_exits: tuple[PaperFuturesEntryExit, ...]
     closed_basket: ClosedBasket | None
     basket_id: UUID | None
     basket_entry_count: int
     position_side: PositionSide | None
     take_profit_price: Decimal | None
-    # What each open Entry Pair paid and leaves at; see the Spot snapshot.
-    entry_pairs: tuple[BasketPair, ...]
+    # What each open Entry paid and leaves at; see the Spot snapshot.
+    entry_targets: tuple[BasketEntryTarget, ...]
     account_equity: Decimal
     capital_plan: FuturesCapitalPlan
     failure_reason: PaperFuturesFailureReason | None
@@ -430,14 +436,20 @@ class PaperFuturesSession:
             pending_intent=self._pending_intent,
             entry_fill=entry_fill,
             entry_number=None if filled_entry is None else filled_entry.entry_number,
+            entry_group_id=None if filled_entry is None else filled_entry.group_id,
+            entry_group_take_profit_price=(
+                None
+                if filled_entry is None or self._basket is None
+                else self._basket.entry_take_profit_price(filled_entry.entry_number)
+            ),
             entry_exits=entry_exits,
             closed_basket=closed_basket,
             basket_id=basket_id,
             basket_entry_count=basket_entry_count,
             position_side=position_side,
             take_profit_price=take_profit_price,
-            entry_pairs=(
-                () if self._basket is None else self._basket.open_pair_views()
+            entry_targets=(
+                () if self._basket is None else self._basket.open_entry_targets()
             ),
             account_equity=self._account_equity,
             capital_plan=self._capital_plan,

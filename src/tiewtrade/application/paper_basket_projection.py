@@ -17,7 +17,7 @@ from tiewtrade.application.paper_spot_session import PaperSpotSessionSnapshot
 from tiewtrade.application.trading_workspace import (
     BasketEntryGate,
     BasketEntrySnapshot,
-    BasketPairSnapshot,
+    BasketEntryTargetSnapshot,
     BasketSnapshot,
 )
 from tiewtrade.execution.paper_futures import PaperFuturesEntryFill
@@ -25,7 +25,7 @@ from tiewtrade.execution.paper_spot import PaperSpotEntryFill
 from tiewtrade.market_data.candle import Candle
 from tiewtrade.trading.basket import (
     BasketEntry,
-    BasketPair,
+    BasketEntryTarget,
     average_entry_price_after_fill,
 )
 from tiewtrade.trading.entry_pair import EntryGate
@@ -164,7 +164,7 @@ def reopened_basket_snapshot(
 
     A price of None is a Basket read before one arrived. Everything the
     database already answered — what was bought, when, how much, and the
-    targets its Pairs are sold at — is shown at once; only what it is worth
+    target each Entry is sold at — is shown at once; only what it is worth
     waits.
     Holding the whole tab back for that one figure read as no Position at all.
     """
@@ -175,7 +175,7 @@ def reopened_basket_snapshot(
         entry_count=reopened.basket.entry_count,
         current_price=current_price,
         take_profit_price=reopened.basket.take_profit_price,
-        pairs=reopened.basket.open_pair_views(),
+        targets=reopened.basket.open_entry_targets(),
         position_side=reopened.basket.position_side,
         entry_gate=reopened.lifecycle.entry_gate(),
         completed_pairs=reopened.lifecycle.completed_pairs,
@@ -198,7 +198,7 @@ def spot_basket_snapshot(
         entry_count=snapshot.basket_entry_count,
         current_price=candle.close,
         take_profit_price=snapshot.take_profit_price,
-        pairs=snapshot.entry_pairs,
+        targets=snapshot.entry_targets,
         position_side=PositionSide.LONG,
         entry_gate=snapshot.entry_gate,
         completed_pairs=snapshot.entry_completed_pairs,
@@ -223,7 +223,7 @@ def futures_basket_snapshot(
         entry_count=snapshot.basket_entry_count,
         current_price=candle.close,
         take_profit_price=snapshot.take_profit_price,
-        pairs=snapshot.entry_pairs,
+        targets=snapshot.entry_targets,
         position_side=snapshot.position_side,
         entry_gate=snapshot.entry_gate,
         completed_pairs=snapshot.entry_completed_pairs,
@@ -239,7 +239,7 @@ def _updated_basket_snapshot(
     entry_count: int,
     current_price: Decimal | None,
     take_profit_price: Decimal | None,
-    pairs: tuple[BasketPair, ...],
+    targets: tuple[BasketEntryTarget, ...],
     position_side: PositionSide,
     entry_gate: EntryGate | None,
     completed_pairs: int,
@@ -276,13 +276,15 @@ def _updated_basket_snapshot(
         average_entry_price=average_entry_price,
         current_price=current_price,
         take_profit_price=take_profit_price,
-        pairs=tuple(
-            BasketPairSnapshot(
-                pair=pair.pair,
-                average_entry_price=pair.average_entry_price,
-                take_profit_price=pair.take_profit_price,
+        targets=tuple(
+            BasketEntryTargetSnapshot(
+                entry_number=target.entry_number,
+                group_id=target.group_id,
+                entry_price=target.entry_price,
+                group_average_entry_price=target.group_average_entry_price,
+                take_profit_price=target.take_profit_price,
             )
-            for pair in pairs
+            for target in targets
         ),
         unrealized_pnl=marked_pnl,
         entry_gate=BasketEntryGate(entry_gate.state),

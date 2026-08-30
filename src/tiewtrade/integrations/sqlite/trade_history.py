@@ -761,8 +761,8 @@ def _insert_fill(connection: sqlite3.Connection, fill: TradeFill) -> None:
             fill_id, basket_id, session_id, order_id, exchange_trade_id, side,
             entry_number, filled_at_utc, price, quantity, notional,
             realized_pnl, source, entry_atr,
-            closes_entry_number
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            closes_entry_number, entry_group_id, group_take_profit_price
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             fill.fill_id,
@@ -780,6 +780,12 @@ def _insert_fill(connection: sqlite3.Connection, fill: TradeFill) -> None:
             fill.source.value,
             None if fill.entry_atr is None else _stored_decimal(fill.entry_atr),
             fill.closes_entry_number,
+            fill.entry_group_id,
+            (
+                None
+                if fill.group_take_profit_price is None
+                else _stored_decimal(fill.group_take_profit_price)
+            ),
         ),
     )
 
@@ -837,6 +843,12 @@ def _fill_from_row(row: sqlite3.Row) -> TradeFill:
         source=FillSource(row["source"]),
         entry_atr=(None if row["entry_atr"] is None else Decimal(row["entry_atr"])),
         closes_entry_number=row["closes_entry_number"],
+        entry_group_id=row["entry_group_id"],
+        group_take_profit_price=(
+            None
+            if row["group_take_profit_price"] is None
+            else Decimal(row["group_take_profit_price"])
+        ),
     )
 
 

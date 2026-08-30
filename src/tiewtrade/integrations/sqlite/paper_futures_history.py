@@ -64,6 +64,8 @@ class PaperFuturesSQLiteHistory:
         basket_id: UUID,
         entry_number: int,
         fill: PaperFuturesEntryFill,
+        entry_group_id: int,
+        group_take_profit_price: Decimal,
     ) -> bool:
         normalized_fill = paper_fill_record(
             fill,
@@ -71,6 +73,8 @@ class PaperFuturesSQLiteHistory:
             session_id=self._context.session_id,
             side=_entry_fill_side(fill.side),
             entry_number=entry_number,
+            entry_group_id=entry_group_id,
+            group_take_profit_price=group_take_profit_price,
         )
         existing = self._store.get_basket(basket_id)
         if existing is None:

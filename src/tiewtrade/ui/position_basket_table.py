@@ -1,5 +1,4 @@
 from dataclasses import dataclass
-from decimal import ROUND_HALF_EVEN, Decimal
 
 from PySide6.QtCore import QSignalBlocker, Qt, Signal
 from PySide6.QtWidgets import (
@@ -58,16 +57,27 @@ def _price(row: _Row) -> str:
 
 
 def _take_profit_price(row: _Row) -> str:
-    """The price this row's Entry Pair leaves at.
+    """The price this row's Entry leaves at, which is its Group's.
 
-    A Pair is the unit that is sold, so both its Entries read the same figure
-    and a Pair that averaged down further reads a lower one than a Pair that
-    did not. The Basket's own target — the net that takes whatever is left —
-    is not printed per row, because it is not the price this Entry is waiting
-    for.
+    Rows in one Group read the same figure and are sold together at it, which
+    is what the Group column beside this one says. A Group that averaged down
+    reads a lower figure than a Group opened above it, and neither waits on
+    the other.
     """
-    pair = row.basket.pair_for(row.entry.entry_number)
-    return BLANK if pair is None else price_text(pair.take_profit_price)
+    target = row.basket.target_for(row.entry.entry_number)
+    return BLANK if target is None else price_text(target.take_profit_price)
+
+
+def _group(row: _Row) -> str:
+    """Which Entries this row leaves with.
+
+    Two rows showing one target is only legible once it says which rows those
+    are. The number is the Basket's own count of the Groups it has opened, so
+    a Group sold out of does not hand its number to the next one and a reader
+    watching the tab does not see two different sets of Entries called Group 2.
+    """
+    target = row.basket.target_for(row.entry.entry_number)
+    return BLANK if target is None else str(target.group_id)
 
 
 def _entry_gate(row: _Row) -> str:
@@ -82,42 +92,6 @@ def _quantity(row: _Row) -> str:
 
 def _notional(row: _Row) -> str:
     return money_text(row.entry.notional)
-
-
-def _average_entry_price(row: _Row) -> str:
-    """What this row's Entry Pair paid, which its target is measured from.
-
-    The Pair's rather than the Basket's, so the two price columns beside each
-    other belong to the same figure: without it the target reads as coming
-    from nowhere, or worse, as measured from the price on the row itself.
-
-    Shown at the scale the Entries were quoted at. An average is a division,
-    so it can be left with no last decimal place at all, and the exact answer
-    read as a wall of digits wide enough to push the rest of the row off. The
-    Basket keeps every place — a target is measured from the exact figure, not
-    from this one.
-    """
-    pair = row.basket.pair_for(row.entry.entry_number)
-    if pair is None:
-        return BLANK
-    return price_text(
-        pair.average_entry_price.quantize(
-            _quoted_scale(row.basket), rounding=ROUND_HALF_EVEN
-        )
-    )
-
-
-def _quoted_scale(basket: BasketSnapshot) -> Decimal:
-    """The finest scale any of the Basket's Entries was quoted at.
-
-    Read off the Basket rather than off the row, so a derived figure reads the
-    same all the way down the column — which is what makes it legible as the
-    Basket's rather than the row's. Every Fill is rounded to the Symbol's tick
-    before it is recorded, so their scale is the tick's.
-    """
-    exponent = min(entry.price.as_tuple().exponent for entry in basket.entries)
-    assert isinstance(exponent, int)
-    return Decimal(1).scaleb(exponent)
 
 
 def _pnl(row: _Row) -> str:
@@ -143,13 +117,13 @@ class PositionBasketTable(QWidget):
     hides the prices actually paid. The rows are the Entries, each with the
     price it paid.
 
-    Two columns belong to the row's Entry Pair rather than to the row: what
-    that Pair paid and what it is sold at. They repeat across the Entries of
-    one Pair and change between Pairs, which is what a Pair being the unit
-    that leaves looks like on a screen. The average was once left off for
-    reading as a third price among the row's own — but the target comes from
-    it, and a target whose measure is not shown is a number the trader has to
-    take on trust. The lifecycle gate is the Basket's, and repeats throughout.
+    The target beside a row's price is its Group's, so rows of one Group read
+    the same figure and are sold together at it — which is why the Group they
+    are in is printed next to it. Rows of different Groups therefore differ
+    all the way across. The average that target was measured from is not a
+    column: it is a working figure, and a row saying what it paid and where
+    it leaves has already said what a reader watches for. The lifecycle gate
+    is the Basket's, and repeats throughout.
     """
 
     # Measured numbers hang on the right so their digits line up and a minus
@@ -160,10 +134,9 @@ class PositionBasketTable(QWidget):
         Column("Entry Price", RIGHT, _price),
         # Beside the price paid, so the distance left to run reads at a glance.
         Column("Take Profit", RIGHT, _take_profit_price),
-        # Straight after the target, because it is what the target is measured
-        # from: the two Basket figures read together rather than with the row's
-        # own quantity between them.
-        Column("Average", RIGHT, _average_entry_price),
+        # Straight after the target it explains: the rows sharing a number are
+        # the rows sharing the price in the column before it.
+        Column("Group", CENTER, _group),
         Column("Quantity", RIGHT, _quantity),
         Column("Total", RIGHT, _notional),
         Column("Unrealized P/L", RIGHT, _pnl, _pnl_colour),
@@ -250,11 +223,7 @@ class PositionBasketTable(QWidget):
         self._show_close_all(value.basket)
 
     def _show_basket(self, basket: BasketSnapshot | None) -> None:
-        rows = (
-            ()
-            if basket is None
-            else tuple(_Row(basket, entry) for entry in basket.entries)
-        )
+        rows = () if basket is None else _rows_newest_first(basket)
         with QSignalBlocker(self.table):
             self.table.clearSelection()
             self.table.setCurrentCell(-1, -1)
@@ -426,3 +395,24 @@ class PositionBasketTable(QWidget):
             len(self.COLUMNS) - 1, QHeaderView.ResizeMode.Stretch
         )
         return table
+
+
+def _rows_newest_first(basket: BasketSnapshot) -> tuple[_Row, ...]:
+    """The Entries the Basket holds, latest Fill at the top.
+
+    A Basket lists its Entries in the order they were taken, which is the
+    order they are numbered in and the order an audit reads them in. On
+    screen the row worth seeing is the one that just filled, and a Basket
+    deep enough to scroll put it out of sight at the bottom.
+
+    The number breaks a tie rather than the order deciding it: two Entries
+    can fill on the same candle, and the later number is the later Entry.
+    """
+    return tuple(
+        _Row(basket, entry)
+        for entry in sorted(
+            basket.entries,
+            key=lambda entry: (entry.filled_at_utc, entry.entry_number),
+            reverse=True,
+        )
+    )

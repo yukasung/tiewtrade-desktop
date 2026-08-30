@@ -1,10 +1,10 @@
 """What a Start would sell the moment it happened, said in one place.
 
 A Basket left open goes on being marked while the Bot is stopped, so the
-price can run past its target with nothing running to act on it. The first
-live tick after a Start sells the whole Position at that target rather than at
-the price now — instantly, and with no way back. The trader is asked first,
-and asked in these words wherever the question is put.
+price can run past a target with nothing running to act on it. The first live
+tick after a Start sells every Entry Group that is past its target at that
+target rather than at the price now — instantly, and with no way back. The
+trader is asked first, and asked in these words wherever the question is put.
 """
 
 from decimal import Decimal
@@ -12,10 +12,9 @@ from decimal import Decimal
 from tiewtrade.application.open_basket import ReopenedBasket
 
 UNREADABLE_POSITION_MESSAGE = (
-    "What the open Position holds cannot be read yet, or no price has "
-    "arrived to judge it by. Starting the Bot sells the whole Position at "
-    "once if the price has already reached its Take Profit, at that target "
-    "rather than at the price now."
+    "The open Position cannot be read yet, or no price has arrived to judge "
+    "it by. If any Entry is already at its Take Profit, starting the Bot "
+    "sells it at once at that target, not at the price now."
 )
 """Why a Start is worth confirming when nothing can be said about the sale.
 
@@ -26,15 +25,19 @@ with no question put at all.
 """
 
 
-def sweeps_on_start(reopened: ReopenedBasket, current_price: Decimal) -> bool:
-    """Whether a Start would sell the Position at once, by the Basket's rule.
+def sells_on_start(reopened: ReopenedBasket, current_price: Decimal) -> bool:
+    """Whether a Start would sell anything at once, by the Basket's own rule.
+
+    Anything, not everything: a Group past its target goes on the first tick
+    whether or not any other Group is anywhere near its own, so a question
+    asked about the Basket as a whole would leave that sale unannounced.
 
     The price is asked as both the high and the low of the moment, which is
     the question a forming candle puts to the same rule: the price is at this
     level now. Deciding it here instead would be a second reading of the rule
     that sells, free to disagree with it.
     """
-    return reopened.basket.reaches_take_profit(current_price, current_price)
+    return bool(reopened.basket.take_profit_exits(current_price, current_price))
 
 
 def sells_on_start_message(
@@ -46,11 +49,12 @@ def sells_on_start_message(
     books at it and not at the price on screen — and every figure behind it is
     in the Position tab, in columns, where a box of prose cannot beat it.
     """
-    if not sweeps_on_start(reopened, current_price):
+    if not sells_on_start(reopened, current_price):
         return None
     return (
         "The Position is already at its Take Profit. Starting the Bot sells "
-        "every Entry at once at that target, not at the price now."
+        "every Entry whose Group has reached its target at once at that "
+        "target, not at the price now."
     )
 
 
@@ -63,7 +67,7 @@ def position_at_target_message(
     Start would have booked describes a button that is not there. What is left
     is the state.
     """
-    if not sweeps_on_start(reopened, current_price):
+    if not sells_on_start(reopened, current_price):
         return None
     return "The Position is already at its Take Profit."
 

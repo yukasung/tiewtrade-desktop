@@ -6,10 +6,9 @@ from typing import Any
 from tiewtrade.application.trading_workspace import (
     BasketEntryGate,
     BasketEntrySnapshot,
-    BasketPairSnapshot,
+    BasketEntryTargetSnapshot,
     BasketSnapshot,
 )
-from tiewtrade.trading.entry_pair import entry_pair_index
 
 OBSERVED_AT = datetime(2026, 8, 1, 12, tzinfo=UTC)
 
@@ -35,38 +34,41 @@ def basket_entries(
     )
 
 
-def basket_pairs(
+def basket_targets(
     entries: tuple[BasketEntrySnapshot, ...],
     *,
     take_profit_offset: str = "1000",
-) -> tuple[BasketPairSnapshot, ...]:
-    """The Pairs those Entries make, averaged the way a Basket averages them.
+) -> tuple[BasketEntryTargetSnapshot, ...]:
+    """What each of those Entries leaves at, one Group per Entry.
 
-    Counted by the rule's own module so a fixture cannot pair Entries up one
-    way while the code pairs them another. The target is rounded to the scale
-    the Entries were quoted at, because a real one is rounded to the Symbol's
-    tick before anything is asked to show it — a fixture that skipped that
-    would have a screen answering for a price no Basket can produce.
+    A Group of its own for each, so a fixture with two Entries has two
+    targets and the column varies down the page. A Basket really does this
+    whenever it averages up, and it is the arrangement that puts the most in
+    front of whatever is being tested.
+
+    The target is rounded to the scale the Entry was quoted at, because a
+    real one is rounded to the Symbol's tick before anything is asked to show
+    it — a fixture that skipped that would have a screen answering for a
+    price no Basket can produce.
     """
     offset = Decimal(take_profit_offset)
-    grouped: dict[int, list[BasketEntrySnapshot]] = {}
-    for entry in entries:
-        grouped.setdefault(entry_pair_index(entry.entry_number), []).append(entry)
-    pairs: list[BasketPairSnapshot] = []
-    for pair, members in sorted(grouped.items()):
-        quantity = sum((member.quantity for member in members), Decimal("0"))
-        notional = sum((member.notional for member in members), Decimal("0"))
-        average = notional / quantity
-        scale = min(member.price.as_tuple().exponent for member in members)
+    targets: list[BasketEntryTargetSnapshot] = []
+    for group_id, entry in enumerate(entries, start=1):
+        scale = entry.price.as_tuple().exponent
         assert isinstance(scale, int)
-        pairs.append(
-            BasketPairSnapshot(
-                pair=pair,
-                average_entry_price=average,
-                take_profit_price=(average + offset).quantize(Decimal(1).scaleb(scale)),
+        targets.append(
+            BasketEntryTargetSnapshot(
+                entry_number=entry.entry_number,
+                group_id=group_id,
+                entry_price=entry.price,
+                # One Entry per Group, so the Group paid what that Entry paid.
+                group_average_entry_price=entry.price,
+                take_profit_price=(entry.price + offset).quantize(
+                    Decimal(1).scaleb(scale)
+                ),
             )
         )
-    return tuple(pairs)
+    return tuple(targets)
 
 
 def basket_snapshot(**overrides: Any) -> BasketSnapshot:
@@ -81,7 +83,7 @@ def basket_snapshot(**overrides: Any) -> BasketSnapshot:
         average_entry_price=Decimal("64000"),
         current_price=Decimal("65000"),
         take_profit_price=Decimal("66000"),
-        pairs=basket_pairs(entries),
+        targets=basket_targets(entries),
         unrealized_pnl=Decimal("1000"),
         entry_gate=BasketEntryGate.OPEN,
         completed_pairs=1,
@@ -90,8 +92,8 @@ def basket_snapshot(**overrides: Any) -> BasketSnapshot:
     if not overrides:
         return basket
     updated = replace(basket, **overrides)
-    if "entries" in overrides and "pairs" not in overrides:
-        # A fixture that changes the Entries means the Pairs with them, and
-        # leaving the old ones behind reads as Entries whose Pair vanished.
-        updated = replace(updated, pairs=basket_pairs(updated.entries))
+    if "entries" in overrides and "targets" not in overrides:
+        # A fixture that changes the Entries means their targets with them,
+        # and leaving the old ones behind reads as Entries with no target.
+        updated = replace(updated, targets=basket_targets(updated.entries))
     return updated

@@ -42,9 +42,8 @@ def ask_about_a_position_at_its_target(
     dialog.setText("Close this Position at the market price?")
     dialog.setInformativeText(
         f"{reached}\n\n"
-        "Close at Market sells the whole Position at the price now, "
-        "and starts a new Paper Bot with the values on this form.\n\n"
-        "Cancel leaves the Position open and the Bot stopped."
+        "Close at Market sells the whole Position at the price now, then "
+        "starts a new Paper Bot with this form's values."
     )
     close_button = dialog.addButton(
         "Close at Market", QMessageBox.ButtonRole.DestructiveRole
@@ -82,22 +81,20 @@ def ask_about_the_open_position(
     dialog.setText("Start the Bot on the Position it holds?")
     if at_target is None:
         start_line = (
-            "Start Bot runs the Paper Session that is already there, position "
-            "and all. The values on this form are not used."
+            "Start Bot runs the Session already there, position and all. "
+            "This form's values are not used."
         )
     else:
         start_line = (
-            "Start Bot runs the Paper Session that is already there. What has "
-            "reached its Take Profit is sold at once at the target it was "
-            "given, not at the price now, and the rest is run on. The values "
-            "on this form are not used."
+            "Start Bot runs the Session already there. What has reached its "
+            "Take Profit sells at once at that target, not at the price now; "
+            "the rest runs on. This form's values are not used."
         )
     dialog.setInformativeText(
         f"{holding}{'' if at_target is None else f' {at_target}'}\n\n"
         f"{start_line}\n\n"
-        "Close at Market sells the whole Position at the price now, and starts "
-        "a new Paper Bot with the values on this form.\n\n"
-        "Cancel leaves the Position open and the Bot stopped."
+        "Close at Market sells the whole Position at the price now, then "
+        "starts a new Paper Bot with this form's values."
     )
     start_button = dialog.addButton("Start Bot", QMessageBox.ButtonRole.AcceptRole)
     close_button = dialog.addButton(

@@ -40,7 +40,7 @@ class PaperSpotExitFill:
     quantity: Decimal
     filled_at: datetime
     # The Entry this Fill closed, when it closed one rather than the Basket.
-    # Only a trader selling one Entry sets it: take profit, stop loss and a
+    # Only a trader selling one Entry sets it: take profit and a
     # manual close of the Position all take everything and leave it None.
     entry_number: int | None = None
 
@@ -136,26 +136,6 @@ class PaperSpotExecutor:
             quantity=entry.quantity,
             filled_at=filled_at,
             entry_number=entry_number,
-        )
-
-    def fill_stop_loss(
-        self, basket: Basket, candle: Candle, *, filled_at: datetime
-    ) -> PaperSpotExitFill | None:
-        require_matching_symbol(candle, self._symbol_rules)
-
-        if basket.stop_loss_price is None or candle.low > basket.stop_loss_price:
-            return None
-
-        price = self._symbol_rules.floor_price(basket.stop_loss_price)
-
-        quantity = basket.total_quantity
-        order_id = f"stop-loss:{basket.basket_id}"
-        return PaperSpotExitFill(
-            order_id=order_id,
-            fill_id=paper_fill_id(self._session.session_id, order_id),
-            price=price,
-            quantity=quantity,
-            filled_at=filled_at,
         )
 
     def _log_entry_rejected(self, *, price: Decimal, quantity: Decimal) -> None:

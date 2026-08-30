@@ -10,12 +10,13 @@ from pytestqt.qtbot import QtBot
 
 from tests.support.workspace_snapshots import (
     basket_entries,
-    basket_pairs,
     basket_snapshot,
+    basket_targets,
 )
 from tiewtrade.application.trading_workspace import (
     BasketEntryGate,
     BasketEntrySnapshot,
+    BasketEntryTargetSnapshot,
     BasketSnapshot,
     empty_position_basket_tab,
     failed_position_basket_tab,
@@ -46,7 +47,7 @@ def _entry(
 
 
 def _futures_basket() -> BasketSnapshot:
-    """Two Entries at different prices, making one Pair between them."""
+    """Two Entries at different prices, each in a Group of its own."""
     entries = (
         _entry(1, "66000.0000", "0.96336"),
         _entry(2, "66000.2500", "0.96264"),
@@ -59,9 +60,10 @@ def _futures_basket() -> BasketSnapshot:
         total_quantity=Decimal("0.00600000"),
         average_entry_price=Decimal("66000.1250"),
         current_price=Decimal("66321.1200"),
-        # The Basket's own target — the net — which no row prints.
+        # The Basket's own figure — the nearest of the Groups — which no row
+        # prints, because it is not what either of these rows is waiting for.
         take_profit_price=Decimal("68000.0000"),
-        pairs=basket_pairs(entries, take_profit_offset="999.8750"),
+        targets=basket_targets(entries, take_profit_offset="1000.0000"),
         unrealized_pnl=Decimal("1.92600000"),
         entry_gate=BasketEntryGate.OPEN,
         updated_at_utc=OBSERVED_AT,
@@ -101,7 +103,7 @@ def test_each_entry_of_the_basket_is_its_own_row(qtbot: QtBot) -> None:
         "Date",
         "Entry Price",
         "Take Profit",
-        "Average",
+        "Group",
         "Quantity",
         "Total",
         "Unrealized P/L",
@@ -109,31 +111,32 @@ def test_each_entry_of_the_basket_is_its_own_row(qtbot: QtBot) -> None:
         "Close Position",
     )
     assert widget.table.rowCount() == 2
+    # Latest Fill on top, so the row that just happened is the one on screen.
     assert _row(widget, 0) == {
-        "Date": "2026-08-02 08:00:00",
-        "Entry Price": "66,000.0000",
-        "Take Profit": "67,000.0000",
+        "Date": "2026-08-02 09:00:00",
+        "Entry Price": "66,000.2500",
+        "Take Profit": "67,000.2500",
+        "Group": "2",
         "Quantity": "0.00300000",
         "Total": "198.00 USDT",
-        "Average": "66,000.1250",
         "Unrealized P/L": "0.96 USDT",
         "Status": "Active",
     }
-    assert _row(widget, 1)["Entry Price"] == "66,000.2500"
-    assert _row(widget, 1)["Date"] == "2026-08-02 09:00:00"
+    assert _row(widget, 1)["Entry Price"] == "66,000.0000"
+    assert _row(widget, 1)["Date"] == "2026-08-02 08:00:00"
     assert widget.state_label.text() == ""
     assert widget.state_label.accessibleName() == "Position status"
 
 
-def test_both_entries_of_a_pair_read_the_target_that_pair_leaves_at(
+def test_each_entry_reads_the_target_of_the_group_it_is_in(
     qtbot: QtBot,
 ) -> None:
-    """Entries bought at different prices are sold together at their Pair's.
+    """Entries in different Groups wait for different prices.
 
-    The column repeats across a Pair rather than varying by row, which is the
-    fact: the Entry bought high has no target of its own to wait for. The
-    Basket's own target — 68,000 here, the net under every Pair — is not what
-    this Entry is waiting for, so it is not what the row shows.
+    The column varies by row rather than repeating, which is the fact: these
+    two averaged up, so each opened a Group and each Group is measured from
+    what it alone paid. The Basket's own figure — 68,000 here, the nearest of
+    its Groups — is not what either row is waiting for, so no row shows it.
     """
     widget = PositionBasketTable()
     qtbot.addWidget(widget)
@@ -142,7 +145,7 @@ def test_both_entries_of_a_pair_read_the_target_that_pair_leaves_at(
         ready_position_basket_tab(_futures_basket(), observed_at_utc=OBSERVED_AT)
     )
 
-    assert _cell(widget, "Take Profit", 0).text() == "67,000.0000"
+    assert _cell(widget, "Take Profit", 0).text() == "67,000.2500"
     assert _cell(widget, "Take Profit", 1).text() == "67,000.0000"
     assert "68,000" not in _cell(widget, "Take Profit", 0).text()
     for row in (0, 1):
@@ -159,7 +162,7 @@ def test_money_is_grouped_and_a_quantity_is_not(qtbot: QtBot) -> None:
         ready_position_basket_tab(_futures_basket(), observed_at_utc=OBSERVED_AT)
     )
 
-    row = _row(widget, 0)
+    row = _row(widget, 1)
     assert row["Entry Price"] == "66,000.0000"
     assert row["Take Profit"] == "67,000.0000"
     assert row["Total"] == "198.00 USDT"
@@ -168,14 +171,72 @@ def test_money_is_grouped_and_a_quantity_is_not(qtbot: QtBot) -> None:
     assert row["Quantity"] == "0.00300000"
 
 
-def test_the_average_is_a_column_and_not_a_label_beside_the_table(
+def test_the_entry_that_just_filled_is_the_row_on_top(qtbot: QtBot) -> None:
+    """A Basket lists its Entries in the order taken; the tab reads backwards.
+
+    The row worth seeing is the one that just filled, and a Basket deep
+    enough to scroll had it out of sight at the bottom.
+    """
+    widget = PositionBasketTable()
+    qtbot.addWidget(widget)
+
+    widget.show_snapshot(
+        ready_position_basket_tab(
+            basket_snapshot(
+                entry_count=3,
+                entries=(
+                    _entry(1, "100", "1"),
+                    _entry(2, "101", "1"),
+                    _entry(3, "102", "1"),
+                ),
+            ),
+            observed_at_utc=OBSERVED_AT,
+        )
+    )
+
+    assert [_cell(widget, "Entry Price", row).text() for row in range(3)] == [
+        "102",
+        "101",
+        "100",
+    ]
+
+
+def test_two_entries_filled_on_one_candle_are_ordered_by_their_numbers(
     qtbot: QtBot,
 ) -> None:
-    """The average reads on every row because the target is measured from it.
+    """The clock cannot separate them, and the later number is the later Entry."""
+    widget = PositionBasketTable()
+    qtbot.addWidget(widget)
+    filled_at = datetime(2026, 8, 2, 10, 0, tzinfo=UTC)
 
-    It is the Pair's, so it repeats across the Entries of one Pair the way
-    Take Profit does. Nothing summarises it beside the rows — no label and no
-    total — because a figure printed twice can disagree with itself.
+    widget.show_snapshot(
+        ready_position_basket_tab(
+            basket_snapshot(
+                entry_count=2,
+                entries=(
+                    replace(_entry(1, "100", "1"), filled_at_utc=filled_at),
+                    replace(_entry(2, "101", "1"), filled_at_utc=filled_at),
+                ),
+            ),
+            observed_at_utc=OBSERVED_AT,
+        )
+    )
+
+    assert [_cell(widget, "Entry Price", row).text() for row in range(2)] == [
+        "101",
+        "100",
+    ]
+
+
+def test_the_target_is_a_column_and_not_a_label_beside_the_table(
+    qtbot: QtBot,
+) -> None:
+    """The price a row leaves at reads on the row, against the price it paid.
+
+    The average the target was measured from is not printed: it is a working
+    figure, and a row already says what it paid and where it goes. Nothing
+    summarises the target beside the rows either — no label and no total —
+    because a figure printed twice can disagree with itself.
     """
     widget = PositionBasketTable()
     qtbot.addWidget(widget)
@@ -184,24 +245,23 @@ def test_the_average_is_a_column_and_not_a_label_beside_the_table(
         ready_position_basket_tab(_futures_basket(), observed_at_utc=OBSERVED_AT)
     )
 
-    assert _cell(widget, "Average", 0).text() == "66,000.1250"
-    assert _cell(widget, "Average", 1).text() == "66,000.1250"
-    assert _cell(widget, "Entry Price", 0).text() == "66,000.0000"
-    assert _cell(widget, "Entry Price", 1).text() == "66,000.2500"
+    assert "Average" not in widget.headers
+    assert _cell(widget, "Entry Price", 0).text() == "66,000.2500"
+    assert _cell(widget, "Entry Price", 1).text() == "66,000.0000"
     assert not hasattr(widget, "total_label")
     assert not hasattr(widget, "basket_label")
 
 
-def test_an_average_that_does_not_divide_evenly_reads_at_the_quoted_scale(
+def test_a_target_measured_from_an_endless_average_still_reads_exactly(
     qtbot: QtBot,
 ) -> None:
-    """A Pair whose Entries are different sizes averages to no last decimal.
+    """A Group whose Entries are different sizes averages to no last decimal.
 
     Paper buys a fixed amount of money rather than a fixed amount of the
-    asset, so the two Entries of a Pair rarely hold the same quantity and the
-    weighted average between them runs on forever. Printed in full it grew the
-    column wide enough to push the rest of the row off. An average of prices
-    is a price, so it reads at the scale those prices were quoted at.
+    asset, so two Entries rarely hold the same quantity and the weighted
+    average between them runs on forever. That average is not on screen: the
+    target measured from it is rounded to the Symbol's tick, so what a reader
+    watches for is a price the market can actually print.
     """
     widget = PositionBasketTable()
     qtbot.addWidget(widget)
@@ -213,22 +273,34 @@ def test_an_average_that_does_not_divide_evenly_reads_at_the_quoted_scale(
         replace(entry, notional=entry.price * entry.quantity) for entry in sized
     )
 
+    group_average = Decimal("302") / Decimal("3")
+
     widget.show_snapshot(
         ready_position_basket_tab(
             basket_snapshot(
                 entry_count=2,
                 entries=entries,
-                pairs=basket_pairs(entries, take_profit_offset="10"),
-                average_entry_price=Decimal("302") / Decimal("3"),
+                # One Group holding both, so its average is the Basket's here.
+                targets=tuple(
+                    BasketEntryTargetSnapshot(
+                        entry_number=entry.entry_number,
+                        group_id=1,
+                        entry_price=entry.price,
+                        group_average_entry_price=group_average,
+                        take_profit_price=Decimal("110.67"),
+                    )
+                    for entry in entries
+                ),
+                average_entry_price=group_average,
                 take_profit_price=Decimal("110.67"),
             ),
             observed_at_utc=OBSERVED_AT,
         )
     )
 
-    # 100.666666..., read at the two places the Entries were quoted at.
+    # One Group, so both rows leave at the one price measured from it — the
+    # exact target, not a figure derived from a rounded average on screen.
     for row in (0, 1):
-        assert _cell(widget, "Average", row).text() == "100.67"
         assert _cell(widget, "Take Profit", row).text() == "110.67"
 
 
@@ -252,8 +324,6 @@ def test_a_single_entry_basket_reads_the_one_price_it_paid(
 
     assert widget.table.rowCount() == 1
     assert _cell(widget, "Entry Price", 0).text() == "64,000"
-    # One Entry, so the average is the price it paid and says nothing new.
-    assert _cell(widget, "Average", 0).text() == "64,000"
 
 
 def test_a_moved_column_carries_its_own_reading(
@@ -296,7 +366,9 @@ def test_columns_align_numbers_right_and_text_left(qtbot: QtBot) -> None:
         left,
         right,
         right,
-        right,
+        # The Group is a name for a set of rows rather than a measurement, so
+        # it is centred rather than lined up with the figures around it.
+        centre,
         right,
         right,
         right,
@@ -340,7 +412,6 @@ def test_an_unmarked_entry_shows_a_dash_where_its_result_will_be(
     assert row["Unrealized P/L"] == BLANK
     # What needed no price is there in full.
     assert row["Entry Price"] == "64,000"
-    assert row["Average"] == "64,000"
     # The Pair's target, which needs no price to mark against either.
     assert row["Take Profit"] == "65,000"
     assert row["Total"] == "192.00 USDT"
@@ -658,8 +729,9 @@ def test_every_entry_carries_the_order_that_closes_it(qtbot: QtBot) -> None:
     _close_button(widget, 1).click()
 
     # The Entry's own number, not the row it happens to sit in: rows are
-    # rebuilt on every price, and one of them has already gone before now.
-    assert asked == [2]
+    # rebuilt on every price, are listed newest first, and one of them has
+    # already gone before now.
+    assert asked == [1]
 
 
 def test_the_order_is_taken_away_while_one_is_still_in_flight(
@@ -740,11 +812,12 @@ def test_only_the_pair_that_just_completed_reads_as_cooling_down(
         )
     )
 
+    # Newest Pair first, so the Cooldown it holds reads on the top two rows.
     assert [_cell(widget, "Status", row).text() for row in range(4)] == [
-        "Active",
-        "Active",
         "Cooldown",
         "Cooldown",
+        "Active",
+        "Active",
     ]
 
 

@@ -1,10 +1,15 @@
 """A Basket that outlived the Runtime that opened it, and how it comes back.
 
-Nothing about a Basket is remembered as a total: the take profit, the average
-Entry Price and the Entry Pair count are all read out of its Entries. Putting
-one back is therefore replaying those Entries, which is the only way the
-numbers come back the same rather than close, and the reason both the Runtime
-that trades it and the tab that shows it ask here rather than each other.
+Almost nothing about a Basket is remembered as a total: the average Entry
+Price and the Entry Pair count are read out of its Entries, and putting one
+back is replaying them, which is the only way the numbers come back the same
+rather than close. The exception is where each Entry Group's target had got
+to. A target only ever moves closer, so where it stopped is the history of
+every Entry that joined or left the Group, not a reading of the ones still
+there — that much is remembered and handed back rather than worked out again.
+
+Both the Runtime that trades a Basket and the tab that shows it ask here
+rather than each other.
 """
 
 from dataclasses import dataclass, field
@@ -26,6 +31,7 @@ class OpenBasketEntry:
     quantity: Decimal
     filled_at: datetime
     atr: Decimal
+    group_id: int
 
 
 @dataclass(frozen=True, slots=True)
@@ -33,6 +39,12 @@ class OpenBasketState:
     basket_id: UUID
     entries: tuple[OpenBasketEntry, ...]
     closed_basket_count: int
+    # Where each open Group's target had been ratcheted to. Not a reading:
+    # a target only ever moved closer, and how far depends on Entries that
+    # have since been sold out of the Group, so replaying what is left cannot
+    # arrive back at it. Empty for a Basket opened before Groups were kept,
+    # which is told to measure its Groups afresh.
+    group_take_profit_prices: dict[int, Decimal] = field(default_factory=dict)
     # What the Basket's own Entries left when they sold, which its result is
     # owed however long ago they went. Nothing settled is the default: a
     # Basket that has never been sold out of has none.
@@ -65,7 +77,6 @@ def reopen_basket(
     *,
     entry_policy: EntryPolicy,
     take_profit_atr_multiplier: Decimal,
-    stop_loss_atr_multiplier: Decimal | None,
     tick_size: Decimal,
 ) -> ReopenedBasket:
     """Replay the Entries, letting the Basket state its own numbers again."""
@@ -73,7 +84,6 @@ def reopen_basket(
         state.basket_id,
         entry_policy,
         take_profit_atr_multiplier,
-        stop_loss_atr_multiplier=stop_loss_atr_multiplier,
         # Replaying the open Entries states everything the Basket holds; what
         # it already sold is not there to be replayed, and is told to it.
         settled=state.settled,
@@ -86,7 +96,10 @@ def reopen_basket(
             atr=entry.atr,
             tick_size=tick_size,
             entry_number=entry.entry_number,
+            group_id=entry.group_id,
         )
+    if state.group_take_profit_prices:
+        basket.restore_group_take_profit_prices(state.group_take_profit_prices)
     # Counted off the Basket rather than off the Entries handed in, so the
     # Pair count can only ever describe Entries the Basket actually took. What
     # it already settled counts too — a Fill this Basket sold before now

@@ -23,6 +23,7 @@ def _entry(number: int, price: str, *, day: int) -> OpenBasketEntry:
         quantity=Decimal("1"),
         filled_at=datetime(2026, 1, day, tzinfo=UTC),
         atr=Decimal("1"),
+        group_id=1,
     )
 
 
@@ -40,7 +41,6 @@ def _reopen(state: OpenBasketState, *, max_entries: int = 10) -> ReopenedBasket:
         state,
         entry_policy=EntryPolicy(max_entries=max_entries),
         take_profit_atr_multiplier=Decimal("1"),
-        stop_loss_atr_multiplier=None,
         tick_size=Decimal("0.01"),
     )
 

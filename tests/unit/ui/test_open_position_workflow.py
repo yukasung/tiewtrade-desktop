@@ -42,13 +42,13 @@ def _reopened() -> ReopenedBasket:
                     quantity=Decimal("2"),
                     filled_at=datetime(2026, 8, 1, 12, tzinfo=UTC),
                     atr=Decimal("2"),
+                    group_id=1,
                 ),
             ),
             closed_basket_count=0,
         ),
         entry_policy=session.config.entry_policy,
         take_profit_atr_multiplier=Decimal("3"),
-        stop_loss_atr_multiplier=None,
         tick_size=Decimal("0.01"),
     )
 

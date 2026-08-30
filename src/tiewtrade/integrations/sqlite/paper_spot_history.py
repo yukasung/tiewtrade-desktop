@@ -49,6 +49,8 @@ class PaperSpotSQLiteHistory:
         entry_number: int,
         fill: PaperSpotEntryFill,
         entry_atr: Decimal,
+        entry_group_id: int,
+        group_take_profit_price: Decimal,
     ) -> bool:
         normalized_fill = paper_fill_record(
             fill,
@@ -57,6 +59,8 @@ class PaperSpotSQLiteHistory:
             side=FillSide.BUY,
             entry_number=entry_number,
             entry_atr=entry_atr,
+            entry_group_id=entry_group_id,
+            group_take_profit_price=group_take_profit_price,
         )
         return self._store.record_paper_spot_entry_fill(
             normalized_fill,

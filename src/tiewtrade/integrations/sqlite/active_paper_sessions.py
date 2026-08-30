@@ -90,18 +90,22 @@ class SQLiteActivePaperSessions:
                 "SELECT state FROM paper_runtime_lifecycle WHERE session_id = ?",
                 (str(session_id),),
             ).fetchone()
+            # No row left to retire is not a Session running somewhere: a
+            # database cleared out from under the window leaves nothing to
+            # end, and saying so is what lets the caller tell a trader the
+            # truth about it.
+            if active is None:
+                raise PaperSessionUnavailableError(
+                    "Active Paper Session is no longer there"
+                )
             # A missing lifecycle row means the runtime never started, so
             # there is nothing to stop and no work to lose. Refusing that
             # case used to strand a Session that could neither run nor be
             # replaced, leaving Start Paper Bot failing for good.
-            if active is None or (
-                lifecycle is not None
-                and lifecycle["state"]
-                not in {
-                    "stopped",
-                    "blocked",
-                }
-            ):
+            if lifecycle is not None and lifecycle["state"] not in {
+                "stopped",
+                "blocked",
+            }:
                 raise PaperSessionUnavailableError(
                     "Active Paper Session cannot be retired"
                 )

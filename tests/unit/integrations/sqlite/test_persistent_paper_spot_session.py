@@ -96,11 +96,13 @@ def entry_snapshot() -> PaperSpotSessionSnapshot:
         basket_id=BASKET_ID,
         basket_entry_count=1,
         take_profit_price=Decimal("105"),
-        entry_pairs=(),
+        entry_targets=(),
         entry_gate=EntryGate(EntryGateState.OPEN),
         waived_pair=None,
         waived_at=None,
         entry_completed_pairs=0,
+        entry_group_id=1,
+        entry_group_take_profit_price=Decimal("105"),
     )
 
 
@@ -120,11 +122,13 @@ def close_snapshot() -> PaperSpotSessionSnapshot:
         basket_id=BASKET_ID,
         basket_entry_count=0,
         take_profit_price=None,
-        entry_pairs=(),
+        entry_targets=(),
         entry_gate=EntryGate(EntryGateState.OPEN),
         waived_pair=None,
         waived_at=None,
         entry_completed_pairs=0,
+        entry_group_id=None,
+        entry_group_take_profit_price=None,
     )
 
 
@@ -192,6 +196,8 @@ def test_successful_entry_is_durable_before_ready_snapshot_returns() -> None:
         entry_number=1,
         fill=entry_fill(),
         entry_atr=Decimal("2.5"),
+        entry_group_id=1,
+        group_take_profit_price=Decimal("105"),
     )
     assert result.session == entry_snapshot()
     assert result.persistence_state is PersistenceState.READY

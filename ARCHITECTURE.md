@@ -110,6 +110,56 @@ candle ถัดไปเมื่อยืนยัน durability ไม่ไ�
 generic interface ล่วงหน้า เมื่อมี consumer ของ persistence adapter อย่างน้อยสองแบบ
 จึงค่อยย้าย contract ไปไว้ที่ Module ผู้ใช้งาน
 
+## Session Notification Boundary
+
+การแจ้งเตือนออกนอกเครื่องเป็น side effect ที่ไม่มี trading decision ใดพึ่งพา `trading` และ
+`execution` จึงไม่รู้จักมันเลย `application` เป็นเจ้าของ notice ทุกชนิดใน
+`application/session_notice.py` (`EntryOpenedNotice`, `BasketClosedNotice`,
+`CooldownStartedNotice`, `CooldownCancelledNotice`, `MarketFeedLostNotice`,
+`MarketFeedRestoredNotice`, `BotErrorNotice`) และ contract `SessionNotifier`
+ส่วน `integrations/line` เป็นผู้ implement contract นี้ผ่าน LINE Messaging API push
+(LINE Notify ปิดบริการเมื่อ มี.ค. 2025 จึงใช้ไม่ได้)
+
+หนึ่งเหตุการณ์คือหนึ่งข้อความ notice แต่ละชนิดถือคนละข้อเท็จจริงและอ่านคนละแบบ เปิด Position กับ
+ปิด Position จึงเป็นคนละข้อความเสมอ แม้ candle เดียวจะทำทั้งสองอย่าง
+
+**ใครเป็นคนพูด** แบ่งตามว่าใครรู้เรื่องนั้น:
+
+| เหตุการณ์ | ผู้เรียก | เงื่อนไข |
+| --- | --- | --- |
+| Entry เปิด | `PaperRuntimeSink` | snapshot มี Entry Fill |
+| Position ปิด | `PaperRuntimeSink` | snapshot มี `closed_basket` (candle ปิด, candle ระหว่างแท่ง, และการขาย Entry สุดท้ายตามคำสั่งเทรดเดอร์) |
+| Cooldown เริ่ม | `PaperRuntimeSink` | Entry gate เพิ่งเปลี่ยนเป็น `COOLDOWN` |
+| Cooldown ถูกยกเลิก | `PaperRuntimeSink` | `waive_cooldown` สำเร็จ |
+| ข้อมูลตลาดขาด / กลับมา | `PaperRuntimeController` | runtime transition |
+| Bot หยุดเพราะ error | `PaperRuntimeController` | `_publish_blocked` |
+
+snapshot บอกได้แค่ว่า "gate เป็นอะไร" ไม่เคยบอกว่า "gate เปลี่ยน" sink จึงเป็นผู้จำ gate เดิมไว้
+เทียบเอง และพูดเรื่อง Cooldown ครั้งเดียวตอนที่มันปิด ไม่ใช่ทุก candle ที่มันยังปิดอยู่ ทำนองเดียวกัน
+Controller จำไว้ว่า feed กำลังส่งอยู่หรือไม่ และพูดครั้งเดียวต่อการขาดหนึ่งครั้ง ไม่ใช่ครั้งเดียว
+ต่อ transition และพูดเรื่อง Bot หยุดครั้งเดียวต่อการหยุดหนึ่งครั้ง แม้จะมีหลายที่ค้นพบการหยุดนั้น
+
+`PaperRuntimeSink` เรียก notifier **หลังปล่อย entry lock** เสมอ notifier ต้องคืนค่าทันที
+ห้าม raise และต้องเรียกได้จากทุก thread — candle ยกเรื่องขึ้นบน loop ของ Runtime ส่วนคำสั่ง
+ของเทรดเดอร์ยกขึ้นบน thread ที่เขากดมา `LineNoticeNotifier` เป็นผู้รับผิดชอบความต่างนี้
+ด้วย `call_soon_threadsafe` ส่วนการส่งจริงถูก queue ไว้ให้ worker ของ `integrations/line` ทำ
+candle ถัดไปจึงไม่รอ network และการส่งล้มเหลวไม่ทำให้ Session fail-closed — ค่าที่เสียคือข้อความ
+ไม่ใช่ Session
+
+การปิด Position หรือยกเลิก Cooldown ตอน Bot หยุด (`close_one_entry_at_rest`,
+`waive_cooldown_at_rest`, `ClosePaperPosition`) ไม่ส่งข้อความ เพราะไม่มี Runtime ถือ notifier
+อยู่ — เทรดเดอร์ที่ทำเองตอนนั้นกำลังมองหน้าจออยู่แล้ว
+
+Channel access token เป็น credential จึงอยู่ใน OS keyring ผ่าน
+`integrations/keyring/line_notifications.py` เท่านั้น ห้ามลง SQLite, log หรือ fixture
+`line_notification_composition.py` เป็น seam เดียวที่ประกอบ keyring adapter เข้ากับ
+transport โดย `desktop_main` และ `ui` รับเฉพาะ callable ที่ประกอบไว้แล้ว จึงไม่ import
+keyring หรือ transport เอง และหน้าจอ Settings รับรู้ได้แค่ว่า "มี token เก็บไว้หรือไม่"
+ไม่เคยอ่านค่า token กลับมาแสดง log ของ `integrations/line` บอกได้แค่ชนิด notice กับ symbol
+ไม่เคยบอกตัวเลขผลกำไรขาดทุน
+
+Session อ่านค่าตั้งค่าตอน Runtime เริ่มทำงาน การแก้ค่าจึงมีผลกับการ Start ครั้งถัดไป
+
 ## Backfilled Candle
 
 `market_data` เป็นผู้รู้ว่า candle ใดมาสดและ candle ใดถูกดึงย้อนหลังหลังการเชื่อมต่อขาด จึงส่ง
@@ -118,7 +168,7 @@ generic interface ล่วงหน้า เมื่อมี consumer ขอ
 (`PaperSpotSession` / `PaperFuturesSession`) เป็นผู้บังคับ
 
 Session ที่ได้รับ candle ย้อนหลังจะคืน Entry Intent ที่ค้างอยู่ให้ Strategy แทนการ Fill แต่ยัง
-ประมวลผลทุกอย่างที่เหลือตามปกติ ทั้ง indicator, Take Profit และ Stop Loss
+ประมวลผลทุกอย่างที่เหลือตามปกติ ทั้ง indicator และ Take Profit
 รายละเอียดกฎอยู่ใน PRODUCT.md ข้อ 8.1
 
 ## Cooldown Waiver

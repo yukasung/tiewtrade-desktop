@@ -126,17 +126,22 @@ class BasketEntrySnapshot:
 
 
 @dataclass(frozen=True, slots=True)
-class BasketPairSnapshot:
-    """What one Entry Pair paid and leaves at, as the Basket stated it."""
+class BasketEntryTargetSnapshot:
+    """What one Entry paid, the Group it is in, and what that Group leaves at."""
 
-    pair: int
-    average_entry_price: Decimal
+    entry_number: int
+    group_id: int
+    entry_price: Decimal
+    group_average_entry_price: Decimal
     take_profit_price: Decimal
 
     def __post_init__(self) -> None:
-        if type(self.pair) is not int or self.pair < 1:
-            raise ValueError("pair must be a positive integer")
-        _require_decimal(self.average_entry_price, "average_entry_price")
+        if type(self.entry_number) is not int or self.entry_number < 1:
+            raise ValueError("entry_number must be a positive integer")
+        if type(self.group_id) is not int or self.group_id < 1:
+            raise ValueError("group_id must be a positive integer")
+        _require_decimal(self.entry_price, "entry_price")
+        _require_decimal(self.group_average_entry_price, "group_average_entry_price")
         _require_decimal(self.take_profit_price, "take_profit_price")
 
 
@@ -152,10 +157,10 @@ class BasketSnapshot:
     # Basket read back out of the database stands before its first candle.
     current_price: Decimal | None
     take_profit_price: Decimal
-    # Every open Entry Pair, so a row can read the figures of its own Pair
-    # rather than the Basket-wide ones. Those are the net under all the Pairs
-    # at once, not the price any single Pair is waiting for.
-    pairs: tuple[BasketPairSnapshot, ...]
+    # Every open Entry, so a row can read the target of the Group it is in
+    # rather than the Basket-wide one. That one is only the nearest of the
+    # Groups, not the price this row's Entry is waiting for.
+    targets: tuple[BasketEntryTargetSnapshot, ...]
     unrealized_pnl: Decimal | None
     entry_gate: BasketEntryGate
     updated_at_utc: datetime
@@ -184,14 +189,12 @@ class BasketSnapshot:
             raise ValueError("completed_pairs must be a non-negative integer")
         _require_utc(self.updated_at_utc, "updated_at_utc")
 
-    def pair_for(self, entry_number: int) -> BasketPairSnapshot | None:
-        """The Pair this Entry belongs to, as the Basket last stated it.
-
-        Counted by the rule's own module rather than again here, the same way
-        `entry_gate_for` counts it — one reading of what makes a Pair.
-        """
-        wanted = entry_pair_index(entry_number)
-        return next((pair for pair in self.pairs if pair.pair == wanted), None)
+    def target_for(self, entry_number: int) -> BasketEntryTargetSnapshot | None:
+        """The Group this Entry is in and the price it leaves at."""
+        return next(
+            (target for target in self.targets if target.entry_number == entry_number),
+            None,
+        )
 
     def entry_gate_for(self, entry_number: int) -> BasketEntryGate:
         """The gate as it stands for one Entry, not the Basket read as a whole.

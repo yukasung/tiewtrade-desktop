@@ -59,6 +59,7 @@ from tiewtrade.ui.session_workflow import (
     SessionWorkflow,
 )
 from tiewtrade.ui.settings_dialogs import ask_about_clearing_database
+from tiewtrade.ui.settings_panel import LineNotificationsReading
 from tiewtrade.ui.start_decision import StartCourse, course_before_start
 from tiewtrade.ui.start_dialogs import (
     PositionAtTarget,
@@ -165,6 +166,13 @@ NO_BOT = BotActions()
 NO_CHART = ChartSources()
 
 
+type SaveLineNotifications = Callable[[bool, str, str], None]
+"""Keep these LINE settings, wherever this installation keeps them."""
+
+type ReadLineNotifications = Callable[[], LineNotificationsReading]
+"""Read back the LINE settings — never the token, only that there is one."""
+
+
 class MainWindow(QMainWindow):
     def __init__(
         self,
@@ -182,6 +190,8 @@ class MainWindow(QMainWindow):
         connection_notice: ConnectionNotice | None = None,
         connection_notice_delay_ms: int = CONNECTION_NOTICE_DELAY_MILLISECONDS,
         clear_database: Callable[[], None] | None = None,
+        save_line_notifications: SaveLineNotifications | None = None,
+        read_line_notifications: ReadLineNotifications | None = None,
     ) -> None:
         super().__init__()
         self._take_profit_confirmation = (
@@ -205,6 +215,8 @@ class MainWindow(QMainWindow):
         self._validate_session = validate_session or validate_paper_session
         self._shutdown_runtime = bot.shutdown_runtime
         self._clear_database = clear_database
+        self._save_line_notifications = save_line_notifications
+        self._read_line_notifications = read_line_notifications
         self._chart_fact_relay = chart.facts
         self._start_chart_feed = chart.start_feed
         self._select_chart_view = chart.select_view
@@ -300,6 +312,9 @@ class MainWindow(QMainWindow):
         self.workspace.settings_requested.connect(self._settings_requested)
         self.workspace.settings_panel.clear_database_requested.connect(
             self._clear_database_requested
+        )
+        self.workspace.settings_panel.line_notifications_save_requested.connect(
+            self._line_notifications_save_requested
         )
         self._open_position.reading_landed.connect(self._position_reading_landed)
 
@@ -580,9 +595,29 @@ class MainWindow(QMainWindow):
             report_failure=lambda: QMessageBox.warning(
                 settings_panel,
                 "Settings",
-                "Could not clear the database. Check your connection, then try again.",
+                "Could not clear the database. Try again.",
             ),
             failure_log="Could not clear the database",
+            start=self._thread_pool.start,
+        )
+        self._keep_line_settings = GuardedAction(
+            available=lambda available: settings_panel.set_busy(not available),
+            report_failure=lambda: QMessageBox.warning(
+                settings_panel,
+                "Settings",
+                "Could not save the LINE settings. "
+                "This machine may not be letting TiewTrade store them.",
+            ),
+            failure_log="Could not save the LINE notification settings",
+            start=self._thread_pool.start,
+        )
+        # Reading is its own action rather than a second use of the one that
+        # saves: what is saved is read back straight afterwards, and an action
+        # already running is an action that refuses to start again.
+        self._show_line_settings = GuardedAction(
+            available=lambda available: settings_panel.set_busy(not available),
+            report_failure=settings_panel.say_line_notifications_unreadable,
+            failure_log="Could not read the LINE notification settings",
             start=self._thread_pool.start,
         )
 
@@ -716,7 +751,7 @@ class MainWindow(QMainWindow):
 
     @Slot(object)
     def _replacement_failed(self, _error: object) -> None:
-        message = "Could not stop, close, or retire the existing Paper Session. "
+        message = "Could not stop, close, or retire the existing Paper Session."
         if isinstance(_error, RuntimeError) and str(_error) == (
             "A fresh market price is unavailable"
         ):
@@ -735,6 +770,8 @@ class MainWindow(QMainWindow):
                 "The existing Paper Session is still running somewhere. "
                 "Stop it, or restart the application."
             )
+        elif str(_error) == "Active Paper Session is no longer there":
+            message = "The existing Paper Session is no longer in the database."
         self.setup.show_field_error(
             "capital_per_entry",
             f"{message} Try Start Paper Bot again.",
@@ -918,7 +955,7 @@ class MainWindow(QMainWindow):
         dialog.setIcon(QMessageBox.Icon.Warning)
         dialog.setText(reason)
         dialog.setInformativeText(
-            "The Session is open on the setup form. Start the Bot again when "
+            "The Session is open on the setup form. Start the Bot again once "
             "the connection is back."
         )
         dialog.addButton(QMessageBox.StandardButton.Ok)
@@ -1107,6 +1144,51 @@ class MainWindow(QMainWindow):
             self.workspace.hide_settings()
             return
         self.workspace.show_settings()
+        self._read_line_settings()
+
+    def _read_line_settings(self) -> None:
+        """Fill the LINE form from what is stored, off the UI thread.
+
+        Wherever the settings are kept, reading them can put a prompt in front
+        of the trader and wait on an answer, which is not something a window
+        may do while it is being drawn. The form opens as it is and fills in
+        when the reading lands.
+        """
+        read = self._read_line_notifications
+        if read is None or self._show_line_settings.is_running:
+            return
+        self._show_line_settings.run(read, succeeded=self._line_settings_read)
+
+    @Slot(object)
+    def _line_settings_read(self, reading: object) -> None:
+        if not isinstance(reading, tuple):
+            return
+        self.workspace.settings_panel.show_line_notifications(reading)
+
+    @Slot(bool, str, str)
+    def _line_notifications_save_requested(
+        self,
+        enabled: bool,
+        target_id: str,
+        access_token: str,
+    ) -> None:
+        save = self._save_line_notifications
+        if save is None or self._keep_line_settings.is_running:
+            return
+        self._keep_line_settings.run(
+            lambda: save(enabled, target_id, access_token),
+            succeeded=self._line_settings_kept,
+        )
+
+    @Slot(object)
+    def _line_settings_kept(self, _result: object) -> None:
+        """Read the form back from what was actually stored.
+
+        What the trader typed and what is now stored are two things, and the
+        second is the one the Bot will use. Reading it back is also what
+        empties the token field once its value is somewhere safer.
+        """
+        self._read_line_settings()
 
     @Slot()
     def _clear_database_requested(self) -> None:
@@ -1133,11 +1215,24 @@ class MainWindow(QMainWindow):
         still read as available and, pressed, find nothing left to sell —
         so the tab is asked again, the way `_all_closed` already does after
         an actual sale.
+
+        The chart is read back for the same reason: its Buy/Sell badges are
+        drawings of fills whose rows are gone, and nothing else would ask
+        for them again until the next trade.
         """
         self._history_workflow.start()
+        self._chart_workflow.refresh_fills()
         session = self._current_session()
         if session is not None:
             self._open_position.read_for(session)
+        # The Session the setup form was holding to replace was wiped along
+        # with the rest, so there is nothing left to stop, close, or retire.
+        # Held on to, it sent the next Start to retire a row that was gone,
+        # which came back as "still running somewhere" — about a Session
+        # nothing was running. A cleared installation has no Session, and
+        # the next Start is the one that makes one.
+        self._replacement_session = None
+        self._replacement_values = None
         self.workspace.hide_settings()
 
     @Slot(object)

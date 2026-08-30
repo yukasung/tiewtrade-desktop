@@ -702,6 +702,10 @@ def _fake_running_controller(
         def current_workspace(self) -> TradingWorkspaceSnapshot:
             return workspace
 
+        def is_holding(self, session: ConfiguredPaperSession) -> bool:
+            del session
+            return True
+
         def start(self, session: ConfiguredPaperSession) -> BotLifecycleResult:
             return BotLifecycleResult(
                 workspace=workspace_with_runtime_state(
@@ -848,7 +852,7 @@ def test_concurrent_session_load_and_history_query_serialize_v1_migration(
             row[1] for row in connection.execute("PRAGMA table_info(basket_results)")
         }
 
-    assert schema_version == 15
+    assert schema_version == 16
     assert "leverage" in basket_columns
 
 
@@ -1056,3 +1060,32 @@ def test_desktop_composition_defers_database_directory_creation_to_load_worker(
         True,
         True,
     ) in mkdir_calls
+
+
+def test_open_entry_numbers_is_none_when_the_bot_was_only_initialized(
+    tmp_path: Path,
+) -> None:
+    """A Session opened but never started is not one a Runtime is holding.
+
+    `initialize` puts a controller in place so the tab can read durable
+    lifecycle state, and that controller's workspace carries no Basket until
+    a Runtime starts and publishes one. Answering an empty tuple there says
+    "held, with nothing open", which is what makes Close All sell nothing at
+    all rather than fall back to the database.
+    """
+    session = configured_spot_session()
+    database = SQLiteDatabase(tmp_path / "tiewtrade.sqlite3")
+    actions = desktop_main._PaperRuntimeActions(
+        lifecycle=SQLitePaperRuntimeLifecycle(database),
+        trade_history=SQLiteTradeHistory(database),
+        runtime_snapshots=RuntimeSnapshotRelay(),
+        prepare_database=lambda: None,
+    )
+
+    actions.initialize(
+        configured_bot_control(
+            session, observed_at_utc=datetime(2026, 8, 2, tzinfo=UTC)
+        )
+    )
+
+    assert actions.open_entry_numbers(session) is None

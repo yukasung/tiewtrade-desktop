@@ -22,17 +22,13 @@ class RsiStepGridPreset:
     rsi_entry_threshold: Decimal
     atr_period: int
     take_profit_atr_multiplier: Decimal
-    stop_loss_atr_multiplier: Decimal | None = None
 
     def __post_init__(self) -> None:
-        if self.stop_loss_atr_multiplier is not None:
-            raise ValueError("rsi-step-grid does not support stop_loss_atr_multiplier")
         require_shared_preset_rules(
             version=self.version,
             rsi_period=self.rsi_period,
             atr_period=self.atr_period,
             take_profit_atr_multiplier=self.take_profit_atr_multiplier,
-            stop_loss_atr_multiplier=self.stop_loss_atr_multiplier,
         )
         if not Decimal("0") <= self.rsi_reset_threshold < self.rsi_entry_threshold:
             raise ValueError("reset threshold must be below entry threshold")

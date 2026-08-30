@@ -89,6 +89,26 @@ def test_retire_rejects_running_session_without_mutation(tmp_path: Path) -> None
     assert store.get_active() == session
 
 
+def test_retire_says_a_session_that_is_no_longer_there_is_gone(
+    tmp_path: Path,
+) -> None:
+    """A row that has been cleared away is not a Session running somewhere.
+
+    Both answers used to come back word for word the same, so the window told
+    a trader whose database had just been wiped that the Session it could not
+    retire was still running — about a Session nothing was running.
+    """
+    database = SQLiteDatabase(tmp_path / "tiewtrade.sqlite3")
+    database.migrate()
+    store = SQLiteActivePaperSessions(database)
+    session = configured_spot_session()
+    store.create(session)
+    database.clear_all_data()
+
+    with pytest.raises(PaperSessionUnavailableError, match="is no longer there"):
+        store.retire(session.config.session_id, datetime(2026, 8, 8, 5, 1, tzinfo=UTC))
+
+
 def test_create_and_restart_round_trip_exact_spot_session(tmp_path: Path) -> None:
     database_path = tmp_path / "tiewtrade.sqlite3"
     database = SQLiteDatabase(database_path)
@@ -210,7 +230,7 @@ def test_migration_from_v2_preserves_trade_history_record(tmp_path: Path) -> Non
             """
         ).fetchone()
 
-    assert version == 15
+    assert version == 16
     assert basket_id == "basket-sentinel"
     assert bot_sessions_exists is not None
 
@@ -251,7 +271,7 @@ def test_migration_to_v11_takes_the_spot_ratio_out_of_a_session(
             )
         )
 
-    assert version == 15
+    assert version == 16
     assert "spot_trading_capital_ratio" not in columns
     # The one guarantee the rebuilt table has to keep carrying.
     assert "bot_sessions_single_active_idx" in indexes

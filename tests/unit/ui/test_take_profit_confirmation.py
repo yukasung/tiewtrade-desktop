@@ -12,18 +12,20 @@ from tiewtrade.application.open_basket import (
 from tiewtrade.ui.take_profit_confirmation import (
     position_at_target_message,
     position_held_message,
+    sells_on_start,
     sells_on_start_message,
-    sweeps_on_start,
 )
 
 FILLED_AT = datetime(2026, 8, 1, 12, tzinfo=UTC)
 
 
 def _reopened(*prices: str) -> ReopenedBasket:
-    """A Basket of Entries at the given prices, sharing one target.
+    """A Basket of Entries at the given prices, one Group each.
 
-    The multiplier and ATR put the target 6 above what the Basket paid on
-    average, so a price picked in a test says plainly whether it reaches it.
+    A Group apiece, which is what a Basket that averaged up really holds, so
+    each price in a test has a target of its own to reach. The multiplier and
+    ATR put every target 6 above the price it is measured from, so a price
+    picked in a test says plainly which Group it reaches.
     """
     session = configured_spot_session()
     return reopen_basket(
@@ -36,6 +38,7 @@ def _reopened(*prices: str) -> ReopenedBasket:
                     quantity=Decimal("2"),
                     filled_at=FILLED_AT + timedelta(hours=number - 1),
                     atr=Decimal("2"),
+                    group_id=number,
                 )
                 for number, price in enumerate(prices, start=1)
             ),
@@ -43,7 +46,6 @@ def _reopened(*prices: str) -> ReopenedBasket:
         ),
         entry_policy=session.config.entry_policy,
         take_profit_atr_multiplier=Decimal("3"),
-        stop_loss_atr_multiplier=None,
         tick_size=Decimal("0.01"),
     )
 
@@ -57,30 +59,49 @@ def test_a_position_at_its_target_is_warned_about_once_however_many_entries() ->
     """The sale books at the target, and that is the whole warning.
 
     Counting Entries grew the box by a clause each, for figures the Position
-    tab already shows in columns behind it — and under one Basket target the
-    count says nothing about the sale anyway: it takes everything.
+    tab already shows in columns behind it.
     """
     expected = (
         "The Position is already at its Take Profit. Starting the Bot sells "
-        "every Entry at once at that target, not at the price now."
+        "every Entry whose Group has reached its target at once at that "
+        "target, not at the price now."
     )
 
     assert sells_on_start_message(_reopened("100"), Decimal("110")) == expected
     assert sells_on_start_message(_reopened("100", "101"), Decimal("110")) == expected
 
 
-def test_an_entry_under_water_is_swept_out_with_the_rest() -> None:
-    """The Entry paid 120 for is losing at 110 and leaves anyway.
+def test_one_group_past_its_target_is_enough_to_warrant_the_question() -> None:
+    """A Start sells whatever Group has reached a target, not only all of them.
 
-    Its average with the Entry at 100 is 110, so the Basket's target is 116 —
-    which is the point of measuring from the average: the Entry that would
-    otherwise be stranded goes when the Basket goes.
+    The Group bought at 100 leaves at 106, long before the Group bought at 120
+    leaves at 126. A question asked about the Basket as a whole would let the
+    first of them go with nothing said.
     """
     reopened = _reopened("100", "120")
 
-    assert reopened.basket.take_profit_price == Decimal("116")
-    assert sweeps_on_start(reopened, Decimal("116")) is True
-    assert sweeps_on_start(reopened, Decimal("115.99")) is False
+    assert reopened.basket.entry_take_profit_price(1) == Decimal("106")
+    assert reopened.basket.entry_take_profit_price(2) == Decimal("126")
+    # The Basket's own figure is the nearer of the two, which is the sale a
+    # Start would make first.
+    assert reopened.basket.take_profit_price == Decimal("106")
+    assert sells_on_start(reopened, Decimal("106")) is True
+    assert sells_on_start(reopened, Decimal("105.99")) is False
+
+
+def test_the_group_the_price_has_not_reached_goes_on_holding() -> None:
+    """A Start sells the Group at its target and leaves the other where it is.
+
+    The Entry bought at 120 is losing at 116 and stays there: nothing carries
+    a Group out at a price it did not reach, so the warning is about the one
+    sale and no more.
+    """
+    reopened = _reopened("100", "120")
+
+    assert [
+        (exit.entry.entry_number, exit.price)
+        for exit in reopened.basket.take_profit_exits(Decimal("116"), Decimal("116"))
+    ] == [(1, Decimal("106"))]
 
 
 def test_no_price_is_quoted_where_none_can_be_formatted_well() -> None:
