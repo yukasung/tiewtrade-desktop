@@ -1,5 +1,4 @@
 from dataclasses import dataclass
-from decimal import ROUND_HALF_EVEN, Decimal
 
 from PySide6.QtCore import QSignalBlocker, Qt, Signal
 from PySide6.QtWidgets import (
@@ -95,44 +94,6 @@ def _notional(row: _Row) -> str:
     return money_text(row.entry.notional)
 
 
-def _average_entry_price(row: _Row) -> str:
-    """What this row's Group paid on average, which its target is measured from.
-
-    The Group's rather than the Basket's, so the three figures on a row read
-    as one statement: this Group paid that, so it leaves at this. A Basket
-    holding two Groups has no single average that explains either of their
-    targets, and printing one would put a number beside a target it had
-    nothing to do with.
-
-    Shown at the scale the Entries were quoted at. An average is a division,
-    so it can be left with no last decimal place at all, and the exact answer
-    read as a wall of digits wide enough to push the rest of the row off. The
-    Basket keeps every place — the target is measured from the exact figure,
-    not from this one.
-    """
-    target = row.basket.target_for(row.entry.entry_number)
-    if target is None:
-        return BLANK
-    return price_text(
-        target.group_average_entry_price.quantize(
-            _quoted_scale(row.basket), rounding=ROUND_HALF_EVEN
-        )
-    )
-
-
-def _quoted_scale(basket: BasketSnapshot) -> Decimal:
-    """The finest scale any of the Basket's Entries was quoted at.
-
-    Read off the Basket rather than off the row, so a derived figure reads the
-    same all the way down the column — which is what makes it legible as the
-    Basket's rather than the row's. Every Fill is rounded to the Symbol's tick
-    before it is recorded, so their scale is the tick's.
-    """
-    exponent = min(entry.price.as_tuple().exponent for entry in basket.entries)
-    assert isinstance(exponent, int)
-    return Decimal(1).scaleb(exponent)
-
-
 def _pnl(row: _Row) -> str:
     """What the Entry is worth against the price, once there is one.
 
@@ -158,9 +119,11 @@ class PositionBasketTable(QWidget):
 
     The target beside a row's price is its Group's, so rows of one Group read
     the same figure and are sold together at it — which is why the Group they
-    are in is printed next to it, and the average that target was measured
-    from beside that. Rows of different Groups therefore differ all the way
-    across. The lifecycle gate is the Basket's, and repeats throughout.
+    are in is printed next to it. Rows of different Groups therefore differ
+    all the way across. The average that target was measured from is not a
+    column: it is a working figure, and a row saying what it paid and where
+    it leaves has already said what a reader watches for. The lifecycle gate
+    is the Basket's, and repeats throughout.
     """
 
     # Measured numbers hang on the right so their digits line up and a minus
@@ -174,10 +137,6 @@ class PositionBasketTable(QWidget):
         # Straight after the target it explains: the rows sharing a number are
         # the rows sharing the price in the column before it.
         Column("Group", CENTER, _group),
-        # The figure the target was measured from, beside the Group whose
-        # average it is — so the row reads as what it paid, what its Group
-        # paid, and where that Group leaves.
-        Column("Average", RIGHT, _average_entry_price),
         Column("Quantity", RIGHT, _quantity),
         Column("Total", RIGHT, _notional),
         Column("Unrealized P/L", RIGHT, _pnl, _pnl_colour),

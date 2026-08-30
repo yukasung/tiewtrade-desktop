@@ -104,7 +104,6 @@ def test_each_entry_of_the_basket_is_its_own_row(qtbot: QtBot) -> None:
         "Entry Price",
         "Take Profit",
         "Group",
-        "Average",
         "Quantity",
         "Total",
         "Unrealized P/L",
@@ -120,7 +119,6 @@ def test_each_entry_of_the_basket_is_its_own_row(qtbot: QtBot) -> None:
         "Group": "2",
         "Quantity": "0.00300000",
         "Total": "198.00 USDT",
-        "Average": "66,000.2500",
         "Unrealized P/L": "0.96 USDT",
         "Status": "Active",
     }
@@ -230,16 +228,15 @@ def test_two_entries_filled_on_one_candle_are_ordered_by_their_numbers(
     ]
 
 
-def test_the_average_is_a_column_and_not_a_label_beside_the_table(
+def test_the_target_is_a_column_and_not_a_label_beside_the_table(
     qtbot: QtBot,
 ) -> None:
-    """The average reads on every row because the target is measured from it.
+    """The price a row leaves at reads on the row, against the price it paid.
 
-    It is the Group's, so it repeats across the Entries of one Group the way
-    Take Profit does — and here, where the two Entries averaged up into a
-    Group each, it says what each of them alone paid. Nothing summarises it
-    beside the rows — no label and no total — because a figure printed twice
-    can disagree with itself.
+    The average the target was measured from is not printed: it is a working
+    figure, and a row already says what it paid and where it goes. Nothing
+    summarises the target beside the rows either — no label and no total —
+    because a figure printed twice can disagree with itself.
     """
     widget = PositionBasketTable()
     qtbot.addWidget(widget)
@@ -248,26 +245,23 @@ def test_the_average_is_a_column_and_not_a_label_beside_the_table(
         ready_position_basket_tab(_futures_basket(), observed_at_utc=OBSERVED_AT)
     )
 
-    assert _cell(widget, "Average", 0).text() == "66,000.2500"
-    assert _cell(widget, "Average", 1).text() == "66,000.0000"
+    assert "Average" not in widget.headers
     assert _cell(widget, "Entry Price", 0).text() == "66,000.2500"
     assert _cell(widget, "Entry Price", 1).text() == "66,000.0000"
-    # The Basket's own average, 66,000.1250, is not what either row reads:
-    # it is measured across two Groups and explains neither of their targets.
     assert not hasattr(widget, "total_label")
     assert not hasattr(widget, "basket_label")
 
 
-def test_an_average_that_does_not_divide_evenly_reads_at_the_quoted_scale(
+def test_a_target_measured_from_an_endless_average_still_reads_exactly(
     qtbot: QtBot,
 ) -> None:
     """A Group whose Entries are different sizes averages to no last decimal.
 
     Paper buys a fixed amount of money rather than a fixed amount of the
     asset, so two Entries rarely hold the same quantity and the weighted
-    average between them runs on forever. Printed in full it grew the column
-    wide enough to push the rest of the row off. An average of prices is a
-    price, so it reads at the scale those prices were quoted at.
+    average between them runs on forever. That average is not on screen: the
+    target measured from it is rounded to the Symbol's tick, so what a reader
+    watches for is a price the market can actually print.
     """
     widget = PositionBasketTable()
     qtbot.addWidget(widget)
@@ -304,11 +298,8 @@ def test_an_average_that_does_not_divide_evenly_reads_at_the_quoted_scale(
         )
     )
 
-    # 100.666666..., read at the two places the Entries were quoted at, and
-    # the same figure on both rows because it is the one Group's.
-    for row in (0, 1):
-        assert _cell(widget, "Average", row).text() == "100.67"
-    # One Group, so both rows leave at the one price measured from it.
+    # One Group, so both rows leave at the one price measured from it — the
+    # exact target, not a figure derived from a rounded average on screen.
     for row in (0, 1):
         assert _cell(widget, "Take Profit", row).text() == "110.67"
 
@@ -333,8 +324,6 @@ def test_a_single_entry_basket_reads_the_one_price_it_paid(
 
     assert widget.table.rowCount() == 1
     assert _cell(widget, "Entry Price", 0).text() == "64,000"
-    # One Entry, so the average is the price it paid and says nothing new.
-    assert _cell(widget, "Average", 0).text() == "64,000"
 
 
 def test_a_moved_column_carries_its_own_reading(
@@ -383,7 +372,6 @@ def test_columns_align_numbers_right_and_text_left(qtbot: QtBot) -> None:
         right,
         right,
         right,
-        right,
         left,
     )
     for column, alignment in enumerate(widget.ALIGNMENTS):
@@ -424,7 +412,6 @@ def test_an_unmarked_entry_shows_a_dash_where_its_result_will_be(
     assert row["Unrealized P/L"] == BLANK
     # What needed no price is there in full.
     assert row["Entry Price"] == "64,000"
-    assert row["Average"] == "64,000"
     # The Pair's target, which needs no price to mark against either.
     assert row["Take Profit"] == "65,000"
     assert row["Total"] == "192.00 USDT"
