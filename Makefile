@@ -1,7 +1,15 @@
-.PHONY: run verify build clean-build sign-build notarize check-signature
+.PHONY: run run-dev verify build clean-build sign-build notarize check-signature
 
 run:
 	PYTHONPATH=src .venv/bin/python -m tiewtrade.desktop_main
+
+# The same app against a database that is not a trader's own. `make run`
+# opens the installed one, which is what a delivered build opens too, so
+# anything tried out there lands in the record that is supposed to be theirs.
+# Delete .local to start over; nothing in it is anyone's history.
+run-dev:
+	PYTHONPATH=src TIEWTRADE_DATABASE_PATH=.local/tiewtrade.sqlite3 \
+	  .venv/bin/python -m tiewtrade.desktop_main
 
 # Everything that has to pass before a build is worth making.
 verify:
