@@ -1875,3 +1875,199 @@ def test_a_running_controller_holds_its_session_until_it_is_stopped(
     controller.stop(session)
 
     assert controller.is_holding(session) is False
+
+
+def test_startup_recovers_a_stale_running_marker_when_no_other_process_runs(
+    tmp_path: Path,
+) -> None:
+    """A marker left saying "running" is a fact about a process that is gone.
+
+    Nothing else can say so: the marker is written before the Bot runs and
+    cleared after it stops, so a Bot that was killed leaves it standing. Told
+    that this process is the only one on the installation, the marker is
+    read for what it is — left over — and the Session is startable again.
+    """
+    session = configured_spot_session()
+    database = _database_with_session(tmp_path, session)
+    lifecycle = SQLitePaperRuntimeLifecycle(database)
+    lifecycle.mark_running(session.config.session_id, _NOW)
+    controller = PaperRuntimeController(
+        lifecycle=lifecycle,
+        trade_history=SQLiteTradeHistory(database),
+        symbol_rules=_symbol_rules(),
+        source_factory=lambda _endpoints: _unexpected_source_factory(),
+        snapshot_callback=lambda _snapshot: None,
+        clock=lambda: _STOPPED_AT,
+    )
+
+    result = controller.inspect_startup(session, sole_process=True)
+
+    assert result.workspace.header is not None
+    assert result.workspace.header.runtime_state is BotRuntimeState.STOPPED
+    assert result.blocked_reason is None
+    marker = lifecycle.read(session.config.session_id)
+    assert marker is not None
+    assert marker.state is PaperRuntimeLifecycleState.STOPPED
+
+
+def test_startup_recovery_does_not_start_the_bot(tmp_path: Path) -> None:
+    """Clearing a stale marker is not a command to trade.
+
+    Start is the trader's press, and a Session that came back on its own
+    would be one nobody asked for. `_unexpected_source_factory` proves no
+    market data was opened; holding nothing proves no Basket was taken up.
+    """
+    session = configured_spot_session()
+    database = _database_with_session(tmp_path, session)
+    lifecycle = SQLitePaperRuntimeLifecycle(database)
+    lifecycle.mark_running(session.config.session_id, _NOW)
+    controller = PaperRuntimeController(
+        lifecycle=lifecycle,
+        trade_history=SQLiteTradeHistory(database),
+        symbol_rules=_symbol_rules(),
+        source_factory=lambda _endpoints: _unexpected_source_factory(),
+        snapshot_callback=lambda _snapshot: None,
+        clock=lambda: _STOPPED_AT,
+    )
+
+    controller.inspect_startup(session, sole_process=True)
+
+    assert controller.is_holding(session) is False
+
+
+def test_startup_keeps_blocking_a_running_marker_when_nothing_was_proved(
+    tmp_path: Path,
+) -> None:
+    """Not knowing is not the same as knowing there is no one there.
+
+    Where the installation could not be claimed — the lock unavailable, or
+    another window genuinely holding it — the marker may well be live, and a
+    second Bot on one Session is the thing this exists to prevent.
+    """
+    session = configured_spot_session()
+    database = _database_with_session(tmp_path, session)
+    lifecycle = SQLitePaperRuntimeLifecycle(database)
+    lifecycle.mark_running(session.config.session_id, _NOW)
+    controller = PaperRuntimeController(
+        lifecycle=lifecycle,
+        trade_history=SQLiteTradeHistory(database),
+        symbol_rules=_symbol_rules(),
+        source_factory=lambda _endpoints: _unexpected_source_factory(),
+        snapshot_callback=lambda _snapshot: None,
+        clock=lambda: _STOPPED_AT,
+    )
+
+    result = controller.inspect_startup(session)
+
+    assert result.workspace.header is not None
+    assert result.workspace.header.runtime_state is BotRuntimeState.BLOCKED
+    assert result.blocked_reason == "Paper Bot recovery required"
+    marker = lifecycle.read(session.config.session_id)
+    assert marker is not None
+    assert marker.state is PaperRuntimeLifecycleState.RUNNING
+
+
+def test_startup_leaves_a_stopped_marker_alone_whoever_holds_the_installation(
+    tmp_path: Path,
+) -> None:
+    """A Session that stopped cleanly reads the same either way."""
+    session = configured_spot_session()
+    database = _database_with_session(tmp_path, session)
+    lifecycle = SQLitePaperRuntimeLifecycle(database)
+    lifecycle.mark_stopped(session.config.session_id, _NOW)
+    controller = PaperRuntimeController(
+        lifecycle=lifecycle,
+        trade_history=SQLiteTradeHistory(database),
+        symbol_rules=_symbol_rules(),
+        source_factory=lambda _endpoints: _unexpected_source_factory(),
+        snapshot_callback=lambda _snapshot: None,
+        clock=lambda: _STOPPED_AT,
+    )
+
+    result = controller.inspect_startup(session, sole_process=True)
+
+    assert result.workspace.header is not None
+    assert result.workspace.header.runtime_state is BotRuntimeState.CONFIGURED
+    assert result.blocked_reason is None
+
+
+def test_startup_recovery_that_cannot_be_written_stays_blocked(
+    tmp_path: Path,
+) -> None:
+    """Fail closed: an unwritten recovery must never read as a recovered one."""
+    session = configured_spot_session()
+    database = _database_with_session(tmp_path, session)
+    SQLitePaperRuntimeLifecycle(database).mark_running(session.config.session_id, _NOW)
+    controller = PaperRuntimeController(
+        lifecycle=FailingStopLifecycle(database),
+        trade_history=SQLiteTradeHistory(database),
+        symbol_rules=_symbol_rules(),
+        source_factory=lambda _endpoints: _unexpected_source_factory(),
+        snapshot_callback=lambda _snapshot: None,
+        clock=lambda: _STOPPED_AT,
+    )
+
+    result = controller.inspect_startup(session, sole_process=True)
+
+    assert result.workspace.header is not None
+    assert result.workspace.header.runtime_state is BotRuntimeState.BLOCKED
+    marker = SQLitePaperRuntimeLifecycle(database).read(session.config.session_id)
+    assert marker is not None
+    assert marker.state is PaperRuntimeLifecycleState.RUNNING
+
+
+def test_a_killed_bot_comes_back_to_the_position_it_left(tmp_path: Path) -> None:
+    """The whole point, end to end: a crash costs a restart, not a Position.
+
+    A Bot killed mid-Session leaves an open Entry in the database and a
+    marker still saying "running". Starting again is what the trader wants
+    and what the Entry needs — the Basket is picked up where it was left,
+    not sold, not abandoned, and not walled off behind a Blocked Session.
+    """
+    session = configured_spot_session()
+    database = _database_with_session(tmp_path, session)
+    _record_open_spot_entry(database, session, entry_atr=Decimal("2"))
+    lifecycle = SQLitePaperRuntimeLifecycle(database)
+    lifecycle.mark_running(session.config.session_id, _NOW)
+    history = SQLiteTradeHistory(database)
+    left_open = history.find_open_basket(session.config.session_id)
+    assert left_open is not None
+
+    startup = PaperRuntimeController(
+        lifecycle=lifecycle,
+        trade_history=history,
+        symbol_rules=_symbol_rules(),
+        source_factory=lambda _endpoints: _unexpected_source_factory(),
+        snapshot_callback=lambda _snapshot: None,
+        clock=lambda: _STOPPED_AT,
+    )
+
+    recovered = startup.inspect_startup(session, sole_process=True)
+
+    assert recovered.workspace.header is not None
+    assert recovered.workspace.header.runtime_state is BotRuntimeState.STOPPED
+    assert history.find_open_basket(session.config.session_id) is not None
+
+    running = PaperRuntimeController(
+        lifecycle=SQLitePaperRuntimeLifecycle(database),
+        trade_history=history,
+        symbol_rules=_symbol_rules(),
+        source_factory=lambda _endpoints: ControllablePublicCandleSource(
+            warm_up=_warm_up_candles(),
+            live=(),
+        ),
+        scheduler=ImmediateScheduler(),
+        snapshot_callback=lambda _snapshot: None,
+    )
+
+    started = running.start(session)
+
+    assert started.workspace.header is not None
+    assert started.workspace.header.runtime_state is BotRuntimeState.RUNNING
+    basket = running.current_workspace.position_basket.basket
+    assert basket is not None
+    assert basket.entry_count == left_open.entry_count
+    assert [entry.entry_number for entry in basket.entries] == [1]
+    assert basket.total_quantity == Decimal("1")
+
+    running.stop(session)

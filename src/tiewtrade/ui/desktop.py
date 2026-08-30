@@ -1,7 +1,11 @@
+import signal
 import sys
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
+from types import FrameType
 
-from PySide6.QtWidgets import QApplication
+from PySide6.QtCore import QTimer
+from PySide6.QtWidgets import QApplication, QMessageBox
 
 from tiewtrade.application.paper_session_setup import PaperSessionSetupValues
 from tiewtrade.ui.main_window import (
@@ -53,4 +57,72 @@ def run_desktop(
     )
     window.setStyleSheet(DARK_THEME)
     window.show()
-    return app.exec()
+    with _closing_on_a_signal(window):
+        return app.exec()
+
+
+# Often enough that Ctrl+C feels immediate, seldom enough to cost nothing.
+_SIGNAL_POLL_MS = 200
+_CLOSING_SIGNALS = (signal.SIGINT, signal.SIGTERM)
+
+
+@contextmanager
+def _closing_on_a_signal(window: MainWindow) -> Iterator[None]:
+    """Turn Ctrl+C and a shutdown request into the close the window knows.
+
+    Killed where it stands, the app leaves an open WebSocket, a market-data
+    runtime stopped out of order, and a lifecycle marker still saying the Bot
+    is running. `closeEvent` already stops the Runtime, waits for the workers
+    and marks the Session stopped, so the whole of this is asking for it.
+
+    SIGKILL is deliberately absent: no process may handle it. That is the
+    death the installation lock answers instead.
+    """
+
+    def close_the_window(_received: int, _frame: FrameType | None) -> None:
+        window.close()
+
+    try:
+        previous = [
+            (received, signal.signal(received, close_the_window))
+            for received in _CLOSING_SIGNALS
+        ]
+    except ValueError:
+        # Handlers belong to the main thread. Somewhere else, the app still
+        # opens; it just closes the one way it always could.
+        yield
+        return
+    # Python runs a handler between its own bytecodes, and `exec` spends its
+    # time inside Qt's C++ loop. A timer that does nothing hands control back
+    # often enough for the handler to be reached at all.
+    awake = QTimer()
+    awake.timeout.connect(lambda: None)
+    awake.start(_SIGNAL_POLL_MS)
+    try:
+        yield
+    finally:
+        awake.stop()
+        for received, handler in previous:
+            signal.signal(received, handler)
+
+
+def report_installation_in_use(message: str) -> None:
+    """Say why the app will not open, to a trader who has no terminal.
+
+    A bundled desktop app writes its reasons to a log nobody is watching, and
+    this one has to land before any window exists — so it brings up the only
+    thing available that early: a dialog of its own.
+    """
+    app = QApplication.instance()
+    if app is None:
+        app = QApplication(sys.argv)
+    apply_dark_appearance()
+    dialog = QMessageBox()
+    # The theme normally reaches a box through the main window it is built
+    # under. There is no window here and there never will be in this run, so
+    # the box carries the stylesheet itself.
+    dialog.setStyleSheet(DARK_THEME)
+    dialog.setWindowTitle("TiewTrade")
+    dialog.setIcon(QMessageBox.Icon.Warning)
+    dialog.setText(message)
+    dialog.exec()
