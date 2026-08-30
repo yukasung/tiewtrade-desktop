@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import os
 from collections.abc import AsyncIterator, Awaitable, Callable, Coroutine
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
@@ -790,5 +791,25 @@ def default_database_path() -> Path:
     return directory / "tiewtrade.sqlite3"
 
 
+def database_path_from_environment() -> Path | None:
+    """A database for trying things out, kept away from the installed one.
+
+    `default_database_path()` answers for the machine, not for the process, so
+    running from a checkout opened the very file a trader's history lives in —
+    a session opened while developing landed in the record that is supposed to
+    be the trader's own. This lets a checkout say otherwise; nothing else does,
+    and the delivered app never asks (see packaging/entry_point.py), so an
+    exported variable cannot move a trader's database out from under them.
+
+    `None` means "no answer here" — the caller falls back to the installed one.
+    """
+    configured = os.environ.get("TIEWTRADE_DATABASE_PATH", "").strip()
+    if not configured:
+        return None
+    # The app changes working directory, so a relative path would name a
+    # different file later in the same run than it did at startup.
+    return Path(configured).expanduser().resolve()
+
+
 if __name__ == "__main__":
-    raise SystemExit(run_desktop())
+    raise SystemExit(run_desktop(database_path_from_environment()))

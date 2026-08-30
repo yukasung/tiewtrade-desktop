@@ -1498,3 +1498,53 @@ class _FakeSignal:
 
     def connect(self, slot: object) -> None:
         self.connected.append(slot)
+
+
+def test_a_development_database_is_chosen_by_the_environment(
+    monkeypatch: MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """Development writes somewhere a trader's own history cannot be reached.
+
+    One path served both, so `make run` and the delivered app opened the same
+    file: a session opened while trying something out landed in the record a
+    trader keeps.
+    """
+    development_database = tmp_path / "development" / "tiewtrade.sqlite3"
+    monkeypatch.setenv("TIEWTRADE_DATABASE_PATH", str(development_database))
+
+    assert desktop_main.database_path_from_environment() == development_database
+
+
+def test_without_the_variable_the_installed_database_is_the_answer(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("TIEWTRADE_DATABASE_PATH", raising=False)
+
+    assert desktop_main.database_path_from_environment() is None
+
+
+def test_an_empty_variable_is_not_a_path(monkeypatch: MonkeyPatch) -> None:
+    """A variable exported but left blank means "unset", not the current directory."""
+    monkeypatch.setenv("TIEWTRADE_DATABASE_PATH", "")
+
+    assert desktop_main.database_path_from_environment() is None
+
+
+def test_the_development_database_is_resolved_against_no_working_directory(
+    monkeypatch: MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """A relative path follows the process, and the app changes directory.
+
+    Left relative, the same `make run-dev` would open a different file
+    depending on where it was run from.
+    """
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("TIEWTRADE_DATABASE_PATH", ".local/tiewtrade.sqlite3")
+
+    resolved = desktop_main.database_path_from_environment()
+
+    assert resolved is not None
+    assert resolved.is_absolute()
+    assert resolved == tmp_path / ".local" / "tiewtrade.sqlite3"

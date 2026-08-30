@@ -24,6 +24,16 @@ python3 -m venv .venv
 make run
 ```
 
+`make run` เปิดฐานข้อมูลชุดเดียวกับที่แอปที่ติดตั้งแล้วเปิด คือ
+`~/Library/Application Support/TiewTrade/tiewtrade.sqlite3` ระหว่างพัฒนาจึงควรใช้:
+
+```bash
+make run-dev
+```
+
+ซึ่งเขียนลง `.local/tiewtrade.sqlite3` ในโครงการแทน ลบทิ้งเพื่อเริ่มใหม่ได้เสมอ
+โดยไม่กระทบประวัติการเทรดจริง
+
 ## ทดสอบบน branch ปัจจุบันก่อน merge
 
 ```bash
