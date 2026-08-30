@@ -36,7 +36,7 @@ def _build_fast_test_strategy(
 _DEFINITIONS: dict[str, StrategyDefinition] = {
     RsiStepGridPreset.v1().version: StrategyDefinition(
         preset_version=RsiStepGridPreset.v1().version,
-        display_name="RSI Step Grid v1",
+        display_name="RSI Step Grid",
         market_types=frozenset({MarketType.SPOT, MarketType.FUTURES}),
         build_preset=RsiStepGridPreset.v1,
         build_strategy=_build_rsi_step_grid_strategy,
@@ -45,7 +45,7 @@ _DEFINITIONS: dict[str, StrategyDefinition] = {
     # machinery run, not a strategy anyone should trade.
     FastTestPreset.v1().version: StrategyDefinition(
         preset_version=FastTestPreset.v1().version,
-        display_name="Fast Test (testing only)",
+        display_name="Fast Test",
         market_types=frozenset({MarketType.SPOT, MarketType.FUTURES}),
         build_preset=FastTestPreset.v1,
         build_strategy=_build_fast_test_strategy,
