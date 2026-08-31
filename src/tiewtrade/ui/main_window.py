@@ -817,6 +817,11 @@ class MainWindow(QMainWindow):
         self._start_chart_for(session)
 
     def _start_chart_for(self, session: ConfiguredPaperSession) -> None:
+        self.workspace.live_price_card.show_market_type(session.config.market_type)
+        self.workspace.live_price_card.show_pair(
+            session.market_data.symbol,
+            session.market_data.timeframe,
+        )
         if self._load_chart is not None:
             self._chart_workflow.start(session)
         if self._start_chart_feed is not None:
@@ -972,11 +977,24 @@ class MainWindow(QMainWindow):
             return
         self._open_position.mark_price(candle)
 
+    def _show_live_price(self, candle: object) -> None:
+        """Put the price on the sidebar card, whatever the chart makes of it.
+
+        The chart takes a forming candle only while it is following the
+        present, so panning back a day used to take the current price off
+        the screen entirely. The card is fed here, before the workflow has
+        had its say, so the price stays readable wherever the chart is.
+        """
+        if not isinstance(candle, ChartCandle):
+            return
+        self.workspace.live_price_card.show_price(candle)
+
     @Slot(object, int)
     def _chart_completed_candle(self, candle: object, generation: int) -> None:
         relay = self._chart_fact_relay
         if relay is None or not relay.is_current(generation):
             return
+        self._show_live_price(candle)
         self._mark_chart_candle(candle)
         self._chart_workflow.completed_candle(candle)
 
@@ -993,6 +1011,7 @@ class MainWindow(QMainWindow):
             return
         self._chart_feed_state = state
         self.workspace.chart.show_feed_state(state)
+        self.workspace.live_price_card.set_stale(state is not ChartFeedState.LIVE)
         self._show_system_notice()
         self._update_connection_notice()
 
@@ -1054,6 +1073,7 @@ class MainWindow(QMainWindow):
         relay = self._chart_fact_relay
         if relay is None or not relay.is_current(generation):
             return
+        self._show_live_price(candle)
         self._mark_chart_candle(candle)
         self._chart_workflow.in_progress_candle(candle)
 
@@ -1245,6 +1265,8 @@ class MainWindow(QMainWindow):
         if session is None:
             return
         self._chart_workflow.select_view(value)
+        self.workspace.live_price_card.clear()
+        self.workspace.live_price_card.show_pair(value.symbol, value.timeframe)
         if self._select_chart_view is not None:
             self._select_chart_view(session, value)
 
@@ -1253,6 +1275,7 @@ class MainWindow(QMainWindow):
         relay = self._runtime_snapshots
         if relay is None or not relay.is_current(generation):
             return
+        self._show_live_price(candle)
         self._chart_workflow.completed_candle(candle)
 
     @Slot(object, int)
@@ -1260,6 +1283,7 @@ class MainWindow(QMainWindow):
         relay = self._runtime_snapshots
         if relay is None or not relay.is_current(generation):
             return
+        self._show_live_price(candle)
         self._chart_workflow.in_progress_candle(candle)
 
     @Slot(str, str)
@@ -1311,6 +1335,7 @@ class MainWindow(QMainWindow):
         self._connection_notice.hide()
         if self._chart_fact_relay is not None:
             self._chart_fact_relay.invalidate()
+        self.workspace.live_price_card.clear()
         self._workflow.close()
         self._lifecycle_workflow.close()
         self._history_workflow.close()

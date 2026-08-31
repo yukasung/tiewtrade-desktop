@@ -4380,3 +4380,113 @@ def test_line_settings_that_cannot_be_stored_are_reported_where_they_were_typed(
     qtbot.waitUntil(lambda: bool(seen))
     assert "Could not save the LINE settings." in seen[0]
     qtbot.waitUntil(panel.save_line_button.isEnabled)
+
+
+_LIVE_PRICE_CANDLE = flat_candle(datetime(2026, 8, 2, 9, 0, tzinfo=UTC), "78355.24")
+
+
+def _window_reading_prices(qtbot: QtBot) -> tuple[MainWindow, ChartFactRelay]:
+    """A window whose chart is loaded and whose feed can be spoken for."""
+    session = configured_spot_session()
+    relay = ChartFactRelay()
+    loaded: list[ChartRange] = []
+
+    async def load_chart(
+        configured: ConfiguredPaperSession,
+        chart_range: ChartRange,
+    ) -> ChartSnapshot:
+        loaded.append(chart_range)
+        return empty_chart_snapshot(configured, chart_range)
+
+    window = MainWindow(
+        create_session=unused_create,
+        load_active=lambda: session,
+        list_basket_history=empty_basket_history,
+        list_trade_fills=empty_trade_fills,
+        chart=ChartSources(
+            facts=relay,
+            load=load_chart,
+            select_view=lambda _session, _selection: None,
+        ),
+    )
+    qtbot.addWidget(window)
+    window.show()
+    qtbot.waitUntil(lambda: bool(loaded))
+    return window, relay
+
+
+def test_the_price_card_names_the_market_before_a_price_has_arrived(
+    qtbot: QtBot,
+) -> None:
+    window, _relay = _window_reading_prices(qtbot)
+
+    assert window.workspace.live_price_card.pair.text() == "BTCUSDT · 5m · Spot"
+    assert window.workspace.live_price_card.price.text() == BLANK
+
+
+def test_a_price_the_chart_view_has_no_room_for_still_reaches_the_card(
+    qtbot: QtBot,
+) -> None:
+    """The card is the answer to a chart that has been panned off the present.
+
+    The chart draws the forming candle only at the end of the range it holds,
+    so a price arriving for any other candle is dropped on the way to it. The
+    price is still the price, and the card takes it from the feed itself
+    rather than from what the chart made of it.
+    """
+    window, relay = _window_reading_prices(qtbot)
+    card = window.workspace.live_price_card
+
+    relay.new_generation().in_progress_candle(_LIVE_PRICE_CANDLE)
+
+    qtbot.waitUntil(lambda: card.price.text() == "78,355.24")
+    # The chart itself never took it: the workflow drops a price that does
+    # not belong to the candle at the end of the range it is holding.
+    assert window._chart_workflow._snapshot is not None
+    assert window._chart_workflow._snapshot.in_progress_candle is None
+
+
+def test_a_price_from_a_replaced_feed_never_reaches_the_card(qtbot: QtBot) -> None:
+    window, relay = _window_reading_prices(qtbot)
+    card = window.workspace.live_price_card
+    replaced = relay.new_generation()
+    relay.new_generation()
+
+    replaced.in_progress_candle(_LIVE_PRICE_CANDLE)
+
+    qtbot.wait(50)
+    assert card.price.text() == BLANK
+
+
+def test_the_price_card_dims_while_the_feed_is_away(qtbot: QtBot) -> None:
+    window, relay = _window_reading_prices(qtbot)
+    card = window.workspace.live_price_card
+    publisher = relay.new_generation()
+    publisher.in_progress_candle(_LIVE_PRICE_CANDLE)
+    qtbot.waitUntil(lambda: card.price.text() == "78,355.24")
+
+    publisher.feed_state(ChartFeedState.RECONNECTING)
+
+    qtbot.waitUntil(lambda: card.is_stale)
+    # Dimmed, not blanked: the last price is still the last thing known.
+    assert card.price.text() == "78,355.24"
+
+    publisher.feed_state(ChartFeedState.LIVE)
+
+    qtbot.waitUntil(lambda: not card.is_stale)
+
+
+def test_choosing_another_pair_takes_the_old_price_off_the_card(
+    qtbot: QtBot,
+) -> None:
+    window, relay = _window_reading_prices(qtbot)
+    card = window.workspace.live_price_card
+    relay.new_generation().in_progress_candle(_LIVE_PRICE_CANDLE)
+    qtbot.waitUntil(lambda: card.price.text() == "78,355.24")
+
+    window.workspace.chart.symbol.setCurrentIndex(
+        window.workspace.chart.symbol.findData("ETHUSDT")
+    )
+
+    qtbot.waitUntil(lambda: card.pair.text() == "ETHUSDT · 5m · Spot")
+    assert card.price.text() == BLANK

@@ -18,7 +18,11 @@ from tiewtrade.application.trading_workspace import (
 )
 from tiewtrade.ui.candlestick_chart import CandlestickChartWidget
 from tiewtrade.ui.trade_history_workflow import HistoryTab
-from tiewtrade.ui.trading_workspace import TradingWorkspace, WorkspaceTab
+from tiewtrade.ui.trading_workspace import (
+    BOT_CONTROL_WIDTH,
+    TradingWorkspace,
+    WorkspaceTab,
+)
 
 
 def test_workspace_places_existing_features_in_one_screen(qtbot: QtBot) -> None:
@@ -154,6 +158,26 @@ def test_connection_notice_card_sits_below_the_topbar_and_starts_hidden(
     assert header_rect.bottom() < notice_rect.top()
     assert notice_rect.bottom() < bot_control_rect.top()
     assert notice_rect.left() == header_rect.left()
+
+
+def test_live_price_card_sits_between_the_notice_and_the_bot_control(
+    qtbot: QtBot,
+) -> None:
+    workspace = TradingWorkspace()
+    qtbot.addWidget(workspace)
+    workspace.resize(1200, 700)
+    workspace.show()
+    workspace.connection_notice_card.show()
+
+    qtbot.waitUntil(lambda: workspace.live_price_card.isVisible())
+
+    notice_rect = _widget_rect_in_viewport(workspace.connection_notice_card, workspace)
+    price_rect = _widget_rect_in_viewport(workspace.live_price_card, workspace)
+    bot_control_rect = _widget_rect_in_viewport(workspace.bot_control, workspace)
+    assert notice_rect.bottom() < price_rect.top()
+    assert price_rect.bottom() < bot_control_rect.top()
+    assert price_rect.left() == bot_control_rect.left()
+    assert price_rect.width() == BOT_CONTROL_WIDTH
 
 
 def test_settings_button_emits_settings_requested(qtbot: QtBot) -> None:

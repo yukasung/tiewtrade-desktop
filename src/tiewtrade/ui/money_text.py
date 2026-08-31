@@ -29,6 +29,18 @@ def price_text(value: Decimal) -> str:
     return f"{value:,f}"
 
 
+def cent_price_text(value: Decimal) -> str:
+    """A price to the cent, for a screen that reads it at a glance.
+
+    Binance quotes eight places and a price of 78,355.24000000 is six
+    characters of nothing: the zeros are the quoting convention, not the
+    precision the price was struck at. The chart's axis and the sidebar's
+    live price are both read in passing, so they stop at the cent — the
+    ledger and the database still keep every place.
+    """
+    return f"{value:,.2f}"
+
+
 def money_text(value: Decimal) -> str:
     """An amount as it reads on screen: grouped, and to the cent."""
     return f"{value:,.2f} {QUOTE_ASSET}"
