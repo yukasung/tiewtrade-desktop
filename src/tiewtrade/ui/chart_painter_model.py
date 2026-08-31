@@ -13,6 +13,7 @@ from tiewtrade.application.chart_data import (
 )
 from tiewtrade.trading.trade_history import FillSide
 from tiewtrade.ui.display_time import in_display_timezone
+from tiewtrade.ui.money_text import cent_price_text
 
 _PANE_GAP = 10.0
 _RSI_PANE_RATIO = 0.26
@@ -427,7 +428,7 @@ def _current_price_glyph(
     return CurrentPriceGlyph(
         line=QLineF(plot_surface.left(), y, plot_surface.right(), y),
         label_rect=label_rect,
-        price_text=_price_text(candle.close),
+        price_text=cent_price_text(candle.close),
         remaining_text=_remaining_time_text(remaining),
         color=color,
     )
@@ -513,7 +514,7 @@ def _price_ticks(
             AxisTickGlyph(
                 line=QLineF(plot_surface.right(), y, plot_surface.right() + 4, y),
                 label_rect=_axis_label_rect(y, plot_surface, surface),
-                label=_price_text(value),
+                label=cent_price_text(value),
                 value=str(value),
             )
         )
@@ -565,7 +566,7 @@ def crosshair_at(
     if plot.contains(position):
         pane = plot
         axis_value = _price_at(position.y(), model.price_low, model.price_high, plot)
-        axis_label = _price_text(axis_value)
+        axis_label = cent_price_text(axis_value)
     elif rsi_pane.contains(position):
         pane = rsi_pane
         axis_value = _rsi_at(position.y(), rsi_pane)
@@ -615,10 +616,6 @@ def crosshair_at(
             value=timestamp.isoformat(),
         ),
     )
-
-
-def _price_text(value: Decimal) -> str:
-    return f"{value:,.2f}"
 
 
 def _time_text(value: datetime) -> str:

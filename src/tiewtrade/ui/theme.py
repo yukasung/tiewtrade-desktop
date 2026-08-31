@@ -15,7 +15,7 @@ QMainWindow, QWidget#workspace, QWidget#workspaceContent {
 }
 QFrame#botControl, QFrame#card,
 QFrame#statusCard, QFrame#filterCard, QFrame#emptyPanel,
-QFrame#workspaceToolbar {
+QFrame#workspaceToolbar, QFrame#livePriceCard {
     background: #141A22;
     border: 1px solid #2B3441;
     border-radius: 8px;
@@ -55,6 +55,17 @@ QLabel#eyebrow {
     color: #94A3B8;
     font-size: 11px;
     font-weight: 700;
+}
+QLabel#livePrice {
+    color: #F1F5F9;
+    font-size: 22px;
+    font-weight: 700;
+}
+/* A price that stopped arriving still reads, dimmed. The label's own colour
+   is handed back when it goes stale, so this rule has nothing to lose to. */
+QFrame#livePriceCard[stale="true"] QLabel#livePrice,
+QFrame#livePriceCard[stale="true"] QLabel#eyebrow {
+    color: #64748B;
 }
 QLabel#summaryValue {
     color: #F1F5F9;

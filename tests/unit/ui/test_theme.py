@@ -244,6 +244,27 @@ def test_unclassified_button_renders_a_visible_dark_theme_surface(
     assert QColor(lightest).lightness() > 128, f"lightest pixel was {lightest}"
 
 
+def test_a_stale_live_price_dims_past_its_own_colour(qtbot: QtBot) -> None:
+    """The dim has to beat both the theme's price colour and the label's own.
+
+    `QLabel#livePrice` is an id selector, so a rule that only names the card's
+    stale property loses to it and the price goes on reading as though it were
+    still arriving.
+    """
+    workspace = TradingWorkspace()
+    qtbot.addWidget(workspace)
+    workspace.setStyleSheet(DARK_THEME)
+    workspace.resize(1200, 700)
+    workspace.show()
+    card = workspace.live_price_card
+
+    card.set_stale(True)
+
+    assert _palette_color(card.price, QPalette.ColorRole.WindowText) == QColor(
+        "#64748B"
+    )
+
+
 def _palette_color(widget: QWidget, role: QPalette.ColorRole) -> QColor:
     return widget.palette().color(role)
 
