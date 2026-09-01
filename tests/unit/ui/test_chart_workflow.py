@@ -31,7 +31,8 @@ from tiewtrade.market_data.candle import Candle
 from tiewtrade.market_data.config import timeframe_to_interval
 from tiewtrade.trading.trade_history import FillSide, TradeFill
 from tiewtrade.ui.background_task import BackgroundTask
-from tiewtrade.ui.chart_workflow import ChartFactRelay, ChartWorkflow
+from tiewtrade.ui.chart_fact_relay import ChartFactRelay
+from tiewtrade.ui.chart_workflow import ChartWorkflow
 
 
 class ImmediateThreadPool:

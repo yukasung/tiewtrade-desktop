@@ -14,10 +14,12 @@ from tiewtrade.ui.main_window import (
     BotActions,
     ChartSources,
     MainWindow,
+)
+from tiewtrade.ui.session_workflow import CreateSession, LoadActiveSession
+from tiewtrade.ui.settings_workflow import (
     ReadLineNotifications,
     SaveLineNotifications,
 )
-from tiewtrade.ui.session_workflow import CreateSession, LoadActiveSession
 from tiewtrade.ui.theme import DARK_THEME, apply_dark_appearance
 from tiewtrade.ui.total_pnl_workflow import ReadTotalRealizedPnl
 from tiewtrade.ui.trade_history_workflow import (

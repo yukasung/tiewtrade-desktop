@@ -18,6 +18,8 @@ from tests.support.trade_history_records import (
 from tiewtrade.integrations.sqlite.database import SQLiteDatabase
 from tiewtrade.integrations.sqlite.trade_history import (
     SQLiteTradeHistory,
+)
+from tiewtrade.integrations.sqlite.trade_history_errors import (
     TradeHistoryConflictError,
     TradeHistoryUnavailableError,
 )

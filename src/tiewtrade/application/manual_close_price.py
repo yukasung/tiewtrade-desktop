@@ -2,7 +2,10 @@ from collections.abc import Callable
 from datetime import timedelta
 from decimal import Decimal
 
-from tiewtrade.application.latest_market_price import LatestMarketPrice
+from tiewtrade.application.latest_market_price import (
+    LatestMarketPrice,
+    MarketPriceUnavailableError,
+)
 from tiewtrade.application.paper_session_setup import ConfiguredPaperSession
 from tiewtrade.market_data.source_errors import MarketDataSourceError
 
@@ -43,4 +46,4 @@ class ManualClosePrice:
         try:
             return self._quote(session)
         except MarketDataSourceError as error:
-            raise RuntimeError(_UNAVAILABLE_MESSAGE) from error
+            raise MarketPriceUnavailableError(_UNAVAILABLE_MESSAGE) from error

@@ -16,6 +16,8 @@ from tiewtrade.integrations.sqlite.paper_futures_history import (
 )
 from tiewtrade.integrations.sqlite.trade_history import (
     SQLiteTradeHistory,
+)
+from tiewtrade.integrations.sqlite.trade_history_errors import (
     TradeHistoryConflictError,
 )
 from tiewtrade.trading.basket import (

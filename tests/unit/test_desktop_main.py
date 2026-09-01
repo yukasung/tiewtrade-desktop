@@ -16,6 +16,7 @@ import pytest
 from pytest import MonkeyPatch
 
 import tiewtrade.desktop_main as desktop_main
+import tiewtrade.desktop_paper_runtime as desktop_paper_runtime
 import tiewtrade.ui.desktop as ui_desktop
 from tests.support.paper_session_setup import (
     configured_futures_session,
@@ -36,6 +37,7 @@ from tiewtrade.application.paper_session_setup import (
     PaperSessionCreateOutcome,
     PaperSessionSetupValues,
 )
+from tiewtrade.application.paper_symbols import paper_symbol_rules
 from tiewtrade.application.trade_history import (
     BasketHistoryResult,
     TradeHistoryFilter,
@@ -49,6 +51,7 @@ from tiewtrade.application.trading_workspace import (
     WorkspaceTabState,
 )
 from tiewtrade.desktop_logging import LOG_FILE_NAME
+from tiewtrade.desktop_paper_runtime import PaperRuntimeActions
 from tiewtrade.integrations.binance.public_endpoints import (
     BinanceMarketDataPayloadError,
     BinancePublicEndpoints,
@@ -63,6 +66,7 @@ from tiewtrade.integrations.sqlite.paper_runtime_lifecycle import (
     SQLitePaperRuntimeLifecycle,
 )
 from tiewtrade.integrations.sqlite.trade_history import SQLiteTradeHistory
+from tiewtrade.line_notification_composition import line_session_notifier
 from tiewtrade.trading.session_config import MarketType
 from tiewtrade.trading.symbol_rules import SymbolRules
 from tiewtrade.ui.bot_lifecycle_workflow import LifecycleAction, RuntimeSnapshotRelay
@@ -163,6 +167,25 @@ def desktop_logging_stays_off(monkeypatch: MonkeyPatch) -> None:
         desktop_main,
         "configure_desktop_logging",
         lambda directory: directory / LOG_FILE_NAME,
+    )
+
+
+def _runtime_actions(database: SQLiteDatabase) -> PaperRuntimeActions:
+    """The guard, handed stubs for everything a real Runtime would be built with.
+
+    Every test that reaches for it replaces `PaperRuntimeController` outright,
+    so what a Runtime would have been built with never gets used.
+    """
+    return PaperRuntimeActions(
+        lifecycle=SQLitePaperRuntimeLifecycle(database),
+        trade_history=SQLiteTradeHistory(database),
+        runtime_snapshots=RuntimeSnapshotRelay(),
+        prepare_database=lambda: None,
+        symbol_rules=lambda session: paper_symbol_rules(
+            session.market_data.symbol, session.config.market_type
+        ),
+        source_factory=BinancePublicMarketData,
+        notifier_factory=line_session_notifier,
     )
 
 
@@ -458,7 +481,7 @@ def test_desktop_composes_concrete_paper_runtime_actions(
         return 0
 
     monkeypatch.setattr(
-        desktop_main,
+        desktop_paper_runtime,
         "PaperRuntimeController",
         FakePaperRuntimeController,
         raising=False,
@@ -551,17 +574,12 @@ def test_runtime_shutdown_during_start_stops_controller_after_readiness(
             return self.result
 
     monkeypatch.setattr(
-        desktop_main,
+        desktop_paper_runtime,
         "PaperRuntimeController",
         SlowPaperRuntimeController,
     )
     database = SQLiteDatabase(tmp_path / "tiewtrade.sqlite3")
-    actions = desktop_main._PaperRuntimeActions(
-        lifecycle=SQLitePaperRuntimeLifecycle(database),
-        trade_history=SQLiteTradeHistory(database),
-        runtime_snapshots=RuntimeSnapshotRelay(),
-        prepare_database=lambda: None,
-    )
+    actions = _runtime_actions(database)
     session = configured_spot_session()
     errors: list[BaseException] = []
 
@@ -645,17 +663,12 @@ def test_runtime_shutdown_waits_for_active_lifecycle_operation_without_duplicate
             return self.result
 
     monkeypatch.setattr(
-        desktop_main,
+        desktop_paper_runtime,
         "PaperRuntimeController",
         BlockingPaperRuntimeController,
     )
     database = SQLiteDatabase(tmp_path / "tiewtrade.sqlite3")
-    actions = desktop_main._PaperRuntimeActions(
-        lifecycle=SQLitePaperRuntimeLifecycle(database),
-        trade_history=SQLiteTradeHistory(database),
-        runtime_snapshots=RuntimeSnapshotRelay(),
-        prepare_database=lambda: None,
-    )
+    actions = _runtime_actions(database)
     session = configured_spot_session()
     configured = configured_bot_control(
         session,
@@ -752,15 +765,12 @@ def test_open_entry_numbers_reads_the_running_runtime_basket(
     session = configured_spot_session()
     workspace = _workspace_with_basket(session, basket_snapshot())
     monkeypatch.setattr(
-        desktop_main, "PaperRuntimeController", _fake_running_controller(workspace)
+        desktop_paper_runtime,
+        "PaperRuntimeController",
+        _fake_running_controller(workspace),
     )
     database = SQLiteDatabase(tmp_path / "tiewtrade.sqlite3")
-    actions = desktop_main._PaperRuntimeActions(
-        lifecycle=SQLitePaperRuntimeLifecycle(database),
-        trade_history=SQLiteTradeHistory(database),
-        runtime_snapshots=RuntimeSnapshotRelay(),
-        prepare_database=lambda: None,
-    )
+    actions = _runtime_actions(database)
 
     actions.start(
         configured_bot_control(
@@ -778,15 +788,12 @@ def test_open_entry_numbers_is_empty_when_the_runtime_holds_no_basket(
     session = configured_spot_session()
     workspace = _workspace_with_basket(session, None)
     monkeypatch.setattr(
-        desktop_main, "PaperRuntimeController", _fake_running_controller(workspace)
+        desktop_paper_runtime,
+        "PaperRuntimeController",
+        _fake_running_controller(workspace),
     )
     database = SQLiteDatabase(tmp_path / "tiewtrade.sqlite3")
-    actions = desktop_main._PaperRuntimeActions(
-        lifecycle=SQLitePaperRuntimeLifecycle(database),
-        trade_history=SQLiteTradeHistory(database),
-        runtime_snapshots=RuntimeSnapshotRelay(),
-        prepare_database=lambda: None,
-    )
+    actions = _runtime_actions(database)
 
     actions.start(
         configured_bot_control(
@@ -802,12 +809,7 @@ def test_open_entry_numbers_is_none_when_no_runtime_holds_the_session(
 ) -> None:
     session = configured_spot_session()
     database = SQLiteDatabase(tmp_path / "tiewtrade.sqlite3")
-    actions = desktop_main._PaperRuntimeActions(
-        lifecycle=SQLitePaperRuntimeLifecycle(database),
-        trade_history=SQLiteTradeHistory(database),
-        runtime_snapshots=RuntimeSnapshotRelay(),
-        prepare_database=lambda: None,
-    )
+    actions = _runtime_actions(database)
 
     assert actions.open_entry_numbers(session) is None
 
@@ -1097,12 +1099,7 @@ def test_open_entry_numbers_is_none_when_the_bot_was_only_initialized(
     """
     session = configured_spot_session()
     database = SQLiteDatabase(tmp_path / "tiewtrade.sqlite3")
-    actions = desktop_main._PaperRuntimeActions(
-        lifecycle=SQLitePaperRuntimeLifecycle(database),
-        trade_history=SQLiteTradeHistory(database),
-        runtime_snapshots=RuntimeSnapshotRelay(),
-        prepare_database=lambda: None,
-    )
+    actions = _runtime_actions(database)
 
     actions.initialize(
         configured_bot_control(
@@ -1253,7 +1250,7 @@ def test_desktop_startup_inspection_states_that_nothing_else_is_running(
 
     captured: dict[str, object] = {}
     monkeypatch.setattr(
-        desktop_main,
+        desktop_paper_runtime,
         "PaperRuntimeController",
         RecordingController,
         raising=False,
@@ -1551,3 +1548,46 @@ def test_the_development_database_is_resolved_against_no_working_directory(
     assert resolved is not None
     assert resolved.is_absolute()
     assert resolved == tmp_path / ".local" / "tiewtrade.sqlite3"
+
+
+def test_the_installed_database_lives_in_application_support_on_macos() -> None:
+    installed = desktop_main.default_database_path(platform="darwin", environment={})
+
+    assert installed == (
+        Path.home()
+        / "Library"
+        / "Application Support"
+        / "TiewTrade"
+        / desktop_main.DATABASE_FILE_NAME
+    )
+
+
+def test_the_installed_database_lives_in_local_app_data_on_windows(
+    tmp_path: Path,
+) -> None:
+    """Windows keeps per-machine application state in LOCALAPPDATA.
+
+    A database written under `Library/Application Support` on Windows is a
+    folder no Windows user looks in and no backup tool treats as application
+    state.
+    """
+    installed = desktop_main.default_database_path(
+        platform="win32",
+        environment={"LOCALAPPDATA": str(tmp_path)},
+    )
+
+    assert installed == tmp_path / "TiewTrade" / desktop_main.DATABASE_FILE_NAME
+
+
+def test_windows_without_the_variable_still_names_the_usual_location() -> None:
+    """LOCALAPPDATA is set on every supported Windows, but a missing one must
+    not silently put a trader's history in the working directory."""
+    installed = desktop_main.default_database_path(platform="win32", environment={})
+
+    assert installed == (
+        Path.home()
+        / "AppData"
+        / "Local"
+        / "TiewTrade"
+        / desktop_main.DATABASE_FILE_NAME
+    )

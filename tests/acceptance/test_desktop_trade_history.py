@@ -27,6 +27,8 @@ from tiewtrade.application.trade_history import BasketHistoryResult, TradeHistor
 from tiewtrade.integrations.sqlite.database import SQLiteDatabase
 from tiewtrade.integrations.sqlite.trade_history import (
     SQLiteTradeHistory,
+)
+from tiewtrade.integrations.sqlite.trade_history_errors import (
     TradeHistoryUnavailableError,
 )
 from tiewtrade.trading.session_config import MarketType

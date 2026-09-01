@@ -3,7 +3,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 
-from PySide6.QtCore import Qt, QThreadPool, QTimer, Slot
+from PySide6.QtCore import Qt, QThreadPool, Slot
 from PySide6.QtGui import QCloseEvent
 from PySide6.QtWidgets import QMainWindow, QMessageBox
 
@@ -16,6 +16,9 @@ from tiewtrade.application.chart_data import (
     ChartSnapshot,
 )
 from tiewtrade.application.chart_view_selection import ChartViewSelection
+from tiewtrade.application.paper_session_replacement import (
+    replacement_failure_message,
+)
 from tiewtrade.application.paper_session_setup import (
     ConfiguredPaperSession,
     PaperSessionSetupValues,
@@ -26,7 +29,6 @@ from tiewtrade.application.trading_workspace import (
     BasketEntryGate,
     BasketSnapshot,
     BotRuntimeState,
-    DataFreshness,
     PositionBasketTabSnapshot,
     TradingWorkspaceSnapshot,
 )
@@ -36,8 +38,8 @@ from tiewtrade.ui.bot_lifecycle_workflow import (
     LifecycleAction,
     RuntimeSnapshotRelay,
 )
+from tiewtrade.ui.chart_fact_relay import ChartFactRelay
 from tiewtrade.ui.chart_workflow import (
-    ChartFactRelay,
     ChartWorkflow,
     LoadChart,
     LoadChartFills,
@@ -59,14 +61,22 @@ from tiewtrade.ui.session_workflow import (
     LoadActiveSession,
     SessionWorkflow,
 )
-from tiewtrade.ui.settings_dialogs import ask_about_clearing_database
-from tiewtrade.ui.settings_panel import LineNotificationsReading
+from tiewtrade.ui.settings_workflow import (
+    ReadLineNotifications,
+    SaveLineNotifications,
+    SettingsWorkflow,
+)
 from tiewtrade.ui.start_decision import StartCourse, course_before_start
 from tiewtrade.ui.start_dialogs import (
     PositionAtTarget,
     PositionOnStart,
     ask_about_a_position_at_its_target,
     ask_about_the_open_position,
+)
+from tiewtrade.ui.start_workflow import StartWorkflow, TakeProfitConfirmation
+from tiewtrade.ui.system_notice import (
+    CONNECTION_NOTICE_DELAY_MILLISECONDS,
+    SystemNoticeWorkflow,
 )
 from tiewtrade.ui.take_profit_confirmation import UNREADABLE_POSITION_MESSAGE
 from tiewtrade.ui.total_pnl_workflow import (
@@ -84,38 +94,9 @@ _LOGGER = logging.getLogger("tiewtrade.ui.main_window")
 
 WORKER_SHUTDOWN_TIMEOUT_MS = 5_000
 
-# A question put to the trader, answered by calling the confirmation it is
-# handed. The same shape the Stop confirmation takes, so both can be given a
-# plain callable in a test rather than a dialog to click.
-TakeProfitConfirmation = Callable[[str, Callable[[], None]], None]
-
 # Told to the trader, not asked of them: the Bot has already stopped by the
 # time this is called. A plain callable, so a test can read what was said.
 BlockedNotice = Callable[[str], None]
-
-# What the one system notice says, worst first. It carries only faults the
-# reader has to act on; a connection being retried is told in a dialog, which
-# a reader looking anywhere else on the screen still meets.
-CHART_FEED_STOPPED_NOTICE = "Chart feed stopped — prices are not current"
-
-# How long a connection has to stay away before the trader is taken away from
-# what they were doing. The runtime retries for as long as it takes, climbing
-# from a second to a thirty-second ceiling, so a drop shorter than this is one
-# it was always going to ride out on its own.
-CONNECTION_NOTICE_DELAY_MILLISECONDS = 30_000
-
-# The database may be cleared whenever the Bot is not actually trading or
-# moving between states. Stopped, Blocked, and a freshly Configured Session
-# all resolve through the same editable Setup form, whose only way onward
-# retires whatever Session was there and creates a fresh one — so a cleared
-# database never leaves that form pointed at a row that just went.
-_CLEAR_DATABASE_BLOCKED_STATES = frozenset(
-    {
-        BotRuntimeState.STARTING,
-        BotRuntimeState.RUNNING,
-        BotRuntimeState.STOPPING,
-    }
-)
 
 
 @dataclass(frozen=True, slots=True)
@@ -134,7 +115,10 @@ class BotActions:
     initialize: LifecycleAction | None = None
     runtime_snapshots: RuntimeSnapshotRelay | None = None
     shutdown_runtime: Callable[[], None] | None = None
-    stop_for_replacement: Callable[[ConfiguredPaperSession], None] | None = None
+    # Clears the Session that is there away — stopped, closed and retired —
+    # so the setup form's values can make a new one. The order that happens
+    # in is a business rule, and it is `application` that states it.
+    replace_session: Callable[[ConfiguredPaperSession], None] | None = None
     close_position: Callable[[ConfiguredPaperSession], None] | None = None
     # One Entry of the open Basket, sold at the price the market is at. True
     # where it sold, False where there was no such Entry left to sell.
@@ -143,7 +127,6 @@ class BotActions:
     # one was blocking it and got lifted, False otherwise.
     cancel_cooldown: Callable[[ConfiguredPaperSession], bool] | None = None
     has_open_position: Callable[[ConfiguredPaperSession], bool] | None = None
-    retire_session: Callable[[ConfiguredPaperSession], None] | None = None
     read_open_basket: ReadOpenBasket | None = None
 
 
@@ -171,13 +154,6 @@ NO_BOT = BotActions()
 NO_CHART = ChartSources()
 
 
-type SaveLineNotifications = Callable[[bool, str, str], None]
-"""Keep these LINE settings, wherever this installation keeps them."""
-
-type ReadLineNotifications = Callable[[], LineNotificationsReading]
-"""Read back the LINE settings — never the token, only that there is one."""
-
-
 class MainWindow(QMainWindow):
     def __init__(
         self,
@@ -200,37 +176,23 @@ class MainWindow(QMainWindow):
         read_line_notifications: ReadLineNotifications | None = None,
     ) -> None:
         super().__init__()
-        self._take_profit_confirmation = (
-            take_profit_confirmation or self._open_take_profit_confirmation
-        )
         self._blocked_notice = blocked_notice or self._open_blocked_notice
-        self._connection_lost = False
         self._last_bot_state: BotRuntimeState | None = None
-        self._take_profit_confirmation_pending = False
-        self._take_profit_confirmation_dialog: QMessageBox | None = None
         self._thread_pool = thread_pool or QThreadPool.globalInstance()
         self._load_chart = chart.load
         self._close_position = bot.close_position
         self._close_entry = bot.close_entry
         self._cancel_cooldown = bot.cancel_cooldown
-        self._waiting_on_a_reading: list[Callable[[], None]] = []
         self._has_open_position = bot.has_open_position
         self._clock = chart.clock
-        self._retire_session = bot.retire_session
-        self._stop_for_replacement = bot.stop_for_replacement
+        self._replace_paper_session = bot.replace_session
         self._validate_session = validate_session or validate_paper_session
         self._shutdown_runtime = bot.shutdown_runtime
-        self._clear_database = clear_database
-        self._save_line_notifications = save_line_notifications
-        self._read_line_notifications = read_line_notifications
         self._chart_fact_relay = chart.facts
         self._start_chart_feed = chart.start_feed
         self._select_chart_view = chart.select_view
         self._stop_chart_feed = chart.stop_feed
         self._default_chart_session = chart.default_session
-        self._chart_feed_state: ChartFeedState | None = None
-        self._bot_stopped_reason = ""
-        self._bot_reconnecting = False
         self._close_sequence_started = False
         self._close_sequence_completed = False
         self._shutdown_task: BackgroundTask | None = None
@@ -238,8 +200,24 @@ class MainWindow(QMainWindow):
         self._runtime_shutdown_pool = QThreadPool(self)
         self._runtime_shutdown_pool.setMaxThreadCount(1)
         self.workspace = TradingWorkspace()
-        self._connection_notice = (
-            connection_notice or self.workspace.connection_notice_card
+        self._settings = SettingsWorkflow(
+            panel=self.workspace.settings_panel,
+            clear_database=clear_database,
+            save_line_notifications=save_line_notifications,
+            read_line_notifications=read_line_notifications,
+            thread_pool=self._thread_pool,
+            parent=self,
+        )
+        self._settings.database_cleared.connect(self._database_cleared)
+        self._system_notice = SystemNoticeWorkflow(
+            connection_notice=(
+                connection_notice or self.workspace.connection_notice_card
+            ),
+            connection_notice_delay_ms=connection_notice_delay_ms,
+            parent=self,
+        )
+        self._system_notice.notice_changed.connect(
+            self.workspace.chart.show_system_notice
         )
         self.setup = self.workspace.setup
         self.overview = self.workspace.overview
@@ -275,8 +253,8 @@ class MainWindow(QMainWindow):
         self._wire_session_workflow(create_session, load_active)
         self._build_guarded_actions()
         self._wire_open_position(bot)
-        self._wire_bot_lifecycle(bot)
-        self._wire_chart(chart, bot, connection_notice_delay_ms)
+        self._wire_bot_lifecycle(bot, take_profit_confirmation)
+        self._wire_chart(chart, bot)
         self._wire_trade_history(list_basket_history, list_trade_fills)
         self._wire_total_pnl(read_total_realized_pnl)
         self._workflow.start()
@@ -323,15 +301,10 @@ class MainWindow(QMainWindow):
             self._close_all_requested
         )
         self.workspace.settings_requested.connect(self._settings_requested)
-        self.workspace.settings_panel.clear_database_requested.connect(
-            self._clear_database_requested
-        )
-        self.workspace.settings_panel.line_notifications_save_requested.connect(
-            self._line_notifications_save_requested
-        )
-        self._open_position.reading_landed.connect(self._position_reading_landed)
 
-    def _wire_bot_lifecycle(self, bot: BotActions) -> None:
+    def _wire_bot_lifecycle(
+        self, bot: BotActions, take_profit_confirmation: TakeProfitConfirmation | None
+    ) -> None:
         """Starting and stopping the Bot, and hearing what state it is in."""
         self._lifecycle_workflow = BotLifecycleWorkflow(
             start_bot=bot.start,
@@ -342,12 +315,18 @@ class MainWindow(QMainWindow):
             parent=self,
         )
         self._lifecycle_workflow.snapshot_changed.connect(self._bot_control_changed)
-        self.workspace.start_bot_requested.connect(self._start_requested)
+        self._start = StartWorkflow(
+            position=self._open_position,
+            current_session=self._current_session,
+            start_bot=self._lifecycle_workflow.start_bot,
+            dialog_parent=self,
+            confirmation=take_profit_confirmation,
+            parent=self,
+        )
+        self.workspace.start_bot_requested.connect(self._start.requested)
         self.workspace.stop_bot_requested.connect(self._stop_requested)
 
-    def _wire_chart(
-        self, chart: ChartSources, bot: BotActions, connection_notice_delay_ms: int
-    ) -> None:
+    def _wire_chart(self, chart: ChartSources, bot: BotActions) -> None:
         """The chart, the candles that reach it, and the notices it raises."""
         self._chart_workflow = ChartWorkflow(
             load_chart=chart.load or _unused_chart_loader,
@@ -367,11 +346,6 @@ class MainWindow(QMainWindow):
             self.workspace.chart.set_following_latest
         )
         self._chart_workflow.feed_state_changed.connect(self._show_chart_feed_state)
-        # A drop worth telling is one that lasts, so the telling waits.
-        self._connection_notice_timer = QTimer(self)
-        self._connection_notice_timer.setSingleShot(True)
-        self._connection_notice_timer.setInterval(connection_notice_delay_ms)
-        self._connection_notice_timer.timeout.connect(self._announce_connection_lost)
         self.workspace.chart.range_requested.connect(self._chart_workflow.load_range)
         self.workspace.chart.latest_requested.connect(
             self._chart_workflow.follow_latest
@@ -423,7 +397,7 @@ class MainWindow(QMainWindow):
         # the database — a Session left running elsewhere goes on trading past
         # it. A question about a Position is put to the Position that is there
         # now, not to the one the window happens to be holding.
-        self._once_the_position_is_read(
+        self._open_position.read_then(
             self._replacement_session, self._take_the_start_course
         )
 
@@ -432,7 +406,7 @@ class MainWindow(QMainWindow):
             return
         course = course_before_start(
             position_open=self._position_is_open(),
-            sells_on_start=self._sells_on_start_message() is not None,
+            sells_on_start=self._start.sells_on_start_message() is not None,
             sale_is_unknown=self._open_position.what_a_start_sells_is_unknown(),
         )
         if course is StartCourse.ASK_ABOUT_THE_SALE:
@@ -442,32 +416,6 @@ class MainWindow(QMainWindow):
             self._act_on_the_open_position()
             return
         self._replace_session()
-
-    def _once_the_position_is_read(
-        self,
-        session: ConfiguredPaperSession | None,
-        then: Callable[[], None],
-    ) -> None:
-        """Read the Basket again, and do this with the answer that comes back.
-
-        A Start puts an irreversible question, and it once put one about an
-        Entry that had already sold: the window had read the Basket when it
-        opened and nothing had asked since. No Session to read for is nothing
-        to wait on.
-        """
-        self._waiting_on_a_reading.append(then)
-        if session is None:
-            self._position_reading_landed()
-            return
-        self._open_position.read_for(session)
-
-    @Slot()
-    def _position_reading_landed(self) -> None:
-        """Whatever was waiting for a current reading now has one."""
-        waiting = self._waiting_on_a_reading
-        self._waiting_on_a_reading = []
-        for then in waiting:
-            then()
 
     def _position_is_open(self) -> bool:
         """Whether anything is held — by the database, or by a running Bot."""
@@ -482,7 +430,7 @@ class MainWindow(QMainWindow):
         return persisted or running
 
     def _act_on_a_position_at_its_target(self) -> None:
-        reached = self._position_at_target_message()
+        reached = self._start.position_at_target_message()
         if reached is None:
             return
         answer = ask_about_a_position_at_its_target(self, reached)
@@ -496,10 +444,10 @@ class MainWindow(QMainWindow):
     def _act_on_the_open_position(self) -> None:
         answer = ask_about_the_open_position(
             self,
-            self._position_held_message() or UNREADABLE_POSITION_MESSAGE,
+            self._start.position_held_message() or UNREADABLE_POSITION_MESSAGE,
             # Said only where part of the Position has reached a target, which
             # is what makes running the Session on a sale of its own.
-            self._position_at_target_message(),
+            self._start.position_at_target_message(),
         )
         if answer is PositionOnStart.START_ON_IT:
             self._resume_replacement_session()
@@ -534,27 +482,7 @@ class MainWindow(QMainWindow):
         # Started without asking again: a Position at its target never reaches
         # here — that course closes at the market price or does nothing — so
         # there is no sale left for a question to be about.
-        self._start_now()
-
-    @Slot()
-    def _start_requested(self) -> None:
-        """Start the Bot, asking first about any Position it would run on.
-
-        A Position left open goes on being marked while nothing runs, so the
-        price can reach an Entry's target with no Bot to act on it. The first
-        live tick after a Start sells every such Entry at once, at the target
-        it was given rather than at the price on screen — and there is no way
-        back from a Fill. Short of a target it sells nothing, but it is still
-        this press that hands an open Position back to a Bot, so it is said
-        here too. The routes that put no question of their own come through
-        here, which is where this one is put — to the Position that is there
-        now, which is why the Basket is read again before it is asked about.
-        """
-        if self._take_profit_confirmation_pending:
-            return
-        self._once_the_position_is_read(
-            self._current_session(), self._ask_before_starting
-        )
+        self._start.start_now()
 
     def _current_session(self) -> ConfiguredPaperSession | None:
         """The Session this window is on, or None before there is one.
@@ -576,7 +504,6 @@ class MainWindow(QMainWindow):
         the whole of what they have in common, and all that is stated here.
         """
         position_basket = self.workspace.position_basket
-        settings_panel = self.workspace.settings_panel
         self._sell_entry = GuardedAction(
             available=position_basket.set_closing_enabled,
             report_failure=lambda: position_basket.show_close_error(
@@ -601,132 +528,14 @@ class MainWindow(QMainWindow):
             failure_log="Could not close the Position",
             start=self._thread_pool.start,
         )
-        # The Settings panel has no line of its own to answer on, and says
-        # "busy" where the Position tab says which control is off.
-        self._wipe_database = GuardedAction(
-            available=lambda available: settings_panel.set_busy(not available),
-            report_failure=lambda: QMessageBox.warning(
-                settings_panel,
-                "Settings",
-                "Could not clear the database. Try again.",
-            ),
-            failure_log="Could not clear the database",
-            start=self._thread_pool.start,
-        )
-        self._keep_line_settings = GuardedAction(
-            available=lambda available: settings_panel.set_busy(not available),
-            report_failure=lambda: QMessageBox.warning(
-                settings_panel,
-                "Settings",
-                "Could not save the LINE settings. "
-                "This machine may not be letting TiewTrade store them.",
-            ),
-            failure_log="Could not save the LINE notification settings",
-            start=self._thread_pool.start,
-        )
-        # Reading is its own action rather than a second use of the one that
-        # saves: what is saved is read back straight afterwards, and an action
-        # already running is an action that refuses to start again.
-        self._show_line_settings = GuardedAction(
-            available=lambda available: settings_panel.set_busy(not available),
-            report_failure=settings_panel.say_line_notifications_unreadable,
-            failure_log="Could not read the LINE notification settings",
-            start=self._thread_pool.start,
-        )
-
-    def _ask_before_starting(self) -> None:
-        """Put the question the reading turned out to be worth, or none."""
-        message = self._sells_on_start_message() or self._position_held_message()
-        if message is None:
-            self._start_now()
-            return
-        if self._take_profit_confirmation_pending:
-            return
-        self._take_profit_confirmation_pending = True
-        self._take_profit_confirmation(message, self._confirm_start)
-
-    def _start_now(self) -> None:
-        """The one line that starts the Bot, whichever question preceded it."""
-        self._lifecycle_workflow.start_bot()
-
-    def _sells_on_start_message(self) -> str | None:
-        """What a Start would sell now, asked of the Position that is held.
-
-        A Futures Session never takes a Basket back, so it answers the same
-        way as having none: there is nothing to put a question about.
-        """
-        return self._said_or_asked_anyway(self._open_position.sells_on_start_message())
-
-    def _position_at_target_message(self) -> str | None:
-        """What the held Position has reached, in the words the dialog puts it.
-
-        Read from the same Basket and price as _sells_on_start_message, which
-        is what decided a question was worth putting at all.
-        """
-        return self._said_or_asked_anyway(
-            self._open_position.position_at_target_message()
-        )
-
-    def _position_held_message(self) -> str | None:
-        """What the Position stands at, in the words the dialog puts it in.
-
-        Read from the same Basket and price as the other two, which is what
-        decided a question was worth putting at all.
-        """
-        return self._said_or_asked_anyway(self._open_position.position_held_message())
-
-    def _said_or_asked_anyway(self, message: str | None) -> str | None:
-        """The reading itself, or the reason there is none to be had.
-
-        Silence has two meanings — nothing is at its target, and nothing can
-        be told yet — and only one of them makes it safe to start without
-        asking. A Basket still being read, or one with no price yet, took the
-        question away and sold a Position at a target the price had left.
-        """
-        if message is not None:
-            return message
-        if self._open_position.what_a_start_sells_is_unknown():
-            return UNREADABLE_POSITION_MESSAGE
-        return None
-
-    def _confirm_start(self) -> None:
-        self._take_profit_confirmation_pending = False
-        self._start_now()
-
-    def _open_take_profit_confirmation(
-        self, message: str, confirm: Callable[[], None]
-    ) -> None:
-        dialog = QMessageBox(self)
-        dialog.setWindowTitle("Open Position")
-        dialog.setIcon(QMessageBox.Icon.Warning)
-        dialog.setText("Start the Bot on the Position it holds?")
-        dialog.setInformativeText(message)
-        start_button = dialog.addButton("Start Bot", QMessageBox.ButtonRole.AcceptRole)
-        cancel_button = dialog.addButton("Cancel", QMessageBox.ButtonRole.RejectRole)
-        # The confirmed answer is the one that cannot be taken back, so the
-        # key an impatient hand hits is the one that changes nothing.
-        dialog.setDefaultButton(cancel_button)
-        dialog.setEscapeButton(cancel_button)
-        dialog.setWindowModality(Qt.WindowModality.WindowModal)
-
-        def finish(_result: int) -> None:
-            if dialog.clickedButton() is start_button:
-                confirm()
-            else:
-                self._take_profit_confirmation_pending = False
-            dialog.deleteLater()
-
-        dialog.finished.connect(finish)
-        self._take_profit_confirmation_dialog = dialog
-        dialog.open()
 
     def _replace_session(self) -> None:
         session = self._replacement_session
         values = self._replacement_values
-        retire_session = self._retire_session
+        replace = self._replace_paper_session
         if session is None or values is None:
             return
-        if retire_session is None:
+        if replace is None:
             self.setup.show_field_error(
                 "capital_per_entry",
                 "Paper Session replacement is unavailable. Restart the application.",
@@ -734,19 +543,9 @@ class MainWindow(QMainWindow):
             return
         if self._replacement_task is not None:
             return
-
-        def stop_close_and_retire() -> None:
-            if self._stop_for_replacement is not None:
-                self._stop_for_replacement(session)
-            if self._has_open_position is not None and self._has_open_position(session):
-                if self._close_position is None:
-                    raise RuntimeError("Paper position close is unavailable")
-                self._close_position(session)
-            retire_session(session)
-
         self.workspace.set_bot_busy(True)
         self._replacement_succeeded = False
-        task = BackgroundTask(stop_close_and_retire)
+        task = BackgroundTask(lambda: replace(session))
         task.signals.succeeded.connect(self._replacement_completed)
         task.signals.failed.connect(self._replacement_failed)
         task.signals.finished.connect(self._replacement_finished)
@@ -763,28 +562,12 @@ class MainWindow(QMainWindow):
         self._open_position.forget()
 
     @Slot(object)
-    def _replacement_failed(self, _error: object) -> None:
-        message = "Could not stop, close, or retire the existing Paper Session."
-        if isinstance(_error, RuntimeError) and str(_error) == (
-            "A fresh market price is unavailable"
-        ):
-            message = (
-                "Could not reach live market data to price the close. "
-                "Check your internet connection, then try again."
-            )
-        elif isinstance(_error, RuntimeError) and str(_error) == (
-            "Paper Bot must stop before it can be replaced"
-        ):
-            message = (
-                "Paper Bot is still stopping. Wait for it to stop, then try again."
-            )
-        elif str(_error) == "Active Paper Session cannot be retired":
-            message = (
-                "The existing Paper Session is still running somewhere. "
-                "Stop it, or restart the application."
-            )
-        elif str(_error) == "Active Paper Session is no longer there":
-            message = "The existing Paper Session is no longer in the database."
+    def _replacement_failed(self, error: object) -> None:
+        message = (
+            replacement_failure_message(error)
+            if isinstance(error, BaseException)
+            else "Could not stop, close, or retire the existing Paper Session."
+        )
         self.setup.show_field_error(
             "capital_per_entry",
             f"{message} Try Start Paper Bot again.",
@@ -902,7 +685,8 @@ class MainWindow(QMainWindow):
             return
         previous_state = self._last_bot_state
         self._last_bot_state = value.state
-        self._read_bot_notice(value, previous_state)
+        self._settings.set_bot_state(value.state)
+        self._system_notice.bot_snapshot(value, previous_state)
         self.workspace.show_bot_control_snapshot(value)
         self._chart_workflow.runtime_snapshot(value)
         if value.state is BotRuntimeState.RUNNING:
@@ -924,7 +708,7 @@ class MainWindow(QMainWindow):
             and BotControlAction.START in value.available_actions
         ):
             self._pending_start_session = None
-            self._start_requested()
+            self._start.requested()
             return
         if value.state is BotRuntimeState.CONFIGURED:
             self._show_editable_setup(value)
@@ -941,35 +725,6 @@ class MainWindow(QMainWindow):
     def _stop_requested(self) -> None:
         self._return_to_setup_after_stop = True
         self._lifecycle_workflow.stop_bot()
-
-    def _read_bot_notice(
-        self,
-        snapshot: BotControlSnapshot,
-        previous_state: BotRuntimeState | None,
-    ) -> None:
-        """What the Bot has to say on the one line the system speaks on.
-
-        A Bot waiting on data it cannot reach reads as a Bot that is trading,
-        and a Bot that stopped while the reader was elsewhere leaves nothing
-        behind once its dialog is closed.
-        """
-        header = snapshot.workspace.header
-        if snapshot.state is BotRuntimeState.RUNNING:
-            self._bot_stopped_reason = ""
-            self._bot_reconnecting = (
-                header is not None and header.data_freshness is DataFreshness.STALE
-            )
-        elif (
-            snapshot.state is BotRuntimeState.BLOCKED
-            and previous_state is BotRuntimeState.RUNNING
-        ):
-            self._bot_stopped_reason = snapshot.blocked_reason or ""
-            self._bot_reconnecting = False
-        else:
-            self._bot_stopped_reason = ""
-            self._bot_reconnecting = False
-        self._show_system_notice()
-        self._update_connection_notice()
 
     def _announce_blocked_runtime(
         self,
@@ -1006,6 +761,19 @@ class MainWindow(QMainWindow):
         self.setup.set_values_from_session(snapshot.session)
         self.workspace.show_setup()
 
+    def _still_on_screen(
+        self,
+        relay: ChartFactRelay | RuntimeSnapshotRelay | None,
+        generation: int,
+    ) -> bool:
+        """Whether a candle relayed at this generation is still the one on screen.
+
+        A relay hands its facts over from a worker thread, so one can land
+        after the Session it was read for has gone. The generation it carries
+        is what says which, and an unwired relay never had one to be current.
+        """
+        return relay is not None and relay.is_current(generation)
+
     def _mark_chart_candle(self, candle: object) -> None:
         """Keep the newest price the chart has, which a resting Basket marks on."""
         if not isinstance(candle, ChartCandle):
@@ -1030,8 +798,7 @@ class MainWindow(QMainWindow):
 
     @Slot(object, int)
     def _chart_completed_candle(self, candle: object, generation: int) -> None:
-        relay = self._chart_fact_relay
-        if relay is None or not relay.is_current(generation):
+        if not self._still_on_screen(self._chart_fact_relay, generation):
             return
         self._show_live_price(candle)
         self._mark_chart_candle(candle)
@@ -1039,8 +806,7 @@ class MainWindow(QMainWindow):
 
     @Slot(object, int)
     def _chart_feed_state_received(self, state: object, generation: int) -> None:
-        relay = self._chart_fact_relay
-        if relay is None or not relay.is_current(generation):
+        if not self._still_on_screen(self._chart_fact_relay, generation):
             return
         self._chart_workflow.feed_state(state)
 
@@ -1048,45 +814,9 @@ class MainWindow(QMainWindow):
     def _show_chart_feed_state(self, state: object) -> None:
         if not isinstance(state, ChartFeedState):
             return
-        self._chart_feed_state = state
         self.workspace.chart.show_feed_state(state)
         self.workspace.live_price_card.set_stale(state is not ChartFeedState.LIVE)
-        self._show_system_notice()
-        self._update_connection_notice()
-
-    def _show_system_notice(self) -> None:
-        self.workspace.chart.show_system_notice(self._system_notice_text())
-
-    def _update_connection_notice(self) -> None:
-        """Raise the connection notice on a drop that lasts, drop it on return.
-
-        Only the crossings matter. A drop keeps producing snapshots for as
-        long as it lasts, and a countdown restarted by each of them would
-        never reach the end of its wait.
-        """
-        lost = not self._bot_stopped_reason and (
-            self._bot_reconnecting
-            or self._chart_feed_state is ChartFeedState.RECONNECTING
-        )
-        if lost == self._connection_lost:
-            return
-        self._connection_lost = lost
-        if lost:
-            self._connection_notice_timer.start()
-            return
-        self._connection_notice_timer.stop()
-        self._connection_notice.hide()
-
-    @Slot()
-    def _announce_connection_lost(self) -> None:
-        self._connection_notice.show()
-
-    def _system_notice_text(self) -> str:
-        if self._bot_stopped_reason:
-            return self._bot_stopped_reason
-        if self._chart_feed_state is ChartFeedState.STOPPED:
-            return CHART_FEED_STOPPED_NOTICE
-        return ""
+        self._system_notice.feed_state(state)
 
     @Slot()
     def _chart_retry_requested(self) -> None:
@@ -1098,7 +828,7 @@ class MainWindow(QMainWindow):
         """
         self._chart_workflow.retry()
         if (
-            self._chart_feed_state is not ChartFeedState.STOPPED
+            self._system_notice.chart_feed_state is not ChartFeedState.STOPPED
             or self._start_chart_feed is None
         ):
             return
@@ -1109,32 +839,46 @@ class MainWindow(QMainWindow):
 
     @Slot(object, int)
     def _chart_in_progress_candle(self, candle: object, generation: int) -> None:
-        relay = self._chart_fact_relay
-        if relay is None or not relay.is_current(generation):
+        if not self._still_on_screen(self._chart_fact_relay, generation):
             return
         self._show_live_price(candle)
         self._mark_chart_candle(candle)
         self._chart_workflow.in_progress_candle(candle)
 
-    @Slot(int)
-    def _close_entry_requested(self, entry_number: int) -> None:
-        """Sell one Entry, once the trader has said so in as many words.
+    def _ask_then_act(
+        self,
+        action: GuardedAction,
+        ask: Callable[[], bool],
+        work: Callable[[ConfiguredPaperSession], object],
+    ) -> None:
+        """Put the question, and act on the Session where the answer is yes.
 
-        Which of the two is holding the Basket is not this window's to know:
-        the action is asked, and it goes to the Runtime that owns it or to the
-        database a stopped Bot left it in.
+        The three things the Position tab does are asked and answered alike:
+        nothing starts while the same action is still in flight, nothing acts
+        without a Session to act on, and nothing acts until the trader has
+        said so in as many words. Which of the two is holding the Basket is
+        not this window's to know — the action goes to the Runtime that owns
+        it or to the database a stopped Bot left it in.
         """
-        close_entry = self._close_entry
-        if close_entry is None or self._sell_entry.is_running:
+        if action.is_running:
             return
         session = self._current_session()
         if session is None:
             return
-        if not ask_about_selling_one_entry(self, entry_number):
+        if not ask():
             return
-        self._sell_entry.run(
-            lambda: close_entry(session, entry_number),
-            succeeded=self._position_action_landed,
+        action.run(lambda: work(session), succeeded=self._position_action_landed)
+
+    @Slot(int)
+    def _close_entry_requested(self, entry_number: int) -> None:
+        """Sell one Entry, at the price the market is at."""
+        close_entry = self._close_entry
+        if close_entry is None:
+            return
+        self._ask_then_act(
+            self._sell_entry,
+            lambda: ask_about_selling_one_entry(self, entry_number),
+            lambda session: close_entry(session, entry_number),
         )
 
     @Slot(object)
@@ -1154,47 +898,29 @@ class MainWindow(QMainWindow):
 
     @Slot()
     def _cancel_cooldown_requested(self) -> None:
-        """Lift a Cooldown, once the trader has said so in as many words.
-
-        Which of the two is holding the Basket is not this window's to know:
-        the action is asked, and it goes to the Runtime that owns it or to the
-        database a stopped Bot left it in.
-        """
+        """Lift the Cooldown, where one is what the open Basket is waiting on."""
         cancel_cooldown = self._cancel_cooldown
-        if cancel_cooldown is None or self._waive_cooldown.is_running:
+        if cancel_cooldown is None:
             return
         basket = self.workspace.position_basket.basket
         if basket is None or basket.entry_gate is not BasketEntryGate.COOLDOWN:
             return
-        session = self._current_session()
-        if session is None:
-            return
-        if not ask_about_cancelling_cooldown(self):
-            return
-        self._waive_cooldown.run(
-            lambda: cancel_cooldown(session),
-            succeeded=self._position_action_landed,
+        self._ask_then_act(
+            self._waive_cooldown,
+            lambda: ask_about_cancelling_cooldown(self),
+            cancel_cooldown,
         )
 
     @Slot()
     def _close_all_requested(self) -> None:
-        """Sell the whole Position, once the trader has said so in as many words.
-
-        Which of the two is holding the Basket is not this window's to know:
-        the action is asked, and it goes to the Runtime that owns it or to the
-        database a stopped Bot left it in.
-        """
+        """Sell the whole Position, at the price the market is at."""
         close_position = self._close_position
-        if close_position is None or self._sell_position.is_running:
+        if close_position is None:
             return
-        session = self._current_session()
-        if session is None:
-            return
-        if not ask_about_closing_all_at_market(self):
-            return
-        self._sell_position.run(
-            lambda: close_position(session),
-            succeeded=self._position_action_landed,
+        self._ask_then_act(
+            self._sell_position,
+            lambda: ask_about_closing_all_at_market(self),
+            close_position,
         )
 
     @Slot()
@@ -1203,70 +929,10 @@ class MainWindow(QMainWindow):
             self.workspace.hide_settings()
             return
         self.workspace.show_settings()
-        self._read_line_settings()
-
-    def _read_line_settings(self) -> None:
-        """Fill the LINE form from what is stored, off the UI thread.
-
-        Wherever the settings are kept, reading them can put a prompt in front
-        of the trader and wait on an answer, which is not something a window
-        may do while it is being drawn. The form opens as it is and fills in
-        when the reading lands.
-        """
-        read = self._read_line_notifications
-        if read is None or self._show_line_settings.is_running:
-            return
-        self._show_line_settings.run(read, succeeded=self._line_settings_read)
-
-    @Slot(object)
-    def _line_settings_read(self, reading: object) -> None:
-        if not isinstance(reading, tuple):
-            return
-        self.workspace.settings_panel.show_line_notifications(reading)
-
-    @Slot(bool, str, str)
-    def _line_notifications_save_requested(
-        self,
-        enabled: bool,
-        target_id: str,
-        access_token: str,
-    ) -> None:
-        save = self._save_line_notifications
-        if save is None or self._keep_line_settings.is_running:
-            return
-        self._keep_line_settings.run(
-            lambda: save(enabled, target_id, access_token),
-            succeeded=self._line_settings_kept,
-        )
-
-    @Slot(object)
-    def _line_settings_kept(self, _result: object) -> None:
-        """Read the form back from what was actually stored.
-
-        What the trader typed and what is now stored are two things, and the
-        second is the one the Bot will use. Reading it back is also what
-        empties the token field once its value is somewhere safer.
-        """
-        self._read_line_settings()
+        self._settings.opened()
 
     @Slot()
-    def _clear_database_requested(self) -> None:
-        clear_database = self._clear_database
-        if clear_database is None or self._wipe_database.is_running:
-            return
-        if self._last_bot_state in _CLEAR_DATABASE_BLOCKED_STATES:
-            QMessageBox.warning(
-                self.workspace.settings_panel,
-                "Settings",
-                "Stop the bot before clearing the database.",
-            )
-            return
-        if not ask_about_clearing_database(self.workspace.settings_panel):
-            return
-        self._wipe_database.run(clear_database, succeeded=self._database_cleared)
-
-    @Slot(object)
-    def _database_cleared(self, _result: object) -> None:
+    def _database_cleared(self) -> None:
         """Read the Position tab back, the same way a Close All does.
 
         Whatever Basket the tab was showing had its row wiped along with
@@ -1315,16 +981,14 @@ class MainWindow(QMainWindow):
 
     @Slot(object, int)
     def _runtime_completed_candle(self, candle: object, generation: int) -> None:
-        relay = self._runtime_snapshots
-        if relay is None or not relay.is_current(generation):
+        if not self._still_on_screen(self._runtime_snapshots, generation):
             return
         self._show_live_price(candle)
         self._chart_workflow.completed_candle(candle)
 
     @Slot(object, int)
     def _runtime_in_progress_candle(self, candle: object, generation: int) -> None:
-        relay = self._runtime_snapshots
-        if relay is None or not relay.is_current(generation):
+        if not self._still_on_screen(self._runtime_snapshots, generation):
             return
         self._show_live_price(candle)
         self._chart_workflow.in_progress_candle(candle)
@@ -1374,8 +1038,7 @@ class MainWindow(QMainWindow):
         super().closeEvent(event)
 
     def _close_workflows(self) -> None:
-        self._connection_notice_timer.stop()
-        self._connection_notice.hide()
+        self._system_notice.close()
         if self._chart_fact_relay is not None:
             self._chart_fact_relay.invalidate()
         self.workspace.live_price_card.clear()
@@ -1429,43 +1092,8 @@ class MainWindow(QMainWindow):
             thread_pool=self._thread_pool,
             parent=self,
         )
+        self._history_workflow.attach(self.trade_history)
         self.workspace.trade_history_activated.connect(self._trade_history_activated)
-        self.trade_history.apply_filters_requested.connect(
-            self._history_workflow.apply_filters
-        )
-        self.trade_history.reset_requested.connect(self._history_workflow.reset_filters)
-        self.trade_history.history_tab_changed.connect(
-            self._history_workflow.select_tab
-        )
-        self.trade_history.baskets_retry_requested.connect(
-            self._history_workflow.retry_baskets
-        )
-        self.trade_history.fills_retry_requested.connect(
-            self._history_workflow.retry_fills
-        )
-        self._history_workflow.baskets_loading.connect(
-            self.trade_history.set_baskets_loading
-        )
-        self._history_workflow.baskets_ready.connect(self.trade_history.show_baskets)
-        self._history_workflow.baskets_empty.connect(
-            self.trade_history.show_baskets_empty
-        )
-        self._history_workflow.baskets_unavailable.connect(
-            self.trade_history.show_baskets_unavailable
-        )
-        self._history_workflow.filter_invalid.connect(
-            self.trade_history.show_filter_error
-        )
-        self._history_workflow.trades_ready.connect(self.trade_history.show_trades)
-        self._history_workflow.trades_loading.connect(
-            self.trade_history.set_trades_loading
-        )
-        self._history_workflow.trades_empty.connect(
-            self.trade_history.show_trades_empty
-        )
-        self._history_workflow.trades_unavailable.connect(
-            self.trade_history.show_trades_unavailable
-        )
 
 
 async def _unused_chart_loader(

@@ -29,6 +29,8 @@ from tiewtrade.integrations.sqlite.persistent_paper_spot_session import (
 )
 from tiewtrade.integrations.sqlite.trade_history import (
     SQLiteTradeHistory,
+)
+from tiewtrade.integrations.sqlite.trade_history_errors import (
     TradeHistoryUnavailableError,
 )
 from tiewtrade.trading.trade_history import (

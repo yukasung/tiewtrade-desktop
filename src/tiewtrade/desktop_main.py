@@ -1,20 +1,22 @@
 import asyncio
 import logging
 import os
-from collections.abc import AsyncIterator, Awaitable, Callable, Coroutine
+import sys
+from collections.abc import (
+    AsyncIterator,
+    Awaitable,
+    Callable,
+    Coroutine,
+    Mapping,
+)
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
-from threading import Event, Lock
+from threading import Lock
 from uuid import UUID
 
-from tiewtrade.application.bot_control import (
-    BotControlSnapshot,
-    BotLifecycleResult,
-    workspace_with_runtime_state,
-)
 from tiewtrade.application.chart_data import (
     ChartRange,
 )
@@ -25,10 +27,16 @@ from tiewtrade.application.database_compatibility import DatabaseCompatibilityEr
 from tiewtrade.application.latest_market_price import LatestMarketPrice
 from tiewtrade.application.manual_close_price import ManualClosePrice
 from tiewtrade.application.open_basket import ReopenedBasket, reopen_basket
+from tiewtrade.application.paper_basket_at_rest import (
+    close_one_entry_at_rest,
+    waive_cooldown_at_rest,
+)
 from tiewtrade.application.paper_manual_close import ClosePaperPosition
 from tiewtrade.application.paper_runtime import (
-    PaperRuntimeController,
     read_open_basket_state,
+)
+from tiewtrade.application.paper_session_replacement import (
+    ReplacePaperSession,
 )
 from tiewtrade.application.paper_session_setup import (
     ConfiguredPaperSession,
@@ -37,14 +45,10 @@ from tiewtrade.application.paper_session_setup import (
     PaperSessionSetupValues,
     validate_paper_session,
 )
-from tiewtrade.application.paper_session_sink import (
-    close_one_entry_at_rest,
-    waive_cooldown_at_rest,
-)
 from tiewtrade.application.paper_symbols import PAPER_SYMBOLS, paper_symbol_rules
-from tiewtrade.application.trading_workspace import BotRuntimeState
 from tiewtrade.decimal_context import configure_decimal_context
 from tiewtrade.desktop_logging import configure_desktop_logging
+from tiewtrade.desktop_paper_runtime import PaperRuntimeActions
 from tiewtrade.integrations.binance.public_endpoints import BinancePublicEndpoints
 from tiewtrade.integrations.binance.public_market_data import BinancePublicMarketData
 from tiewtrade.integrations.process_lock.installation_lock import InstallationLock
@@ -56,7 +60,6 @@ from tiewtrade.integrations.sqlite.database import (
     UnsupportedDatabaseSchemaError,
 )
 from tiewtrade.integrations.sqlite.paper_runtime_lifecycle import (
-    PaperRuntimeLifecycleState,
     SQLitePaperRuntimeLifecycle,
 )
 from tiewtrade.integrations.sqlite.trade_history import SQLiteTradeHistory
@@ -72,14 +75,16 @@ from tiewtrade.trading.session_config import MarketType
 from tiewtrade.trading.symbol_rules import SymbolRules
 from tiewtrade.trading.trade_history import TradeFill
 from tiewtrade.ui.bot_lifecycle_workflow import RuntimeSnapshotRelay
-from tiewtrade.ui.chart_workflow import ChartFactRelay
+from tiewtrade.ui.chart_fact_relay import ChartFactRelay
 from tiewtrade.ui.desktop import report_installation_in_use
 from tiewtrade.ui.desktop import run_desktop as run_desktop_ui
 from tiewtrade.ui.main_window import BotActions, ChartSources
 
 _logger = logging.getLogger(__name__)
 
-_RUNTIME_SHUTDOWN_TIMEOUT_SECONDS = 30.0
+APPLICATION_NAME = "TiewTrade"
+DATABASE_FILE_NAME = "tiewtrade.sqlite3"
+
 _MANUAL_CLOSE_PRICE_MAX_AGE = timedelta(seconds=30)
 # Not 0: a shell, a launcher, or a packaging script has to be able to tell
 # "the app ran and closed" from "the app never opened".
@@ -89,287 +94,6 @@ _INSTALLATION_IN_USE_MESSAGE = (
     "One installation runs one Bot Session at a time, so close the other "
     "window before opening this one."
 )
-
-
-class _PaperRuntimeActions:
-    def __init__(
-        self,
-        *,
-        lifecycle: SQLitePaperRuntimeLifecycle,
-        trade_history: SQLiteTradeHistory,
-        runtime_snapshots: RuntimeSnapshotRelay,
-        prepare_database: Callable[[], None],
-    ) -> None:
-        self._lifecycle = lifecycle
-        self._trade_history = trade_history
-        self._runtime_snapshots = runtime_snapshots
-        self._prepare_database = prepare_database
-        self._lock = Lock()
-        self._controller: PaperRuntimeController | None = None
-        self._session: ConfiguredPaperSession | None = None
-        self._operation: str | None = None
-        self._operation_finished = Event()
-        self._operation_finished.set()
-        self._shutdown_requested = False
-        self._shutdown_stop_claimed = False
-
-    def initialize(self, snapshot: BotControlSnapshot) -> BotLifecycleResult:
-        self._prepare_database()
-        self._begin_operation("initialize")
-        controller: PaperRuntimeController | None = None
-        try:
-            controller = self._new_controller(snapshot.session)
-            with self._lock:
-                self._controller = controller
-                self._session = snapshot.session
-            # The composition root holds the installation lock for the life
-            # of the app, so nothing else can be running this Session — which
-            # is what lets a marker left by a killed Bot be read as stale.
-            result = controller.inspect_startup(snapshot.session, sole_process=True)
-        finally:
-            self._finish_operation(
-                "initialize",
-                controller=controller,
-                session=snapshot.session,
-            )
-        return _lifecycle_result_for_ui(snapshot, result)
-
-    def start(self, snapshot: BotControlSnapshot) -> BotLifecycleResult:
-        self._prepare_database()
-        self._begin_operation("start")
-        controller: PaperRuntimeController | None = None
-        try:
-            controller = self._new_controller(snapshot.session)
-            with self._lock:
-                self._controller = controller
-                self._session = snapshot.session
-            result = controller.start(snapshot.session)
-        finally:
-            self._finish_operation(
-                "start",
-                controller=controller,
-                session=snapshot.session,
-            )
-        return _lifecycle_result_for_ui(snapshot, result)
-
-    def stop(self, snapshot: BotControlSnapshot) -> BotLifecycleResult:
-        self._begin_operation("stop")
-        controller: PaperRuntimeController | None = None
-        try:
-            controller = self._current_controller(snapshot.session)
-            result = controller.stop(snapshot.session)
-        finally:
-            self._finish_operation(
-                "stop",
-                controller=controller,
-                session=snapshot.session,
-            )
-        return _lifecycle_result_for_ui(snapshot, result)
-
-    def close_entry(
-        self,
-        session: ConfiguredPaperSession,
-        entry_number: int,
-        *,
-        price: Decimal,
-    ) -> bool:
-        """Ask the running Runtime to let one Entry go, if it is holding this one."""
-        with self._lock:
-            controller = self._controller if self._session == session else None
-        if controller is None:
-            return False
-        return controller.close_entry(session, entry_number, price=price)
-
-    def open_entry_numbers(
-        self, session: ConfiguredPaperSession
-    ) -> tuple[int, ...] | None:
-        """Entry numbers the running Runtime currently holds, if it holds this one.
-
-        None where no Runtime holds this Session — Close All then falls back
-        to whatever the database has, the way a single row's close already
-        does. A Runtime that holds it but has nothing open answers with an
-        empty tuple, not None: there is a position, it is just closed.
-
-        Whether one holds it is the controller's own answer rather than a
-        reading of its workspace. A controller is put in place to inspect
-        durable lifecycle state before any Bot runs, and its workspace
-        carries no Basket until a running Runtime publishes one — read that
-        way, a stopped Bot says "nothing open" about a Position that is
-        sitting in the database, and Close All sells none of it.
-        """
-        with self._lock:
-            controller = self._controller if self._session == session else None
-        if controller is None or not controller.is_holding(session):
-            return None
-        basket = controller.current_workspace.position_basket.basket
-        if basket is None:
-            return ()
-        return tuple(entry.entry_number for entry in basket.entries)
-
-    def waive_cooldown(self, session: ConfiguredPaperSession) -> bool:
-        """Ask the running Runtime to lift a Cooldown it is holding."""
-        with self._lock:
-            controller = self._controller if self._session == session else None
-        if controller is None:
-            return False
-        return controller.waive_cooldown(session)
-
-    def stop_for_replacement(self, session: ConfiguredPaperSession) -> None:
-        with self._lock:
-            controller = self._controller if self._session == session else None
-        lifecycle = self._lifecycle.read(session.config.session_id)
-        if lifecycle is None or lifecycle.state is PaperRuntimeLifecycleState.STOPPED:
-            return
-        self._begin_operation("replace")
-        try:
-            if controller is not None and controller.owns_active_runtime(session):
-                result = controller.stop(session)
-            else:
-                if controller is None:
-                    controller = self._new_controller(session)
-                    with self._lock:
-                        self._controller = controller
-                        self._session = session
-                result = controller.recover(session)
-            header = result.workspace.header
-            if header is None or header.runtime_state is not BotRuntimeState.STOPPED:
-                raise RuntimeError("Paper Bot must stop before it can be replaced")
-        finally:
-            self._finish_operation("replace", controller=controller, session=session)
-
-    def shutdown(self) -> None:
-        with self._lock:
-            self._shutdown_requested = True
-            if self._operation is not None:
-                operation_finished = self._operation_finished
-                controller = None
-                session = None
-            elif self._shutdown_stop_claimed:
-                return
-            else:
-                self._shutdown_stop_claimed = True
-                operation_finished = None
-                controller = self._controller
-                session = self._session
-        if operation_finished is not None:
-            operation_finished.wait(_RUNTIME_SHUTDOWN_TIMEOUT_SECONDS)
-            return
-        self._stop_controller_if_needed(controller, session)
-
-    def new_session_available(self, session: ConfiguredPaperSession) -> bool:
-        with self._lock:
-            if self._operation is not None:
-                return False
-            controller = self._controller if self._session == session else None
-        return controller is None or not controller.owns_active_runtime(session)
-
-    def _begin_operation(self, operation: str) -> None:
-        with self._lock:
-            if self._shutdown_requested:
-                raise RuntimeError("Paper Runtime is shutting down")
-            if self._operation is not None:
-                raise RuntimeError("Paper Runtime operation is already in progress")
-            self._operation = operation
-            self._operation_finished.clear()
-
-    def _finish_operation(
-        self,
-        operation: str,
-        *,
-        controller: PaperRuntimeController | None,
-        session: ConfiguredPaperSession,
-    ) -> None:
-        with self._lock:
-            shutdown_stop = (
-                self._shutdown_requested
-                and not self._shutdown_stop_claimed
-                and operation != "stop"
-            )
-            if self._shutdown_requested and not self._shutdown_stop_claimed:
-                self._shutdown_stop_claimed = True
-        try:
-            if shutdown_stop:
-                self._stop_controller_if_needed(controller, session)
-        finally:
-            with self._lock:
-                if self._operation == operation:
-                    self._operation = None
-                self._operation_finished.set()
-
-    def _stop_controller_if_needed(
-        self,
-        controller: PaperRuntimeController | None,
-        session: ConfiguredPaperSession | None,
-    ) -> None:
-        if controller is None or session is None:
-            return
-        try:
-            result = controller.current_result
-        except RuntimeError:
-            return
-        header = result.workspace.header
-        if header is None or header.runtime_state not in {
-            BotRuntimeState.RUNNING,
-            BotRuntimeState.BLOCKED,
-        }:
-            return
-        controller.stop(session)
-
-    def _new_controller(
-        self,
-        session: ConfiguredPaperSession,
-    ) -> PaperRuntimeController:
-        publish = self._runtime_snapshots.new_generation()
-        controller: PaperRuntimeController | None = None
-
-        def publish_current_result(workspace: object) -> None:
-            del workspace
-            if controller is not None:
-                publish(controller.current_result)
-
-        controller = PaperRuntimeController(
-            lifecycle=self._lifecycle,
-            trade_history=self._trade_history,
-            symbol_rules=_symbol_rules_for(session),
-            source_factory=BinancePublicMarketData,
-            notifier_factory=line_session_notifier,
-            snapshot_callback=publish_current_result,
-            completed_candle_callback=publish.completed_candle,
-            in_progress_candle_callback=publish.in_progress_candle,
-        )
-        return controller
-
-    def _current_controller(
-        self,
-        session: ConfiguredPaperSession,
-    ) -> PaperRuntimeController:
-        with self._lock:
-            controller = self._controller
-            active_session = self._session
-        if controller is None or active_session != session:
-            raise RuntimeError("Paper Runtime is not active for this Session")
-        return controller
-
-
-def _lifecycle_result_for_ui(
-    current: BotControlSnapshot,
-    result: BotLifecycleResult,
-) -> BotLifecycleResult:
-    header = result.workspace.header
-    if header is None:
-        raise ValueError("Paper Runtime result requires a header")
-    return BotLifecycleResult(
-        workspace=workspace_with_runtime_state(
-            current.workspace,
-            header.runtime_state,
-            data_freshness=(
-                None
-                if header.runtime_state is BotRuntimeState.BLOCKED
-                else header.data_freshness
-            ),
-        ),
-        blocked_reason=result.blocked_reason,
-    )
 
 
 def _symbol_rules_for(session: ConfiguredPaperSession) -> SymbolRules:
@@ -450,7 +174,7 @@ class _DesktopStores:
 def _bot_actions(
     stores: _DesktopStores,
     *,
-    runtime_actions: _PaperRuntimeActions,
+    runtime_actions: PaperRuntimeActions,
     runtime_snapshots: RuntimeSnapshotRelay,
     manual_close_price: ManualClosePrice,
     shutdown_runtime: Callable[[], None],
@@ -554,20 +278,27 @@ def _bot_actions(
             tick_size=_symbol_rules_for(session).tick_size,
         )
 
+    def has_open_position(session: ConfiguredPaperSession) -> bool:
+        return history.find_open_basket(session.config.session_id) is not None
+
+    replace_session = ReplacePaperSession(
+        stop_bot=runtime_actions.stop_for_replacement,
+        has_open_position=has_open_position,
+        close_position=close_position,
+        retire_session=retire_session,
+    )
+
     return BotActions(
         start=runtime_actions.start,
         stop=runtime_actions.stop,
         initialize=runtime_actions.initialize,
         runtime_snapshots=runtime_snapshots,
         shutdown_runtime=shutdown_runtime,
-        stop_for_replacement=runtime_actions.stop_for_replacement,
+        replace_session=_migrate_first(stores.prepare, replace_session.execute),
         close_position=_migrate_first(stores.prepare, close_position),
         close_entry=_migrate_first(stores.prepare, close_entry),
         cancel_cooldown=_migrate_first(stores.prepare, cancel_cooldown),
-        has_open_position=lambda session: (
-            history.find_open_basket(session.config.session_id) is not None
-        ),
-        retire_session=_migrate_first(stores.prepare, retire_session),
+        has_open_position=has_open_position,
         read_open_basket=_migrate_first(stores.prepare, read_open_basket),
     )
 
@@ -737,11 +468,14 @@ def _run_desktop_holding_the_installation(resolved_database_path: Path) -> int:
         source_factory=BinancePublicMarketData,
         latest_market_price=latest_market_price,
     )
-    runtime_actions = _PaperRuntimeActions(
+    runtime_actions = PaperRuntimeActions(
         lifecycle=SQLitePaperRuntimeLifecycle(database),
         trade_history=history,
         runtime_snapshots=runtime_snapshots,
         prepare_database=prepare_database,
+        symbol_rules=_symbol_rules_for,
+        source_factory=BinancePublicMarketData,
+        notifier_factory=line_session_notifier,
     )
 
     def shutdown_desktop_runtimes() -> None:
@@ -789,9 +523,30 @@ def _keep_line_notifications(
     )
 
 
-def default_database_path() -> Path:
-    directory = Path.home() / "Library" / "Application Support" / "TiewTrade"
-    return directory / "tiewtrade.sqlite3"
+def default_database_path(
+    platform: str = sys.platform,
+    environment: Mapping[str, str] = os.environ,
+) -> Path:
+    """The one file a trader's history lives in, named for their machine.
+
+    Each platform has a place it keeps application state, and it is the place
+    its backup tools and its users already look. macOS says Application
+    Support; Windows says LOCALAPPDATA. The arguments exist so a machine can
+    answer for the other one under test — nothing calls this with them.
+    """
+    return _application_directory(platform, environment) / DATABASE_FILE_NAME
+
+
+def _application_directory(platform: str, environment: Mapping[str, str]) -> Path:
+    if platform != "win32":
+        return Path.home() / "Library" / "Application Support" / APPLICATION_NAME
+    # Every supported Windows sets LOCALAPPDATA. Missing, the usual location is
+    # still a better answer than a relative path, which would put a trader's
+    # history wherever the app happened to be started from.
+    local_app_data = environment.get("LOCALAPPDATA", "").strip()
+    if not local_app_data:
+        return Path.home() / "AppData" / "Local" / APPLICATION_NAME
+    return Path(local_app_data) / APPLICATION_NAME
 
 
 def database_path_from_environment() -> Path | None:
