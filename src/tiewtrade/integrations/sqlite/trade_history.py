@@ -304,6 +304,27 @@ class SQLiteTradeHistory:
 
         return self._run_read(operation)
 
+    def total_realized_pnl(self) -> Decimal:
+        """Every result this installation has realised, across all of it.
+
+        There is no filter because the question has no dimension: not one
+        Session, not one day, not one market — the whole ledger.
+
+        Open Baskets are in it. `realized_pnl` is a running total the moment
+        an Entry is sold out of a Basket, whether or not the Basket itself
+        has closed, so a closed-only sum would drop the profit of a Basket
+        that is still holding the rest of its Entries.
+
+        What it does not carry is what is still held: that is unrealised, it
+        needs a price, and nothing in the database has one.
+        """
+
+        def operation(connection: sqlite3.Connection) -> Decimal:
+            rows = connection.execute("SELECT realized_pnl FROM basket_results")
+            return _exact_decimal_sum(Decimal(row["realized_pnl"]) for row in rows)
+
+        return self._run_read(operation)
+
     def list_pair_fills(
         self,
         symbol: str,

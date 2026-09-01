@@ -61,9 +61,18 @@ QLabel#livePrice {
     font-size: 22px;
     font-weight: 700;
 }
+/* Smaller than the price it reads beside: the side column is a fixed width
+   and this figure carries its quote asset, so two prices' worth of digits
+   do not both fit at 22px. */
+QLabel#totalPnl {
+    color: #F1F5F9;
+    font-size: 18px;
+    font-weight: 700;
+}
 /* A price that stopped arriving still reads, dimmed. The label's own colour
    is handed back when it goes stale, so this rule has nothing to lose to. */
 QFrame#livePriceCard[stale="true"] QLabel#livePrice,
+QFrame#livePriceCard[stale="true"] QLabel#totalPnl,
 QFrame#livePriceCard[stale="true"] QLabel#eyebrow {
     color: #64748B;
 }

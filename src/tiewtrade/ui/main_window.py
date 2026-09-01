@@ -24,6 +24,7 @@ from tiewtrade.application.paper_session_setup import (
 )
 from tiewtrade.application.trading_workspace import (
     BasketEntryGate,
+    BasketSnapshot,
     BotRuntimeState,
     DataFreshness,
     PositionBasketTabSnapshot,
@@ -68,6 +69,10 @@ from tiewtrade.ui.start_dialogs import (
     ask_about_the_open_position,
 )
 from tiewtrade.ui.take_profit_confirmation import UNREADABLE_POSITION_MESSAGE
+from tiewtrade.ui.total_pnl_workflow import (
+    ReadTotalRealizedPnl,
+    TotalPnlWorkflow,
+)
 from tiewtrade.ui.trade_history_workflow import (
     ListBasketHistory,
     ListTradeFills,
@@ -181,6 +186,7 @@ class MainWindow(QMainWindow):
         load_active: LoadActiveSession,
         list_basket_history: ListBasketHistory | None = None,
         list_trade_fills: ListTradeFills | None = None,
+        read_total_realized_pnl: ReadTotalRealizedPnl | None = None,
         validate_session: Callable[[PaperSessionSetupValues], None] | None = None,
         bot: BotActions = NO_BOT,
         chart: ChartSources = NO_CHART,
@@ -257,6 +263,11 @@ class MainWindow(QMainWindow):
         # holding it — the running Runtime or the database. A close is the
         # moment this goes from true to false, wherever it is seen.
         self._position_open = False
+        # Which Entries the open Basket is holding. Every sale changes it,
+        # and a sale is the only thing that changes what has been realised,
+        # so this is what says the durable half has to be read again. `None`
+        # is no Basket at all, which is also a composition.
+        self._position_composition: tuple[int, ...] | None = None
 
         # Built in the order the window reads: the Session first, because
         # everything below is about the one it is on, and the history last,
@@ -267,7 +278,9 @@ class MainWindow(QMainWindow):
         self._wire_bot_lifecycle(bot)
         self._wire_chart(chart, bot, connection_notice_delay_ms)
         self._wire_trade_history(list_basket_history, list_trade_fills)
+        self._wire_total_pnl(read_total_realized_pnl)
         self._workflow.start()
+        self._total_pnl.start()
 
     def _wire_session_workflow(
         self, create_session: CreateSession, load_active: LoadActiveSession
@@ -846,24 +859,42 @@ class MainWindow(QMainWindow):
             isinstance(value, TradingWorkspaceSnapshot)
             and self._last_bot_state is BotRuntimeState.RUNNING
         ):
-            self._note_position_open(value.position_basket.basket is not None)
+            self._note_position(value.position_basket.basket)
 
     @Slot(object)
     def _open_position_basket_changed(self, value: object) -> None:
         if not isinstance(value, PositionBasketTabSnapshot):
             return
-        self._note_position_open(value.basket is not None)
+        if self._last_bot_state is BotRuntimeState.RUNNING:
+            # The Runtime owns the Basket, and this side can still land a
+            # read that went out before the hand-off — an empty tab from
+            # before the Bot started, over a Position that is open now.
+            return
+        self._note_position(value.basket)
 
-    def _note_position_open(self, is_open: bool) -> None:
-        """Ask the Position History table to refresh the moment a Basket closes.
+    def _note_position(self, basket: BasketSnapshot | None) -> None:
+        """Take the Position as it now stands, wherever it was read from.
 
-        A closed Basket is a new row nothing else will surface until this
-        Session's tab is reopened, so the close itself is what refreshes it.
+        Two things follow from it. A closed Basket is a new history row
+        nothing else will surface until this Session's tab is reopened, so
+        the close itself is what refreshes the table. And the Basket is half
+        of the total: what it is worth now comes straight off the snapshot,
+        while what it has realised is in the database — read again whenever
+        the Entries it holds change, which is every sale and nothing else.
         """
         was_open = self._position_open
-        self._position_open = is_open
-        if was_open and not is_open and self._history_started:
+        self._position_open = basket is not None
+        if was_open and basket is None and self._history_started:
             self._history_workflow.start()
+        self._total_pnl.set_open_basket(basket)
+        composition = (
+            None
+            if basket is None
+            else tuple(entry.entry_number for entry in basket.entries)
+        )
+        if composition != self._position_composition:
+            self._position_composition = composition
+            self._total_pnl.refresh()
 
     @Slot(object)
     def _bot_control_changed(self, value: object) -> None:
@@ -1241,6 +1272,7 @@ class MainWindow(QMainWindow):
         for them again until the next trade.
         """
         self._history_workflow.start()
+        self._total_pnl.refresh()
         self._chart_workflow.refresh_fills()
         session = self._current_session()
         if session is not None:
@@ -1339,6 +1371,7 @@ class MainWindow(QMainWindow):
         self._workflow.close()
         self._lifecycle_workflow.close()
         self._history_workflow.close()
+        self._total_pnl.close()
         self._chart_workflow.close()
 
     @Slot()
@@ -1359,6 +1392,19 @@ class MainWindow(QMainWindow):
         self._close_sequence_completed = True
         self._shutdown_task = None
         self.close()
+
+    def _wire_total_pnl(
+        self, read_total_realized_pnl: ReadTotalRealizedPnl | None
+    ) -> None:
+        """The figure beside the price: everything realised, plus what is held."""
+        self._total_pnl = TotalPnlWorkflow(
+            read_total_realized_pnl=read_total_realized_pnl,
+            thread_pool=self._thread_pool,
+            parent=self,
+        )
+        self._total_pnl.total_changed.connect(
+            self.workspace.live_price_card.show_total_pnl
+        )
 
     def _wire_trade_history(
         self,

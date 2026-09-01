@@ -1,4 +1,5 @@
 import ast
+from decimal import Decimal
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -73,6 +74,7 @@ def test_dark_theme_covers_current_semantic_object_names_without_dead_navigation
 ):
     for selector in (
         "QLabel#eyebrow",
+        "QLabel#totalPnl",
         "QLabel#summaryValue",
         'QPushButton[retryButton="true"]',
     ):
@@ -242,6 +244,23 @@ def test_unclassified_button_renders_a_visible_dark_theme_surface(
     # the exact colour asked every machine to rasterize text identically,
     # which is why this passed on macOS and failed on Linux for weeks.
     assert QColor(lightest).lightness() > 128, f"lightest pixel was {lightest}"
+
+
+def test_a_stale_total_dims_beside_the_price_it_is_read_with(qtbot: QtBot) -> None:
+    """Half the total is priced off the feed, so it goes dim with the price."""
+    workspace = TradingWorkspace()
+    qtbot.addWidget(workspace)
+    workspace.setStyleSheet(DARK_THEME)
+    workspace.resize(1200, 700)
+    workspace.show()
+    card = workspace.live_price_card
+    card.show_total_pnl(Decimal("1234.5"))
+
+    card.set_stale(True)
+
+    assert _palette_color(card.total, QPalette.ColorRole.WindowText) == QColor(
+        "#64748B"
+    )
 
 
 def test_a_stale_live_price_dims_past_its_own_colour(qtbot: QtBot) -> None:

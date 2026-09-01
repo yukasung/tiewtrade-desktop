@@ -377,6 +377,9 @@ def test_desktop_composition_supplies_migrated_trade_history_queries(
     assert migration_calls == 2
     assert list_baskets(TradeHistoryFilter()).items == ()
     assert migration_calls == 3
+    read_total = cast(Callable[[], Decimal], captured["read_total_realized_pnl"])
+    assert read_total() == Decimal("0")
+    assert migration_calls == 4
 
 
 def test_desktop_composes_concrete_paper_runtime_actions(

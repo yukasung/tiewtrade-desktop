@@ -755,6 +755,9 @@ def _run_desktop_holding_the_installation(resolved_database_path: Path) -> int:
             prepare_database, history.list_basket_history
         ),
         list_trade_fills=_migrate_first(prepare_database, history.list_trade_fills),
+        read_total_realized_pnl=_migrate_first(
+            prepare_database, history.total_realized_pnl
+        ),
         validate_session=validate_paper_session,
         bot=_bot_actions(
             stores,

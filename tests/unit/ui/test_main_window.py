@@ -3596,6 +3596,206 @@ def test_the_workspace_start_asks_about_the_position_that_is_there_now(
     assert len(reads) >= 2
 
 
+def test_the_total_pnl_reads_beside_the_price_from_the_start(qtbot: QtBot) -> None:
+    window = MainWindow(
+        create_session=unused_create,
+        load_active=no_active_session,
+        list_basket_history=empty_basket_history,
+        list_trade_fills=empty_trade_fills,
+        read_total_realized_pnl=lambda: Decimal("42.5"),
+    )
+    qtbot.addWidget(window)
+    window.show()
+
+    qtbot.waitUntil(
+        lambda: window.workspace.live_price_card.total.text() == "42.50 USDT"
+    )
+
+
+def test_a_window_with_no_total_to_read_leaves_the_figure_blank(
+    qtbot: QtBot,
+) -> None:
+    window = MainWindow(
+        create_session=unused_create,
+        load_active=no_active_session,
+        list_basket_history=empty_basket_history,
+        list_trade_fills=empty_trade_fills,
+    )
+    qtbot.addWidget(window)
+    window.show()
+    qtbot.waitUntil(window.setup.create_button.isEnabled)
+
+    assert window.workspace.live_price_card.total.text() == BLANK
+
+
+def test_the_open_basket_is_added_to_the_total_and_moves_with_the_price(
+    qtbot: QtBot,
+) -> None:
+    """The unrealised half is a candle away, and costs no read to take."""
+    session = configured_spot_session()
+    relay = ChartFactRelay()
+    reads = 0
+
+    def read_total() -> Decimal:
+        nonlocal reads
+        reads += 1
+        return Decimal("10")
+
+    window = MainWindow(
+        create_session=unused_create,
+        load_active=lambda: session,
+        list_basket_history=empty_basket_history,
+        list_trade_fills=empty_trade_fills,
+        read_total_realized_pnl=read_total,
+        bot=BotActions(read_open_basket=lambda _session: _basket_of(session, "100")),
+        chart=ChartSources(facts=relay),
+    )
+    qtbot.addWidget(window)
+    window.show()
+    qtbot.waitUntil(lambda: window._open_position.basket is not None)
+    reads_before_candles = reads
+
+    # Two Entries' worth of quantity at 100, marked at 105: 10 of unrealised.
+    publisher = relay.new_generation()
+    publisher.in_progress_candle(
+        flat_candle(datetime(2026, 8, 1, 12, 5, tzinfo=UTC), 105)
+    )
+    qtbot.waitUntil(
+        lambda: window.workspace.live_price_card.total.text() == "20.00 USDT"
+    )
+
+    publisher.in_progress_candle(
+        flat_candle(datetime(2026, 8, 1, 12, 5, tzinfo=UTC), 110)
+    )
+    qtbot.waitUntil(
+        lambda: window.workspace.live_price_card.total.text() == "30.00 USDT"
+    )
+    qtbot.wait(50)
+
+    assert reads == reads_before_candles
+
+
+def test_selling_one_entry_of_an_open_basket_reads_the_realized_half_again(
+    qtbot: QtBot,
+) -> None:
+    """A sale is realised money, and the Basket it came out of stays open.
+
+    Nothing else would ask for it: the Basket is still there, the tab still
+    has rows, and only the Entries it is holding have changed.
+    """
+    session = configured_spot_session()
+    relay = ChartFactRelay()
+    reads = 0
+    sold: list[int] = []
+
+    def read_total() -> Decimal:
+        nonlocal reads
+        reads += 1
+        return Decimal(reads)
+
+    def read_open_basket(_session: ConfiguredPaperSession) -> ReopenedBasket | None:
+        return _basket_of_two(session) if not sold else _basket_of(session, "100")
+
+    def close_entry(_session: ConfiguredPaperSession, entry_number: int) -> bool:
+        sold.append(entry_number)
+        return True
+
+    window = MainWindow(
+        create_session=unused_create,
+        load_active=lambda: session,
+        list_basket_history=empty_basket_history,
+        list_trade_fills=empty_trade_fills,
+        read_total_realized_pnl=read_total,
+        bot=BotActions(read_open_basket=read_open_basket, close_entry=close_entry),
+        chart=ChartSources(facts=relay),
+    )
+    qtbot.addWidget(window)
+    window.show()
+    qtbot.waitUntil(lambda: window.workspace.position_basket.table.rowCount() == 2)
+    relay.new_generation().in_progress_candle(
+        flat_candle(datetime(2026, 8, 1, 12, 5, tzinfo=UTC), 105)
+    )
+    qtbot.waitUntil(lambda: _marked_rows(window) == 2)
+    reads_before_sale = reads
+
+    QTimer.singleShot(0, _answer_position_dialog("Market", []))
+    _click_close_entry(window, 0)
+
+    qtbot.waitUntil(lambda: sold == [2])
+    qtbot.waitUntil(lambda: window.workspace.position_basket.table.rowCount() == 1)
+    qtbot.waitUntil(lambda: reads == reads_before_sale + 1)
+    qtbot.wait(50)
+
+    assert reads == reads_before_sale + 1
+
+
+def test_a_closed_basket_leaves_the_total_reading_what_was_realized(
+    qtbot: QtBot,
+) -> None:
+    """Nothing is held any more, so the durable half is the whole answer."""
+    session = configured_spot_session()
+    relay = ChartFactRelay()
+    closed: list[str] = []
+
+    def read_open_basket(_session: ConfiguredPaperSession) -> ReopenedBasket | None:
+        return None if closed else _basket_of(session, "100")
+
+    def close_entry(_session: ConfiguredPaperSession, _entry_number: int) -> bool:
+        closed.append("sold")
+        return True
+
+    window = MainWindow(
+        create_session=unused_create,
+        load_active=lambda: session,
+        list_basket_history=empty_basket_history,
+        list_trade_fills=empty_trade_fills,
+        read_total_realized_pnl=lambda: Decimal("10"),
+        bot=BotActions(read_open_basket=read_open_basket, close_entry=close_entry),
+        chart=ChartSources(facts=relay),
+    )
+    qtbot.addWidget(window)
+    window.show()
+    qtbot.waitUntil(lambda: window._open_position.basket is not None)
+    relay.new_generation().in_progress_candle(
+        flat_candle(datetime(2026, 8, 1, 12, 5, tzinfo=UTC), 105)
+    )
+    qtbot.waitUntil(
+        lambda: window.workspace.live_price_card.total.text() == "20.00 USDT"
+    )
+
+    QTimer.singleShot(0, _answer_position_dialog("Market", []))
+    _click_close_entry(window, 0)
+
+    qtbot.waitUntil(lambda: closed == ["sold"])
+    qtbot.waitUntil(
+        lambda: window.workspace.live_price_card.total.text() == "10.00 USDT"
+    )
+
+
+def test_clearing_the_database_reads_the_total_again(qtbot: QtBot) -> None:
+    """Everything realised was wiped, so the figure standing is not true."""
+    totals = [Decimal("10"), Decimal("0")]
+
+    window = MainWindow(
+        create_session=unused_create,
+        load_active=no_active_session,
+        list_basket_history=empty_basket_history,
+        list_trade_fills=empty_trade_fills,
+        read_total_realized_pnl=lambda: totals.pop(0) if totals else Decimal("0"),
+    )
+    qtbot.addWidget(window)
+    window.show()
+    qtbot.waitUntil(
+        lambda: window.workspace.live_price_card.total.text() == "10.00 USDT"
+    )
+
+    window._database_cleared(None)
+
+    qtbot.waitUntil(
+        lambda: window.workspace.live_price_card.total.text() == "0.00 USDT"
+    )
+
+
 def _basket_of(session: ConfiguredPaperSession, price: str) -> ReopenedBasket:
     """One Entry taken at a price, with an ATR of 2 and a multiplier of 3."""
     return reopen_basket(
@@ -3607,6 +3807,37 @@ def _basket_of(session: ConfiguredPaperSession, price: str) -> ReopenedBasket:
                     price=Decimal(price),
                     quantity=Decimal("2"),
                     filled_at=datetime(2026, 8, 1, 12, tzinfo=UTC),
+                    atr=Decimal("2"),
+                    group_id=1,
+                ),
+            ),
+            closed_basket_count=0,
+        ),
+        entry_policy=session.config.entry_policy,
+        take_profit_atr_multiplier=Decimal("3"),
+        tick_size=Decimal("0.01"),
+    )
+
+
+def _basket_of_two(session: ConfiguredPaperSession) -> ReopenedBasket:
+    """Two Entries at 100, taken a day apart so the Entry Pair lets the second in."""
+    return reopen_basket(
+        OpenBasketState(
+            basket_id=UUID("00000000-0000-0000-0000-0000000000d4"),
+            entries=(
+                OpenBasketEntry(
+                    entry_number=1,
+                    price=Decimal("100"),
+                    quantity=Decimal("2"),
+                    filled_at=datetime(2026, 8, 1, 12, tzinfo=UTC),
+                    atr=Decimal("2"),
+                    group_id=1,
+                ),
+                OpenBasketEntry(
+                    entry_number=2,
+                    price=Decimal("100"),
+                    quantity=Decimal("2"),
+                    filled_at=datetime(2026, 8, 2, 12, tzinfo=UTC),
                     atr=Decimal("2"),
                     group_id=1,
                 ),
