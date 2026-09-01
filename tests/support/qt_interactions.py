@@ -35,6 +35,63 @@ def hover(widget: QWidget, x: int, y: int) -> None:
     )
 
 
+def press(widget: QWidget, x: int, y: int) -> None:
+    """Put the left button down on a widget, headless or not (see `hover`)."""
+    _send_mouse(
+        widget,
+        QEvent.Type.MouseButtonPress,
+        x,
+        y,
+        button=Qt.MouseButton.LeftButton,
+        buttons=Qt.MouseButton.LeftButton,
+    )
+
+
+def drag_to(widget: QWidget, x: int, y: int) -> None:
+    """Move with the left button held, as a drag in progress."""
+    _send_mouse(
+        widget,
+        QEvent.Type.MouseMove,
+        x,
+        y,
+        button=Qt.MouseButton.NoButton,
+        buttons=Qt.MouseButton.LeftButton,
+    )
+
+
+def release(widget: QWidget, x: int, y: int) -> None:
+    _send_mouse(
+        widget,
+        QEvent.Type.MouseButtonRelease,
+        x,
+        y,
+        button=Qt.MouseButton.LeftButton,
+        buttons=Qt.MouseButton.NoButton,
+    )
+
+
+def _send_mouse(
+    widget: QWidget,
+    event_type: QEvent.Type,
+    x: int,
+    y: int,
+    *,
+    button: Qt.MouseButton,
+    buttons: Qt.MouseButton,
+) -> None:
+    QApplication.sendEvent(
+        widget,
+        QMouseEvent(
+            event_type,
+            QPointF(x, y),
+            QPointF(x, y),
+            button,
+            buttons,
+            Qt.KeyboardModifier.NoModifier,
+        ),
+    )
+
+
 def table_item(table: QTableWidget, row: int, column: int) -> QTableWidgetItem:
     item = table.item(row, column)
     assert item is not None

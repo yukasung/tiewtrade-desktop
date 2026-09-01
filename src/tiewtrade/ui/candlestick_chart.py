@@ -25,6 +25,8 @@ from tiewtrade.application.chart_data import (
     ChartReadState,
     ChartSnapshot,
     latest_completed_boundary,
+    panned_chart_range,
+    visible_candle_count,
     zoomed_chart_range,
 )
 from tiewtrade.application.chart_view_selection import ChartViewSelection
@@ -63,6 +65,10 @@ _ZOOM_ICON_EXTENT = QSize(_ZOOM_ICON_SIZE, _ZOOM_ICON_SIZE)
 # button's enabled and disabled text colors from the theme.
 _ZOOM_ICON_COLOR = "#F1F5F9"
 _ZOOM_ICON_DISABLED_COLOR = "#6F7D93"
+# How far one notch of a horizontal wheel carries the window. A trackpad
+# reports many small notches, so a whole screen of scrolling is a glide
+# rather than a jump.
+_WHEEL_PAN_CANDLES = 4
 
 
 class CandlestickChartWidget(QWidget):
@@ -81,6 +87,8 @@ class CandlestickChartWidget(QWidget):
         self._snapshot: ChartSnapshot | None = None
         self._feed_state: ChartFeedState | None = None
         self._crosshair_position: QPointF | None = None
+        self._pan_anchor: QPointF | None = None
+        self._pan_offset_x = 0.0
 
         self._header = QHBoxLayout()
         self._header.setContentsMargins(12, 10, 12, 0)
@@ -175,6 +183,11 @@ class CandlestickChartWidget(QWidget):
         return tuple(marker_label(marker.side) for marker in self._snapshot.markers)
 
     @property
+    def pan_offset(self) -> float:
+        """How far the drawn chart is held from its range, mid-drag."""
+        return self._pan_offset_x
+
+    @property
     def crosshair(self) -> CrosshairGlyph | None:
         model = self._painter_model()
         if model is None:
@@ -243,7 +256,9 @@ class CandlestickChartWidget(QWidget):
             )
             != snapshot.chart_range
         )
-        self.previous_range_button.setEnabled(has_range)
+        self.previous_range_button.setEnabled(
+            has_range and self._pan_target(-self._visible_candles(snapshot)) is not None
+        )
         self.next_range_button.setEnabled(
             has_range
             and snapshot.chart_range.end
@@ -301,14 +316,60 @@ class CandlestickChartWidget(QWidget):
             self._draw_message(painter, surface, "Loading chart")
         elif not snapshot.display_candles:
             self._draw_message(painter, surface, "No completed candles")
-        else:
+        elif not self._pan_offset_x:
             self._draw_chart(painter, surface, snapshot)
+        else:
+            # Mid-drag the same candles are drawn shifted, leaving the side
+            # being pulled from bare until the panned range is read.
+            painter.save()
+            painter.setClipRect(surface)
+            painter.translate(self._pan_offset_x, 0)
+            self._draw_chart(painter, surface, snapshot)
+            painter.restore()
         painter.end()
 
+    def mousePressEvent(self, event: QMouseEvent) -> None:  # noqa: N802
+        """Take hold of the chart, so the drag that follows moves it."""
+        if (
+            event.button() is Qt.MouseButton.LeftButton
+            and self._can_pan()
+            and self._chart_surface().contains(event.position())
+        ):
+            self._pan_anchor = event.position()
+            self._pan_offset_x = 0.0
+            self._crosshair_position = None
+            self.setCursor(Qt.CursorShape.ClosedHandCursor)
+            event.accept()
+            return
+        super().mousePressEvent(event)
+
     def mouseMoveEvent(self, event: QMouseEvent) -> None:  # noqa: N802
+        anchor = self._pan_anchor
+        if anchor is not None:
+            # The drawn chart follows the hand at once; the range it is read
+            # from only moves when the hand lets go.
+            self._pan_offset_x = event.position().x() - anchor.x()
+            self._crosshair_position = None
+            self.update()
+            event.accept()
+            return
         self._crosshair_position = event.position()
         self.update()
         super().mouseMoveEvent(event)
+
+    def mouseReleaseEvent(self, event: QMouseEvent) -> None:  # noqa: N802
+        if self._pan_anchor is None:
+            super().mouseReleaseEvent(event)
+            return
+        anchor = self._pan_anchor
+        offset = event.position().x() - anchor.x()
+        self._pan_anchor = None
+        self._pan_offset_x = 0.0
+        self.unsetCursor()
+        self.update()
+        # Pulling the chart to the right walks the window back in time.
+        self._request_pan(-self._candles_across(offset))
+        event.accept()
 
     def leaveEvent(self, event: QEvent) -> None:  # noqa: N802
         self._crosshair_position = None
@@ -316,10 +377,68 @@ class CandlestickChartWidget(QWidget):
         super().leaveEvent(event)
 
     def wheelEvent(self, event: QWheelEvent) -> None:  # noqa: N802
-        if self._request_zoom(zoom_in=event.angleDelta().y() > 0):
+        pan = self._wheel_pan_candles(event)
+        if pan and self._request_pan(pan):
+            event.accept()
+            return
+        if not pan and self._request_zoom(zoom_in=event.angleDelta().y() > 0):
             event.accept()
             return
         super().wheelEvent(event)
+
+    def _wheel_pan_candles(self, event: QWheelEvent) -> int:
+        """Read a sideways scroll as candles; a vertical one is not a pan."""
+        pixels = event.pixelDelta().x()
+        if pixels:
+            return -self._candles_across(float(pixels))
+        angle = event.angleDelta().x()
+        if not angle:
+            return 0
+        step = max(1, round(abs(angle) / 120 * _WHEEL_PAN_CANDLES))
+        return -step if angle > 0 else step
+
+    def _candles_across(self, pixels: float) -> int:
+        """How many candles a horizontal distance on screen covers."""
+        snapshot = self._snapshot
+        if snapshot is None:
+            return 0
+        width = self._chart_surface().width()
+        if width <= 0:
+            return 0
+        slot = width / self._visible_candles(snapshot)
+        return round(pixels / slot)
+
+    @staticmethod
+    def _visible_candles(snapshot: ChartSnapshot) -> int:
+        return visible_candle_count(snapshot.chart_range, snapshot.timeframe)
+
+    def _can_pan(self) -> bool:
+        snapshot = self._snapshot
+        return snapshot is not None and snapshot.state in {
+            ChartReadState.READY,
+            ChartReadState.EMPTY,
+        }
+
+    def _pan_target(self, candle_shift: int) -> ChartRange | None:
+        """The range this shift would read, or None when nothing would move."""
+        snapshot = self._snapshot
+        if snapshot is None or not self._can_pan():
+            return None
+        panned = panned_chart_range(
+            snapshot.chart_range,
+            snapshot.timeframe,
+            candle_shift=candle_shift,
+            observed_at_utc=snapshot.observed_at_utc,
+        )
+        return None if panned == snapshot.chart_range else panned
+
+    def _request_pan(self, candle_shift: int) -> bool:
+        """Emit the panned range; report whether anything moved."""
+        panned = self._pan_target(candle_shift)
+        if panned is None:
+            return False
+        self.range_requested.emit(panned)
+        return True
 
     def _request_zoom_in(self) -> None:
         self._request_zoom(zoom_in=True)
@@ -348,28 +467,12 @@ class CandlestickChartWidget(QWidget):
     def _request_previous_range(self) -> None:
         if self._snapshot is None:
             return
-        chart_range = self._snapshot.chart_range
-        self.range_requested.emit(
-            ChartRange(
-                chart_range.start - (chart_range.end - chart_range.start),
-                chart_range.start,
-            )
-        )
+        self._request_pan(-self._visible_candles(self._snapshot))
 
     def _request_next_range(self) -> None:
         if self._snapshot is None:
             return
-        chart_range = self._snapshot.chart_range
-        duration = chart_range.end - chart_range.start
-        latest_end = latest_completed_boundary(
-            self._snapshot.timeframe,
-            self._snapshot.observed_at_utc,
-        )
-        next_end = min(chart_range.end + duration, latest_end)
-        next_range = ChartRange(next_end - duration, next_end)
-        if next_range == chart_range:
-            return
-        self.range_requested.emit(next_range)
+        self._request_pan(self._visible_candles(self._snapshot))
 
     def _draw_message(self, painter: QPainter, surface: QRectF, message: str) -> None:
         painter.setPen(QColor(_AXIS_TEXT_COLOR))

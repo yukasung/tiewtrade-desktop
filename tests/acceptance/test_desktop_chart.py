@@ -1,6 +1,6 @@
 import asyncio
 from collections.abc import AsyncIterator, Awaitable
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
 from threading import Event
@@ -11,7 +11,7 @@ from pytest import MonkeyPatch
 from pytestqt.qtbot import QtBot
 
 from tests.support.paper_session_setup import configured_spot_session
-from tests.support.qt_interactions import click
+from tests.support.qt_interactions import click, press, release
 from tests.support.trade_history_records import trade_fill
 from tests.support.trade_history_ui import (
     empty_basket_history,
@@ -26,6 +26,7 @@ from tiewtrade.application.chart_data import (
     ChartRange,
     ChartReadState,
     ChartSnapshot,
+    visible_candle_count,
 )
 from tiewtrade.application.paper_runtime import PaperRuntimeController
 from tiewtrade.application.paper_session_setup import (
@@ -190,6 +191,57 @@ def test_desktop_shows_configured_session_chart_without_manual_order_controls(
     assert window.workspace.bot_control.isVisible()
     assert window.findChildren(QPushButton, "manualBuyButton") == []
     assert window.findChildren(QPushButton, "manualSellButton") == []
+
+
+def test_dragging_the_chart_reads_an_older_window(qtbot: QtBot) -> None:
+    """A pull on the chart reaches the candle source as an older range."""
+    session = configured_spot_session()
+    requested: list[ChartRange] = []
+
+    async def load_chart(
+        configured: ConfiguredPaperSession, chart_range: ChartRange
+    ) -> ChartSnapshot:
+        requested.append(chart_range)
+        return ChartSnapshot(
+            session=configured,
+            chart_range=chart_range,
+            observed_at_utc=datetime(2026, 8, 2, 10, 3, tzinfo=UTC),
+            candles=(),
+            fills=(),
+            state=ChartReadState.EMPTY,
+        )
+
+    window = MainWindow(
+        create_session=unused_create,
+        load_active=lambda: session,
+        list_basket_history=empty_basket_history,
+        list_trade_fills=empty_trade_fills,
+        chart=ChartSources(
+            load=load_chart, clock=lambda: datetime(2026, 8, 2, 10, 3, tzinfo=UTC)
+        ),
+    )
+    qtbot.addWidget(window)
+    window.resize(1200, 700)
+    window.show()
+    chart = window.workspace.chart
+    qtbot.waitUntil(lambda: len(requested) == 1)
+
+    opening_range = requested[0]
+    surface = chart._chart_surface()
+    slot = surface.width() / visible_candle_count(opening_range, "5m")
+    middle = int(surface.center().y())
+    press(chart, int(surface.left()) + 20, middle)
+    release(chart, int(surface.left()) + 20 + round(slot * 30), middle)
+
+    qtbot.waitUntil(lambda: len(requested) == 2)
+    older = requested[1]
+    assert older.end == opening_range.end - timedelta(minutes=5) * 30
+    assert older.end - older.start == opening_range.end - opening_range.start
+    qtbot.waitUntil(
+        lambda: chart._snapshot is not None and chart._snapshot.chart_range == older
+    )
+    # Panned off the latest candle, the chart offers the way back.
+    assert chart.follow_latest_button.isVisible()
 
 
 def test_chart_failure_does_not_stop_runtime_or_trade_history(qtbot: QtBot) -> None:
