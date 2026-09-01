@@ -13,7 +13,8 @@ CLI สำหรับ replay ไม่เชื่อมต่อ Binance แ�
 | `make run-dev` | รันแอปกับฐานข้อมูลสำหรับพัฒนา — ใช้ตัวนี้ระหว่างเขียนโค้ด |
 | `make run` | รันแอปกับฐานข้อมูลชุดเดียวกับที่ผู้ใช้จริงเปิด |
 | `make verify` | ตรวจทุกอย่างก่อน commit |
-| `make build` | สร้าง `dist/TiewTrade.app` |
+| `make build` | สร้าง `dist/TiewTrade.app` (macOS) |
+| `packaging/build_windows.ps1` | สร้าง `dist\TiewTrade\TiewTrade.exe` (รันบน Windows) |
 
 ## การติดตั้ง
 
@@ -92,6 +93,11 @@ git diff --check
 
 ## Packaging
 
+PyInstaller ข้ามระบบปฏิบัติการไม่ได้ — macOS bundle ต้อง build บน macOS และ Windows
+executable ต้อง build บนเครื่อง Windows ทั้งสองอ่าน `packaging/tiewtrade.spec` ไฟล์เดียวกัน
+
+### macOS
+
 สร้าง macOS app bundle จาก root ของโครงการ:
 
 ```bash
@@ -114,7 +120,7 @@ cp -R dist/TiewTrade.app /Applications/
 ditto -c -k --keepParent dist/TiewTrade.app ~/Desktop/TiewTrade.zip
 ```
 
-### Signing และ Notarization
+### Signing และ Notarization (macOS)
 
 `make build` เซ็นแบบ ad-hoc ซึ่งเปิดได้เฉพาะบนเครื่องที่สร้างมัน เครื่องอื่นที่รับไฟล์ไป
 ต้องคลิกขวาที่ `TiewTrade.app` แล้วเลือก Open หนึ่งครั้ง หรือ:
@@ -138,3 +144,34 @@ make notarize TIEWTRADE_NOTARY_PROFILE=tiewtrade
 
 `sign-build` และ `notarize` ยังไม่เคยถูกรันจริง เพราะยังไม่มี Certificate ในโครงการนี้
 
+
+### Windows
+
+ต้องทำบนเครื่อง Windows ที่มี Python 3.12 ติดตั้งไว้ ตั้งสภาพแวดล้อมครั้งเดียวจาก root
+ของโครงการ:
+
+```powershell
+py -3.12 -m venv .venv
+.venv\Scripts\python.exe -m pip install --upgrade pip
+.venv\Scripts\python.exe -m pip install -e ".[dev]"
+```
+
+จากนั้นสั่ง build:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File packaging\build_windows.ps1
+```
+
+สคริปต์รันชุดตรวจเดียวกับ `make verify` ให้ก่อนและหยุดถ้าไม่ผ่าน ด้วยเหตุผลเดียวกับ
+`make build` — ข้ามได้ด้วย `-SkipVerify` เมื่อเพิ่งตรวจไปแล้วใน checkout เดียวกัน
+
+ผลลัพธ์เป็นโฟลเดอร์ `dist\TiewTrade\` ที่มี `dist\TiewTrade\TiewTrade.exe` อยู่ข้างใน
+พร้อมไฟล์ที่แอปต้องใช้ตอนรัน ส่งต่อทั้งโฟลเดอร์ (zip ได้) — `.exe` ตัวเดียวรันไม่ได้
+เครื่องปลายทางไม่ต้องติดตั้ง Python หรือ Qt
+
+ฐานข้อมูลไม่ได้ถูกรวมไปด้วยเช่นเดียวกับบน macOS แอปสร้างของตัวเองเมื่อเปิดครั้งแรกที่
+`%LOCALAPPDATA%\TiewTrade\` ซึ่งเป็นที่ที่ Windows เก็บสถานะของแอป — ประวัติการเทรด
+จึงอยู่รอดข้ามการอัปเดตที่เขียนทับโฟลเดอร์ `TiewTrade`
+
+โครงการนี้ยังไม่มี Code Signing Certificate ของ Windows ดังนั้น SmartScreen จะเตือน
+เมื่อเปิดครั้งแรก ผู้ใช้ต้องเลือก More info แล้ว Run anyway หนึ่งครั้ง
