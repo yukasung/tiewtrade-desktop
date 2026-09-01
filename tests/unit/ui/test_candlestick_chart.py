@@ -12,12 +12,14 @@ from pytestqt.qtbot import QtBot
 import tiewtrade.ui.candlestick_chart as candlestick_chart_module
 import tiewtrade.ui.chart_painter_model as chart_module
 from tests.support.paper_session_setup import configured_spot_session
-from tests.support.qt_interactions import click, hover
+from tests.support.qt_interactions import click, drag_to, hover, press, release
 from tiewtrade.application.chart_data import (
+    MAXIMUM_HISTORY_LOOKBACK,
     ChartFeedState,
     ChartRange,
     ChartReadState,
     ChartSnapshot,
+    visible_candle_count,
 )
 from tiewtrade.application.chart_indicators import (
     CHART_ATR_PERIOD,
@@ -200,6 +202,164 @@ def test_zoom_is_inert_without_a_readable_snapshot(qtbot: QtBot) -> None:
     chart.zoom_in_button.click()
 
     assert requested == []
+
+
+def test_dragging_the_chart_reads_the_range_it_was_pulled_to(qtbot: QtBot) -> None:
+    chart = CandlestickChartWidget()
+    qtbot.addWidget(chart)
+    chart.resize(1200, 500)
+    chart.show()
+    snapshot = zoomable_snapshot()
+    chart.show_snapshot(snapshot)
+    requested: list[ChartRange] = []
+    chart.range_requested.connect(requested.append)
+
+    surface = chart._chart_surface()
+    slot = surface.width() / visible_candle_count(
+        snapshot.chart_range, snapshot.timeframe
+    )
+    middle = int(surface.center().y())
+    press(chart, int(surface.left()) + 100, middle)
+    release(chart, int(surface.left()) + 100 + round(slot * 12), middle)
+
+    assert len(requested) == 1
+    panned = requested[0]
+    # Pulled to the right by twelve candle slots: twelve candles further back,
+    # with the window keeping its width.
+    assert panned.start == snapshot.chart_range.start - timedelta(minutes=5) * 12
+    assert panned.end == snapshot.chart_range.end - timedelta(minutes=5) * 12
+
+
+def test_a_drag_in_progress_moves_the_paint_without_reading_a_new_range(
+    qtbot: QtBot,
+) -> None:
+    """The reader sees the chart move under the cursor; the read waits."""
+    chart = CandlestickChartWidget()
+    qtbot.addWidget(chart)
+    chart.resize(1200, 500)
+    chart.show()
+    chart.show_snapshot(ready_snapshot())
+    requested: list[ChartRange] = []
+    chart.range_requested.connect(requested.append)
+
+    surface = chart._chart_surface()
+    middle = int(surface.center().y())
+    press(chart, int(surface.center().x()), middle)
+    drag_to(chart, int(surface.center().x()) + 90, middle)
+
+    assert requested == []
+    assert chart.pan_offset == 90
+    # A drag is not a hover: the crosshair does not chase the moving chart.
+    assert chart.crosshair is None
+    assert not chart.grab().isNull()
+
+    release(chart, int(surface.center().x()) + 90, middle)
+
+    assert chart.pan_offset == 0
+
+
+def test_a_horizontal_wheel_pans_while_a_vertical_one_still_zooms(
+    qtbot: QtBot,
+) -> None:
+    chart = CandlestickChartWidget()
+    qtbot.addWidget(chart)
+    chart.resize(1200, 500)
+    chart.show()
+    snapshot = zoomable_snapshot()
+    chart.show_snapshot(snapshot)
+    requested: list[ChartRange] = []
+    chart.range_requested.connect(requested.append)
+
+    _send_wheel(chart, delta=120, horizontal=True)
+
+    assert len(requested) == 1
+    panned = requested[0]
+    assert panned.start < snapshot.chart_range.start
+    assert panned.end - panned.start == (
+        snapshot.chart_range.end - snapshot.chart_range.start
+    )
+
+    _send_wheel(chart, delta=120)
+
+    assert requested[1].end == snapshot.chart_range.end
+
+
+def test_the_chart_reads_no_further_back_than_three_months(qtbot: QtBot) -> None:
+    chart = CandlestickChartWidget()
+    qtbot.addWidget(chart)
+    chart.resize(1200, 500)
+    chart.show()
+    interval = timedelta(minutes=5)
+    observed_at_utc = datetime(2026, 1, 1, 10, 0, tzinfo=UTC)
+    earliest = observed_at_utc - MAXIMUM_HISTORY_LOOKBACK
+    # A window already sitting ten candles inside the limit.
+    near_limit = ChartRange(earliest + interval * 10, earliest + interval * 130)
+    chart.show_snapshot(
+        ChartSnapshot(
+            session=configured_spot_session(),
+            chart_range=near_limit,
+            observed_at_utc=observed_at_utc,
+            candles=(),
+            fills=(),
+            state=ChartReadState.EMPTY,
+        )
+    )
+    requested: list[ChartRange] = []
+    chart.range_requested.connect(requested.append)
+
+    surface = chart._chart_surface()
+    slot = surface.width() / visible_candle_count(near_limit, "5m")
+    middle = int(surface.center().y())
+    press(chart, int(surface.left()) + 10, middle)
+    release(chart, int(surface.left()) + 10 + round(slot * 40), middle)
+
+    assert requested == [ChartRange(earliest, earliest + interval * 120)]
+
+
+def test_previous_range_stops_at_the_history_limit(qtbot: QtBot) -> None:
+    chart = CandlestickChartWidget()
+    qtbot.addWidget(chart)
+    end = datetime(2026, 1, 1, 10, 0, tzinfo=UTC)
+    oldest = ChartRange(
+        end - MAXIMUM_HISTORY_LOOKBACK,
+        end - MAXIMUM_HISTORY_LOOKBACK + timedelta(minutes=5) * 120,
+    )
+    chart.show_snapshot(
+        ChartSnapshot(
+            session=configured_spot_session(),
+            chart_range=oldest,
+            observed_at_utc=end,
+            candles=(),
+            fills=(),
+            state=ChartReadState.EMPTY,
+        )
+    )
+    requested: list[ChartRange] = []
+    chart.range_requested.connect(requested.append)
+
+    assert not chart.previous_range_button.isEnabled()
+    chart.previous_range_button.click()
+
+    assert requested == []
+
+
+def test_panning_is_inert_without_a_readable_snapshot(qtbot: QtBot) -> None:
+    chart = CandlestickChartWidget()
+    qtbot.addWidget(chart)
+    chart.resize(1200, 500)
+    chart.show()
+    requested: list[ChartRange] = []
+    chart.range_requested.connect(requested.append)
+
+    surface = chart._chart_surface()
+    middle = int(surface.center().y())
+    press(chart, int(surface.center().x()), middle)
+    drag_to(chart, int(surface.center().x()) + 120, middle)
+    release(chart, int(surface.center().x()) + 120, middle)
+    _send_wheel(chart, delta=120, horizontal=True)
+
+    assert requested == []
+    assert chart.pan_offset == 0
 
 
 def test_chart_selector_header_leaves_readable_space_between_controls(
@@ -689,12 +849,15 @@ def zoomable_snapshot() -> ChartSnapshot:
     )
 
 
-def _send_wheel(chart: CandlestickChartWidget, *, delta: int) -> None:
+def _send_wheel(
+    chart: CandlestickChartWidget, *, delta: int, horizontal: bool = False
+) -> None:
+    angle = QPoint(delta, 0) if horizontal else QPoint(0, delta)
     event = QWheelEvent(
         QPointF(chart.rect().center()),
         QPointF(chart.mapToGlobal(chart.rect().center())),
         QPoint(0, 0),
-        QPoint(0, delta),
+        angle,
         Qt.MouseButton.NoButton,
         Qt.KeyboardModifier.NoModifier,
         Qt.ScrollPhase.NoScrollPhase,

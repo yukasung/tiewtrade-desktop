@@ -14,6 +14,9 @@ _UTC_EPOCH = datetime(1970, 1, 1, tzinfo=UTC)
 _DEFAULT_VISIBLE_CANDLE_COUNT = 120
 MINIMUM_VISIBLE_CANDLE_COUNT = 20
 MAXIMUM_VISIBLE_CANDLE_COUNT = 500
+# How far back a reader may pan. Deeper history is a research question the
+# chart does not answer, and every window past this one costs a fresh read.
+MAXIMUM_HISTORY_LOOKBACK = timedelta(days=90)
 ChartCandle = Candle
 
 
@@ -106,6 +109,42 @@ def zoomed_chart_range(
     if target == visible:
         return chart_range
     return ChartRange(chart_range.end - interval * target, chart_range.end)
+
+
+def earliest_chart_start(timeframe: str, observed_at_utc: datetime) -> datetime:
+    """The oldest candle a reader may pan back to."""
+    return (
+        latest_completed_boundary(timeframe, observed_at_utc) - MAXIMUM_HISTORY_LOOKBACK
+    )
+
+
+def panned_chart_range(
+    chart_range: ChartRange,
+    timeframe: str,
+    *,
+    candle_shift: int,
+    observed_at_utc: datetime,
+) -> ChartRange:
+    """Slide the window by whole candles, keeping its width.
+
+    A negative shift reads backwards. The window stops at the latest completed
+    boundary in one direction and at `earliest_chart_start` in the other, and a
+    window already against the stop it is asked to cross is returned unchanged
+    so a caller can tell that nothing moved.
+    """
+    if candle_shift == 0:
+        return chart_range
+    interval = timeframe_to_interval(timeframe)
+    duration = chart_range.end - chart_range.start
+    start = chart_range.start + interval * candle_shift
+    earliest = earliest_chart_start(timeframe, observed_at_utc)
+    latest_start = latest_completed_boundary(timeframe, observed_at_utc) - duration
+    # A window wider than the lookback would clamp both ways; the latest
+    # candle is the one worth keeping.
+    start = min(max(start, earliest), max(latest_start, earliest))
+    if start == chart_range.start:
+        return chart_range
+    return ChartRange(start, start + duration)
 
 
 @dataclass(frozen=True, slots=True)

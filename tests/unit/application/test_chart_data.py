@@ -8,6 +8,7 @@ import pytest
 
 from tests.support.chart_candles import candle_run, flat_candle
 from tiewtrade.application.chart_data import (
+    MAXIMUM_HISTORY_LOOKBACK,
     MAXIMUM_VISIBLE_CANDLE_COUNT,
     MINIMUM_VISIBLE_CANDLE_COUNT,
     ChartRange,
@@ -15,7 +16,9 @@ from tiewtrade.application.chart_data import (
     ChartSnapshot,
     append_completed_candle,
     default_chart_range,
+    earliest_chart_start,
     latest_completed_boundary,
+    panned_chart_range,
     visible_candle_count,
     zoomed_chart_range,
 )
@@ -230,6 +233,86 @@ def test_zoom_always_changes_the_window_by_at_least_one_candle() -> None:
     assert (
         visible_candle_count(zoomed_chart_range(chart_range, "5m", zoom_in=True), "5m")
         == 20
+    )
+
+
+def test_pan_moves_the_whole_window_without_changing_its_width() -> None:
+    observed_at_utc = datetime(2026, 1, 1, 10, 0, tzinfo=UTC)
+    interval = timedelta(minutes=5)
+    chart_range = ChartRange(observed_at_utc - interval * 120, observed_at_utc)
+
+    panned = panned_chart_range(
+        chart_range,
+        "5m",
+        candle_shift=-30,
+        observed_at_utc=observed_at_utc,
+    )
+
+    assert panned == ChartRange(
+        chart_range.start - interval * 30,
+        chart_range.end - interval * 30,
+    )
+    assert visible_candle_count(panned, "5m") == 120
+
+
+def test_pan_forward_stops_at_the_latest_completed_boundary() -> None:
+    observed_at_utc = datetime(2026, 1, 1, 10, 3, tzinfo=UTC)
+    interval = timedelta(minutes=5)
+    latest_end = latest_completed_boundary("5m", observed_at_utc)
+    chart_range = ChartRange(latest_end - interval * 130, latest_end - interval * 10)
+
+    panned = panned_chart_range(
+        chart_range,
+        "5m",
+        candle_shift=400,
+        observed_at_utc=observed_at_utc,
+    )
+
+    assert panned == ChartRange(latest_end - interval * 120, latest_end)
+    assert (
+        panned_chart_range(
+            panned, "5m", candle_shift=5, observed_at_utc=observed_at_utc
+        )
+        == panned
+    )
+
+
+def test_pan_back_stops_three_months_before_the_latest_candle() -> None:
+    observed_at_utc = datetime(2026, 1, 1, 10, 0, tzinfo=UTC)
+    interval = timedelta(minutes=5)
+    chart_range = ChartRange(observed_at_utc - interval * 120, observed_at_utc)
+    earliest = earliest_chart_start("5m", observed_at_utc)
+
+    assert MAXIMUM_HISTORY_LOOKBACK == timedelta(days=90)
+    assert earliest == observed_at_utc - MAXIMUM_HISTORY_LOOKBACK
+
+    panned = panned_chart_range(
+        chart_range,
+        "5m",
+        candle_shift=-100_000,
+        observed_at_utc=observed_at_utc,
+    )
+
+    assert panned == ChartRange(earliest, earliest + interval * 120)
+    assert (
+        panned_chart_range(
+            panned, "5m", candle_shift=-20, observed_at_utc=observed_at_utc
+        )
+        == panned
+    )
+
+
+def test_pan_by_nothing_returns_the_same_range() -> None:
+    observed_at_utc = datetime(2026, 1, 1, 10, 0, tzinfo=UTC)
+    chart_range = ChartRange(
+        observed_at_utc - timedelta(minutes=5) * 120, observed_at_utc
+    )
+
+    assert (
+        panned_chart_range(
+            chart_range, "5m", candle_shift=0, observed_at_utc=observed_at_utc
+        )
+        is chart_range
     )
 
 
