@@ -22,7 +22,7 @@ from tiewtrade.integrations.sqlite.paper_spot_history import PaperSpotSQLiteHist
 from tiewtrade.integrations.sqlite.persistent_paper_spot_session import (
     create_persistent_paper_spot_session,
 )
-from tiewtrade.integrations.sqlite.trade_history import (
+from tiewtrade.integrations.sqlite.trade_history_errors import (
     TradeHistoryConflictError,
     TradeHistoryUnavailableError,
 )

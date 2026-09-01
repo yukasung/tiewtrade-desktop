@@ -266,6 +266,7 @@ def _updated_basket_snapshot(
     return BasketSnapshot(
         symbol=symbol,
         market_type=market_type.value,
+        position_side=position_side.value,
         entry_count=entry_count,
         entries=_marked_entries(
             position.entries,

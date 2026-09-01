@@ -10,13 +10,15 @@ from uuid import UUID, uuid4
 
 import pytest
 
+from tiewtrade.application.paper_session_notices import (
+    basket_closed_notice,
+    entry_opened_notice,
+    snapshot_notices,
+)
 from tiewtrade.application.paper_session_setup import ConfiguredPaperSession
 from tiewtrade.application.paper_session_sink import (
     PaperRuntimeSink,
     PaperSessionFailedClosedError,
-    basket_closed_notice,
-    entry_opened_notice,
-    snapshot_notices,
 )
 from tiewtrade.application.session_notice import (
     BasketClosedNotice,

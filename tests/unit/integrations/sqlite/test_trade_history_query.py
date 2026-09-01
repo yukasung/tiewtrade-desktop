@@ -347,3 +347,86 @@ def test_list_trade_fills_reads_a_fill_by_the_day_it_landed_on(
     result = history.list_trade_fills(TradeHistoryFilter(opened_from_utc=midnight))
 
     assert tuple(item.fill.fill_id for item in result) == (f"{HIGH_ID}-buy-2",)
+
+
+def test_total_realized_pnl_counts_an_open_baskets_sold_entries(
+    history: SQLiteTradeHistory,
+) -> None:
+    """A running total on an OPEN row is realised money and must be counted.
+
+    An Entry sold out of a Basket that stays open adds to that Basket's row
+    while its status is still `open`, so a closed-only sum drops it.
+    """
+    opened = datetime(2026, 3, 1, tzinfo=UTC)
+    record(history, basket(LOW_ID, opened_at_utc=opened, realized_pnl=Decimal("2.5")))
+    still_open = replace(
+        basket(HIGH_ID, opened_at_utc=opened, status=BasketStatus.OPEN),
+        realized_pnl=Decimal("5.123"),
+    )
+    history.record_open_basket(
+        still_open,
+        fill(
+            still_open,
+            fill_id=f"{HIGH_ID}-buy",
+            side=FillSide.BUY,
+            filled_at_utc=opened,
+        ),
+    )
+
+    assert history.total_realized_pnl() == Decimal("7.623")
+
+
+def test_total_realized_pnl_crosses_sessions_markets_and_days(
+    history: SQLiteTradeHistory,
+) -> None:
+    latest = datetime(2026, 3, 2, tzinfo=UTC)
+    record(
+        history,
+        basket(LOW_ID, opened_at_utc=latest, realized_pnl=Decimal("3")),
+    )
+    record(
+        history,
+        replace(
+            basket(
+                HIGH_ID,
+                opened_at_utc=latest - timedelta(days=30),
+                market_type=MarketType.FUTURES,
+                realized_pnl=Decimal("-1.25"),
+            ),
+            session_id=UUID("00000000-0000-0000-0000-0000000002ff"),
+        ),
+    )
+
+    assert history.total_realized_pnl() == Decimal("1.75")
+
+
+def test_total_realized_pnl_adds_every_place_exactly(
+    history: SQLiteTradeHistory,
+) -> None:
+    opened = datetime(2026, 3, 3, tzinfo=UTC)
+    amounts = (
+        Decimal("9999999999999999999999999999"),
+        Decimal("0.1"),
+        Decimal("0.000000000000000001"),
+    )
+    for index, amount in enumerate(amounts):
+        record(
+            history,
+            basket(
+                UUID(f"00000000-0000-0000-0000-00000000030{index}"),
+                opened_at_utc=opened,
+                realized_pnl=amount,
+            ),
+        )
+
+    # Written out rather than summed here: Decimal's default context rounds
+    # at 28 significant digits, which is exactly what the query must not do.
+    assert history.total_realized_pnl() == Decimal(
+        "9999999999999999999999999999.100000000000000001"
+    )
+
+
+def test_total_realized_pnl_of_an_empty_database_is_zero(
+    history: SQLiteTradeHistory,
+) -> None:
+    assert history.total_realized_pnl() == Decimal("0")

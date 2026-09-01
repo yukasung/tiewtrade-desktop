@@ -14,11 +14,14 @@ from tiewtrade.ui.main_window import (
     BotActions,
     ChartSources,
     MainWindow,
+)
+from tiewtrade.ui.session_workflow import CreateSession, LoadActiveSession
+from tiewtrade.ui.settings_workflow import (
     ReadLineNotifications,
     SaveLineNotifications,
 )
-from tiewtrade.ui.session_workflow import CreateSession, LoadActiveSession
 from tiewtrade.ui.theme import DARK_THEME, apply_dark_appearance
+from tiewtrade.ui.total_pnl_workflow import ReadTotalRealizedPnl
 from tiewtrade.ui.trade_history_workflow import (
     ListBasketHistory,
     ListTradeFills,
@@ -31,6 +34,7 @@ def run_desktop(
     load_active: LoadActiveSession,
     list_basket_history: ListBasketHistory | None = None,
     list_trade_fills: ListTradeFills | None = None,
+    read_total_realized_pnl: ReadTotalRealizedPnl | None = None,
     validate_session: Callable[[PaperSessionSetupValues], None] | None = None,
     bot: BotActions = NO_BOT,
     chart: ChartSources = NO_CHART,
@@ -48,6 +52,7 @@ def run_desktop(
         load_active=load_active,
         list_basket_history=list_basket_history,
         list_trade_fills=list_trade_fills,
+        read_total_realized_pnl=read_total_realized_pnl,
         validate_session=validate_session,
         bot=bot,
         chart=chart,

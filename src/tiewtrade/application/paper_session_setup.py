@@ -104,6 +104,14 @@ class PaperSessionUnavailableError(RuntimeError):
     pass
 
 
+class ActivePaperSessionStillRunningError(PaperSessionUnavailableError):
+    """Something is still running the Session that was asked to be retired."""
+
+
+class ActivePaperSessionGoneError(PaperSessionUnavailableError):
+    """There is no Active Session left to retire — the row it had has gone."""
+
+
 CreateActiveSession = Callable[[ConfiguredPaperSession], PaperSessionCreateOutcome]
 
 

@@ -31,7 +31,8 @@ from tiewtrade.market_data.candle import Candle
 from tiewtrade.market_data.config import timeframe_to_interval
 from tiewtrade.trading.trade_history import FillSide, TradeFill
 from tiewtrade.ui.background_task import BackgroundTask
-from tiewtrade.ui.chart_workflow import ChartFactRelay, ChartWorkflow
+from tiewtrade.ui.chart_fact_relay import ChartFactRelay
+from tiewtrade.ui.chart_workflow import ChartWorkflow
 
 
 class ImmediateThreadPool:
@@ -1103,6 +1104,7 @@ def open_basket(session: ConfiguredPaperSession, entry_count: int) -> BasketSnap
     return BasketSnapshot(
         symbol=session.market_data.symbol,
         market_type=session.config.market_type,
+        position_side="long",
         entry_count=entry_count,
         entries=basket_entries(
             *("100",) * entry_count, quantity="1", current_price="101"

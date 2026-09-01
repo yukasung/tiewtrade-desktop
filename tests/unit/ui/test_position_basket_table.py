@@ -55,6 +55,7 @@ def _futures_basket() -> BasketSnapshot:
     return BasketSnapshot(
         symbol="BTCUSDT",
         market_type="futures",
+        position_side="long",
         entry_count=2,
         entries=entries,
         total_quantity=Decimal("0.00600000"),

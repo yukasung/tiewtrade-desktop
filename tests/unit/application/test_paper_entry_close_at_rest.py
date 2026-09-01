@@ -10,12 +10,12 @@ import pytest
 
 from tests.support.paper_session_setup import configured_spot_session
 from tiewtrade.application.open_basket import reopen_basket
-from tiewtrade.application.paper_manual_close import ClosePaperPosition
-from tiewtrade.application.paper_session_sink import (
+from tiewtrade.application.paper_basket_at_rest import (
     close_one_entry_at_rest,
     read_open_basket_state,
     waive_cooldown_at_rest,
 )
+from tiewtrade.application.paper_manual_close import ClosePaperPosition
 from tiewtrade.execution.paper_spot import PaperSpotEntryFill
 from tiewtrade.integrations.sqlite.database import SQLiteDatabase
 from tiewtrade.integrations.sqlite.paper_spot_history import (

@@ -67,6 +67,8 @@ class OpenPositionWorkflow(QObject):
         # Nothing has been asked for yet, so nothing is held and nothing is
         # unknown. Only a read that is out or that failed makes it unknown.
         self._holding_is_unknown = False
+        self._waiting_on_a_reading: list[Callable[[], None]] = []
+        self.reading_landed.connect(self._hand_the_reading_on)
 
     @property
     def basket(self) -> ReopenedBasket | None:
@@ -104,6 +106,32 @@ class OpenPositionWorkflow(QObject):
         task.signals.finished.connect(self._read_finished)
         self._task = task
         self._thread_pool.start(task)
+
+    def read_then(
+        self,
+        session: ConfiguredPaperSession | None,
+        then: Callable[[], None],
+    ) -> None:
+        """Read the Basket again, and do this with the answer that comes back.
+
+        A Start puts an irreversible question, and it once put one about an
+        Entry that had already sold: the window had read the Basket when it
+        opened and nothing had asked since. No Session to read for is nothing
+        to wait on.
+        """
+        self._waiting_on_a_reading.append(then)
+        if session is None:
+            self._hand_the_reading_on()
+            return
+        self.read_for(session)
+
+    @Slot()
+    def _hand_the_reading_on(self) -> None:
+        """Whatever was waiting for a current reading now has one."""
+        waiting = self._waiting_on_a_reading
+        self._waiting_on_a_reading = []
+        for then in waiting:
+            then()
 
     def mark_price(self, candle: ChartCandle) -> None:
         """Take the newest price a resting Basket is marked on."""

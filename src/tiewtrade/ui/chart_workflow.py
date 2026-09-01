@@ -3,7 +3,6 @@ import logging
 from collections.abc import Awaitable, Callable
 from dataclasses import replace
 from datetime import UTC, datetime
-from threading import Lock
 from typing import TypeGuard
 from uuid import UUID
 
@@ -24,6 +23,14 @@ from tiewtrade.application.chart_view_selection import ChartViewSelection
 from tiewtrade.application.paper_session_setup import ConfiguredPaperSession
 from tiewtrade.trading.trade_history import TradeFill
 from tiewtrade.ui.background_task import BackgroundTask
+from tiewtrade.ui.chart_snapshots import (
+    answers_the_view,
+    blank_snapshot,
+    fills_inside,
+    unavailable_snapshot,
+    with_in_progress_candle,
+    without_fills,
+)
 
 LoadChart = Callable[[ConfiguredPaperSession, ChartRange], Awaitable[ChartSnapshot]]
 RefreshChart = Callable[
@@ -36,47 +43,6 @@ LoadChartFills = Callable[
     Awaitable[tuple[TradeFill, ...]],
 ]
 _LOGGER = logging.getLogger("tiewtrade.ui.chart_workflow")
-
-
-class ChartFactPublisher:
-    def __init__(self, relay: "ChartFactRelay", generation: int) -> None:
-        self._relay = relay
-        self._generation = generation
-
-    def completed_candle(self, candle: ChartCandle) -> None:
-        self._relay.completed_candle_ready.emit(candle, self._generation)
-
-    def in_progress_candle(self, candle: ChartCandle) -> None:
-        self._relay.in_progress_candle_ready.emit(candle, self._generation)
-
-    def feed_state(self, state: ChartFeedState) -> None:
-        self._relay.feed_state_ready.emit(state, self._generation)
-
-
-class ChartFactRelay(QObject):
-    """Queues generation-bound chart facts onto the Qt thread."""
-
-    completed_candle_ready = Signal(object, int)
-    in_progress_candle_ready = Signal(object, int)
-    feed_state_ready = Signal(object, int)
-
-    def __init__(self, parent: QObject | None = None) -> None:
-        super().__init__(parent)
-        self._lock = Lock()
-        self._generation = 0
-
-    def new_generation(self) -> ChartFactPublisher:
-        with self._lock:
-            self._generation += 1
-            return ChartFactPublisher(self, self._generation)
-
-    def invalidate(self) -> None:
-        with self._lock:
-            self._generation += 1
-
-    def is_current(self, generation: int) -> bool:
-        with self._lock:
-            return generation == self._generation
 
 
 class ChartWorkflow(QObject):
@@ -354,7 +320,7 @@ class ChartWorkflow(QObject):
             or snapshot.chart_range != chart_range
         ):
             return
-        fills = _fills_inside(result, snapshot.visible_range)
+        fills = fills_inside(result, snapshot.visible_range)
         if fills == snapshot.fills:
             return
         try:
@@ -643,14 +609,8 @@ class ChartWorkflow(QObject):
     def _valid_snapshot(
         self, result: object, chart_range: ChartRange
     ) -> TypeGuard[ChartSnapshot]:
-        return (
-            isinstance(result, ChartSnapshot)
-            and self._session is not None
-            and self._selection is not None
-            and result.session_id == self._session.config.session_id
-            and result.symbol == self._selection.symbol
-            and result.timeframe == self._selection.timeframe
-            and result.chart_range == chart_range
+        return answers_the_view(
+            result, facts=self._view_facts(), chart_range=chart_range
         )
 
     def _is_current_session_candle(
@@ -726,31 +686,11 @@ class ChartWorkflow(QObject):
         in_progress_candle: ChartCandle | None,
         fills: tuple[TradeFill, ...] | None = None,
     ) -> ChartSnapshot:
-        return ChartSnapshot(
-            chart_range=snapshot.chart_range,
-            observed_at_utc=max(self._clock(), snapshot.chart_range.end),
-            candles=snapshot.candles,
-            fills=_fills_inside(
-                snapshot.fills if fills is None else fills,
-                # Dropping the forming candle shortens the visible span, so a
-                # fill inside it has to go with it.
-                ChartRange(
-                    snapshot.chart_range.start,
-                    snapshot.chart_range.end
-                    if in_progress_candle is None
-                    else in_progress_candle.close_time,
-                ),
-            ),
-            state=snapshot.state,
+        return with_in_progress_candle(
+            snapshot,
+            now=self._clock(),
             in_progress_candle=in_progress_candle,
-            message=snapshot.message,
-            rsi=snapshot.rsi,
-            atr=snapshot.atr,
-            _session_facts=(
-                snapshot.session_id,
-                snapshot.symbol,
-                snapshot.timeframe,
-            ),
+            fills=fills,
         )
 
     def _view_facts(self) -> tuple[UUID, str, str] | None:
@@ -767,11 +707,10 @@ class ChartWorkflow(QObject):
 
     def _unavailable_snapshot(self, chart_range: ChartRange) -> ChartSnapshot | None:
         """A chart with nothing on it, because the read behind it did not land."""
-        return self._blank_snapshot(
-            chart_range,
-            state=ChartReadState.UNAVAILABLE,
-            message="Chart is unavailable",
-        )
+        facts = self._view_facts()
+        if facts is None:
+            return None
+        return unavailable_snapshot(facts, chart_range, now=self._clock())
 
     def _blank_snapshot(
         self,
@@ -782,20 +721,14 @@ class ChartWorkflow(QObject):
     ) -> ChartSnapshot | None:
         """A chart of this view with nothing drawn on it yet, or nothing left.
 
-        Observed no earlier than the range it covers, so a window ending in
-        the future is not read as one the clock has already passed.
+        None before there is a view to draw one for, which is every caller's
+        reason to have nothing to publish.
         """
         facts = self._view_facts()
         if facts is None:
             return None
-        return ChartSnapshot(
-            chart_range=chart_range,
-            observed_at_utc=max(self._clock(), chart_range.end),
-            candles=(),
-            fills=(),
-            state=state,
-            message=message,
-            _session_facts=facts,
+        return blank_snapshot(
+            facts, chart_range, now=self._clock(), state=state, message=message
         )
 
     def _view_session(self) -> ConfiguredPaperSession:
@@ -826,18 +759,7 @@ class ChartWorkflow(QObject):
             or selection.symbol == session.market_data.symbol
         ):
             return snapshot
-        return ChartSnapshot(
-            chart_range=snapshot.chart_range,
-            observed_at_utc=snapshot.observed_at_utc,
-            candles=snapshot.candles,
-            fills=(),
-            state=snapshot.state,
-            in_progress_candle=snapshot.in_progress_candle,
-            message=snapshot.message,
-            rsi=snapshot.rsi,
-            atr=snapshot.atr,
-            _session_facts=facts,
-        )
+        return without_fills(snapshot, facts=facts)
 
     def _drain_pending_in_progress_candle(self) -> None:
         pending = self._pending_in_progress_candle
@@ -862,15 +784,4 @@ def _basket_facts(snapshot: BotControlSnapshot) -> tuple[object, ...]:
         basket.entry_count,
         basket.total_quantity,
         basket.entry_gate,
-    )
-
-
-def _fills_inside(
-    fills: tuple[object, ...],
-    visible_range: ChartRange,
-) -> tuple[TradeFill, ...]:
-    return tuple(
-        fill
-        for fill in fills
-        if isinstance(fill, TradeFill) and visible_range.contains(fill.filled_at_utc)
     )

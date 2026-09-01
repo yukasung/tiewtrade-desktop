@@ -51,6 +51,8 @@ from tiewtrade.integrations.sqlite.paper_runtime_lifecycle import (
 )
 from tiewtrade.integrations.sqlite.trade_history import (
     SQLiteTradeHistory,
+)
+from tiewtrade.integrations.sqlite.trade_history_errors import (
     TradeHistoryUnavailableError,
 )
 from tiewtrade.market_data.candle import Candle

@@ -950,7 +950,10 @@ def test_desktop_session_setup_sources_exclude_runtime_and_sensitive_imports() -
     session_setup_source_paths = (
         Path("src/tiewtrade/application/paper_session_setup.py"),
     )
-    desktop_composition_path = Path("src/tiewtrade/desktop_main.py")
+    desktop_composition_paths = (
+        Path("src/tiewtrade/desktop_main.py"),
+        Path("src/tiewtrade/desktop_paper_runtime.py"),
+    )
     ui_forbidden_prefixes = (
         "aiohttp",
         "keyring",
@@ -1007,17 +1010,18 @@ def test_desktop_session_setup_sources_exclude_runtime_and_sensitive_imports() -
         forbidden_prefixes=composition_forbidden_prefixes,
         restrict_market_data_to_config=False,
     )
-    desktop_imports = _imported_modules(desktop_composition_path)
-    assert not {
-        module
-        for module in desktop_imports
-        if any(
-            module == prefix or module.startswith(f"{prefix}.")
-            for prefix in desktop_forbidden_prefixes
-        )
-    }
+    for composition_path in desktop_composition_paths:
+        desktop_imports = _imported_modules(composition_path)
+        assert not {
+            module
+            for module in desktop_imports
+            if any(
+                module == prefix or module.startswith(f"{prefix}.")
+                for prefix in desktop_forbidden_prefixes
+            )
+        }
     assert not _sensitive_terms(
-        ui_source_paths + session_setup_source_paths + (desktop_composition_path,)
+        ui_source_paths + session_setup_source_paths + desktop_composition_paths
     )
 
 
@@ -1077,6 +1081,7 @@ def _fake_running_workspace(
             BasketSnapshot(
                 symbol="BTCUSDT",
                 market_type=session.config.market_type.value,
+                position_side="long",
                 entry_count=1,
                 entries=basket_entries(
                     "66000.1250", quantity="0.00150000", current_price="66321.1200"

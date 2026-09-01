@@ -5,6 +5,10 @@ from threading import Lock
 from uuid import UUID
 
 
+class MarketPriceUnavailableError(RuntimeError):
+    """No price fresh enough to act on, from the feed or from a quote."""
+
+
 class LatestMarketPrice:
     """Thread-safe public market-price fact with an explicit freshness bound."""
 
@@ -48,5 +52,5 @@ class LatestMarketPrice:
             or observed_at < received_at
             or observed_at - received_at > max_age
         ):
-            raise RuntimeError("A fresh market price is unavailable")
+            raise MarketPriceUnavailableError("A fresh market price is unavailable")
         return price

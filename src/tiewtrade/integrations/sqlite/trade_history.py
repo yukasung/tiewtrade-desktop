@@ -16,27 +16,36 @@ from tiewtrade.integrations.sqlite.connection_cleanup import (
     rollback_if_open,
 )
 from tiewtrade.integrations.sqlite.database import SQLiteDatabase
+from tiewtrade.integrations.sqlite.trade_history_conflicts import (
+    check_duplicate_fill,
+    entry_count_after_fill,
+    validate_entry_count,
+    validate_fill_ownership,
+    validate_immutable_identity,
+    validate_paper_spot_identity,
+)
+from tiewtrade.integrations.sqlite.trade_history_errors import (
+    TradeHistoryConflictError,
+    TradeHistoryError,
+    TradeHistoryUnavailableError,
+)
+from tiewtrade.integrations.sqlite.trade_history_rows import (
+    basket_from_row,
+    fill_from_row,
+    find_basket,
+    insert_basket,
+    insert_fill,
+    require_basket,
+    trade_fill_history_item_from_row,
+    update_basket,
+    utc_text,
+)
 from tiewtrade.trading.session_config import MarketType, TradeMode
 from tiewtrade.trading.trade_history import (
     BasketResult,
     BasketStatus,
-    FillSide,
-    FillSource,
     TradeFill,
 )
-
-
-class TradeHistoryError(RuntimeError):
-    pass
-
-
-class TradeHistoryConflictError(TradeHistoryError):
-    pass
-
-
-class TradeHistoryUnavailableError(TradeHistoryError):
-    pass
-
 
 ReadResult = TypeVar("ReadResult")
 
@@ -46,36 +55,36 @@ class SQLiteTradeHistory:
         self._database = database
 
     def record_open_basket(self, basket: BasketResult, fill: TradeFill) -> bool:
-        _validate_fill_ownership(basket, fill)
+        validate_fill_ownership(basket, fill)
         if basket.status is not BasketStatus.OPEN:
             raise TradeHistoryConflictError("new Basket must have OPEN status")
 
         def operation(connection: sqlite3.Connection) -> bool:
-            if _check_duplicate_fill(connection, fill):
+            if check_duplicate_fill(connection, fill):
                 return False
-            if _find_basket(connection, basket.basket_id) is not None:
+            if find_basket(connection, basket.basket_id) is not None:
                 raise TradeHistoryConflictError("Basket already exists")
-            _insert_basket(connection, basket)
-            _insert_fill(connection, fill)
+            insert_basket(connection, basket)
+            insert_fill(connection, fill)
             return True
 
         return self._run_write(operation)
 
     def record_entry_fill(self, basket: BasketResult, fill: TradeFill) -> bool:
-        _validate_fill_ownership(basket, fill)
+        validate_fill_ownership(basket, fill)
 
         def operation(connection: sqlite3.Connection) -> bool:
-            if _check_duplicate_fill(connection, fill):
+            if check_duplicate_fill(connection, fill):
                 return False
-            current = _require_basket(connection, basket.basket_id)
-            _validate_immutable_identity(current, basket)
+            current = require_basket(connection, basket.basket_id)
+            validate_immutable_identity(current, basket)
             if current.status is not BasketStatus.OPEN:
                 raise TradeHistoryConflictError("closed Basket cannot receive a Fill")
             if basket.status is not BasketStatus.OPEN:
                 raise TradeHistoryConflictError("Entry Fill requires an OPEN Basket")
-            _validate_entry_count(connection, current, basket, fill)
-            _insert_fill(connection, fill)
-            _update_basket(connection, basket)
+            validate_entry_count(connection, current, basket, fill)
+            insert_fill(connection, fill)
+            update_basket(connection, basket)
             return True
 
         return self._run_write(operation)
@@ -89,15 +98,15 @@ class SQLiteTradeHistory:
         strategy_preset_version: str,
     ) -> bool:
         def operation(connection: sqlite3.Connection) -> bool:
-            if _check_duplicate_fill(connection, fill):
+            if check_duplicate_fill(connection, fill):
                 return False
-            current = _find_basket(connection, fill.basket_id)
+            current = find_basket(connection, fill.basket_id)
             if current is None:
                 if fill.entry_number != 1:
                     raise TradeHistoryConflictError(
                         "new Entry Fill has an unexpected entry_number"
                     )
-                _insert_basket(
+                insert_basket(
                     connection,
                     BasketResult(
                         basket_id=fill.basket_id,
@@ -115,9 +124,9 @@ class SQLiteTradeHistory:
                         status=BasketStatus.OPEN,
                     ),
                 )
-                _insert_fill(connection, fill)
+                insert_fill(connection, fill)
                 return True
-            _validate_paper_spot_identity(
+            validate_paper_spot_identity(
                 current,
                 fill,
                 symbol=symbol,
@@ -126,9 +135,9 @@ class SQLiteTradeHistory:
             )
             if current.status is not BasketStatus.OPEN:
                 raise TradeHistoryConflictError("closed Basket cannot receive a Fill")
-            entry_count = _entry_count_after_fill(connection, current, fill)
-            _insert_fill(connection, fill)
-            _update_basket(
+            entry_count = entry_count_after_fill(connection, current, fill)
+            insert_fill(connection, fill)
+            update_basket(
                 connection,
                 replace(
                     current,
@@ -146,43 +155,43 @@ class SQLiteTradeHistory:
         The Basket row carries the running total either way; whether this sale
         was its last is the caller's reading, and arrives as the status.
         """
-        _validate_fill_ownership(basket, fill)
+        validate_fill_ownership(basket, fill)
         if fill.closes_entry_number is None:
             raise TradeHistoryConflictError("Entry Exit Fill must name its Entry")
 
         def operation(connection: sqlite3.Connection) -> bool:
-            if _check_duplicate_fill(connection, fill):
+            if check_duplicate_fill(connection, fill):
                 return False
-            current = _require_basket(connection, basket.basket_id)
-            _validate_immutable_identity(current, basket)
+            current = require_basket(connection, basket.basket_id)
+            validate_immutable_identity(current, basket)
             if current.status is not BasketStatus.OPEN:
                 raise TradeHistoryConflictError("closed Basket cannot receive a Fill")
-            _insert_fill(connection, fill)
-            _update_basket(connection, basket)
+            insert_fill(connection, fill)
+            update_basket(connection, basket)
             return True
 
         return self._run_write(operation)
 
     def record_closed_basket(self, basket: BasketResult, fill: TradeFill) -> bool:
-        _validate_fill_ownership(basket, fill)
+        validate_fill_ownership(basket, fill)
 
         def operation(connection: sqlite3.Connection) -> bool:
-            if _check_duplicate_fill(connection, fill):
+            if check_duplicate_fill(connection, fill):
                 return False
-            current = _require_basket(connection, basket.basket_id)
-            _validate_immutable_identity(current, basket)
+            current = require_basket(connection, basket.basket_id)
+            validate_immutable_identity(current, basket)
             if current.status is not BasketStatus.OPEN:
                 raise TradeHistoryConflictError("Basket is already closed")
             if basket.status is not BasketStatus.CLOSED:
                 raise TradeHistoryConflictError("Close Fill requires a CLOSED Basket")
-            _insert_fill(connection, fill)
-            _update_basket(connection, basket)
+            insert_fill(connection, fill)
+            update_basket(connection, basket)
             return True
 
         return self._run_write(operation)
 
     def get_basket(self, basket_id: UUID) -> BasketResult | None:
-        return self._run_read(lambda connection: _find_basket(connection, basket_id))
+        return self._run_read(lambda connection: find_basket(connection, basket_id))
 
     def record_cooldown_waiver(
         self, basket_id: UUID, waived_pair: int, waived_at: datetime
@@ -197,7 +206,7 @@ class SQLiteTradeHistory:
                     waived_pair = excluded.waived_pair,
                     waived_at_utc = excluded.waived_at_utc
                 """,
-                (str(basket_id), waived_pair, _utc_text(waived_at)),
+                (str(basket_id), waived_pair, utc_text(waived_at)),
             )
             return True
 
@@ -229,7 +238,7 @@ class SQLiteTradeHistory:
             ).fetchall()
             if len(rows) > 1:
                 raise TradeHistoryConflictError("Session has more than one open Basket")
-            return _basket_from_row(rows[0]) if rows else None
+            return basket_from_row(rows[0]) if rows else None
 
         return self._run_read(operation)
 
@@ -248,7 +257,7 @@ class SQLiteTradeHistory:
                 parameters,
             ).fetchall()
             return BasketHistoryResult(
-                items=tuple(_basket_from_row(row) for row in rows),
+                items=tuple(basket_from_row(row) for row in rows),
                 realized_pnl=_closed_realized_pnl(connection, filters),
             )
 
@@ -273,7 +282,7 @@ class SQLiteTradeHistory:
                 """,
                 parameters,
             ).fetchall()
-            return tuple(_trade_fill_history_item_from_row(row) for row in rows)
+            return tuple(trade_fill_history_item_from_row(row) for row in rows)
 
         return self._run_read(operation)
 
@@ -287,7 +296,7 @@ class SQLiteTradeHistory:
                 """,
                 (str(basket_id),),
             ).fetchall()
-            return tuple(_fill_from_row(row) for row in rows)
+            return tuple(fill_from_row(row) for row in rows)
 
         return self._run_read(operation)
 
@@ -301,6 +310,27 @@ class SQLiteTradeHistory:
                 (str(session_id), BasketStatus.CLOSED.value),
             ).fetchone()
             return int(row["closed"])
+
+        return self._run_read(operation)
+
+    def total_realized_pnl(self) -> Decimal:
+        """Every result this installation has realised, across all of it.
+
+        There is no filter because the question has no dimension: not one
+        Session, not one day, not one market — the whole ledger.
+
+        Open Baskets are in it. `realized_pnl` is a running total the moment
+        an Entry is sold out of a Basket, whether or not the Basket itself
+        has closed, so a closed-only sum would drop the profit of a Basket
+        that is still holding the rest of its Entries.
+
+        What it does not carry is what is still held: that is unrealised, it
+        needs a price, and nothing in the database has one.
+        """
+
+        def operation(connection: sqlite3.Connection) -> Decimal:
+            rows = connection.execute("SELECT realized_pnl FROM basket_results")
+            return _exact_decimal_sum(Decimal(row["realized_pnl"]) for row in rows)
 
         return self._run_read(operation)
 
@@ -340,11 +370,11 @@ class SQLiteTradeHistory:
                     symbol,
                     trade_mode.value,
                     market_type.value,
-                    _utc_text(start_utc),
-                    _utc_text(end_utc),
+                    utc_text(start_utc),
+                    utc_text(end_utc),
                 ),
             ).fetchall()
-            return tuple(_fill_from_row(row) for row in rows)
+            return tuple(fill_from_row(row) for row in rows)
 
         return self._run_read(operation)
 
@@ -444,10 +474,10 @@ def _basket_where(
     clauses, parameters = _basket_facets(filters, prefix="", closed_only=closed_only)
     if filters.opened_from_utc is not None:
         clauses.append("opened_at_utc >= ?")
-        parameters.append(_utc_text(filters.opened_from_utc))
+        parameters.append(utc_text(filters.opened_from_utc))
     if filters.opened_before_utc is not None:
         clauses.append("opened_at_utc < ?")
-        parameters.append(_utc_text(filters.opened_before_utc))
+        parameters.append(utc_text(filters.opened_before_utc))
     return _where(clauses, parameters)
 
 
@@ -464,10 +494,10 @@ def _fill_where(filters: TradeHistoryFilter) -> tuple[str, tuple[object, ...]]:
     )
     if filters.opened_from_utc is not None:
         clauses.append("trade_fills.filled_at_utc >= ?")
-        parameters.append(_utc_text(filters.opened_from_utc))
+        parameters.append(utc_text(filters.opened_from_utc))
     if filters.opened_before_utc is not None:
         clauses.append("trade_fills.filled_at_utc < ?")
-        parameters.append(_utc_text(filters.opened_before_utc))
+        parameters.append(utc_text(filters.opened_before_utc))
     return _where(clauses, parameters)
 
 
@@ -529,334 +559,3 @@ def _close_or_raise(connection: sqlite3.Connection) -> None:
         raise TradeHistoryUnavailableError(
             "Trade History SQLite close failed"
         ) from error
-
-
-def _validate_fill_ownership(basket: BasketResult, fill: TradeFill) -> None:
-    if basket.basket_id != fill.basket_id:
-        raise TradeHistoryConflictError("Fill belongs to a different Basket")
-    if basket.session_id != fill.session_id:
-        raise TradeHistoryConflictError("Fill belongs to a different Session")
-
-
-def _validate_immutable_identity(
-    current: BasketResult,
-    proposed: BasketResult,
-) -> None:
-    fields = (
-        "basket_id",
-        "session_id",
-        "trade_mode",
-        "market_type",
-        "leverage",
-        "symbol",
-        "timeframe",
-        "strategy_preset_version",
-        "opened_at_utc",
-    )
-    for field in fields:
-        if getattr(current, field) != getattr(proposed, field):
-            raise TradeHistoryConflictError(
-                f"Basket identity field {field} cannot change"
-            )
-
-
-def _validate_paper_spot_identity(
-    current: BasketResult,
-    fill: TradeFill,
-    *,
-    symbol: str,
-    timeframe: str,
-    strategy_preset_version: str,
-) -> None:
-    fields = (
-        ("basket_id", current.basket_id, fill.basket_id),
-        ("session_id", current.session_id, fill.session_id),
-        ("trade_mode", current.trade_mode, TradeMode.PAPER),
-        ("market_type", current.market_type, MarketType.SPOT),
-        ("leverage", current.leverage, None),
-        ("symbol", current.symbol, symbol),
-        ("timeframe", current.timeframe, timeframe),
-        (
-            "strategy_preset_version",
-            current.strategy_preset_version,
-            strategy_preset_version,
-        ),
-    )
-    for field, current_value, expected_value in fields:
-        if current_value != expected_value:
-            raise TradeHistoryConflictError(
-                f"Basket identity field {field} cannot change"
-            )
-
-
-def _validate_entry_count(
-    connection: sqlite3.Connection,
-    current: BasketResult,
-    proposed: BasketResult,
-    fill: TradeFill,
-) -> None:
-    row = connection.execute(
-        """
-        SELECT entry_number
-        FROM trade_fills
-        WHERE basket_id = ? AND order_id = ?
-        ORDER BY filled_at_utc, fill_id
-        LIMIT 1
-        """,
-        (str(fill.basket_id), fill.order_id),
-    ).fetchone()
-    prior_entry_number = row["entry_number"] if row is not None else None
-    if prior_entry_number is not None:
-        if fill.entry_number != prior_entry_number:
-            raise TradeHistoryConflictError(
-                "Partial Fills for one Order must use the same entry_number"
-            )
-        if proposed.entry_count != current.entry_count:
-            raise TradeHistoryConflictError(
-                "Partial Fill must not increment Basket entry_count"
-            )
-        return
-
-    expected_entry_number = current.entry_count + 1
-    if fill.entry_number != expected_entry_number:
-        raise TradeHistoryConflictError("new Entry Fill has an unexpected entry_number")
-    if proposed.entry_count != expected_entry_number:
-        raise TradeHistoryConflictError(
-            "new Entry Fill must increment Basket entry_count once"
-        )
-
-
-def _entry_count_after_fill(
-    connection: sqlite3.Connection,
-    current: BasketResult,
-    fill: TradeFill,
-) -> int:
-    row = connection.execute(
-        """
-        SELECT entry_number
-        FROM trade_fills
-        WHERE basket_id = ? AND order_id = ?
-        ORDER BY filled_at_utc, fill_id
-        LIMIT 1
-        """,
-        (str(fill.basket_id), fill.order_id),
-    ).fetchone()
-    if row is not None:
-        if fill.entry_number != row["entry_number"]:
-            raise TradeHistoryConflictError(
-                "Partial Fills for one Order must use the same entry_number"
-            )
-        return current.entry_count
-    expected_entry_number = current.entry_count + 1
-    if fill.entry_number != expected_entry_number:
-        raise TradeHistoryConflictError("new Entry Fill has an unexpected entry_number")
-    return expected_entry_number
-
-
-def _find_basket(
-    connection: sqlite3.Connection,
-    basket_id: UUID,
-) -> BasketResult | None:
-    row = connection.execute(
-        "SELECT * FROM basket_results WHERE basket_id = ?",
-        (str(basket_id),),
-    ).fetchone()
-    return _basket_from_row(row) if row is not None else None
-
-
-def _require_basket(
-    connection: sqlite3.Connection,
-    basket_id: UUID,
-) -> BasketResult:
-    basket = _find_basket(connection, basket_id)
-    if basket is None:
-        raise TradeHistoryConflictError("Basket does not exist")
-    return basket
-
-
-def _find_fill(
-    connection: sqlite3.Connection,
-    fill_id: str,
-) -> TradeFill | None:
-    row = connection.execute(
-        "SELECT * FROM trade_fills WHERE fill_id = ?",
-        (fill_id,),
-    ).fetchone()
-    return _fill_from_row(row) if row is not None else None
-
-
-def _check_duplicate_fill(
-    connection: sqlite3.Connection,
-    fill: TradeFill,
-) -> bool:
-    existing = _find_fill(connection, fill.fill_id)
-    if existing is None:
-        return False
-    if existing != fill:
-        raise TradeHistoryConflictError(
-            f"fill_id {fill.fill_id!r} has conflicting payload"
-        )
-    return True
-
-
-def _update_basket(
-    connection: sqlite3.Connection,
-    basket: BasketResult,
-) -> None:
-    cursor = connection.execute(
-        """
-        UPDATE basket_results
-        SET session_id = ?, trade_mode = ?, market_type = ?, leverage = ?, symbol = ?,
-            timeframe = ?, strategy_preset_version = ?, opened_at_utc = ?,
-            closed_at_utc = ?, entry_count = ?, invested_notional = ?,
-            realized_pnl = ?, status = ?
-        WHERE basket_id = ?
-        """,
-        (*_basket_values(basket)[1:], str(basket.basket_id)),
-    )
-    if cursor.rowcount != 1:
-        raise TradeHistoryConflictError("Basket does not exist")
-
-
-def _insert_basket(
-    connection: sqlite3.Connection,
-    basket: BasketResult,
-) -> None:
-    connection.execute(
-        """
-        INSERT INTO basket_results (
-            basket_id, session_id, trade_mode, market_type, leverage, symbol,
-            timeframe, strategy_preset_version, opened_at_utc,
-            closed_at_utc, entry_count, invested_notional,
-            realized_pnl, status
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """,
-        _basket_values(basket),
-    )
-
-
-def _basket_values(basket: BasketResult) -> tuple[object, ...]:
-    return (
-        str(basket.basket_id),
-        str(basket.session_id),
-        basket.trade_mode.value,
-        basket.market_type.value,
-        basket.leverage,
-        basket.symbol,
-        basket.timeframe,
-        basket.strategy_preset_version,
-        _utc_text(basket.opened_at_utc),
-        _utc_text(basket.closed_at_utc) if basket.closed_at_utc is not None else None,
-        basket.entry_count,
-        _stored_decimal(basket.invested_notional),
-        _stored_decimal(basket.realized_pnl),
-        basket.status.value,
-    )
-
-
-def _insert_fill(connection: sqlite3.Connection, fill: TradeFill) -> None:
-    connection.execute(
-        """
-        INSERT INTO trade_fills (
-            fill_id, basket_id, session_id, order_id, exchange_trade_id, side,
-            entry_number, filled_at_utc, price, quantity, notional,
-            realized_pnl, source, entry_atr,
-            closes_entry_number, entry_group_id, group_take_profit_price
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """,
-        (
-            fill.fill_id,
-            str(fill.basket_id),
-            str(fill.session_id),
-            fill.order_id,
-            fill.exchange_trade_id,
-            fill.side.value,
-            fill.entry_number,
-            _utc_text(fill.filled_at_utc),
-            _stored_decimal(fill.price),
-            _stored_decimal(fill.quantity),
-            _stored_decimal(fill.notional),
-            _stored_decimal(fill.realized_pnl),
-            fill.source.value,
-            None if fill.entry_atr is None else _stored_decimal(fill.entry_atr),
-            fill.closes_entry_number,
-            fill.entry_group_id,
-            (
-                None
-                if fill.group_take_profit_price is None
-                else _stored_decimal(fill.group_take_profit_price)
-            ),
-        ),
-    )
-
-
-def _stored_decimal(value: Decimal) -> str:
-    """A figure as the database keeps it, to every place it was given.
-
-    Nothing is normalized away here. What a Fill was priced at is the
-    record, and trimming it would change what the row says happened.
-    """
-    return format(value, "f")
-
-
-def _utc_text(value: datetime) -> str:
-    return value.isoformat()
-
-
-def _basket_from_row(row: sqlite3.Row) -> BasketResult:
-    return BasketResult(
-        basket_id=UUID(row["basket_id"]),
-        session_id=UUID(row["session_id"]),
-        trade_mode=TradeMode(row["trade_mode"]),
-        market_type=MarketType(row["market_type"]),
-        leverage=row["leverage"],
-        symbol=row["symbol"],
-        timeframe=row["timeframe"],
-        strategy_preset_version=row["strategy_preset_version"],
-        opened_at_utc=datetime.fromisoformat(row["opened_at_utc"]),
-        closed_at_utc=(
-            datetime.fromisoformat(row["closed_at_utc"])
-            if row["closed_at_utc"] is not None
-            else None
-        ),
-        entry_count=row["entry_count"],
-        invested_notional=Decimal(row["invested_notional"]),
-        realized_pnl=Decimal(row["realized_pnl"]),
-        status=BasketStatus(row["status"]),
-    )
-
-
-def _fill_from_row(row: sqlite3.Row) -> TradeFill:
-    return TradeFill(
-        fill_id=row["fill_id"],
-        basket_id=UUID(row["basket_id"]),
-        session_id=UUID(row["session_id"]),
-        order_id=row["order_id"],
-        exchange_trade_id=row["exchange_trade_id"],
-        side=FillSide(row["side"]),
-        entry_number=row["entry_number"],
-        filled_at_utc=datetime.fromisoformat(row["filled_at_utc"]),
-        price=Decimal(row["price"]),
-        quantity=Decimal(row["quantity"]),
-        notional=Decimal(row["notional"]),
-        realized_pnl=Decimal(row["realized_pnl"]),
-        source=FillSource(row["source"]),
-        entry_atr=(None if row["entry_atr"] is None else Decimal(row["entry_atr"])),
-        closes_entry_number=row["closes_entry_number"],
-        entry_group_id=row["entry_group_id"],
-        group_take_profit_price=(
-            None
-            if row["group_take_profit_price"] is None
-            else Decimal(row["group_take_profit_price"])
-        ),
-    )
-
-
-def _trade_fill_history_item_from_row(row: sqlite3.Row) -> TradeFillHistoryItem:
-    return TradeFillHistoryItem(
-        fill=_fill_from_row(row),
-        symbol=row["symbol"],
-        timeframe=row["timeframe"],
-        market_type=MarketType(row["market_type"]),
-        trade_mode=TradeMode(row["trade_mode"]),
-    )

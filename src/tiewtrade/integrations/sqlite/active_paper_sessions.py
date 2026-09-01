@@ -4,6 +4,8 @@ from decimal import Decimal
 from uuid import UUID
 
 from tiewtrade.application.paper_session_setup import (
+    ActivePaperSessionGoneError,
+    ActivePaperSessionStillRunningError,
     ConfiguredPaperSession,
     PaperSessionCreateOutcome,
     PaperSessionUnavailableError,
@@ -95,7 +97,7 @@ class SQLiteActivePaperSessions:
             # end, and saying so is what lets the caller tell a trader the
             # truth about it.
             if active is None:
-                raise PaperSessionUnavailableError(
+                raise ActivePaperSessionGoneError(
                     "Active Paper Session is no longer there"
                 )
             # A missing lifecycle row means the runtime never started, so
@@ -106,7 +108,7 @@ class SQLiteActivePaperSessions:
                 "stopped",
                 "blocked",
             }:
-                raise PaperSessionUnavailableError(
+                raise ActivePaperSessionStillRunningError(
                     "Active Paper Session cannot be retired"
                 )
             connection.execute(

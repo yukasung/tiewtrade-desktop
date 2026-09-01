@@ -28,7 +28,7 @@ from tiewtrade.integrations.sqlite.paper_futures_history import (
 from tiewtrade.integrations.sqlite.persistent_paper_futures_session import (
     create_persistent_paper_futures_session,
 )
-from tiewtrade.integrations.sqlite.trade_history import (
+from tiewtrade.integrations.sqlite.trade_history_errors import (
     TradeHistoryConflictError,
     TradeHistoryUnavailableError,
 )

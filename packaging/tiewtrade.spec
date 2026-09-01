@@ -1,13 +1,22 @@
-# PyInstaller build for the TiewTrade desktop app (macOS .app bundle).
+# PyInstaller build for the TiewTrade desktop app.
 #
-# Nothing here bundles a database. The app writes to
-# ~/Library/Application Support/TiewTrade at runtime and builds its own
-# schema on first launch, so the only thing that has to reach the bundle is
-# code — plus the one import Python cannot see statically (see keyring below).
+# One spec, two platforms: it produces a macOS .app bundle on macOS and a
+# collected dist/TiewTrade folder holding TiewTrade.exe on Windows.
+# PyInstaller cannot cross-compile, so each build runs on the machine it is
+# built for — `make build` on macOS, packaging/build_windows.ps1 on Windows.
+#
+# Nothing here bundles a database. The app writes to the platform's own
+# application-state directory at runtime (Application Support on macOS,
+# LOCALAPPDATA on Windows) and builds its own schema on first launch, so the
+# only thing that has to reach the build is code — plus the one import Python
+# cannot see statically (see keyring below).
 
 import os
+import sys
 import tomllib
 from pathlib import Path
+
+IS_MACOS = sys.platform == "darwin"
 
 PROJECT_ROOT = Path(SPECPATH).parent  # noqa: F821 — PyInstaller injects SPECPATH
 SOURCE_ROOT = PROJECT_ROOT / "src"
@@ -15,20 +24,27 @@ SOURCE_ROOT = PROJECT_ROOT / "src"
 with (PROJECT_ROOT / "pyproject.toml").open("rb") as pyproject:
     VERSION = tomllib.load(pyproject)["project"]["version"]
 
-# keyring finds its backends through entry points, which PyInstaller cannot
-# follow. Left out, the macOS Keychain backend is simply absent at runtime and
-# the app reads every stored credential as "not set" without raising — LINE
-# notifications would look switched off forever. Name it explicitly.
 # Signing is opt-in through the environment so an unsigned local build stays
 # one command. Without an identity PyInstaller ad-hoc signs the bundle, which
-# runs on this machine and nowhere else. `make sign-build` sets both.
-SIGN_IDENTITY = os.environ.get("TIEWTRADE_SIGN_IDENTITY") or None
+# runs on this machine and nowhere else. `make sign-build` sets both. Windows
+# code signing is not set up in this project, so nothing is signed there.
+SIGN_IDENTITY = (
+    (os.environ.get("TIEWTRADE_SIGN_IDENTITY") or None) if IS_MACOS else None
+)
 ENTITLEMENTS = (
     str(PROJECT_ROOT / "packaging" / "entitlements.plist") if SIGN_IDENTITY else None
 )
 
+# keyring finds its backends through entry points, which PyInstaller cannot
+# follow. Left out, the platform's credential store — the macOS Keychain, the
+# Windows Credential Locker — is simply absent at runtime and the app reads
+# every stored credential as "not set" without raising, so LINE notifications
+# would look switched off forever. Name the backend of each platform
+# explicitly; naming both is harmless, since a backend that cannot run on the
+# machine reports itself unusable rather than raising.
 HIDDEN_IMPORTS = [
     "keyring.backends.macOS",
+    "keyring.backends.Windows",
     "keyring.backends.chainer",
     "keyring.backends.fail",
     "keyring.backends.null",
@@ -124,19 +140,23 @@ collection = COLLECT(  # noqa: F821
     name="TiewTrade",
 )
 
-bundle = BUNDLE(  # noqa: F821
-    collection,
-    name="TiewTrade.app",
-    icon=None,
-    bundle_identifier="com.tiewtrade.desktop",
-    version=VERSION,
-    info_plist={
-        "CFBundleShortVersionString": VERSION,
-        "CFBundleVersion": VERSION,
-        "NSHighResolutionCapable": True,
-        # Internal Alpha, Paper-first: the app talks to Binance for market data
-        # only, and holds no document types of its own.
-        "LSApplicationCategoryType": "public.app-category.finance",
-        "LSMinimumSystemVersion": "12.0",
-    },
-)
+# On Windows the collected folder above is the deliverable: dist/TiewTrade,
+# with TiewTrade.exe beside the runtime it needs. Only macOS has a bundle to
+# wrap it in.
+if IS_MACOS:
+    bundle = BUNDLE(  # noqa: F821
+        collection,
+        name="TiewTrade.app",
+        icon=None,
+        bundle_identifier="com.tiewtrade.desktop",
+        version=VERSION,
+        info_plist={
+            "CFBundleShortVersionString": VERSION,
+            "CFBundleVersion": VERSION,
+            "NSHighResolutionCapable": True,
+            # Internal Alpha, Paper-first: the app talks to Binance for market
+            # data only, and holds no document types of its own.
+            "LSApplicationCategoryType": "public.app-category.finance",
+            "LSMinimumSystemVersion": "12.0",
+        },
+    )

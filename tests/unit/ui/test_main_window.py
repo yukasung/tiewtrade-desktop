@@ -23,7 +23,9 @@ from PySide6.QtWidgets import (
 from pytestqt.qtbot import QtBot
 
 import tiewtrade.ui.main_window as main_window_module
+import tiewtrade.ui.start_workflow as start_workflow_module
 from tests.support.chart_candles import flat_candle
+from tests.support.connection_notice import RecordingConnectionNotice
 from tests.support.paper_session_setup import (
     configured_futures_session,
     configured_spot_session,
@@ -55,7 +57,9 @@ from tiewtrade.application.open_basket import (
     reopen_basket,
 )
 from tiewtrade.application.paper_runtime import PaperPositionRestoreError
+from tiewtrade.application.paper_session_replacement import ReplacePaperSession
 from tiewtrade.application.paper_session_setup import (
+    ActivePaperSessionGoneError,
     ConfiguredPaperSession,
     CreatePaperSession,
     PaperSessionCreateOutcome,
@@ -87,21 +91,37 @@ from tiewtrade.trading.session_config import MarketType, TradeMode
 from tiewtrade.trading.trade_history import TradeFill
 from tiewtrade.ui.blank_text import BLANK
 from tiewtrade.ui.bot_lifecycle_workflow import RuntimeSnapshotRelay
-from tiewtrade.ui.chart_workflow import ChartFactRelay
+from tiewtrade.ui.chart_fact_relay import ChartFactRelay
 from tiewtrade.ui.display_time import display_today
 from tiewtrade.ui.main_window import (
-    CHART_FEED_STOPPED_NOTICE,
     BotActions,
     ChartSources,
     MainWindow,
 )
 from tiewtrade.ui.pair_text import pair_text
 from tiewtrade.ui.session_overview import SessionOverviewWidget
+from tiewtrade.ui.system_notice import CHART_FEED_STOPPED_NOTICE
 from tiewtrade.ui.trade_history_presenter import (
     default_filter_values,
     trade_history_filter,
 )
 from tiewtrade.ui.trading_workspace import WorkspaceTab
+
+
+def _replacement(
+    *,
+    has_open_position: Callable[[ConfiguredPaperSession], bool] = lambda _s: False,
+    close_position: Callable[[ConfiguredPaperSession], None] = lambda _s: None,
+    retire_session: Callable[[ConfiguredPaperSession], None] = lambda _s: None,
+    stop_bot: Callable[[ConfiguredPaperSession], None] = lambda _s: None,
+) -> Callable[[ConfiguredPaperSession], None]:
+    """The real replacement, wired to whatever this test is watching happen."""
+    return ReplacePaperSession(
+        stop_bot=stop_bot,
+        has_open_position=has_open_position,
+        close_position=close_position,
+        retire_session=retire_session,
+    ).execute
 
 
 def _runtime_state(window: MainWindow) -> BotRuntimeState | None:
@@ -2010,6 +2030,7 @@ def test_stop_with_open_position_reopens_editable_setup_without_closing(
     basket = BasketSnapshot(
         symbol="BTCUSDT",
         market_type="spot",
+        position_side="long",
         entry_count=1,
         entries=basket_entries("100", quantity="1", current_price="110"),
         total_quantity=Decimal("1"),
@@ -2060,7 +2081,11 @@ def test_stop_with_open_position_reopens_editable_setup_without_closing(
             stop=stop,
             close_position=close_position,
             has_open_position=lambda _session: True,
-            retire_session=retire_session,
+            replace_session=_replacement(
+                has_open_position=lambda _session: True,
+                close_position=close_position,
+                retire_session=retire_session,
+            ),
             runtime_snapshots=runtime_snapshots,
         ),
     )
@@ -2165,7 +2190,9 @@ def test_the_chart_reloads_the_candles_a_dropped_feed_swallowed(
     publisher = relay.new_generation()
     publisher.feed_state(ChartFeedState.RECONNECTING)
 
-    qtbot.waitUntil(lambda: window._chart_feed_state is ChartFeedState.RECONNECTING)
+    qtbot.waitUntil(
+        lambda: window._system_notice.chart_feed_state is ChartFeedState.RECONNECTING
+    )
 
     publisher.feed_state(ChartFeedState.LIVE)
 
@@ -2227,7 +2254,7 @@ def test_the_system_notice_says_the_worst_of_what_is_wrong(qtbot: QtBot) -> None
             )
         )
     )
-    qtbot.waitUntil(lambda: window._bot_reconnecting)
+    qtbot.waitUntil(lambda: window._system_notice.reconnecting)
     assert notice.text() == ""
 
     chart_feed.feed_state(ChartFeedState.STOPPED)
@@ -2246,54 +2273,9 @@ def test_the_system_notice_says_the_worst_of_what_is_wrong(qtbot: QtBot) -> None
     )
 
 
-def test_the_system_notice_clears_when_the_chart_feed_comes_back(
-    qtbot: QtBot,
-) -> None:
-    session = configured_spot_session()
-    relay = ChartFactRelay()
-
-    async def load_chart(
-        loaded: ConfiguredPaperSession,
-        chart_range: ChartRange,
-    ) -> ChartSnapshot:
-        return empty_chart_snapshot(loaded, chart_range)
-
-    window = MainWindow(
-        create_session=unused_create,
-        load_active=lambda: session,
-        list_basket_history=empty_basket_history,
-        list_trade_fills=empty_trade_fills,
-        chart=ChartSources(facts=relay, load=load_chart, start_feed=lambda _s: None),
-    )
-    qtbot.addWidget(window)
-    window.show()
-    notice = window.workspace.chart.system_notice
-    publisher = relay.new_generation()
-    publisher.feed_state(ChartFeedState.STOPPED)
-    qtbot.waitUntil(lambda: notice.text() == CHART_FEED_STOPPED_NOTICE)
-
-    publisher.feed_state(ChartFeedState.LIVE)
-
-    qtbot.waitUntil(lambda: notice.text() == "")
-
-
-class _RecordingConnectionNotice:
-    """Stands in for the dialog, so a test reads what was said, not clicked."""
-
-    def __init__(self) -> None:
-        self.shown = 0
-        self.hidden = 0
-
-    def show(self) -> None:
-        self.shown += 1
-
-    def hide(self) -> None:
-        self.hidden += 1
-
-
 def _window_watching_a_chart_feed(
     qtbot: QtBot,
-    notice: _RecordingConnectionNotice,
+    notice: RecordingConnectionNotice,
     *,
     delay_ms: int,
 ) -> tuple[MainWindow, ChartFactRelay]:
@@ -2320,75 +2302,10 @@ def _window_watching_a_chart_feed(
     return window, relay
 
 
-def test_a_connection_that_comes_back_quickly_is_never_announced(
-    qtbot: QtBot,
-) -> None:
-    """The runtime retries forever, so most drops are a blink.
-
-    Announcing every one of them would put a dialog over the chart each time
-    a phone hotspot wavered, and the trader would learn to dismiss it.
-    """
-    notice = _RecordingConnectionNotice()
-    window, relay = _window_watching_a_chart_feed(qtbot, notice, delay_ms=60_000)
-    publisher = relay.new_generation()
-
-    publisher.feed_state(ChartFeedState.RECONNECTING)
-    publisher.feed_state(ChartFeedState.LIVE)
-
-    qtbot.waitUntil(lambda: not window._connection_notice_timer.isActive())
-    assert notice.shown == 0
-
-
-def test_a_connection_still_away_after_the_wait_is_announced(qtbot: QtBot) -> None:
-    notice = _RecordingConnectionNotice()
-    _window, relay = _window_watching_a_chart_feed(qtbot, notice, delay_ms=0)
-
-    relay.new_generation().feed_state(ChartFeedState.RECONNECTING)
-
-    qtbot.waitUntil(lambda: notice.shown == 1)
-
-
-def test_more_reconnect_news_neither_delays_nor_repeats_the_announcement(
-    qtbot: QtBot,
-) -> None:
-    """Restarting the countdown on every update would defer it forever.
-
-    A drop keeps producing snapshots the whole time it lasts, so a timer
-    that started again on each one would never reach the end of its wait.
-    """
-    notice = _RecordingConnectionNotice()
-    window, relay = _window_watching_a_chart_feed(qtbot, notice, delay_ms=60_000)
-    publisher = relay.new_generation()
-    publisher.feed_state(ChartFeedState.RECONNECTING)
-    qtbot.waitUntil(window._connection_notice_timer.isActive)
-    remaining = window._connection_notice_timer.remainingTime()
-    qtbot.wait(20)
-
-    publisher.feed_state(ChartFeedState.RECONNECTING)
-    publisher.feed_state(ChartFeedState.RECONNECTING)
-
-    assert window._connection_notice_timer.remainingTime() < remaining
-    assert notice.shown == 0
-
-
-def test_the_announcement_is_taken_back_when_prices_are_current_again(
-    qtbot: QtBot,
-) -> None:
-    notice = _RecordingConnectionNotice()
-    _window, relay = _window_watching_a_chart_feed(qtbot, notice, delay_ms=0)
-    publisher = relay.new_generation()
-    publisher.feed_state(ChartFeedState.RECONNECTING)
-    qtbot.waitUntil(lambda: notice.shown == 1)
-
-    publisher.feed_state(ChartFeedState.LIVE)
-
-    qtbot.waitUntil(lambda: notice.hidden == 1)
-
-
 def test_closing_the_window_takes_the_announcement_down_with_it(
     qtbot: QtBot,
 ) -> None:
-    notice = _RecordingConnectionNotice()
+    notice = RecordingConnectionNotice()
     window, relay = _window_watching_a_chart_feed(qtbot, notice, delay_ms=0)
     relay.new_generation().feed_state(ChartFeedState.RECONNECTING)
     qtbot.waitUntil(lambda: notice.shown == 1)
@@ -2396,7 +2313,6 @@ def test_closing_the_window_takes_the_announcement_down_with_it(
     window.close()
 
     qtbot.waitUntil(lambda: notice.hidden == 1)
-    assert not window._connection_notice_timer.isActive()
 
 
 def test_a_bot_that_stops_replaces_the_connection_notice_with_its_own(
@@ -2412,7 +2328,7 @@ def test_a_bot_that_stops_replaces_the_connection_notice_with_its_own(
     session = configured_spot_session()
     relay = ChartFactRelay()
     runtime_snapshots = RuntimeSnapshotRelay()
-    notice = _RecordingConnectionNotice()
+    notice = RecordingConnectionNotice()
     blocked: list[str] = []
 
     def start(snapshot: BotControlSnapshot) -> BotLifecycleResult:
@@ -2755,6 +2671,8 @@ def _open_position_window(
         """Gone once it is closed, the way the database answers after a close."""
         return None if closes else reopened
 
+    close_position = _close_position_fake(replaceable, closes, closed_all)
+
     window = MainWindow(
         create_session=create if replaceable else unused_create,
         load_active=lambda: session,
@@ -2766,11 +2684,18 @@ def _open_position_window(
             # What the setup form's Start needs before it offers to replace
             # the Session rather than run the one already there.
             has_open_position=(lambda _session: True) if replaceable else None,
-            close_position=_close_position_fake(replaceable, closes, closed_all),
+            close_position=close_position,
             close_entry=(
                 None if closed_entries is None else _record_close_entry(closed_entries)
             ),
-            retire_session=(lambda _session: None) if replaceable else None,
+            replace_session=(
+                _replacement(
+                    has_open_position=lambda _session: True,
+                    close_position=close_position,
+                )
+                if replaceable and close_position is not None
+                else None
+            ),
         ),
         chart=ChartSources(facts=relay),
         take_profit_confirmation=lambda message, confirm: asked.append(
@@ -3135,7 +3060,9 @@ def test_clicking_clear_database_while_running_warns_instead_of_confirming(
     asked: list[tuple[str, Callable[[], None]]] = []
     window = _open_position_window(qtbot, started=started, asked=asked, price=105)
     qtbot.waitUntil(lambda: window.workspace.position_basket.table.rowCount() == 1)
-    window._clear_database = lambda: pytest.fail("clear_database must not run")
+    window._settings._clear_database = lambda: pytest.fail(
+        "clear_database must not run"
+    )
 
     configured = window._lifecycle_workflow.snapshot
     window._bot_control_changed(
@@ -3181,7 +3108,7 @@ def test_clicking_clear_database_after_stopping_proceeds_to_the_confirmation(
     window = _open_position_window(qtbot, started=started, asked=asked, price=105)
     qtbot.waitUntil(lambda: window.workspace.position_basket.table.rowCount() == 1)
     cleared: list[str] = []
-    window._clear_database = lambda: cleared.append("cleared")
+    window._settings._clear_database = lambda: cleared.append("cleared")
 
     running = replace(
         window._lifecycle_workflow.snapshot,
@@ -3237,7 +3164,7 @@ def test_clearing_the_database_refreshes_the_position_tab(qtbot: QtBot) -> None:
     qtbot.waitUntil(lambda: window.workspace.position_basket.table.rowCount() == 1)
     # The fake database's Basket disappears the same way `closes` already
     # makes `read_open_basket` answer None elsewhere in this fixture.
-    window._clear_database = lambda: closed.append("cleared")
+    window._settings._clear_database = lambda: closed.append("cleared")
     _click_settings(window)
 
     def confirm_clear() -> None:
@@ -3301,7 +3228,11 @@ def test_clearing_the_database_leaves_no_session_for_the_next_start_to_replace(
             stop=stop,
             close_position=lambda _session: events.append("close"),
             has_open_position=lambda _session: bool(stored_session),
-            retire_session=lambda _session: events.append("retire"),
+            replace_session=_replacement(
+                has_open_position=lambda _session: bool(stored_session),
+                close_position=lambda _session: events.append("close"),
+                retire_session=lambda _session: events.append("retire"),
+            ),
         ),
         clear_database=stored_session.clear,
     )
@@ -3355,7 +3286,7 @@ def test_a_session_that_is_gone_is_not_reported_as_one_still_running(
     window.show()
 
     window._replacement_failed(
-        PaperSessionUnavailableError("Active Paper Session is no longer there")
+        ActivePaperSessionGoneError("Active Paper Session is no longer there")
     )
 
     assert window.setup.capital_per_entry_error.text() == (
@@ -3596,6 +3527,291 @@ def test_the_workspace_start_asks_about_the_position_that_is_there_now(
     assert len(reads) >= 2
 
 
+def test_the_total_pnl_reads_beside_the_price_from_the_start(qtbot: QtBot) -> None:
+    window = MainWindow(
+        create_session=unused_create,
+        load_active=no_active_session,
+        list_basket_history=empty_basket_history,
+        list_trade_fills=empty_trade_fills,
+        read_total_realized_pnl=lambda: Decimal("42.5"),
+    )
+    qtbot.addWidget(window)
+    window.show()
+
+    qtbot.waitUntil(
+        lambda: window.workspace.live_price_card.total.text() == "42.50 USDT"
+    )
+
+
+def test_a_window_with_no_total_to_read_leaves_the_figure_blank(
+    qtbot: QtBot,
+) -> None:
+    window = MainWindow(
+        create_session=unused_create,
+        load_active=no_active_session,
+        list_basket_history=empty_basket_history,
+        list_trade_fills=empty_trade_fills,
+    )
+    qtbot.addWidget(window)
+    window.show()
+    qtbot.waitUntil(window.setup.create_button.isEnabled)
+
+    assert window.workspace.live_price_card.total.text() == BLANK
+
+
+def test_the_open_basket_is_added_to_the_total_and_moves_with_the_price(
+    qtbot: QtBot,
+) -> None:
+    """The unrealised half is a candle away, and costs no read to take."""
+    session = configured_spot_session()
+    relay = ChartFactRelay()
+    reads = 0
+
+    def read_total() -> Decimal:
+        nonlocal reads
+        reads += 1
+        return Decimal("10")
+
+    window = MainWindow(
+        create_session=unused_create,
+        load_active=lambda: session,
+        list_basket_history=empty_basket_history,
+        list_trade_fills=empty_trade_fills,
+        read_total_realized_pnl=read_total,
+        bot=BotActions(read_open_basket=lambda _session: _basket_of(session, "100")),
+        chart=ChartSources(facts=relay),
+    )
+    qtbot.addWidget(window)
+    window.show()
+    qtbot.waitUntil(lambda: window._open_position.basket is not None)
+    reads_before_candles = reads
+
+    # Two Entries' worth of quantity at 100, marked at 105: 10 of unrealised.
+    publisher = relay.new_generation()
+    publisher.in_progress_candle(
+        flat_candle(datetime(2026, 8, 1, 12, 5, tzinfo=UTC), 105)
+    )
+    qtbot.waitUntil(
+        lambda: window.workspace.live_price_card.total.text() == "20.00 USDT"
+    )
+
+    publisher.in_progress_candle(
+        flat_candle(datetime(2026, 8, 1, 12, 5, tzinfo=UTC), 110)
+    )
+    qtbot.waitUntil(
+        lambda: window.workspace.live_price_card.total.text() == "30.00 USDT"
+    )
+    qtbot.wait(50)
+
+    assert reads == reads_before_candles
+
+
+def test_a_running_bots_basket_moves_with_the_price_between_candles(
+    qtbot: QtBot,
+) -> None:
+    """The Runtime marks its Basket once a candle; the trader reads a live figure.
+
+    While the Bot is running nothing else re-marks what is held, so the total
+    used to sit still for a whole timeframe while the price beside it moved.
+    """
+    session = configured_spot_session()
+    relay = ChartFactRelay()
+    runtime_snapshots = RuntimeSnapshotRelay()
+    observed_at = datetime(2026, 8, 1, 12, tzinfo=UTC)
+    entries = basket_entries("100", quantity="1", current_price="110")
+    basket = BasketSnapshot(
+        symbol="BTCUSDT",
+        market_type="spot",
+        position_side="long",
+        entry_count=1,
+        entries=entries,
+        total_quantity=Decimal("1"),
+        average_entry_price=Decimal("100"),
+        current_price=Decimal("110"),
+        take_profit_price=Decimal("120"),
+        targets=basket_targets(entries),
+        unrealized_pnl=Decimal("10"),
+        entry_gate=BasketEntryGate.OPEN,
+        updated_at_utc=observed_at,
+    )
+    reads = 0
+
+    def read_total() -> Decimal:
+        nonlocal reads
+        reads += 1
+        return Decimal("10")
+
+    def start(snapshot: BotControlSnapshot) -> BotLifecycleResult:
+        return BotLifecycleResult(
+            workspace=workspace_with_runtime_state(
+                snapshot.workspace,
+                BotRuntimeState.RUNNING,
+                data_freshness=DataFreshness.FRESH,
+            )
+        )
+
+    window = MainWindow(
+        create_session=unused_create,
+        load_active=lambda: session,
+        list_basket_history=empty_basket_history,
+        list_trade_fills=empty_trade_fills,
+        read_total_realized_pnl=read_total,
+        bot=BotActions(start=start, runtime_snapshots=runtime_snapshots),
+        chart=ChartSources(facts=relay),
+    )
+    qtbot.addWidget(window)
+    window.show()
+    control = window.workspace.bot_control_widget
+    qtbot.waitUntil(control.start_button.isEnabled)
+    click(control.start_button)
+    qtbot.waitUntil(lambda: _runtime_state(window) is BotRuntimeState.RUNNING)
+    runtime_snapshots.new_generation()(
+        BotLifecycleResult(
+            workspace=paper_runtime_workspace_snapshot(
+                window._lifecycle_workflow.snapshot.workspace,
+                basket=basket,
+                observed_at_utc=observed_at,
+            )
+        )
+    )
+    # What the running Bot is holding, marked on the candle it published.
+    qtbot.waitUntil(
+        lambda: window.workspace.live_price_card.total.text() == "20.00 USDT"
+    )
+    reads_before_candles = reads
+
+    relay.new_generation().in_progress_candle(
+        flat_candle(datetime(2026, 8, 1, 12, 5, tzinfo=UTC), 115)
+    )
+
+    qtbot.waitUntil(
+        lambda: window.workspace.live_price_card.total.text() == "25.00 USDT"
+    )
+    qtbot.wait(50)
+    assert reads == reads_before_candles
+
+
+def test_selling_one_entry_of_an_open_basket_reads_the_realized_half_again(
+    qtbot: QtBot,
+) -> None:
+    """A sale is realised money, and the Basket it came out of stays open.
+
+    Nothing else would ask for it: the Basket is still there, the tab still
+    has rows, and only the Entries it is holding have changed.
+    """
+    session = configured_spot_session()
+    relay = ChartFactRelay()
+    reads = 0
+    sold: list[int] = []
+
+    def read_total() -> Decimal:
+        nonlocal reads
+        reads += 1
+        return Decimal(reads)
+
+    def read_open_basket(_session: ConfiguredPaperSession) -> ReopenedBasket | None:
+        return _basket_of_two(session) if not sold else _basket_of(session, "100")
+
+    def close_entry(_session: ConfiguredPaperSession, entry_number: int) -> bool:
+        sold.append(entry_number)
+        return True
+
+    window = MainWindow(
+        create_session=unused_create,
+        load_active=lambda: session,
+        list_basket_history=empty_basket_history,
+        list_trade_fills=empty_trade_fills,
+        read_total_realized_pnl=read_total,
+        bot=BotActions(read_open_basket=read_open_basket, close_entry=close_entry),
+        chart=ChartSources(facts=relay),
+    )
+    qtbot.addWidget(window)
+    window.show()
+    qtbot.waitUntil(lambda: window.workspace.position_basket.table.rowCount() == 2)
+    relay.new_generation().in_progress_candle(
+        flat_candle(datetime(2026, 8, 1, 12, 5, tzinfo=UTC), 105)
+    )
+    qtbot.waitUntil(lambda: _marked_rows(window) == 2)
+    reads_before_sale = reads
+
+    QTimer.singleShot(0, _answer_position_dialog("Market", []))
+    _click_close_entry(window, 0)
+
+    qtbot.waitUntil(lambda: sold == [2])
+    qtbot.waitUntil(lambda: window.workspace.position_basket.table.rowCount() == 1)
+    qtbot.waitUntil(lambda: reads == reads_before_sale + 1)
+    qtbot.wait(50)
+
+    assert reads == reads_before_sale + 1
+
+
+def test_a_closed_basket_leaves_the_total_reading_what_was_realized(
+    qtbot: QtBot,
+) -> None:
+    """Nothing is held any more, so the durable half is the whole answer."""
+    session = configured_spot_session()
+    relay = ChartFactRelay()
+    closed: list[str] = []
+
+    def read_open_basket(_session: ConfiguredPaperSession) -> ReopenedBasket | None:
+        return None if closed else _basket_of(session, "100")
+
+    def close_entry(_session: ConfiguredPaperSession, _entry_number: int) -> bool:
+        closed.append("sold")
+        return True
+
+    window = MainWindow(
+        create_session=unused_create,
+        load_active=lambda: session,
+        list_basket_history=empty_basket_history,
+        list_trade_fills=empty_trade_fills,
+        read_total_realized_pnl=lambda: Decimal("10"),
+        bot=BotActions(read_open_basket=read_open_basket, close_entry=close_entry),
+        chart=ChartSources(facts=relay),
+    )
+    qtbot.addWidget(window)
+    window.show()
+    qtbot.waitUntil(lambda: window._open_position.basket is not None)
+    relay.new_generation().in_progress_candle(
+        flat_candle(datetime(2026, 8, 1, 12, 5, tzinfo=UTC), 105)
+    )
+    qtbot.waitUntil(
+        lambda: window.workspace.live_price_card.total.text() == "20.00 USDT"
+    )
+
+    QTimer.singleShot(0, _answer_position_dialog("Market", []))
+    _click_close_entry(window, 0)
+
+    qtbot.waitUntil(lambda: closed == ["sold"])
+    qtbot.waitUntil(
+        lambda: window.workspace.live_price_card.total.text() == "10.00 USDT"
+    )
+
+
+def test_clearing_the_database_reads_the_total_again(qtbot: QtBot) -> None:
+    """Everything realised was wiped, so the figure standing is not true."""
+    totals = [Decimal("10"), Decimal("0")]
+
+    window = MainWindow(
+        create_session=unused_create,
+        load_active=no_active_session,
+        list_basket_history=empty_basket_history,
+        list_trade_fills=empty_trade_fills,
+        read_total_realized_pnl=lambda: totals.pop(0) if totals else Decimal("0"),
+    )
+    qtbot.addWidget(window)
+    window.show()
+    qtbot.waitUntil(
+        lambda: window.workspace.live_price_card.total.text() == "10.00 USDT"
+    )
+
+    window._database_cleared()
+
+    qtbot.waitUntil(
+        lambda: window.workspace.live_price_card.total.text() == "0.00 USDT"
+    )
+
+
 def _basket_of(session: ConfiguredPaperSession, price: str) -> ReopenedBasket:
     """One Entry taken at a price, with an ATR of 2 and a multiplier of 3."""
     return reopen_basket(
@@ -3607,6 +3823,37 @@ def _basket_of(session: ConfiguredPaperSession, price: str) -> ReopenedBasket:
                     price=Decimal(price),
                     quantity=Decimal("2"),
                     filled_at=datetime(2026, 8, 1, 12, tzinfo=UTC),
+                    atr=Decimal("2"),
+                    group_id=1,
+                ),
+            ),
+            closed_basket_count=0,
+        ),
+        entry_policy=session.config.entry_policy,
+        take_profit_atr_multiplier=Decimal("3"),
+        tick_size=Decimal("0.01"),
+    )
+
+
+def _basket_of_two(session: ConfiguredPaperSession) -> ReopenedBasket:
+    """Two Entries at 100, taken a day apart so the Entry Pair lets the second in."""
+    return reopen_basket(
+        OpenBasketState(
+            basket_id=UUID("00000000-0000-0000-0000-0000000000d4"),
+            entries=(
+                OpenBasketEntry(
+                    entry_number=1,
+                    price=Decimal("100"),
+                    quantity=Decimal("2"),
+                    filled_at=datetime(2026, 8, 1, 12, tzinfo=UTC),
+                    atr=Decimal("2"),
+                    group_id=1,
+                ),
+                OpenBasketEntry(
+                    entry_number=2,
+                    price=Decimal("100"),
+                    quantity=Decimal("2"),
+                    filled_at=datetime(2026, 8, 2, 12, tzinfo=UTC),
                     atr=Decimal("2"),
                     group_id=1,
                 ),
@@ -3647,7 +3894,7 @@ def _position_window(
             read_open_basket=read_open_basket,
             has_open_position=lambda _session: True,
             close_position=lambda _session: None,
-            retire_session=lambda _session: None,
+            replace_session=_replacement(has_open_position=lambda _session: True),
         ),
         chart=ChartSources(facts=relay),
         take_profit_confirmation=take_profit_confirmation,
@@ -3947,11 +4194,13 @@ def test_the_bot_is_started_from_one_place_only(qtbot: QtBot) -> None:
     A second `start_bot()` somewhere else is how a route ends up starting
     without having asked anything at all.
     """
-    source = inspect.getsource(main_window_module.MainWindow)
+    source = inspect.getsource(start_workflow_module.StartWorkflow)
 
-    assert source.count("self._lifecycle_workflow.start_bot()") == 1
-    assert "def _start_now(self) -> None:" in source
-    assert "start_bot_requested.connect(self._start_requested)" in source
+    assert source.count("self._start_bot()") == 1
+    assert "def start_now(self) -> None:" in source
+    assert "start_bot_requested.connect(self._start.requested)" in inspect.getsource(
+        main_window_module.MainWindow
+    )
 
 
 def test_the_default_take_profit_confirmation_defaults_to_cancel(
@@ -3962,7 +4211,7 @@ def test_the_default_take_profit_confirmation_defaults_to_cancel(
     asked: list[tuple[str, Callable[[], None]]] = []
     window = _open_position_window(qtbot, started=started, asked=asked, price=110)
     # Put the real dialog back, which the helper replaced to drive it by hand.
-    window._take_profit_confirmation = window._open_take_profit_confirmation
+    window._start._confirmation = window._start._open_confirmation
     control = window.workspace.bot_control_widget
     qtbot.waitUntil(control.start_button.isEnabled)
 
@@ -4053,7 +4302,11 @@ def test_an_untouched_form_runs_the_session_on_once_that_is_answered_for(
             stop=stop,
             close_position=lambda _session: events.append("close"),
             has_open_position=lambda _session: True,
-            retire_session=lambda _session: events.append("retire"),
+            replace_session=_replacement(
+                has_open_position=lambda _session: True,
+                close_position=lambda _session: events.append("close"),
+                retire_session=lambda _session: events.append("retire"),
+            ),
         ),
     )
     qtbot.addWidget(window)

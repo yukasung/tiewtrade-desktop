@@ -85,6 +85,7 @@ def test_running_shows_runtime_and_basket_facts_without_manual_order_controls(
             BasketSnapshot(
                 symbol="BTCUSDT",
                 market_type="spot",
+                position_side="long",
                 entry_count=2,
                 entries=basket_entries("63000", "65000"),
                 total_quantity=Decimal("1"),

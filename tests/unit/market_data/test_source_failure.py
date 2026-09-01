@@ -1,4 +1,4 @@
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 
 import pytest
 
@@ -6,19 +6,18 @@ from tiewtrade.market_data.candle_pipeline import (
     CandlePipelineInputError,
     CandlePipelineSinkError,
 )
-from tiewtrade.market_data.runtime import (
-    _reconnect_backoff_seconds,
-    _retry_after_seconds,
-    _source_failure,
-    _WarmUpSinkError,
-)
 from tiewtrade.market_data.runtime_state import MarketDataRuntimeReason
 from tiewtrade.market_data.source_errors import (
     MarketDataFailureKind,
     MarketDataFatalError,
-    MarketDataRateLimitError,
     MarketDataRetryableError,
     MarketDataTimeoutError,
+)
+from tiewtrade.market_data.source_failure import (
+    WarmUpSinkError,
+    WarmUpSourceError,
+    failure_kind,
+    source_failure,
 )
 
 BACKFILL_TIMEOUT = MarketDataRuntimeReason.SOURCE_ERROR
@@ -42,7 +41,7 @@ NOW = datetime(2026, 8, 2, 12, tzinfo=UTC)
             id="retryable",
         ),
         pytest.param(
-            _WarmUpSinkError(),
+            WarmUpSinkError(),
             MarketDataRuntimeReason.SINK_ERROR,
             None,
             id="warm-up-sink",
@@ -74,7 +73,7 @@ def test_a_failure_reads_the_same_wherever_it_happens(
 ) -> None:
     """Only a timeout depends on the stage; every other kind is stage-agnostic."""
     for on_timeout in (WARM_UP_TIMEOUT, BACKFILL_TIMEOUT):
-        failure = _source_failure(error, on_timeout=on_timeout)
+        failure = source_failure(error, on_timeout=on_timeout)
         assert failure.reason is expected_reason
         assert failure.kind is expected_kind
 
@@ -89,11 +88,11 @@ def test_a_failure_reads_the_same_wherever_it_happens(
 def test_a_timeout_is_named_by_the_stage_that_ran_out(error: BaseException) -> None:
     """Warm-up has a deadline of its own; a backfill just did not get an answer."""
     assert (
-        _source_failure(error, on_timeout=WARM_UP_TIMEOUT).reason
+        source_failure(error, on_timeout=WARM_UP_TIMEOUT).reason
         is MarketDataRuntimeReason.WARM_UP_TIMEOUT
     )
     assert (
-        _source_failure(error, on_timeout=BACKFILL_TIMEOUT).reason
+        source_failure(error, on_timeout=BACKFILL_TIMEOUT).reason
         is MarketDataRuntimeReason.SOURCE_ERROR
     )
 
@@ -103,51 +102,29 @@ def test_a_timeout_is_not_swallowed_by_the_retryable_base_it_inherits() -> None:
     assert issubclass(MarketDataTimeoutError, MarketDataRetryableError)
 
     assert (
-        _source_failure(
+        source_failure(
             MarketDataTimeoutError("too slow"), on_timeout=WARM_UP_TIMEOUT
         ).reason
         is MarketDataRuntimeReason.WARM_UP_TIMEOUT
     )
 
 
-@pytest.mark.parametrize(
-    ("retry_after", "expected"),
-    [
-        pytest.param(timedelta(seconds=12), 12.0, id="duration"),
-        pytest.param(timedelta(seconds=-5), 0.0, id="duration-already-passed"),
-        pytest.param(NOW + timedelta(seconds=30), 30.0, id="instant"),
-        pytest.param(NOW - timedelta(seconds=30), 0.0, id="instant-already-passed"),
-        pytest.param(None, 60.0, id="unstated"),
-    ],
-)
-def test_a_rate_limit_is_waited_out_for_as_long_as_it_asked(
-    retry_after: timedelta | datetime | None, expected: float
-) -> None:
-    """A pause is never negative, and a refusal that names none still earns one."""
-    error = MarketDataRateLimitError("slow down", retry_after=retry_after)
+def test_a_warm_up_wrapper_still_names_the_kind_the_source_gave() -> None:
+    """Warm-up wraps what the source raised, and the diagnostic has to survive it.
 
-    assert _retry_after_seconds(error, now=NOW) == expected
+    A wrapper that swallowed the kind reported every warm-up failure as
+    unclassified, which is the one thing an operator cannot act on.
+    """
+    wrapped = WarmUpSourceError()
+    wrapped.__cause__ = MarketDataRetryableError(
+        "flaky", kind=MarketDataFailureKind.TRANSPORT
+    )
+
+    assert failure_kind(wrapped) is MarketDataFailureKind.TRANSPORT
 
 
-@pytest.mark.parametrize(
-    ("attempt", "expected"),
-    [
-        pytest.param(1, 1.0, id="first"),
-        pytest.param(2, 2.0, id="second"),
-        pytest.param(3, 4.0, id="third"),
-        pytest.param(4, 8.0, id="fourth"),
-        pytest.param(5, 16.0, id="fifth"),
-        pytest.param(6, 30.0, id="capped"),
-        pytest.param(20, 30.0, id="capped-long-after"),
-    ],
-)
-def test_a_reconnect_waits_longer_each_try_up_to_a_ceiling(
-    attempt: int, expected: float
-) -> None:
-    """A blip is waited out in a second; an outage is not hammered forever."""
-    assert _reconnect_backoff_seconds(attempt) == expected
+def test_a_wrapper_over_something_that_named_no_kind_names_none() -> None:
+    wrapped = WarmUpSourceError()
+    wrapped.__cause__ = RuntimeError("something else entirely")
 
-
-def test_a_reconnect_has_no_try_before_the_first() -> None:
-    with pytest.raises(ValueError, match="attempt must be at least 1"):
-        _reconnect_backoff_seconds(0)
+    assert failure_kind(wrapped) is None

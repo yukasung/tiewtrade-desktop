@@ -1,7 +1,7 @@
 from collections.abc import Callable
 from decimal import Decimal
 from enum import Enum, auto
-from typing import TypeGuard
+from typing import TYPE_CHECKING, TypeGuard
 
 from PySide6.QtCore import QObject, QThreadPool, Signal, Slot
 
@@ -28,6 +28,10 @@ def _default_filters() -> TradeHistoryFilter:
     return trade_history_filter(default_filter_values(display_today()))
 
 
+if TYPE_CHECKING:
+    from tiewtrade.ui.trade_history_page import TradeHistoryPage
+
+
 class HistoryTab(Enum):
     BASKETS = auto()
     TRADES = auto()
@@ -51,6 +55,29 @@ class TradeHistoryWorkflow(QObject):
     trades_empty = Signal()
     trades_unavailable = Signal(str)
     trades_loading = Signal(bool)
+
+    def attach(self, page: "TradeHistoryPage") -> None:
+        """Wire this workflow to the page it reads for, both ways.
+
+        Every one of these is a signal meeting the slot it was named for, and
+        the pairing is nobody's business but these two — stated in the window
+        that holds them, it was fifty lines saying nothing the names did not
+        already say.
+        """
+        page.apply_filters_requested.connect(self.apply_filters)
+        page.reset_requested.connect(self.reset_filters)
+        page.history_tab_changed.connect(self.select_tab)
+        page.baskets_retry_requested.connect(self.retry_baskets)
+        page.fills_retry_requested.connect(self.retry_fills)
+        self.baskets_loading.connect(page.set_baskets_loading)
+        self.baskets_ready.connect(page.show_baskets)
+        self.baskets_empty.connect(page.show_baskets_empty)
+        self.baskets_unavailable.connect(page.show_baskets_unavailable)
+        self.filter_invalid.connect(page.show_filter_error)
+        self.trades_loading.connect(page.set_trades_loading)
+        self.trades_ready.connect(page.show_trades)
+        self.trades_empty.connect(page.show_trades_empty)
+        self.trades_unavailable.connect(page.show_trades_unavailable)
 
     def __init__(
         self,

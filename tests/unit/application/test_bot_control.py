@@ -504,6 +504,7 @@ def _running_control_with_workspace_facts() -> BotControlSnapshot:
             BasketSnapshot(
                 symbol="BTCUSDT",
                 market_type="spot",
+                position_side="long",
                 entry_count=2,
                 entries=basket_entries("63000", "65000"),
                 total_quantity=Decimal("1"),
