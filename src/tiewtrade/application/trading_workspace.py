@@ -5,6 +5,7 @@ from enum import StrEnum
 
 from tiewtrade.application.paper_session_setup import ConfiguredPaperSession
 from tiewtrade.trading.entry_pair import entry_pair_index
+from tiewtrade.trading.position import PositionSide
 from tiewtrade.trading.session_config import MarketType, TradeMode
 
 
@@ -149,6 +150,9 @@ class BasketEntryTargetSnapshot:
 class BasketSnapshot:
     symbol: str
     market_type: str
+    # Which way the Basket is held, so a reader marking it on a newer price
+    # than the one it arrived with knows what a rise is worth to it.
+    position_side: str
     entry_count: int
     entries: tuple[BasketEntrySnapshot, ...]
     total_quantity: Decimal
@@ -174,6 +178,8 @@ class BasketSnapshot:
     def __post_init__(self) -> None:
         _require_text(self.symbol, "symbol")
         _require_text(self.market_type, "market_type")
+        if self.position_side not in tuple(PositionSide):
+            raise ValueError("position_side must be a PositionSide value")
         if type(self.entry_count) is not int or self.entry_count < 0:
             raise ValueError("entry_count must be a non-negative integer")
         _require_basket_entries(self.entries, self.entry_count)

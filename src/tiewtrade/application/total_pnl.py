@@ -19,12 +19,14 @@ low until that Basket is closed.
 from decimal import Decimal
 
 from tiewtrade.application.trading_workspace import BasketSnapshot
+from tiewtrade.trading.position import PositionSide, unrealized_pnl
 
 
 def total_pnl(
     *,
     realized: Decimal | None,
     open_basket: BasketSnapshot | None,
+    current_price: Decimal | None = None,
 ) -> Decimal | None:
     """Realised across the database plus what the open Basket is worth now.
 
@@ -33,11 +35,33 @@ def total_pnl(
     Basket is open and unpriced is a figure that is simply wrong — it would
     settle to the right one on the first candle, which is exactly long enough
     for a trader to have read it.
+
+    A `current_price` is the live price the card is already showing, and it
+    takes precedence over the mark the Basket arrived with: the Basket is
+    marked once a candle, while the price moves all the way through it.
     """
     if realized is None:
         return None
     if open_basket is None:
         return realized
+    if current_price is not None:
+        return realized + marked_on(open_basket, current_price)
     if open_basket.unrealized_pnl is None:
         return None
     return realized + open_basket.unrealized_pnl
+
+
+def marked_on(basket: BasketSnapshot, current_price: Decimal) -> Decimal:
+    """What the open Basket is worth against a price newer than its own.
+
+    A Basket arrives marked on the candle that produced it, and the price goes
+    on moving inside that candle. Marking it again here is the same sum the
+    projection did — the Basket's own average against a later price — and it
+    answers for a Basket the database handed back before any candle marked it.
+    """
+    return unrealized_pnl(
+        side=PositionSide(basket.position_side),
+        average_entry_price=basket.average_entry_price,
+        quantity=basket.total_quantity,
+        current_price=current_price,
+    )

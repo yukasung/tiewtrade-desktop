@@ -906,6 +906,10 @@ class MainWindow(QMainWindow):
         self.workspace.show_bot_control_snapshot(value)
         self._chart_workflow.runtime_snapshot(value)
         if value.state is BotRuntimeState.RUNNING:
+            # The running Runtime publishes its Basket here and nowhere else,
+            # and while it holds one this side reads none. Without taking it,
+            # the total left out everything a running Bot was holding.
+            self._note_position(value.workspace.position_basket.basket)
             self._open_position.held_by_runtime()
         elif value.state is BotRuntimeState.STOPPED:
             # Whatever the Bot left open is the tab's to show again.
@@ -1019,6 +1023,10 @@ class MainWindow(QMainWindow):
         if not isinstance(candle, ChartCandle):
             return
         self.workspace.live_price_card.show_price(candle)
+        # The same price the card is showing marks the open Basket, so the
+        # total beside it moves with the price rather than once a candle. A
+        # Basket a running Runtime owns is re-marked nowhere else.
+        self._total_pnl.set_current_price(candle.symbol, candle.close)
 
     @Slot(object, int)
     def _chart_completed_candle(self, candle: object, generation: int) -> None:
@@ -1298,6 +1306,9 @@ class MainWindow(QMainWindow):
             return
         self._chart_workflow.select_view(value)
         self.workspace.live_price_card.clear()
+        # The chart is being pointed at another Pair, and the price that was
+        # on the card is not one the Basket can be marked on any more.
+        self._total_pnl.clear_price()
         self.workspace.live_price_card.show_pair(value.symbol, value.timeframe)
         if self._select_chart_view is not None:
             self._select_chart_view(session, value)

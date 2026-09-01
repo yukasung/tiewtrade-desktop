@@ -93,6 +93,7 @@ def test_workspace_tabs_render_independent_scoped_states(qtbot: QtBot) -> None:
     basket = BasketSnapshot(
         symbol="BTCUSDT",
         market_type="spot",
+        position_side="long",
         entry_count=1,
         entries=basket_entries(
             "66000.0000", quantity="0.00300000", current_price="66321.1200"

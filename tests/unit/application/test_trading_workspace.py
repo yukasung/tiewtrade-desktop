@@ -285,6 +285,7 @@ def _basket() -> BasketSnapshot:
     return BasketSnapshot(
         symbol="BTCUSDT",
         market_type="spot",
+        position_side="long",
         entry_count=2,
         entries=basket_entries(
             "66000", "66000", quantity="0.003", current_price="66321"

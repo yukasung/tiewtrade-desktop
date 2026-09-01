@@ -77,6 +77,7 @@ def basket_snapshot(**overrides: Any) -> BasketSnapshot:
     basket = BasketSnapshot(
         symbol="BTCUSDT",
         market_type="spot",
+        position_side="long",
         entry_count=2,
         entries=entries,
         total_quantity=Decimal("1"),

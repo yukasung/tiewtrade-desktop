@@ -2010,6 +2010,7 @@ def test_stop_with_open_position_reopens_editable_setup_without_closing(
     basket = BasketSnapshot(
         symbol="BTCUSDT",
         market_type="spot",
+        position_side="long",
         entry_count=1,
         entries=basket_entries("100", quantity="1", current_price="110"),
         total_quantity=Decimal("1"),
@@ -3672,6 +3673,91 @@ def test_the_open_basket_is_added_to_the_total_and_moves_with_the_price(
     )
     qtbot.wait(50)
 
+    assert reads == reads_before_candles
+
+
+def test_a_running_bots_basket_moves_with_the_price_between_candles(
+    qtbot: QtBot,
+) -> None:
+    """The Runtime marks its Basket once a candle; the trader reads a live figure.
+
+    While the Bot is running nothing else re-marks what is held, so the total
+    used to sit still for a whole timeframe while the price beside it moved.
+    """
+    session = configured_spot_session()
+    relay = ChartFactRelay()
+    runtime_snapshots = RuntimeSnapshotRelay()
+    observed_at = datetime(2026, 8, 1, 12, tzinfo=UTC)
+    entries = basket_entries("100", quantity="1", current_price="110")
+    basket = BasketSnapshot(
+        symbol="BTCUSDT",
+        market_type="spot",
+        position_side="long",
+        entry_count=1,
+        entries=entries,
+        total_quantity=Decimal("1"),
+        average_entry_price=Decimal("100"),
+        current_price=Decimal("110"),
+        take_profit_price=Decimal("120"),
+        targets=basket_targets(entries),
+        unrealized_pnl=Decimal("10"),
+        entry_gate=BasketEntryGate.OPEN,
+        updated_at_utc=observed_at,
+    )
+    reads = 0
+
+    def read_total() -> Decimal:
+        nonlocal reads
+        reads += 1
+        return Decimal("10")
+
+    def start(snapshot: BotControlSnapshot) -> BotLifecycleResult:
+        return BotLifecycleResult(
+            workspace=workspace_with_runtime_state(
+                snapshot.workspace,
+                BotRuntimeState.RUNNING,
+                data_freshness=DataFreshness.FRESH,
+            )
+        )
+
+    window = MainWindow(
+        create_session=unused_create,
+        load_active=lambda: session,
+        list_basket_history=empty_basket_history,
+        list_trade_fills=empty_trade_fills,
+        read_total_realized_pnl=read_total,
+        bot=BotActions(start=start, runtime_snapshots=runtime_snapshots),
+        chart=ChartSources(facts=relay),
+    )
+    qtbot.addWidget(window)
+    window.show()
+    control = window.workspace.bot_control_widget
+    qtbot.waitUntil(control.start_button.isEnabled)
+    click(control.start_button)
+    qtbot.waitUntil(lambda: _runtime_state(window) is BotRuntimeState.RUNNING)
+    runtime_snapshots.new_generation()(
+        BotLifecycleResult(
+            workspace=paper_runtime_workspace_snapshot(
+                window._lifecycle_workflow.snapshot.workspace,
+                basket=basket,
+                observed_at_utc=observed_at,
+            )
+        )
+    )
+    # What the running Bot is holding, marked on the candle it published.
+    qtbot.waitUntil(
+        lambda: window.workspace.live_price_card.total.text() == "20.00 USDT"
+    )
+    reads_before_candles = reads
+
+    relay.new_generation().in_progress_candle(
+        flat_candle(datetime(2026, 8, 1, 12, 5, tzinfo=UTC), 115)
+    )
+
+    qtbot.waitUntil(
+        lambda: window.workspace.live_price_card.total.text() == "25.00 USDT"
+    )
+    qtbot.wait(50)
     assert reads == reads_before_candles
 
 

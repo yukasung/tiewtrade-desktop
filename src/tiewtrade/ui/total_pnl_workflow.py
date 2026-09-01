@@ -6,6 +6,11 @@ half arrives with every candle already computed, on the Qt thread, for free.
 Keeping them apart is what lets the price move every few seconds without the
 database being asked anything.
 
+The unrealised half is marked again on every live price, which is what keeps
+the figure moving between candles. Nothing else re-marks a Basket a running
+Runtime owns, so without it the total sat still for a whole timeframe while
+the price beside it moved.
+
 The realised half only changes when an Entry is sold, and every sale changes
 which Entries the open Basket is holding. So the window watches that
 composition and asks again when it moves — there is nothing to poll for.
@@ -41,6 +46,11 @@ class TotalPnlWorkflow(QObject):
         self._thread_pool = thread_pool or QThreadPool.globalInstance()
         self._realized: Decimal | None = None
         self._basket: BasketSnapshot | None = None
+        # The newest price the chart has, kept beside the Basket rather than
+        # folded into it: it belongs to whatever Pair the chart is showing,
+        # which is not always the Pair the Basket was taken in.
+        self._price_symbol: str | None = None
+        self._price: Decimal | None = None
         self._task: BackgroundTask | None = None
         # Asked again while a read was out: the answer in flight saw the
         # database before whatever prompted the second ask, so one more read
@@ -80,6 +90,31 @@ class TotalPnlWorkflow(QObject):
         self._basket = basket
         self._publish()
 
+    def set_current_price(self, symbol: str, price: Decimal) -> None:
+        """Take the newest price, which re-marks the Basket without a read.
+
+        A price that is not a price at all — zero, negative, not finite — is
+        dropped rather than marked on: the mark would raise, on the Qt thread,
+        for a figure that is only being displayed.
+        """
+        if self._closed:
+            return
+        if not isinstance(price, Decimal) or not price.is_finite() or price <= 0:
+            return
+        if symbol == self._price_symbol and price == self._price:
+            return
+        self._price_symbol = symbol
+        self._price = price
+        self._publish()
+
+    def clear_price(self) -> None:
+        """Drop the live price, leaving the Basket as it was last marked."""
+        if self._price_symbol is None and self._price is None:
+            return
+        self._price_symbol = None
+        self._price = None
+        self._publish()
+
     @Slot()
     def close(self) -> None:
         """Stop, and drop whatever is still on its way back."""
@@ -113,9 +148,19 @@ class TotalPnlWorkflow(QObject):
             # Nothing can ever be read, so there is no total to be had and
             # none to report on: the card keeps its blank.
             return
-        value = total_pnl(realized=self._realized, open_basket=self._basket)
+        value = total_pnl(
+            realized=self._realized,
+            open_basket=self._basket,
+            current_price=self._price_for(self._basket),
+        )
         if self._published and value == self._last_published:
             return
         self._published = True
         self._last_published = value
         self.total_changed.emit(value)
+
+    def _price_for(self, basket: BasketSnapshot | None) -> Decimal | None:
+        """The live price, but only where it is a price for this Basket."""
+        if basket is None or self._price_symbol != basket.symbol:
+            return None
+        return self._price

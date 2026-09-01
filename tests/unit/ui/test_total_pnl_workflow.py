@@ -165,3 +165,81 @@ def test_a_window_with_no_reader_stays_silent(qtbot: QtBot) -> None:
     qtbot.wait(50)
 
     assert shown == []
+
+
+def test_a_live_price_moves_the_total_without_reading_the_database_again(
+    qtbot: QtBot,
+) -> None:
+    """The Runtime marks its Basket once a candle; the price moves all along."""
+    reads: list[int] = []
+
+    def read() -> Decimal:
+        reads.append(1)
+        return Decimal("10")
+
+    workflow, shown = _workflow(read)
+
+    workflow.start()
+    qtbot.waitUntil(lambda: shown == [Decimal("10")])
+    workflow.set_open_basket(basket_snapshot())
+    assert shown[-1] == Decimal("1010")
+
+    workflow.set_current_price("BTCUSDT", Decimal("65500"))
+
+    assert shown[-1] == Decimal("1510")
+    assert len(reads) == 1
+
+
+def test_a_price_for_another_pair_does_not_mark_this_basket(qtbot: QtBot) -> None:
+    """The card follows whatever the chart is showing; the Basket does not."""
+    workflow, shown = _workflow(lambda: Decimal("10"))
+
+    workflow.start()
+    qtbot.waitUntil(lambda: shown == [Decimal("10")])
+    workflow.set_open_basket(basket_snapshot())
+    workflow.set_current_price("ETHUSDT", Decimal("3000"))
+
+    assert shown[-1] == Decimal("1010")
+
+
+def test_a_price_arriving_before_the_basket_marks_it_when_it_lands(
+    qtbot: QtBot,
+) -> None:
+    workflow, shown = _workflow(lambda: Decimal("10"))
+
+    workflow.start()
+    qtbot.waitUntil(lambda: shown == [Decimal("10")])
+    workflow.set_current_price("BTCUSDT", Decimal("65500"))
+    workflow.set_open_basket(_unmarked_basket())
+
+    assert shown[-1] == Decimal("1510")
+
+
+def test_a_price_with_no_basket_open_leaves_the_realized_total_alone(
+    qtbot: QtBot,
+) -> None:
+    workflow, shown = _workflow(lambda: Decimal("10"))
+
+    workflow.start()
+    qtbot.waitUntil(lambda: shown == [Decimal("10")])
+    workflow.set_current_price("BTCUSDT", Decimal("65500"))
+    qtbot.wait(50)
+
+    assert shown == [Decimal("10")]
+
+
+def test_a_cleared_price_leaves_the_basket_reading_as_the_runtime_marked_it(
+    qtbot: QtBot,
+) -> None:
+    """A Session or Pair change takes the price away; the Basket keeps its own."""
+    workflow, shown = _workflow(lambda: Decimal("10"))
+
+    workflow.start()
+    qtbot.waitUntil(lambda: shown == [Decimal("10")])
+    workflow.set_open_basket(basket_snapshot())
+    workflow.set_current_price("BTCUSDT", Decimal("65500"))
+    assert shown[-1] == Decimal("1510")
+
+    workflow.clear_price()
+
+    assert shown[-1] == Decimal("1010")

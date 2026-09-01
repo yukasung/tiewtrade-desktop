@@ -1077,6 +1077,7 @@ def _fake_running_workspace(
             BasketSnapshot(
                 symbol="BTCUSDT",
                 market_type=session.config.market_type.value,
+                position_side="long",
                 entry_count=1,
                 entries=basket_entries(
                     "66000.1250", quantity="0.00150000", current_price="66321.1200"
