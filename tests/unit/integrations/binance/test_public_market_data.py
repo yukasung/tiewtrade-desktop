@@ -5,6 +5,7 @@ import json
 from collections.abc import AsyncIterator, Awaitable, Iterable
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
+from itertools import repeat
 from typing import TypeVar, cast
 
 import aiohttp
@@ -13,6 +14,7 @@ from aiohttp import RequestInfo, WSMsgType
 from multidict import CIMultiDict, CIMultiDictProxy
 from yarl import URL
 
+from tiewtrade.application.chart_data import MAXIMUM_VISIBLE_CANDLE_COUNT
 from tiewtrade.integrations.binance.public_endpoints import BinancePublicEndpoints
 from tiewtrade.integrations.binance.public_market_data import (
     WEBSOCKET_HEARTBEAT_SECONDS,
@@ -20,7 +22,11 @@ from tiewtrade.integrations.binance.public_market_data import (
 )
 from tiewtrade.market_data.candle import Candle
 from tiewtrade.market_data.candle_source import MarketDataKlineUpdate
-from tiewtrade.market_data.config import MarketDataConfig
+from tiewtrade.market_data.config import (
+    SUPPORTED_V1_TIMEFRAME_CHOICES,
+    MarketDataConfig,
+    timeframe_to_interval,
+)
 from tiewtrade.market_data.runtime import MarketDataRuntime
 from tiewtrade.market_data.runtime_state import (
     MarketDataRuntimeState,
@@ -32,6 +38,7 @@ from tiewtrade.market_data.source_errors import (
     MarketDataRetryableError,
     MarketDataTimeoutError,
 )
+from tiewtrade.strategies.indicators import WILDER_WARM_UP_CANDLES
 from tiewtrade.trading.session_config import MarketType
 
 _T = TypeVar("_T")
@@ -375,6 +382,109 @@ def test_load_range_stops_on_empty_or_nonadvancing_page(
 
     assert len(session.requests) == request_count
     assert len(candles) == candle_count
+
+
+def test_load_range_splits_a_span_wider_than_the_exchange_limit() -> None:
+    source, session = source_with(
+        rest_pages=[
+            FakeResponse(payload=[rest_kline(0)]),
+            FakeResponse(payload=[]),
+            FakeResponse(payload=[rest_kline(7 * 24 * 60)]),
+            FakeResponse(payload=[]),
+        ]
+    )
+
+    candles = asyncio.run(
+        source.load_range(
+            config(timeframe="30m"),
+            start=datetime(2026, 1, 1, tzinfo=UTC),
+            end=datetime(2026, 1, 9, tzinfo=UTC),
+        )
+    )
+
+    assert [candle.open_time for candle in candles] == [
+        datetime(2026, 1, 1, tzinfo=UTC),
+        datetime(2026, 1, 8, tzinfo=UTC),
+    ]
+    limit_milliseconds = int(timedelta(days=7).total_seconds() * 1000)
+    spans = [
+        int(request[1]["endTime"]) - int(request[1]["startTime"])
+        for request in session.requests
+    ]
+    assert len(spans) > 1
+    assert all(span <= limit_milliseconds for span in spans)
+
+
+def test_load_range_keeps_one_window_at_the_exchange_limit() -> None:
+    source, session = source_with(
+        rest_pages=[
+            FakeResponse(payload=[rest_kline(0)]),
+            FakeResponse(payload=[]),
+        ]
+    )
+
+    asyncio.run(
+        source.load_range(
+            config(timeframe="30m"),
+            start=datetime(2026, 1, 1, tzinfo=UTC),
+            end=datetime(2026, 1, 8, tzinfo=UTC),
+        )
+    )
+
+    end_times = {request[1]["endTime"] for request in session.requests}
+    assert end_times == {1767830399999}
+
+
+def test_load_range_continues_past_a_window_without_candles() -> None:
+    source, session = source_with(
+        rest_pages=[
+            FakeResponse(payload=[]),
+            FakeResponse(payload=[rest_kline(7 * 24 * 60)]),
+            FakeResponse(payload=[]),
+        ]
+    )
+
+    candles = asyncio.run(
+        source.load_range(
+            config(timeframe="30m"),
+            start=datetime(2026, 1, 1, tzinfo=UTC),
+            end=datetime(2026, 1, 9, tzinfo=UTC),
+        )
+    )
+
+    assert [candle.open_time for candle in candles] == [
+        datetime(2026, 1, 8, tzinfo=UTC)
+    ]
+    assert len(session.requests) == 3
+
+
+@pytest.mark.parametrize("timeframe", SUPPORTED_V1_TIMEFRAME_CHOICES)
+def test_load_range_stays_within_the_limit_for_a_widest_chart_read(
+    timeframe: str,
+) -> None:
+    """The widest read the chart ever asks for must survive on any timeframe.
+
+    A chart reads the candles it shows at full zoom out plus the Wilder
+    warm-up before them, and on the slow timeframes that reaches back months.
+    """
+    source, session = source_with(rest_pages=repeat(FakeResponse(payload=[])))
+    interval = timeframe_to_interval(timeframe)
+    end = datetime(2026, 1, 1, tzinfo=UTC)
+
+    asyncio.run(
+        source.load_range(
+            config(timeframe=timeframe),
+            start=end
+            - interval * (MAXIMUM_VISIBLE_CANDLE_COUNT + WILDER_WARM_UP_CANDLES),
+            end=end,
+        )
+    )
+
+    limit_milliseconds = int(timedelta(days=7).total_seconds() * 1000)
+    assert all(
+        int(request[1]["endTime"]) - int(request[1]["startTime"]) <= limit_milliseconds
+        for request in session.requests
+    )
 
 
 def load_one(source: BinancePublicMarketData) -> None:

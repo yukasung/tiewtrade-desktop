@@ -30,6 +30,14 @@ from tiewtrade.market_data.source_errors import (
 
 _INVALID_RESPONSE_MESSAGE = "invalid Binance market-data response"
 _PAGE_LIMIT = 1_000
+# How wide a single klines request may reach back.
+#
+# Binance TH answers any request whose startTime..endTime spans more than
+# seven days with HTTP 400 -4088 "Maximum time interval is 7 days." That is
+# their cap, not ours: a chart on a 1h timeframe asks for 370 candles — the
+# 120 it shows plus the Wilder warm-up before them — which is fifteen days,
+# and the whole chart used to come back empty because of it.
+_MAXIMUM_RANGE_SPAN = timedelta(days=7)
 _HTTP_REQUEST_TIMEOUT_SECONDS = 30.0
 # How often to ask a quiet stream whether it is still there.
 #
@@ -177,6 +185,7 @@ class BinancePublicMarketData:
         candles: dict[datetime, Candle] = {}
         cursor = start
         while cursor < end:
+            window_end = min(end, cursor + _MAXIMUM_RANGE_SPAN)
             page = await self._load_rest_page(
                 config,
                 {
@@ -184,13 +193,17 @@ class BinancePublicMarketData:
                     "interval": config.timeframe,
                     "startTime": _milliseconds(cursor),
                     "endTime": _last_completed_millisecond(
-                        end, interval=config.interval
+                        window_end, interval=config.interval
                     ),
                     "limit": _PAGE_LIMIT,
                 },
             )
             if not page:
-                break
+                # A window without candles is not the end of the range: the
+                # market may simply have had nothing to report there. Step
+                # over it and ask for the next window.
+                cursor = window_end
+                continue
 
             page_candles = sorted(page, key=lambda candle: candle.open_time)
             for candle in page_candles:
