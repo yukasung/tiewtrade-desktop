@@ -1,4 +1,4 @@
-.PHONY: run run-dev verify build clean-build sign-build notarize check-signature
+.PHONY: run run-dev verify build build-linux clean-build sign-build notarize check-signature
 
 run:
 	PYTHONPATH=src .venv/bin/python -m tiewtrade.desktop_main
@@ -35,6 +35,12 @@ build: verify clean-build
 
 clean-build:
 	rm -rf build dist
+
+# The Linux package, built in the container this repository's Dockerfile
+# describes — PyInstaller cannot cross-compile, so macOS cannot make one
+# directly. Leaves dist-linux/TiewTrade. See docs/linux-build.md.
+build-linux:
+	./scripts/build-linux.sh
 
 # A bundle other machines will open. Needs a Developer ID Application
 # certificate in the login keychain; `security find-identity -v -p codesigning`

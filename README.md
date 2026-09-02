@@ -15,6 +15,7 @@ CLI สำหรับ replay ไม่เชื่อมต่อ Binance แ�
 | `make verify` | ตรวจทุกอย่างก่อน commit |
 | `make build` | สร้าง `dist/TiewTrade.app` (macOS) |
 | `packaging/build_windows.ps1` | สร้าง `dist\TiewTrade\TiewTrade.exe` (รันบน Windows) |
+| `./scripts/build-linux.sh` | สร้าง `dist-linux/TiewTrade/` (build ผ่าน Docker บน macOS ได้) |
 
 ## การติดตั้ง
 
@@ -93,8 +94,9 @@ git diff --check
 
 ## Packaging
 
-PyInstaller ข้ามระบบปฏิบัติการไม่ได้ — macOS bundle ต้อง build บน macOS และ Windows
-executable ต้อง build บนเครื่อง Windows ทั้งสองอ่าน `packaging/tiewtrade.spec` ไฟล์เดียวกัน
+PyInstaller ข้ามระบบปฏิบัติการไม่ได้ — macOS bundle ต้อง build บน macOS, Windows
+executable ต้อง build บนเครื่อง Windows และ Linux executable ต้อง build บน Linux
+ทั้งสามอ่าน `packaging/tiewtrade.spec` ไฟล์เดียวกัน
 
 ### macOS
 
@@ -175,3 +177,25 @@ powershell -ExecutionPolicy Bypass -File packaging\build_windows.ps1
 
 โครงการนี้ยังไม่มี Code Signing Certificate ของ Windows ดังนั้น SmartScreen จะเตือน
 เมื่อเปิดครั้งแรก ผู้ใช้ต้องเลือก More info แล้ว Run anyway หนึ่งครั้ง
+
+### Linux
+
+build จาก macOS ได้ โดยใช้ Docker เป็น Linux build environment (ต้องเปิด Docker
+Desktop ไว้):
+
+```bash
+./scripts/build-linux.sh
+```
+
+สคริปต์รันชุดตรวจเดียวกับ `make verify` ในคอนเทนเนอร์ให้ก่อน ข้ามได้ด้วย `--skip-verify`
+ผลลัพธ์เป็นโฟลเดอร์ `dist-linux/TiewTrade/` ที่มี `dist-linux/TiewTrade/TiewTrade` อยู่
+ข้างใน ส่งต่อทั้งโฟลเดอร์เช่นเดียวกับ Windows
+
+Image ใช้ Ubuntu 22.04 และ build เป็น `linux/amd64` เป็นค่าเริ่มต้น — Apple Silicon
+build เป็น arm64 ถ้าไม่ระบุ ซึ่งรันบน Ubuntu x86_64 ไม่ได้
+
+ฐานข้อมูลไม่ได้ถูกรวมไปด้วย แอปสร้างของตัวเองเมื่อเปิดครั้งแรกที่
+`${XDG_DATA_HOME:-~/.local/share}/TiewTrade/`
+
+รายละเอียดทั้งหมด — วิธี copy ไป Ubuntu, Library ที่ต้องติดตั้ง, และวิธีแก้ปัญหา Qt
+platform plugin — อยู่ใน [docs/linux-build.md](docs/linux-build.md)

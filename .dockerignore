@@ -1,0 +1,56 @@
+# What must not reach the Linux build context.
+#
+# Two reasons for an entry here: it would be wrong inside the image (a virtual
+# environment built on macOS holds macOS binaries), or it is not part of any
+# build (a trader's database, this repository's history). Everything the build
+# does need — pyproject.toml, src/, tests/, packaging/ — is deliberately absent
+# from this file.
+
+# The history itself, not the repository's own files: the checks that run
+# inside the container read .github/workflows and .gitignore, and hold them to
+# what the rest of the repository says. Held back, those checks fail in the
+# container for a reason that has nothing to do with the code being built.
+.git
+
+# macOS virtual environment: its binaries do not run on Linux, and a copied
+# one would shadow the interpreter the image installs.
+.venv
+
+# Build output, this platform's and the last Linux build's alike.
+build
+dist
+dist-linux
+
+# Compiled bytecode and tool caches, none of it portable or wanted.
+__pycache__
+**/__pycache__
+*.py[cod]
+.mypy_cache
+.pytest_cache
+.ruff_cache
+
+# A trader's own database, log and lock file live here. Nothing in it belongs
+# in an image, least of all one that gets copied to another machine.
+.local
+
+# Credentials never reach an image. This project keeps none in the repository
+# and this line is what keeps it that way.
+.env
+.env.*
+
+# Editor, agent and documentation-site material, none of it built here.
+.claude
+.superpowers
+.worktrees
+.idea
+.vscode
+*.code-workspace
+.mcp.json
+docs-site/node_modules
+docs-site/.next
+docs-site/out
+package-lock.json
+
+# macOS metadata.
+.DS_Store
+**/.DS_Store

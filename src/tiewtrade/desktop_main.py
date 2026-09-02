@@ -531,22 +531,31 @@ def default_database_path(
 
     Each platform has a place it keeps application state, and it is the place
     its backup tools and its users already look. macOS says Application
-    Support; Windows says LOCALAPPDATA. The arguments exist so a machine can
-    answer for the other one under test — nothing calls this with them.
+    Support; Windows says LOCALAPPDATA; Linux says XDG_DATA_HOME. The
+    arguments exist so a machine can answer for the others under test —
+    nothing calls this with them.
     """
     return _application_directory(platform, environment) / DATABASE_FILE_NAME
 
 
 def _application_directory(platform: str, environment: Mapping[str, str]) -> Path:
-    if platform != "win32":
+    if platform == "darwin":
         return Path.home() / "Library" / "Application Support" / APPLICATION_NAME
-    # Every supported Windows sets LOCALAPPDATA. Missing, the usual location is
-    # still a better answer than a relative path, which would put a trader's
-    # history wherever the app happened to be started from.
-    local_app_data = environment.get("LOCALAPPDATA", "").strip()
-    if not local_app_data:
-        return Path.home() / "AppData" / "Local" / APPLICATION_NAME
-    return Path(local_app_data) / APPLICATION_NAME
+    if platform == "win32":
+        # Every supported Windows sets LOCALAPPDATA. Missing, the usual
+        # location is still a better answer than a relative path, which would
+        # put a trader's history wherever the app happened to be started from.
+        local_app_data = environment.get("LOCALAPPDATA", "").strip()
+        if not local_app_data:
+            return Path.home() / "AppData" / "Local" / APPLICATION_NAME
+        return Path(local_app_data) / APPLICATION_NAME
+    # Linux and every other POSIX desktop. The XDG base directory spec names
+    # `~/.local/share` when the variable is unset, and only an absolute value
+    # counts — the spec says a relative one is to be ignored.
+    data_home = environment.get("XDG_DATA_HOME", "").strip()
+    if not data_home or not Path(data_home).is_absolute():
+        return Path.home() / ".local" / "share" / APPLICATION_NAME
+    return Path(data_home) / APPLICATION_NAME
 
 
 def database_path_from_environment() -> Path | None:

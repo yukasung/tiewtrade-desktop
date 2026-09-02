@@ -1060,14 +1060,21 @@ def test_desktop_composition_defers_database_directory_creation_to_load_worker(
         mkdir_calls.append((path, mode, parents, exist_ok))
         original_mkdir(path, mode=mode, parents=parents, exist_ok=exist_ok)
 
+    # Each platform names its own installation directory, and the variables
+    # that can move it are cleared so this answers under tmp_path wherever the
+    # suite runs — the fact under test is which directories are made, not
+    # where the platform puts them.
+    monkeypatch.delenv("XDG_DATA_HOME", raising=False)
+    monkeypatch.delenv("LOCALAPPDATA", raising=False)
     monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path))
+    installation_directory = desktop_main.default_database_path().parent
     monkeypatch.setattr(Path, "mkdir", record_mkdir)
     monkeypatch.setattr(desktop_main, "run_desktop_ui", capture_desktop)
 
     result = desktop_main.run_desktop()
 
     assert result == 0
-    installation_directory = tmp_path / "Library" / "Application Support" / "TiewTrade"
+    assert installation_directory.is_relative_to(tmp_path)
     # `parents=True` records the whole chain it walks, so the fact under
     # test is that nothing outside that one directory was made.
     assert mkdir_calls != []
@@ -1078,12 +1085,7 @@ def test_desktop_composition_defers_database_directory_creation_to_load_worker(
 
     load_active = cast(LoadActiveSession, captured["load_active"])
     assert load_active() is None
-    assert (
-        tmp_path / "Library" / "Application Support" / "TiewTrade",
-        0o777,
-        True,
-        True,
-    ) in mkdir_calls
+    assert (installation_directory, 0o777, True, True) in mkdir_calls
 
 
 def test_open_entry_numbers_is_none_when_the_bot_was_only_initialized(
@@ -1590,4 +1592,32 @@ def test_windows_without_the_variable_still_names_the_usual_location() -> None:
         / "Local"
         / "TiewTrade"
         / desktop_main.DATABASE_FILE_NAME
+    )
+
+
+def test_the_installed_database_lives_in_the_xdg_data_directory_on_linux(
+    tmp_path: Path,
+) -> None:
+    """Linux keeps per-user application state under XDG_DATA_HOME.
+
+    `Library/Application Support` does not exist on Linux, so the fallback
+    that answered for every non-Windows platform made the app build that
+    folder in a trader's home — a place no Linux backup tool treats as
+    application state.
+    """
+    installed = desktop_main.default_database_path(
+        platform="linux",
+        environment={"XDG_DATA_HOME": str(tmp_path)},
+    )
+
+    assert installed == tmp_path / "TiewTrade" / desktop_main.DATABASE_FILE_NAME
+
+
+def test_linux_without_the_variable_still_names_the_usual_location() -> None:
+    """XDG_DATA_HOME is unset on plenty of desktops; the spec's own default
+    is `~/.local/share`, not the working directory."""
+    installed = desktop_main.default_database_path(platform="linux", environment={})
+
+    assert installed == (
+        Path.home() / ".local" / "share" / "TiewTrade" / desktop_main.DATABASE_FILE_NAME
     )

@@ -1,15 +1,17 @@
 # PyInstaller build for the TiewTrade desktop app.
 #
-# One spec, two platforms: it produces a macOS .app bundle on macOS and a
-# collected dist/TiewTrade folder holding TiewTrade.exe on Windows.
-# PyInstaller cannot cross-compile, so each build runs on the machine it is
-# built for — `make build` on macOS, packaging/build_windows.ps1 on Windows.
+# One spec, three platforms: it produces a macOS .app bundle on macOS, and a
+# collected dist/TiewTrade folder holding the executable on Windows and Linux.
+# PyInstaller cannot cross-compile, so each build runs on the system it is
+# built for — `make build` on macOS, packaging/build_windows.ps1 on Windows,
+# packaging/build_linux.sh inside the Ubuntu container this repository's
+# Dockerfile describes.
 #
 # Nothing here bundles a database. The app writes to the platform's own
 # application-state directory at runtime (Application Support on macOS,
-# LOCALAPPDATA on Windows) and builds its own schema on first launch, so the
-# only thing that has to reach the build is code — plus the one import Python
-# cannot see statically (see keyring below).
+# LOCALAPPDATA on Windows, XDG_DATA_HOME on Linux) and builds its own schema
+# on first launch, so the only thing that has to reach the build is code —
+# plus the imports Python cannot see statically (see keyring below).
 
 import os
 import sys
@@ -37,14 +39,26 @@ ENTITLEMENTS = (
 
 # keyring finds its backends through entry points, which PyInstaller cannot
 # follow. Left out, the platform's credential store — the macOS Keychain, the
-# Windows Credential Locker — is simply absent at runtime and the app reads
-# every stored credential as "not set" without raising, so LINE notifications
-# would look switched off forever. Name the backend of each platform
-# explicitly; naming both is harmless, since a backend that cannot run on the
-# machine reports itself unusable rather than raising.
+# Windows Credential Locker, the Linux Secret Service — is simply absent at
+# runtime and the app reads every stored credential as "not set" without
+# raising, so LINE notifications would look switched off forever.
+#
+# Only the backend of the platform being built for is named. The other
+# platforms' backends are not installed here, and asking PyInstaller for a
+# module that does not exist costs a warning per build for nothing.
+PLATFORM_KEYRING_BACKENDS = {
+    "darwin": ["keyring.backends.macOS"],
+    "win32": ["keyring.backends.Windows"],
+    # SecretService talks to gnome-keyring or KWallet over D-Bus and is what
+    # a stock Ubuntu Desktop answers with; libsecret is the same store reached
+    # through the C library, present on some desktops and not others. A
+    # backend the machine cannot run reports itself unusable rather than
+    # raising, so naming both costs nothing.
+    "linux": ["keyring.backends.SecretService", "keyring.backends.libsecret"],
+}
+
 HIDDEN_IMPORTS = [
-    "keyring.backends.macOS",
-    "keyring.backends.Windows",
+    *PLATFORM_KEYRING_BACKENDS.get(sys.platform, []),
     "keyring.backends.chainer",
     "keyring.backends.fail",
     "keyring.backends.null",
@@ -140,9 +154,9 @@ collection = COLLECT(  # noqa: F821
     name="TiewTrade",
 )
 
-# On Windows the collected folder above is the deliverable: dist/TiewTrade,
-# with TiewTrade.exe beside the runtime it needs. Only macOS has a bundle to
-# wrap it in.
+# On Windows and Linux the collected folder above is the deliverable:
+# dist/TiewTrade, with the executable beside the runtime it needs. Only macOS
+# has a bundle to wrap it in.
 if IS_MACOS:
     bundle = BUNDLE(  # noqa: F821
         collection,
