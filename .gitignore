@@ -13,3 +13,4 @@ __pycache__/
 /dist/
 /.local/
 .DS_Store
+dist-linux/
