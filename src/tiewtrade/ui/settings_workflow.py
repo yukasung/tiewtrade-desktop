@@ -27,14 +27,7 @@ type SaveLineNotifications = Callable[[bool, str, str], None]
 type ReadLineNotifications = Callable[[], LineNotificationsReading]
 """Read back the LINE settings — never the token, only that there is one."""
 
-SETTINGS_SAVED_TEXT = (
-    "Your settings have been saved successfully.\n\n"
-    "They are kept outside the database, so clearing the database leaves "
-    "them where they are.\n\n"
-    "A Runtime reads them when it starts. A Bot that is already running keeps "
-    "the settings it started with — stop it and start it again for these to "
-    "take effect."
-)
+SETTINGS_SAVED_TEXT = "Settings saved successfully."
 """Said only once the settings are actually stored, never before.
 
 Nothing else on this page says a save landed. The button goes back to reading
@@ -47,20 +40,6 @@ Worded for the button rather than for what is behind it today. The button says
 Binance API key among them — so an acknowledgement naming LINE would have to
 be rewritten by whoever adds the second setting, and would be wrong for the
 saves in between.
-
-The two things it goes on to say are the two a trader is most likely to have
-wrong, and both are facts about the page rather than about any one setting:
-
-That the database does not hold them, because "Clear All Database" sits
-directly below this button, and a trader who reads these as database rows would
-expect that button to take them. Only that it is elsewhere, never where: this
-page hands its values to a function and is not told what is behind it, and
-tests/acceptance/test_desktop_session_setup.py holds `ui` to not knowing.
-
-When they start being used, because they are read as a Runtime starts (see
-line_notification_composition) — so a trader who saves while the Bot runs and
-watches for a change would be watching a Bot that is still using what it
-started with.
 """
 
 # The database may be cleared whenever the Bot is not actually trading or
