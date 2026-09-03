@@ -28,7 +28,7 @@ type ReadLineNotifications = Callable[[], LineNotificationsReading]
 """Read back the LINE settings — never the token, only that there is one."""
 
 SETTINGS_SAVED_TEXT = (
-    "Settings saved.\n\n"
+    "Your settings have been saved successfully.\n\n"
     "They are kept outside the database, so clearing the database leaves "
     "them where they are.\n\n"
     "A Runtime reads them when it starts. A Bot that is already running keeps "
