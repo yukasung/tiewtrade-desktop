@@ -14,6 +14,7 @@ from uuid import UUID
 
 import pytest
 from pytest import MonkeyPatch
+from pytestqt.qtbot import QtBot
 
 import tiewtrade.desktop_main as desktop_main
 import tiewtrade.desktop_paper_runtime as desktop_paper_runtime
@@ -70,6 +71,10 @@ from tiewtrade.line_notification_composition import line_session_notifier
 from tiewtrade.trading.session_config import MarketType
 from tiewtrade.trading.symbol_rules import SymbolRules
 from tiewtrade.ui.bot_lifecycle_workflow import LifecycleAction, RuntimeSnapshotRelay
+from tiewtrade.ui.instance_activation import (
+    InstanceActivation,
+    activation_name_for,
+)
 from tiewtrade.ui.main_window import BotActions, ChartSources
 from tiewtrade.ui.session_workflow import CreateSession, LoadActiveSession
 from tiewtrade.ui.theme import DARK_THEME
@@ -1162,6 +1167,9 @@ def test_desktop_refuses_a_second_window_on_one_installation(
 
     monkeypatch.setattr(desktop_main, "run_desktop_ui", capture_open)
     monkeypatch.setattr(desktop_main, "report_installation_in_use", said.append)
+    # This test is about the refusal, not about the waiting a separate one
+    # covers, and the retry waits are real seconds.
+    monkeypatch.setattr(desktop_main, "sleep", lambda seconds: None)
 
     try:
         result = desktop_main.run_desktop(database_path)
@@ -1172,6 +1180,158 @@ def test_desktop_refuses_a_second_window_on_one_installation(
     assert opened == []
     assert len(said) == 1
     assert not database_path.exists()
+
+
+def test_a_second_launch_asks_for_the_window_already_open(
+    qtbot: QtBot,
+    tmp_path: Path,
+    monkeypatch: MonkeyPatch,
+) -> None:
+    """What a trader clicking the icon twice is actually asking for.
+
+    One installation runs one Bot Session, so there is nothing to open. The
+    right answer is not a refusal but a handover: the window that is already
+    there comes to them, and this launch leaves without a word.
+
+    Both ends are in this one process, so the request is waited for rather
+    than read straight back — in the app the two are separate processes and
+    the listening one is inside `exec`, which is what turns a delivered
+    request into a raised window.
+    """
+    database_path = tmp_path / "tiewtrade.sqlite3"
+    asked_for: list[str] = []
+    said: list[str] = []
+    opened: list[object] = []
+    held = InstallationLock(database_path)
+    assert held.acquire() is True
+    running_window = InstanceActivation(activation_name_for(database_path))
+    assert running_window.listen(lambda: asked_for.append("present")) is True
+
+    monkeypatch.setattr(desktop_main, "run_desktop_ui", lambda **kwargs: opened)
+    monkeypatch.setattr(desktop_main, "report_installation_in_use", said.append)
+
+    try:
+        assert desktop_main.run_desktop(database_path) == 0
+        qtbot.waitUntil(lambda: asked_for == ["present"])
+    finally:
+        running_window.close()
+        held.release()
+
+    assert said == []
+    assert opened == []
+    assert not database_path.exists()
+
+
+def test_the_window_that_holds_the_installation_is_the_one_that_answers(
+    tmp_path: Path,
+    monkeypatch: MonkeyPatch,
+) -> None:
+    """The name has to reach the window, or nothing would be listening on it.
+
+    Derived from the database rather than passed in, because the database is
+    what "one installation" means — and a checkout pointed at its own file is
+    a different installation that must not be handed this window.
+    """
+    database_path = tmp_path / "tiewtrade.sqlite3"
+    opened: list[dict[str, object]] = []
+
+    def capture_open(**kwargs: object) -> int:
+        opened.append(kwargs)
+        return 0
+
+    monkeypatch.setattr(desktop_main, "run_desktop_ui", capture_open)
+
+    assert desktop_main.run_desktop(database_path) == 0
+    assert opened[0]["activation_name"] == activation_name_for(database_path)
+
+
+def test_a_launch_waits_for_a_window_that_is_still_starting(
+    tmp_path: Path,
+    monkeypatch: MonkeyPatch,
+) -> None:
+    """The one race that matters: a trader double-clicking the icon.
+
+    The second click can land while the first process holds the installation
+    but has not begun listening. Nothing is there to refuse the connection, so
+    the ask fails at once — retrying without waiting would spend every attempt
+    inside the same millisecond and refuse a window that was moments away.
+    """
+    database_path = tmp_path / "tiewtrade.sqlite3"
+    said: list[str] = []
+    waits: list[float] = []
+    answers = iter([False, False, True])
+    held = InstallationLock(database_path)
+    assert held.acquire() is True
+
+    monkeypatch.setattr(desktop_main, "run_desktop_ui", lambda **kwargs: 0)
+    monkeypatch.setattr(desktop_main, "report_installation_in_use", said.append)
+    monkeypatch.setattr(desktop_main, "sleep", waits.append)
+    monkeypatch.setattr(
+        InstanceActivation,
+        "ask_the_running_window",
+        lambda self, *, timeout_ms: next(answers),
+    )
+
+    try:
+        result = desktop_main.run_desktop(database_path)
+    finally:
+        held.release()
+
+    assert result == 0
+    assert said == []
+    assert waits == [desktop_main._ACTIVATION_RETRY_WAIT_SECONDS] * 2
+
+
+def test_a_launch_does_not_wait_after_its_last_attempt(
+    tmp_path: Path,
+    monkeypatch: MonkeyPatch,
+) -> None:
+    """The window is not coming, so the trader waits for nothing at all."""
+    database_path = tmp_path / "tiewtrade.sqlite3"
+    waits: list[float] = []
+    held = InstallationLock(database_path)
+    assert held.acquire() is True
+
+    monkeypatch.setattr(desktop_main, "run_desktop_ui", lambda **kwargs: 0)
+    monkeypatch.setattr(desktop_main, "report_installation_in_use", lambda text: None)
+    monkeypatch.setattr(desktop_main, "sleep", waits.append)
+
+    try:
+        desktop_main.run_desktop(database_path)
+    finally:
+        held.release()
+
+    assert len(waits) == desktop_main._ACTIVATION_ATTEMPTS - 1
+
+
+def test_an_installation_held_with_no_window_to_show_is_still_refused(
+    tmp_path: Path,
+    monkeypatch: MonkeyPatch,
+) -> None:
+    """Held by something that does not answer is the case the message is for.
+
+    The trader cannot open the app and there is no window to send them to, so
+    saying so is all that is left — and the non-zero exit stands, because
+    nothing about this launch succeeded.
+    """
+    database_path = tmp_path / "tiewtrade.sqlite3"
+    said: list[str] = []
+    opened: list[object] = []
+    held = InstallationLock(database_path)
+    assert held.acquire() is True
+
+    monkeypatch.setattr(desktop_main, "run_desktop_ui", lambda **kwargs: opened)
+    monkeypatch.setattr(desktop_main, "report_installation_in_use", said.append)
+    monkeypatch.setattr(desktop_main, "sleep", lambda seconds: None)
+
+    try:
+        result = desktop_main.run_desktop(database_path)
+    finally:
+        held.release()
+
+    assert result == desktop_main._INSTALLATION_IN_USE_EXIT_CODE
+    assert len(said) == 1
+    assert opened == []
 
 
 def test_desktop_hands_the_installation_back_when_the_window_closes(

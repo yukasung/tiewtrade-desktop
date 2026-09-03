@@ -15,6 +15,7 @@ from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
 from threading import Lock
+from time import sleep
 from uuid import UUID
 
 from tiewtrade.application.chart_data import (
@@ -76,8 +77,15 @@ from tiewtrade.trading.symbol_rules import SymbolRules
 from tiewtrade.trading.trade_history import TradeFill
 from tiewtrade.ui.bot_lifecycle_workflow import RuntimeSnapshotRelay
 from tiewtrade.ui.chart_fact_relay import ChartFactRelay
-from tiewtrade.ui.desktop import report_installation_in_use
+from tiewtrade.ui.desktop import (
+    report_installation_in_use,
+    the_qt_application,
+)
 from tiewtrade.ui.desktop import run_desktop as run_desktop_ui
+from tiewtrade.ui.instance_activation import (
+    InstanceActivation,
+    activation_name_for,
+)
 from tiewtrade.ui.main_window import BotActions, ChartSources
 
 _logger = logging.getLogger(__name__)
@@ -94,6 +102,16 @@ _INSTALLATION_IN_USE_MESSAGE = (
     "One installation runs one Bot Session at a time, so close the other "
     "window before opening this one."
 )
+# Both ends are on this machine, so an answer either comes back at once or is
+# not coming, and the timeout is a bound on a request that has gone wrong.
+_ACTIVATION_TIMEOUT_MS = 1_000
+# The attempts are for a different thing entirely: the process that holds the
+# installation but has not begun listening yet. Nothing is there to refuse the
+# connection, so the ask fails instantly and retrying without waiting would
+# spend all three attempts inside the same millisecond. The wait is what makes
+# them attempts — a Qt window takes a moment to build, and this covers it.
+_ACTIVATION_ATTEMPTS = 3
+_ACTIVATION_RETRY_WAIT_SECONDS = 0.5
 
 
 def _symbol_rules_for(session: ConfiguredPaperSession) -> SymbolRules:
@@ -415,20 +433,58 @@ def run_desktop(database_path: Path | None = None) -> int:
     # what the Bot did, and why it stopped doing it.
     configure_desktop_logging(resolved_database_path.parent)
     installation = InstallationLock(resolved_database_path)
+    activation_name = activation_name_for(resolved_database_path)
     if not installation.acquire():
-        _logger.error(
-            "another process is already running this installation",
-            extra={"event_name": "desktop.installation.in_use"},
-        )
-        report_installation_in_use(_INSTALLATION_IN_USE_MESSAGE)
-        return _INSTALLATION_IN_USE_EXIT_CODE
+        return _hand_over_to_the_running_window(activation_name)
     try:
-        return _run_desktop_holding_the_installation(resolved_database_path)
+        return _run_desktop_holding_the_installation(
+            resolved_database_path,
+            activation_name,
+        )
     finally:
         installation.release()
 
 
-def _run_desktop_holding_the_installation(resolved_database_path: Path) -> int:
+def _hand_over_to_the_running_window(activation_name: str) -> int:
+    """Give this launch to the window that is already open, if there is one.
+
+    One installation runs one Bot Session, so a trader launching the app again
+    is asking for their window, not for a second one. The lock has already
+    refused this process the installation; all that is left is to point the
+    ask at whoever holds it and leave.
+
+    Retried because the two events race at the one moment it matters — a
+    trader double-clicking the icon can reach this before the first process
+    has finished starting, and that first process would then hold the
+    installation while answering nothing.
+
+    Nobody answering at all is a different situation, and the one the message
+    below was written for: the installation is taken and there is no window to
+    send the trader to. It stays an error, exit code and all.
+    """
+    the_qt_application()
+    activation = InstanceActivation(activation_name)
+    for attempt in range(_ACTIVATION_ATTEMPTS):
+        if activation.ask_the_running_window(timeout_ms=_ACTIVATION_TIMEOUT_MS):
+            _logger.info(
+                "handed this launch to the window already open",
+                extra={"event_name": "desktop.activation.handed_over"},
+            )
+            return 0
+        if attempt + 1 < _ACTIVATION_ATTEMPTS:
+            sleep(_ACTIVATION_RETRY_WAIT_SECONDS)
+    _logger.error(
+        "another process is already running this installation",
+        extra={"event_name": "desktop.installation.in_use"},
+    )
+    report_installation_in_use(_INSTALLATION_IN_USE_MESSAGE)
+    return _INSTALLATION_IN_USE_EXIT_CODE
+
+
+def _run_desktop_holding_the_installation(
+    resolved_database_path: Path,
+    activation_name: str,
+) -> int:
     """Everything that may only run while this process owns the database.
 
     Split out so the claim reads as the precondition it is: the body below
@@ -508,6 +564,7 @@ def _run_desktop_holding_the_installation(resolved_database_path: Path) -> int:
         clear_database=_migrate_first(prepare_database, database.clear_all_data),
         save_line_notifications=_keep_line_notifications,
         read_line_notifications=line_notification_reading,
+        activation_name=activation_name,
     )
 
 
