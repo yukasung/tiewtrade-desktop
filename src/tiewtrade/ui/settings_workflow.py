@@ -27,13 +27,19 @@ type SaveLineNotifications = Callable[[bool, str, str], None]
 type ReadLineNotifications = Callable[[], LineNotificationsReading]
 """Read back the LINE settings — never the token, only that there is one."""
 
-LINE_SETTINGS_SAVED_TEXT = "LINE settings saved."
+SETTINGS_SAVED_TEXT = "Settings saved."
 """Said only once the settings are actually stored, never before.
 
 Nothing else on this page says a save landed. The button goes back to reading
 "Save Settings" whether the settings were kept or never left the form, and the
 token field empties and refills either way — so a save that worked and a save
 that quietly did nothing look identical without this.
+
+Worded for the button rather than for what is behind it today. The button says
+"Save Settings" and this page is built to hold the values still to come — a
+Binance API key among them — so an acknowledgement naming LINE would have to
+be rewritten by whoever adds the second setting, and would be wrong for the
+saves in between.
 """
 
 # The database may be cleared whenever the Bot is not actually trading or
@@ -165,7 +171,7 @@ class SettingsWorkflow(QObject):
         has its own message and does not come through here.
         """
         self.opened()
-        QMessageBox.information(self._panel, "Settings", LINE_SETTINGS_SAVED_TEXT)
+        QMessageBox.information(self._panel, "Settings", SETTINGS_SAVED_TEXT)
 
     @Slot()
     def _clear_database_requested(self) -> None:

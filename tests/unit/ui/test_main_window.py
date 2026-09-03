@@ -4674,7 +4674,7 @@ def test_saving_line_settings_says_so(
     click(panel.save_line_button)
 
     qtbot.waitUntil(lambda: bool(seen))
-    assert seen == [settings_workflow_module.LINE_SETTINGS_SAVED_TEXT]
+    assert seen == [settings_workflow_module.SETTINGS_SAVED_TEXT]
 
 
 def test_line_settings_that_could_not_be_saved_are_never_called_saved(
