@@ -27,6 +27,15 @@ type SaveLineNotifications = Callable[[bool, str, str], None]
 type ReadLineNotifications = Callable[[], LineNotificationsReading]
 """Read back the LINE settings — never the token, only that there is one."""
 
+LINE_SETTINGS_SAVED_TEXT = "LINE settings saved."
+"""Said only once the settings are actually stored, never before.
+
+Nothing else on this page says a save landed. The button goes back to reading
+"Save Settings" whether the settings were kept or never left the form, and the
+token field empties and refills either way — so a save that worked and a save
+that quietly did nothing look identical without this.
+"""
+
 # The database may be cleared whenever the Bot is not actually trading or
 # moving between states. Stopped, Blocked, and a freshly Configured Session
 # all resolve through the same editable Setup form, whose only way onward
@@ -140,13 +149,23 @@ class SettingsWorkflow(QObject):
 
     @Slot(object)
     def _settings_kept(self, _result: object) -> None:
-        """Read the form back from what was actually stored.
+        """Read the form back from what was actually stored, and say it landed.
 
         What the trader typed and what is now stored are two things, and the
         second is the one the Bot will use. Reading it back is also what
         empties the token field once its value is somewhere safer.
+
+        The reading is asked for before the box goes up rather than after,
+        because the box is modal and holds this thread inside it. Asked first,
+        the read runs while the trader is looking at the box and the form is
+        already filled in behind it when they dismiss it.
+
+        This is reached only from the success of the save itself, so it can
+        never tell a trader their token was kept when it was not — the failure
+        has its own message and does not come through here.
         """
         self.opened()
+        QMessageBox.information(self._panel, "Settings", LINE_SETTINGS_SAVED_TEXT)
 
     @Slot()
     def _clear_database_requested(self) -> None:
