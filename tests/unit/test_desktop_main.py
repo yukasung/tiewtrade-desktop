@@ -51,7 +51,11 @@ from tiewtrade.application.trading_workspace import (
     TradingWorkspaceSnapshot,
     WorkspaceTabState,
 )
-from tiewtrade.desktop_logging import LOG_FILE_NAME
+from tiewtrade.desktop_logging import (
+    LOG_FILE_NAME,
+    PACKAGE_LOGGER,
+    configure_desktop_logging,
+)
 from tiewtrade.desktop_paper_runtime import PaperRuntimeActions
 from tiewtrade.integrations.binance.public_endpoints import (
     BinanceMarketDataPayloadError,
@@ -1115,6 +1119,28 @@ def test_open_entry_numbers_is_none_when_the_bot_was_only_initialized(
     )
 
     assert actions.open_entry_numbers(session) is None
+
+
+def test_the_desktop_logs_where_it_configures_a_handler(tmp_path: Path) -> None:
+    """What the app says about its own startup has to reach the log file.
+
+    `configure_desktop_logging` attaches the file handler to the package
+    logger, so anything this module writes has to sit under that logger to be
+    heard. `__name__` will not do it: `python -m tiewtrade.desktop_main` — the
+    command this repository documents for running the app — makes `__name__`
+    equal to `"__main__"`, which is outside the package entirely.
+
+    The source is read as well as the logger, because the name is right either
+    way when this test imports the module normally. Only the command a
+    developer actually runs tells the two apart.
+    """
+    configure_desktop_logging(tmp_path)
+    desktop_main._logger.info("probe", extra={"event_name": "probe.event"})
+
+    assert desktop_main._logger.name.startswith(f"{PACKAGE_LOGGER}.")
+    assert "probe.event" in (tmp_path / LOG_FILE_NAME).read_text(encoding="utf-8")
+    source = Path(desktop_main.__file__).read_text(encoding="utf-8")
+    assert "getLogger(__name__)" not in source
 
 
 def test_desktop_claims_the_installation_before_touching_the_database(

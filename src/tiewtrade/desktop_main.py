@@ -48,7 +48,7 @@ from tiewtrade.application.paper_session_setup import (
 )
 from tiewtrade.application.paper_symbols import PAPER_SYMBOLS, paper_symbol_rules
 from tiewtrade.decimal_context import configure_decimal_context
-from tiewtrade.desktop_logging import configure_desktop_logging
+from tiewtrade.desktop_logging import PACKAGE_LOGGER, configure_desktop_logging
 from tiewtrade.desktop_paper_runtime import PaperRuntimeActions
 from tiewtrade.integrations.binance.public_endpoints import BinancePublicEndpoints
 from tiewtrade.integrations.binance.public_market_data import BinancePublicMarketData
@@ -88,7 +88,14 @@ from tiewtrade.ui.instance_activation import (
 )
 from tiewtrade.ui.main_window import BotActions, ChartSources
 
-_logger = logging.getLogger(__name__)
+# Named outright rather than taken from `__name__`, which is the one thing
+# this module cannot use. `python -m tiewtrade.desktop_main` — the command
+# this repository documents for running the app — makes `__name__` equal to
+# `"__main__"`, which sits outside the package logger and so outside the
+# handler `configure_desktop_logging` attaches. Every line below would be
+# written to a logger nothing is listening to, and a developer looking for
+# why the app refused to start would find an empty log.
+_logger = logging.getLogger(f"{PACKAGE_LOGGER}.desktop_main")
 
 APPLICATION_NAME = "TiewTrade"
 DATABASE_FILE_NAME = "tiewtrade.sqlite3"
