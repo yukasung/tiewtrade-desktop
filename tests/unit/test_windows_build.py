@@ -36,6 +36,21 @@ def test_the_spec_names_the_keyring_backend_of_each_platform() -> None:
     assert '"keyring.backends.macOS"' in spec
 
 
+def test_the_spec_keeps_the_module_local_ipc_lives_in() -> None:
+    """`QLocalServer` and `QLocalSocket` are QtNetwork, not QtCore.
+
+    They are how a second launch of the app reaches the window already open.
+    The spec trims most of Qt to keep the bundle small, and QtNetwork would be
+    an easy one to add to that list — it reads like something a desktop app
+    that talks to Binance over aiohttp has no use for. Excluded, the app still
+    builds and still starts, and the only thing that breaks is a trader
+    double-clicking the icon and nothing happening.
+    """
+    spec = _spec_text()
+
+    assert '"PySide6.QtNetwork"' not in spec
+
+
 def test_the_spec_bundles_an_app_only_where_a_bundle_means_something() -> None:
     """`BUNDLE` is a macOS .app; on Windows the collected folder is the app."""
     spec = _spec_text()

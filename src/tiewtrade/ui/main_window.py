@@ -5,7 +5,7 @@ from datetime import UTC, datetime
 
 from PySide6.QtCore import Qt, QThreadPool, Slot
 from PySide6.QtGui import QCloseEvent
-from PySide6.QtWidgets import QMainWindow, QMessageBox
+from PySide6.QtWidgets import QApplication, QMainWindow, QMessageBox
 
 from tiewtrade.application.bot_control import BotControlAction, BotControlSnapshot
 from tiewtrade.application.chart_data import (
@@ -1020,6 +1020,36 @@ class MainWindow(QMainWindow):
         been there, so a Basket closing later knows to refresh the table.
         """
         self._history_started = True
+
+    def present(self) -> None:
+        """Bring this window to the trader, wherever they left it.
+
+        Asked for by a second launch of the app: one installation runs one Bot
+        Session, so opening it again is a request for the window that is
+        already open rather than for another one.
+
+        All four steps are needed, and none of them stands for the others. A
+        window that was never shown needs `show()`. A minimized one is still
+        "visible" to Qt, so the minimized bit has to come off explicitly —
+        and only that bit, or a maximized window would come back the wrong
+        size. A window behind others needs raising, and a raised window that
+        is not active still leaves the trader's keystrokes going elsewhere.
+
+        A window part-way through closing is left alone. Its Runtime is
+        already stopped and it is waiting on its workers, so putting it in
+        front of a trader would show them a window that is about to vanish.
+        """
+        if self._close_sequence_started:
+            return
+        self.show()
+        self.setWindowState(self.windowState() & ~Qt.WindowState.WindowMinimized)
+        self.raise_()
+        self.activateWindow()
+        # A window manager is entitled to refuse a raise it did not see a user
+        # ask for — Wayland compositors usually do. Then this is all the app
+        # can do: mark the window as wanting attention, and let the taskbar or
+        # the dock say so.
+        QApplication.alert(self)
 
     def closeEvent(self, event: QCloseEvent) -> None:
         if not self._close_sequence_completed:

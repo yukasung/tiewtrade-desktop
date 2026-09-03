@@ -8,6 +8,7 @@ from pathlib import Path
 import pytest
 
 import tiewtrade
+from tiewtrade.integrations.process_lock import installation_lock
 from tiewtrade.integrations.process_lock.installation_lock import (
     InstallationLock,
     lock_path_for,
@@ -19,6 +20,15 @@ _SOURCE_ROOT = str(Path(tiewtrade.__file__).resolve().parents[1])
 
 _HOLDER_READY_TIMEOUT_SECONDS = 10.0
 _LOCK_RELEASE_TIMEOUT_SECONDS = 10.0
+
+# SIGKILL and SIGTERM are POSIX signals. Windows kills a process by another
+# route entirely, so the tests that need one are skipped there rather than
+# rewritten — the guarantee they cover is the kernel's on both platforms, and
+# there is a Windows machine in the manual test plan to see it on.
+_POSIX_SIGNALS_ONLY = pytest.mark.skipif(
+    sys.platform == "win32",
+    reason="SIGKILL and SIGTERM do not exist on Windows",
+)
 
 
 def test_lock_path_sits_beside_the_database(tmp_path: Path) -> None:
@@ -129,6 +139,7 @@ def test_context_manager_releases_when_the_body_raises(tmp_path: Path) -> None:
     assert InstallationLock(database).acquire() is True
 
 
+@_POSIX_SIGNALS_ONLY
 def test_another_process_holding_it_refuses_this_one(tmp_path: Path) -> None:
     database = tmp_path / "tiewtrade.sqlite3"
     holder = _start_holder(database)
@@ -139,6 +150,7 @@ def test_another_process_holding_it_refuses_this_one(tmp_path: Path) -> None:
         _end_holder(holder, signal.SIGTERM)
 
 
+@_POSIX_SIGNALS_ONLY
 def test_a_killed_process_leaves_the_lock_free(tmp_path: Path) -> None:
     """The whole point: a Bot that was never stopped cannot hold the lock.
 
@@ -213,13 +225,47 @@ def test_a_lock_that_cannot_be_asked_about_is_not_a_free_lock(
     "Nobody holds it" licenses recovering a stale lifecycle marker. A lock
     that could not be asked about has said nothing of the kind, so it must
     raise rather than report the installation free.
+
+    The platform's own call is behind a seam here rather than named outright,
+    because which call it is differs by platform and this rule does not.
     """
-    import fcntl
 
-    def refuse(*_args: object, **_kwargs: object) -> None:
-        raise PermissionError("flock is unavailable on this filesystem")
+    def refuse(*_args: object, **_kwargs: object) -> bool:
+        raise PermissionError("the lock is unavailable on this filesystem")
 
-    monkeypatch.setattr(fcntl, "flock", refuse)
+    monkeypatch.setattr(installation_lock, "_take_the_lock", refuse)
 
     with pytest.raises(PermissionError):
         InstallationLock(tmp_path / "tiewtrade.sqlite3").acquire()
+
+
+def test_a_lock_that_cannot_be_asked_about_leaves_no_open_handle(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A failed ask must leave nothing behind, so a later ask is a fresh one."""
+    database = tmp_path / "tiewtrade.sqlite3"
+    lock = InstallationLock(database)
+
+    def refuse(*_args: object, **_kwargs: object) -> bool:
+        raise PermissionError("the lock is unavailable on this filesystem")
+
+    monkeypatch.setattr(installation_lock, "_take_the_lock", refuse)
+    with pytest.raises(PermissionError):
+        lock.acquire()
+    monkeypatch.undo()
+
+    assert lock.acquire() is True
+
+    lock.release()
+
+
+def test_the_platform_call_is_never_imported_at_the_top_of_the_module() -> None:
+    """`fcntl` does not exist on Windows, and an import of it at module level
+    would fail before the app could say anything — the whole desktop is behind
+    this import. It has to stay inside the branch that only POSIX takes.
+    """
+    source = Path(installation_lock.__file__).read_text(encoding="utf-8")
+
+    assert "\nimport fcntl" not in source
+    assert "\n    import fcntl" in source

@@ -4743,3 +4743,72 @@ def test_choosing_another_pair_takes_the_old_price_off_the_card(
 
     qtbot.waitUntil(lambda: card.pair.text() == "ETHUSDT · 5m · Spot")
     assert card.price.text() == BLANK
+
+
+def _a_plain_window() -> MainWindow:
+    """A window with nothing wired behind it, for questions about the window."""
+    return MainWindow(
+        create_session=unused_create,
+        load_active=no_active_session,
+        list_basket_history=empty_basket_history,
+        list_trade_fills=empty_trade_fills,
+    )
+
+
+def test_presenting_shows_a_window_that_was_never_shown(qtbot: QtBot) -> None:
+    window = _a_plain_window()
+    qtbot.addWidget(window)
+
+    window.present()
+
+    assert window.isVisible()
+
+
+def test_presenting_restores_a_minimized_window(qtbot: QtBot) -> None:
+    """The ask a second launch makes: the window is here, bring it back.
+
+    A minimized window is still visible as far as Qt is concerned, so `show()`
+    alone would leave it in the dock — the minimized state has to come off.
+    """
+    window = _a_plain_window()
+    qtbot.addWidget(window)
+    window.show()
+    window.showMinimized()
+
+    window.present()
+
+    assert not window.isMinimized()
+    assert window.isVisible()
+
+
+def test_presenting_keeps_the_window_size_it_was_restored_to(qtbot: QtBot) -> None:
+    """Only the minimized bit is taken off, so a maximized window stays so."""
+    window = _a_plain_window()
+    qtbot.addWidget(window)
+    window.showMaximized()
+    window.showMinimized()
+
+    window.present()
+
+    assert window.isMaximized()
+    assert not window.isMinimized()
+
+
+def test_presenting_a_closing_window_does_not_bring_it_back(qtbot: QtBot) -> None:
+    """A window part-way through its close sequence is going, not staying.
+
+    The close sequence has already stopped the Runtime and is waiting on its
+    workers. Raising it then would put a window in front of a trader that is
+    about to vanish, and one whose Bot is already stopped.
+    """
+    window = _a_plain_window()
+    qtbot.addWidget(window)
+    window.show()
+    qtbot.waitUntil(window.setup.create_button.isEnabled)
+    window.close()
+    qtbot.waitUntil(lambda: not window.isVisible())
+    window.hide()
+
+    window.present()
+
+    assert not window.isVisible()

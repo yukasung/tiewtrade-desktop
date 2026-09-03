@@ -3,11 +3,13 @@ import sys
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from types import FrameType
+from typing import cast
 
 from PySide6.QtCore import QTimer
 from PySide6.QtWidgets import QApplication, QMessageBox
 
 from tiewtrade.application.paper_session_setup import PaperSessionSetupValues
+from tiewtrade.ui.instance_activation import InstanceActivation
 from tiewtrade.ui.main_window import (
     NO_BOT,
     NO_CHART,
@@ -41,10 +43,9 @@ def run_desktop(
     clear_database: Callable[[], None] | None = None,
     save_line_notifications: SaveLineNotifications | None = None,
     read_line_notifications: ReadLineNotifications | None = None,
+    activation_name: str | None = None,
 ) -> int:
-    app = QApplication.instance()
-    if app is None:
-        app = QApplication(sys.argv)
+    app = the_qt_application()
     apply_dark_appearance()
 
     window = MainWindow(
@@ -62,8 +63,51 @@ def run_desktop(
     )
     window.setStyleSheet(DARK_THEME)
     window.show()
-    with _closing_on_a_signal(window):
+    with (
+        _closing_on_a_signal(window),
+        _answering_a_second_launch(window, activation_name),
+    ):
         return app.exec()
+
+
+def the_qt_application() -> QApplication:
+    """The one `QApplication` this process gets, built if it does not exist.
+
+    Qt allows exactly one per process, and there is more than one way into
+    this module now — a window opening, a refusal to open, a second launch
+    handing over. Each of them needs an application object and none of them
+    may be the one that builds a second.
+    """
+    app = QApplication.instance()
+    if app is None:
+        app = QApplication(sys.argv)
+    return cast(QApplication, app)
+
+
+@contextmanager
+def _answering_a_second_launch(
+    window: MainWindow,
+    activation_name: str | None,
+) -> Iterator[None]:
+    """Listen for a second launch asking for this window, while it is open.
+
+    Only while: the channel is taken down before `exec` returns, so the name
+    is free for the next launch rather than held by a process on its way out.
+
+    A channel that cannot be opened is not a reason to refuse the window. It
+    costs the trader a convenience, not their Bot — and the installation lock,
+    which is what actually keeps the second Bot from running, has already been
+    taken by the time this is asked.
+    """
+    if activation_name is None:
+        yield
+        return
+    activation = InstanceActivation(activation_name)
+    activation.listen(window.present)
+    try:
+        yield
+    finally:
+        activation.close()
 
 
 # Often enough that Ctrl+C feels immediate, seldom enough to cost nothing.
@@ -118,9 +162,7 @@ def report_installation_in_use(message: str) -> None:
     this one has to land before any window exists — so it brings up the only
     thing available that early: a dialog of its own.
     """
-    app = QApplication.instance()
-    if app is None:
-        app = QApplication(sys.argv)
+    the_qt_application()
     apply_dark_appearance()
     dialog = QMessageBox()
     # The theme normally reaches a box through the main window it is built
