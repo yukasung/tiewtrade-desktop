@@ -24,7 +24,7 @@ class UnsupportedDatabaseSchemaError(ValueError):
 
 
 class SQLiteDatabase:
-    _SCHEMA_VERSION = 16
+    _SCHEMA_VERSION = 18
     _BUSY_TIMEOUT_MS = 5_000
 
     def __init__(self, path: Path) -> None:
@@ -39,11 +39,12 @@ class SQLiteDatabase:
         return connection
 
     def _keep_a_copy(self, connection: sqlite3.Connection, version: int) -> None:
-        """A copy of the file before the first migration that discards data.
+        """A copy of the file as it stood before this migration ran.
 
-        Every migration before this one only ever added. This one drops the
-        fee columns, so the shape it leaves cannot be undone from the file it
-        leaves, and a trader's own record is what is in it.
+        Migrations here drop columns, so the shape one leaves cannot always be
+        undone from the file it leaves, and a trader's own record is what is in
+        it. Kept once per version, so a file already carrying its copy is left
+        alone.
         """
         backup = self._path.with_suffix(f"{self._path.suffix}.v{version}.bak")
         if backup.exists() or not self._path.exists():
@@ -61,14 +62,19 @@ class SQLiteDatabase:
                 return
             if 1 <= version <= 9:
                 _require_drop_column_support()
-            if 1 <= version <= 14:
+            if 1 <= version < self._SCHEMA_VERSION:
                 self._keep_a_copy(connection, version)
-                # v11 and v15 both drop the table paper_runtime_lifecycle
+                # Several migrations drop the table paper_runtime_lifecycle
                 # points at and put one back under the same name. Enforcement
                 # would read the moment in between as an orphaned lifecycle,
                 # so it is off for the migration and the connection is closed
                 # before anything else can use it. Only a transaction-free
                 # moment can switch it, which is why it is switched here.
+                #
+                # Asked of "is there a migration to run at all" rather than of
+                # a version range: a range has to be widened by whoever writes
+                # the next rebuild, and the one who forgot left a trader unable
+                # to open the app.
                 connection.execute("PRAGMA foreign_keys = OFF")
 
             with connection:
@@ -112,11 +118,12 @@ class SQLiteDatabase:
                     _migrate_capital_per_entry_v12(connection)
                 if version == 13:
                     # v13 keyed a waiver by the calendar month a Pair
-                    # completed, because a Cooldown lapsed two months on.
-                    # A Cooldown now stands until it is waived, so the month
-                    # names nothing and the Pair is what a waiver holds. No
-                    # waiver written under the old meaning can be read under
-                    # the new one, so none is carried over.
+                    # completed, because a Cooldown lapsed two months on. That
+                    # month named nothing — a Pair completed on the last day of
+                    # one cooled for a day — so v14 keyed a waiver to the Pair
+                    # instead, which is what it still holds. No waiver written
+                    # under the old meaning can be read under the new one, so
+                    # none is carried over.
                     connection.execute("DROP TABLE IF EXISTS paper_cooldown_waivers")
                 if 0 <= version <= 13:
                     _create_paper_cooldown_waiver_schema(connection)
@@ -136,6 +143,10 @@ class SQLiteDatabase:
                         "ALTER TABLE trade_fills "
                         "ADD COLUMN group_take_profit_price TEXT"
                     )
+                if 1 <= version <= 16:
+                    _migrate_session_cooldown_policy_v17(connection)
+                if 1 <= version <= 17:
+                    _migrate_cooldown_days_only_v18(connection)
                 connection.execute(f"PRAGMA user_version = {self._SCHEMA_VERSION}")
         finally:
             connection.close()
@@ -278,6 +289,40 @@ def _migrate_drop_slippage_v10(connection: sqlite3.Connection) -> None:
         connection.execute("ALTER TABLE bot_sessions DROP COLUMN slippage_bps")
 
 
+def _rebuild_bot_sessions(
+    connection: sqlite3.Connection,
+    *,
+    table_sql: str,
+    column_names: tuple[str, ...],
+    rows: list[tuple[object, ...]],
+) -> None:
+    """Put bot_sessions back in a new shape, carrying the rows given.
+
+    A migration that has to convert each row in Python does the same five
+    things every time, because SQLite cannot add a CHECK to rows already
+    written: raise a scratch table in the new shape, copy into it, drop the
+    old one, rename, and put back the single-active index that went with the
+    table it indexed. (The two that only drop a column copy inside SQL instead,
+    having no row to convert, and raise their own scratch table.)
+
+    `table_sql` and `column_names` are the shape of the migration's own moment,
+    not whatever shape the code has since moved on to — a migration that reads
+    today's shape writes a column its rows were never given.
+    """
+    _raise_scratch_bot_sessions(connection, table_sql)
+    placeholders = ", ".join("?" for _ in column_names)
+    connection.executemany(
+        f"""
+        INSERT INTO new_bot_sessions ({", ".join(column_names)})
+        VALUES ({placeholders})
+        """,
+        rows,
+    )
+    connection.execute("DROP TABLE bot_sessions")
+    connection.execute("ALTER TABLE new_bot_sessions RENAME TO bot_sessions")
+    _create_bot_sessions_indexes(connection)
+
+
 def _raise_scratch_bot_sessions(connection: sqlite3.Connection, table_sql: str) -> None:
     """Put up an empty table to rebuild bot_sessions into.
 
@@ -370,25 +415,104 @@ def _migrate_capital_per_entry_v12(connection: sqlite3.Connection) -> None:
     rows = connection.execute("SELECT * FROM bot_sessions").fetchall()
     converted = [
         (
-            *tuple(row[name] for name in _BOT_SESSIONS_COLUMN_NAMES[:6]),
+            *tuple(row[name] for name in _V12_BOT_SESSIONS_COLUMN_NAMES[:6]),
             str(_capital_per_entry_of(row)),
-            *tuple(row[name] for name in _BOT_SESSIONS_COLUMN_NAMES[7:]),
+            *tuple(row[name] for name in _V12_BOT_SESSIONS_COLUMN_NAMES[7:]),
         )
         for row in rows
     ]
-    _raise_scratch_bot_sessions(connection, _BOT_SESSIONS_TABLE_SQL)
-    placeholders = ", ".join("?" for _ in _BOT_SESSIONS_COLUMN_NAMES)
-    connection.executemany(
-        f"""
-        INSERT INTO new_bot_sessions ({_BOT_SESSIONS_COLUMNS})
-        VALUES ({placeholders})
-        """,
-        converted,
+    _rebuild_bot_sessions(
+        connection,
+        table_sql=_BOT_SESSIONS_TABLE_SQL,
+        column_names=_V12_BOT_SESSIONS_COLUMN_NAMES,
+        rows=converted,
     )
-    connection.execute("DROP TABLE bot_sessions")
-    connection.execute("ALTER TABLE new_bot_sessions RENAME TO bot_sessions")
-    # The single-active index went with the table it indexed.
-    _create_bot_sessions_indexes(connection)
+
+
+def _migrate_session_cooldown_policy_v17(connection: sqlite3.Connection) -> None:
+    """Let a Session say how its Cooldown ends, and say what the old ones did.
+
+    A Cooldown used to be one fixed rule, so no Session stated one. Every
+    Session written before the choice existed was running the rule that waits
+    to be cancelled, and comes back running exactly that.
+
+    This is not the calendar-month Cooldown v13 dropped: a Cooldown that waits
+    is measured from the market time of the Fill that completed the Pair, which
+    the Fills already record, and a waiver still names a Pair. So nothing here
+    touches the waivers — only the Session gains what it now chooses.
+
+    The table is rebuilt rather than altered because a CHECK cannot be added to
+    rows already written any other way.
+    """
+    # Asked of the column the copy below reads, not only of the one it adds: a
+    # table without today's shape has no Session in it to carry over.
+    if not _has_column(connection, "bot_sessions", "capital_per_entry"):
+        return
+    # Asked of the days rather than of the mode, because a table created in
+    # today's shape has the days already and never had a mode to be missing —
+    # this has something to do only where neither has been written yet.
+    if not _column_is_missing(connection, "bot_sessions", "cooldown_days"):
+        return
+    rows = connection.execute("SELECT * FROM bot_sessions").fetchall()
+    kept = [
+        (
+            *tuple(row[name] for name in _V12_BOT_SESSIONS_COLUMN_NAMES[:8]),
+            "until_cancelled",
+            None,
+            *tuple(row[name] for name in _V12_BOT_SESSIONS_COLUMN_NAMES[8:]),
+        )
+        for row in rows
+    ]
+    _rebuild_bot_sessions(
+        connection,
+        table_sql=_V17_BOT_SESSIONS_TABLE_SQL,
+        column_names=_V17_BOT_SESSIONS_COLUMN_NAMES,
+        rows=kept,
+    )
+
+
+def _migrate_cooldown_days_only_v18(connection: sqlite3.Connection) -> None:
+    """Say a Cooldown as the days it waits, and nothing where it waits none.
+
+    v17 let a Session choose between three Cooldowns, one of which never
+    lapsed at all. A Cooldown is now a number of days or nothing, so the mode
+    column has one bit left to carry and the days column already carries it:
+    no days is a Cooldown switched off.
+
+    A Session that was waiting to be cancelled becomes the longest wait there
+    is. That is the closest of the remaining choices to the rule it was
+    running, and the only one that cannot loosen a risk policy behind the
+    trader's back — it holds the Basket back longer than any other, and the
+    Cancel Cooldown button still lets them out of it.
+    """
+    # Asked of the column this reads rather than of the one it drops: a
+    # database with no such table has no Session in it to say anything about.
+    if not _has_column(connection, "bot_sessions", "cooldown_mode"):
+        return
+    rows = connection.execute("SELECT * FROM bot_sessions").fetchall()
+    converted = [
+        (
+            *tuple(row[name] for name in _V12_BOT_SESSIONS_COLUMN_NAMES[:8]),
+            _cooldown_days_of(row),
+            *tuple(row[name] for name in _V12_BOT_SESSIONS_COLUMN_NAMES[8:]),
+        )
+        for row in rows
+    ]
+    _rebuild_bot_sessions(
+        connection,
+        table_sql=_BOT_SESSIONS_TABLE_SQL,
+        column_names=_BOT_SESSIONS_COLUMN_NAMES,
+        rows=converted,
+    )
+
+
+def _cooldown_days_of(row: sqlite3.Row) -> int | None:
+    """The days this Session's Cooldown waits, under the three older names."""
+    if row["cooldown_mode"] == "off":
+        return None
+    if row["cooldown_mode"] == "until_cancelled":
+        return _MAXIMUM_COOLDOWN_DAYS
+    return int(row["cooldown_days"])
 
 
 def _capital_per_entry_of(row: sqlite3.Row) -> Decimal:
@@ -490,6 +614,14 @@ _BOT_SESSIONS_TABLE_SQL = """
             max_entries INTEGER NOT NULL CHECK (
                 max_entries BETWEEN 2 AND 20 AND max_entries % 2 = 0
             ),
+            -- No days at all is a Cooldown switched off. There is nothing
+            -- else for a Session to say about one, so nothing else is stored.
+            -- The default is the longest wait rather than none, so a migration
+            -- that rebuilds this table without naming the column can only ever
+            -- leave a Session more cautious, never less.
+            cooldown_days INTEGER DEFAULT 30 CHECK (
+                cooldown_days IS NULL OR cooldown_days BETWEEN 1 AND 30
+            ),
             futures_policy_version TEXT,
             futures_leverage INTEGER,
             futures_trading_capital_ratio TEXT,
@@ -506,9 +638,80 @@ _BOT_SESSIONS_TABLE_SQL = """
         )
 """
 
-# Every column of bot_sessions in one order, for a rebuild that copies rather
-# than reshapes: naming them keeps the copy honest if the shape moves again.
-_BOT_SESSIONS_COLUMN_NAMES = (
+_MAXIMUM_COOLDOWN_DAYS = 30
+"""The longest Cooldown a Session can wait, as the schema allows one.
+
+Stated here rather than read off `CooldownPolicy` because a migration answers
+for the shape a database had at its own moment, and must go on saying the same
+thing after the domain moves on.
+"""
+
+# The shape bot_sessions had at v17, frozen: a Session named a Cooldown mode
+# beside the days, before no-days-at-all became the way to say one was off.
+_V17_BOT_SESSIONS_TABLE_SQL = """
+        CREATE TABLE IF NOT EXISTS {table} (
+            session_id TEXT PRIMARY KEY,
+            trade_mode TEXT NOT NULL CHECK (trade_mode = 'paper'),
+            market_type TEXT NOT NULL CHECK (
+                market_type IN ('spot', 'futures')
+            ),
+            symbol TEXT NOT NULL,
+            timeframe TEXT NOT NULL,
+            preset_version TEXT NOT NULL,
+            capital_per_entry TEXT NOT NULL,
+            max_entries INTEGER NOT NULL CHECK (
+                max_entries BETWEEN 2 AND 20 AND max_entries % 2 = 0
+            ),
+            cooldown_mode TEXT NOT NULL DEFAULT 'until_cancelled' CHECK (
+                cooldown_mode IN ('off', 'duration', 'until_cancelled')
+            ),
+            cooldown_days INTEGER CHECK (
+                cooldown_days IS NULL OR cooldown_days BETWEEN 1 AND 30
+            ),
+            futures_policy_version TEXT,
+            futures_leverage INTEGER,
+            futures_trading_capital_ratio TEXT,
+            futures_collateral_buffer_ratio TEXT,
+            futures_margin_mode TEXT,
+            futures_position_mode TEXT,
+            created_at_utc TEXT NOT NULL,
+            ended_at_utc TEXT,
+            CHECK (
+                (market_type = 'spot' AND futures_policy_version IS NULL)
+                OR
+                (market_type = 'futures' AND futures_policy_version IS NOT NULL)
+            ),
+            CHECK (
+                (cooldown_mode = 'duration') = (cooldown_days IS NOT NULL)
+            )
+        )
+"""
+
+_V17_BOT_SESSIONS_COLUMN_NAMES = (
+    "session_id",
+    "trade_mode",
+    "market_type",
+    "symbol",
+    "timeframe",
+    "preset_version",
+    "capital_per_entry",
+    "max_entries",
+    "cooldown_mode",
+    "cooldown_days",
+    "futures_policy_version",
+    "futures_leverage",
+    "futures_trading_capital_ratio",
+    "futures_collateral_buffer_ratio",
+    "futures_margin_mode",
+    "futures_position_mode",
+    "created_at_utc",
+    "ended_at_utc",
+)
+
+# What a Session stated at v12, in order. A migration writes the columns of
+# its own moment and leaves later ones to the defaults the table gives them,
+# so adding a column never has to be remembered in every migration before it.
+_V12_BOT_SESSIONS_COLUMN_NAMES = (
     "session_id",
     "trade_mode",
     "market_type",
@@ -527,9 +730,31 @@ _BOT_SESSIONS_COLUMN_NAMES = (
     "ended_at_utc",
 )
 
+# Every column of bot_sessions in one order, for a rebuild that copies rather
+# than reshapes: naming them keeps the copy honest if the shape moves again.
+_BOT_SESSIONS_COLUMN_NAMES = (
+    "session_id",
+    "trade_mode",
+    "market_type",
+    "symbol",
+    "timeframe",
+    "preset_version",
+    "capital_per_entry",
+    "max_entries",
+    "cooldown_days",
+    "futures_policy_version",
+    "futures_leverage",
+    "futures_trading_capital_ratio",
+    "futures_collateral_buffer_ratio",
+    "futures_margin_mode",
+    "futures_position_mode",
+    "created_at_utc",
+    "ended_at_utc",
+)
+
 _BOT_SESSIONS_COLUMNS = """
             session_id, trade_mode, market_type, symbol, timeframe,
-            preset_version, capital_per_entry, max_entries,
+            preset_version, capital_per_entry, max_entries, cooldown_days,
             futures_policy_version, futures_leverage,
             futures_trading_capital_ratio, futures_collateral_buffer_ratio,
             futures_margin_mode, futures_position_mode,

@@ -47,7 +47,7 @@ Foundation ที่พร้อมใช้งานแล้วประกอ
 - `EntryPolicy` ที่รับค่าจาก Session setup
 - Spot capital allocation, symbol quantization และ minimum-notional check
 - Basket weighted average, Take Profit, realized PnL และ atomic state transitions
-- Entry Pair และ Cooldown Month lifecycle แบบ UTC
+- Entry Pair และ Cooldown Policy lifecycle แบบ UTC
 
 Foundation ไม่เลือก execution adapter และไม่มี side effect ไปยัง Binance
 

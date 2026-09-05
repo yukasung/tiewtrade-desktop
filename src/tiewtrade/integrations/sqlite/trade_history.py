@@ -252,7 +252,7 @@ class SQLiteTradeHistory:
                 f"""
                 SELECT * FROM basket_results
                 {where_sql}
-                ORDER BY opened_at_utc DESC, basket_id DESC
+                ORDER BY COALESCE(closed_at_utc, opened_at_utc) DESC, basket_id DESC
                 """,
                 parameters,
             ).fetchall()
@@ -466,18 +466,29 @@ def _where(
     return f"WHERE {' AND '.join(clauses)}", tuple(parameters)
 
 
+_BASKET_DAY = "COALESCE(closed_at_utc, opened_at_utc)"
+"""The moment a round is read by: when it closed, or when it opened if it has not.
+
+A Position opened before midnight goes on running after it, and the result it
+realises belongs to the day it closed — read by the day it opened, today's
+result would sit hidden behind an older round. A round still open has no close
+to be read by, so it answers for the day it started, which keeps the one a
+trader is holding right now in the list.
+"""
+
+
 def _basket_where(
     filters: TradeHistoryFilter,
     *,
     closed_only: bool = False,
 ) -> tuple[str, tuple[object, ...]]:
     clauses, parameters = _basket_facets(filters, prefix="", closed_only=closed_only)
-    if filters.opened_from_utc is not None:
-        clauses.append("opened_at_utc >= ?")
-        parameters.append(utc_text(filters.opened_from_utc))
-    if filters.opened_before_utc is not None:
-        clauses.append("opened_at_utc < ?")
-        parameters.append(utc_text(filters.opened_before_utc))
+    if filters.from_utc is not None:
+        clauses.append(f"{_BASKET_DAY} >= ?")
+        parameters.append(utc_text(filters.from_utc))
+    if filters.before_utc is not None:
+        clauses.append(f"{_BASKET_DAY} < ?")
+        parameters.append(utc_text(filters.before_utc))
     return _where(clauses, parameters)
 
 
@@ -492,12 +503,12 @@ def _fill_where(filters: TradeHistoryFilter) -> tuple[str, tuple[object, ...]]:
     clauses, parameters = _basket_facets(
         filters, prefix="basket_results.", closed_only=False
     )
-    if filters.opened_from_utc is not None:
+    if filters.from_utc is not None:
         clauses.append("trade_fills.filled_at_utc >= ?")
-        parameters.append(utc_text(filters.opened_from_utc))
-    if filters.opened_before_utc is not None:
+        parameters.append(utc_text(filters.from_utc))
+    if filters.before_utc is not None:
         clauses.append("trade_fills.filled_at_utc < ?")
-        parameters.append(utc_text(filters.opened_before_utc))
+        parameters.append(utc_text(filters.before_utc))
     return _where(clauses, parameters)
 
 

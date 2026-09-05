@@ -137,18 +137,27 @@ Short = group_weighted_average_entry_price - (ATR(14) * 3)
 Entries ถูกจัดเป็นคู่ตามลำดับ โดย Pair ลำดับที่ `n` ประกอบด้วย Entries
 `(2n - 1)` และ `2n` จนครบ `max_entries` ของ Session
 
+Cooldown Policy ของ Session บอกว่า Cooldown ที่ Pair สร้างขึ้นยืนอยู่นานเท่าไหร่ ผู้ใช้เลือก
+ตอนสร้าง Session จาก dropdown เดียวและตรึงตลอด Session:
+
+- **1–30 วัน** — Cooldown ปลดเองเมื่อผ่านไปครบจำนวนวันนั้น นับจากเวลาที่ Pair ครบ วัดด้วย
+  เวลาของ candle ไม่ใช่นาฬิกาของเครื่อง เพื่อให้ replay ให้ผลเดิมทุกครั้ง ค่าเริ่มต้นคือ 30 วัน
+  ซึ่งเป็นตัวเลือกที่บล็อกนานที่สุด
+- **Off** — Pair ที่ครบไม่ทำให้ Basket เข้า Cooldown เลย
+
 Lifecycle:
 
 1. ระหว่างที่ Pair มีเพียง Entry แรก ระบบยังเปิด Entry ที่สองได้เมื่อมีสัญญาณ
-2. เมื่อ Pair มีครบสอง Entries Basket เข้าสู่ Cooldown ทันที
+2. เมื่อ Pair มีครบสอง Entries Basket เข้าสู่ Cooldown ทันที ตาม Cooldown Policy ของ
+   Session (ถ้าตั้งเป็น Off ไม่เข้า Cooldown เลย)
 3. ระหว่าง Cooldown ห้ามเพิ่ม Entry แต่ Basket Take Profit ยังคงทำงาน และการปิด Entry
    รายตัวยังทำได้เสมอ
 4. Cooldown คงอยู่ตราบที่ Basket ยังถือทั้งสอง Entries ของ Pair ล่าสุดพร้อมกัน เมื่อ Entry
    ใด Entry หนึ่งของ Pair นั้นถูกปิด — ด้วย Take Profit หรือด้วยการปิดเอง — Cooldown จบลง
    ทันทีและเริ่ม Pair ถัดไปได้ การปิด Entry ของ Pair ก่อนหน้าที่จบไปแล้วไม่ปลด Cooldown
    ของ Pair ล่าสุด เพราะ Pair นั้นยังถือครบทั้งคู่อยู่
-5. Cooldown ไม่หมดอายุเองตามเวลา ถ้ายังถือครบทั้งคู่และต้องการเปิด Entry ต่อ ผู้ใช้กด
-   "Cancel Cooldown" เพื่อยกเลิกได้
+5. Cooldown ปลดเองเมื่อครบจำนวนวันที่ Session ระบุไว้ ถ้ายังถือครบทั้งคู่และต้องการเปิด
+   Entry ก่อนครบ ผู้ใช้กด "Cancel Cooldown" เพื่อไม่รอได้
 6. วน lifecycle นี้จน Basket ปิดหรือครบ `max_entries` ของ Session
 7. การปิด Basket จะ reset Entry Pair และ Cooldown state สำหรับ Basket ใหม่
 
@@ -156,10 +165,14 @@ Lifecycle:
 ถัดไปครบสอง Entries Basket จะเข้า Cooldown อีกครั้งตามปกติ ใช้ได้ทั้ง Paper Spot และ
 Paper Futures โดย Paper Spot เก็บผลการยกเลิกไว้ในฐานข้อมูลจึงอยู่รอดข้าม restart ส่วน
 Paper Futures ยกเลิกได้เฉพาะขณะ Bot กำลังรัน เพราะ Futures ไม่รับ Basket ที่เปิดค้างกลับมา
+Session ที่ตั้ง Cooldown เป็น Off ไม่มี Cooldown ให้ยกเลิก ปุ่มจึงไม่ปรากฏ
+
+เมื่อ Cooldown หมดอายุเอง ระบบแจ้งผู้ใช้ว่า Bot กลับมาเปิด Entry ได้แล้ว
+เพราะไม่มีใครกดอะไรเลย ส่วน Cooldown ที่จบเพราะผู้ใช้ปิด Entry ของ Pair นั้นไม่ต้องแจ้ง
 
 ## 7. Capital Allocation
 
-ผู้ใช้กำหนด Available Capital และ `max_entries` สำหรับแต่ละ Session ระบบแบ่งขนาด Entry เท่ากันจาก Trading Capital ของ Mode นั้น `max_entries` ต้องเป็นเลขคู่ตั้งแต่ 2–20 และถูกตรึงตลอด Session
+ผู้ใช้กำหนด Available Capital และ `max_entries` สำหรับแต่ละ Session ระบบแบ่งขนาด Entry เท่ากันจาก Trading Capital ของ Mode นั้น `max_entries` ต้องเป็นเลขคู่ตั้งแต่ 2–20 และถูกตรึงตลอด Session เช่นเดียวกับ Cooldown Policy
 
 ### 7.1 Spot
 

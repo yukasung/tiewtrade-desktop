@@ -83,7 +83,10 @@ def _group(row: _Row) -> str:
 def _entry_gate(row: _Row) -> str:
     """Whether this Entry's own Pair is what a Cooldown is blocking, and why."""
     gate = row.basket.entry_gate_for(row.entry.entry_number)
-    return blocked_entry_reason(gate) or "Active"
+    return (
+        blocked_entry_reason(gate, cooldown_ends_at=row.basket.cooldown_ends_at_utc)
+        or "Active"
+    )
 
 
 def _quantity(row: _Row) -> str:

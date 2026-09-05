@@ -1,3 +1,5 @@
+from dataclasses import replace
+
 import pytest
 from PySide6.QtGui import QValidator
 from pytestqt.qtbot import QtBot
@@ -12,6 +14,7 @@ from tiewtrade.application.paper_session_setup import (
     PaperSessionSetupValues,
     setup_values_of,
 )
+from tiewtrade.trading.cooldown_policy import CooldownPolicy
 from tiewtrade.trading.futures_policy import FuturesTradingPolicy
 from tiewtrade.ui.session_setup import SessionSetupWidget
 
@@ -235,3 +238,88 @@ def test_amount_field_accepts_only_a_number(qtbot: QtBot) -> None:
     # A field being filled in is not yet a field that is wrong: an empty
     # Amount is still what the form reports as a missing Amount.
     assert _validator_state(validator, "") is not QValidator.State.Invalid
+
+
+def test_the_form_opens_on_the_longest_cooldown(qtbot: QtBot) -> None:
+    """The safest of the choices, so an untouched form is never the loosest."""
+    widget = SessionSetupWidget()
+    qtbot.addWidget(widget)
+
+    assert widget.values().cooldown_days == "30"
+    assert widget.cooldown.currentText() == "30"
+    assert widget.cooldown.accessibleName() == "Cooldown (days)"
+
+
+def test_the_form_offers_off_and_every_day_it_supports(qtbot: QtBot) -> None:
+    widget = SessionSetupWidget()
+    qtbot.addWidget(widget)
+
+    labels = [widget.cooldown.itemText(i) for i in range(widget.cooldown.count())]
+
+    # The unit is on the label, so the list is thirty plain numbers.
+    assert labels[:4] == ["Off", "1", "2", "3"]
+    assert labels[-1] == "30"
+    assert len(labels) == CooldownPolicy.MAXIMUM_DAYS + 1
+
+
+def test_choosing_off_states_no_days_at_all(qtbot: QtBot) -> None:
+    widget = SessionSetupWidget()
+    qtbot.addWidget(widget)
+
+    widget.cooldown.setCurrentIndex(widget.cooldown.findText("Off"))
+
+    assert widget.values().cooldown_days is None
+
+
+def test_choosing_a_number_of_days_states_that_number(qtbot: QtBot) -> None:
+    widget = SessionSetupWidget()
+    qtbot.addWidget(widget)
+
+    widget.cooldown.setCurrentIndex(widget.cooldown.findText("1"))
+
+    assert widget.values().cooldown_days == "1"
+
+
+@pytest.mark.parametrize(
+    ("cooldown", "expected"),
+    [
+        (CooldownPolicy.off(), "Off"),
+        (CooldownPolicy.for_days(1), "1"),
+        (CooldownPolicy.for_days(3), "3"),
+    ],
+)
+def test_a_session_reads_back_onto_the_form(
+    qtbot: QtBot, cooldown: CooldownPolicy, expected: str
+) -> None:
+    widget = SessionSetupWidget()
+    qtbot.addWidget(widget)
+    session = _session_with_cooldown(cooldown)
+
+    widget.set_values_from_session(session)
+
+    assert widget.cooldown.currentText() == expected
+    assert widget.values() == setup_values_of(session)
+
+
+def test_a_cooldown_error_reaches_the_field_that_asked(qtbot: QtBot) -> None:
+    widget = SessionSetupWidget()
+    qtbot.addWidget(widget)
+
+    widget.show_field_error("cooldown_days", "days must be between 1 and 30")
+
+    revealed = widget.reveal_validation_field("cooldown_days")
+
+    assert revealed is not None
+    assert revealed[0] is widget.cooldown
+    assert revealed[1].text() == "days must be between 1 and 30"
+
+
+def _session_with_cooldown(cooldown: CooldownPolicy) -> ConfiguredPaperSession:
+    session = configured_spot_session()
+    return replace(
+        session,
+        config=replace(
+            session.config,
+            entry_policy=replace(session.config.entry_policy, cooldown=cooldown),
+        ),
+    )

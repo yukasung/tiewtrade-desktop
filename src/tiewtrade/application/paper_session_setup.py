@@ -12,6 +12,7 @@ from tiewtrade.strategies.registry import (
     strategy_definition_for,
     strategy_definitions_for,
 )
+from tiewtrade.trading.cooldown_policy import CooldownPolicy
 from tiewtrade.trading.entry_policy import EntryPolicy
 from tiewtrade.trading.futures_policy import FuturesTradingPolicy
 from tiewtrade.trading.session_config import MarketType, SessionConfig, TradeMode
@@ -46,6 +47,10 @@ class PaperSessionSetupValues:
     max_entries: str
     futures_leverage: str | None
     preset_version: str = "rsi-step-grid-v1"
+    # None is a Cooldown switched off. A form that names nothing at all asks
+    # for the longest wait rather than no wait, so a Session assembled without
+    # a choice is never quietly the least cautious one.
+    cooldown_days: str | None = str(CooldownPolicy.DEFAULT_DAYS)
 
 
 @dataclass(frozen=True, slots=True)
@@ -75,12 +80,14 @@ def setup_values_of(session: ConfiguredPaperSession) -> PaperSessionSetupValues:
     """
     config = session.config
     futures_policy = config.futures_policy
+    cooldown = config.entry_policy.cooldown
     return PaperSessionSetupValues(
         market_type=config.market_type.value,
         symbol=session.market_data.symbol,
         timeframe=session.market_data.timeframe,
         capital_per_entry=format(config.capital_per_entry, "f"),
         max_entries=str(config.entry_policy.max_entries),
+        cooldown_days=None if cooldown.days is None else str(cooldown.days),
         futures_leverage=(
             None if futures_policy is None else str(futures_policy.leverage)
         ),
@@ -200,7 +207,10 @@ def _parse(values: PaperSessionSetupValues) -> _ParsedSetup:
             "futures_leverage", lambda: FuturesTradingPolicy.v1(leverage)
         )
 
-    entry_policy = _validate_field("max_entries", lambda: EntryPolicy(max_entries))
+    cooldown = _cooldown_policy(values)
+    entry_policy = _validate_field(
+        "max_entries", lambda: EntryPolicy(max_entries, cooldown=cooldown)
+    )
     market_data = _validate_field(
         "timeframe",
         lambda: MarketDataConfig(symbol=values.symbol, timeframe=values.timeframe),
@@ -219,6 +229,18 @@ def _parse(values: PaperSessionSetupValues) -> _ParsedSetup:
         market_data=market_data,
         preset=preset,
     )
+
+
+def _cooldown_policy(values: PaperSessionSetupValues) -> CooldownPolicy:
+    """The Cooldown this form asks for, pinned for the Session's whole life.
+
+    No days at all is a Cooldown switched off, which is the one other thing
+    the form can ask for — so there is nothing else to read here.
+    """
+    if values.cooldown_days is None:
+        return CooldownPolicy.off()
+    days = _integer(values.cooldown_days, "cooldown_days")
+    return _validate_field("cooldown_days", lambda: CooldownPolicy.for_days(days))
 
 
 def _strategy_definition_for_market_type(

@@ -199,7 +199,7 @@ def test_trade_channel_runs_one_query_and_coalesces_latest_filter() -> None:
 
     assert requested == [
         _today_filter(),
-        TradeHistoryFilter(opened_from_utc=datetime(2026, 1, 2, 17, tzinfo=UTC)),
+        TradeHistoryFilter(from_utc=datetime(2026, 1, 2, 17, tzinfo=UTC)),
     ]
 
 
@@ -313,7 +313,7 @@ def test_only_the_latest_filters_run_after_the_active_request(qtbot: QtBot) -> N
     calls: list[datetime | None] = []
 
     def delayed(filters: TradeHistoryFilter) -> BasketHistoryResult:
-        calls.append(filters.opened_from_utc)
+        calls.append(filters.from_utc)
         if len(calls) == 1:
             started.set()
             assert release.wait(timeout=2)
@@ -330,7 +330,7 @@ def test_only_the_latest_filters_run_after_the_active_request(qtbot: QtBot) -> N
     # The filter changed twice while one query ran: only the last one is asked.
     qtbot.waitUntil(lambda: len(calls) == 2)
     assert calls == [
-        _today_filter().opened_from_utc,
+        _today_filter().from_utc,
         datetime(2026, 1, 2, 17, tzinfo=UTC),
     ]
     assert pool.waitForDone(1_000)
@@ -466,6 +466,6 @@ def test_a_filter_applies_only_to_the_half_that_asked() -> None:
     workflow.select_tab(HistoryTab.BASKETS)
 
     assert trades[-1] == TradeHistoryFilter(
-        opened_from_utc=datetime(2026, 1, 1, 17, tzinfo=UTC)
+        from_utc=datetime(2026, 1, 1, 17, tzinfo=UTC)
     )
     assert baskets == [_today_filter()]

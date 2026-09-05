@@ -201,7 +201,9 @@ def test_paper_execution_history_survives_restart_and_reaches_desktop(
 
     assert len(before_restart.items) == 2
     assert before_restart.realized_pnl == Decimal("2379.699")
-    futures, spot = before_restart.items
+    # Both rounds opened on the same candle, so what puts one first is the
+    # one that closed later — the Spot round ran five minutes longer.
+    spot, futures = before_restart.items
     assert futures.basket_id == futures_basket_id
     assert futures.status is BasketStatus.CLOSED
     assert futures.realized_pnl == Decimal("2356.0200")
@@ -231,14 +233,16 @@ def test_paper_execution_history_survives_restart_and_reaches_desktop(
     _show_every_day(window, qtbot)
 
     qtbot.waitUntil(lambda: window.trade_history.basket_table.rowCount() == 2)
+    # The Spot round closed last, so it heads the list.
     assert _table_row_text(window.trade_history.basket_table, 0) == (
         "2026-01-01 09:05:00",
-        "Futures",
+        "2026-01-01 09:45:00",
+        "Spot",
         "BTC/USDT",
         "5m",
         "1",
-        "29,999.99 USDT",
-        "2,356.02 USDT",
+        "249.94 USDT",
+        "23.68 USDT",
     )
     window.workspace.show_tab(WorkspaceTab.TRADE_HISTORY)
     _show_every_day(window, qtbot)

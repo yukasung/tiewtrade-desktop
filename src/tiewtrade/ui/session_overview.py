@@ -9,6 +9,7 @@ from tiewtrade.application.paper_session_setup import (
 from tiewtrade.trading.futures_policy import FuturesTradingPolicy
 from tiewtrade.trading.session_config import MarketType
 from tiewtrade.ui.blank_text import BLANK
+from tiewtrade.ui.cooldown_text import cooldown_text
 from tiewtrade.ui.display_time import display_timestamp
 from tiewtrade.ui.money_text import QUOTE_ASSET
 from tiewtrade.ui.pair_text import pair_text
@@ -35,6 +36,7 @@ class SessionOverviewWidget(QWidget):
         "Strategy Preset",
         "Amount",
         "Max Entries",
+        "Cooldown (days)",
     )
     _FUTURES_LABELS = ("Leverage", "Margin Mode", "Position Mode")
     _CREATED_LABEL = "Created at"
@@ -49,6 +51,7 @@ class SessionOverviewWidget(QWidget):
         self.preset_value = self._value_label()
         self.capital_per_entry_value = self._value_label()
         self.max_entries_value = self._value_label()
+        self.cooldown_value = self._value_label()
         self.leverage_value = self._value_label()
         self.margin_mode_value = self._value_label()
         self.position_mode_value = self._value_label()
@@ -61,6 +64,7 @@ class SessionOverviewWidget(QWidget):
             "Strategy Preset": self.preset_value,
             "Amount": self.capital_per_entry_value,
             "Max Entries": self.max_entries_value,
+            "Cooldown (days)": self.cooldown_value,
             "Leverage": self.leverage_value,
             "Margin Mode": self.margin_mode_value,
             "Position Mode": self.position_mode_value,
@@ -89,6 +93,7 @@ class SessionOverviewWidget(QWidget):
             f"{_amount_text(config.capital_per_entry)} {QUOTE_ASSET}"
         )
         self.max_entries_value.setText(str(config.entry_policy.max_entries))
+        self.cooldown_value.setText(cooldown_text(config.entry_policy.cooldown))
         self._show_market_policy(session)
         self.created_at_value.setText(display_timestamp(session.created_at_utc))
 

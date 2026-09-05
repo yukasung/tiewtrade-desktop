@@ -23,6 +23,7 @@ from PySide6.QtWidgets import (
 from pytestqt.qtbot import QtBot
 
 import tiewtrade.ui.main_window as main_window_module
+import tiewtrade.ui.settings_workflow as settings_workflow_module
 import tiewtrade.ui.start_workflow as start_workflow_module
 from tests.support.chart_candles import flat_candle
 from tests.support.connection_notice import RecordingConnectionNotice
@@ -86,6 +87,7 @@ from tiewtrade.integrations.sqlite.active_paper_sessions import (
     SQLiteActivePaperSessions,
 )
 from tiewtrade.integrations.sqlite.database import SQLiteDatabase
+from tiewtrade.trading.cooldown_policy import CooldownPolicy
 from tiewtrade.trading.futures_policy import FuturesTradingPolicy
 from tiewtrade.trading.session_config import MarketType, TradeMode
 from tiewtrade.trading.trade_history import TradeFill
@@ -738,7 +740,7 @@ def test_trade_history_filter_and_reset_requests_are_wired(qtbot: QtBot) -> None
 
     qtbot.waitUntil(lambda: len(basket_calls) == 2)
     assert basket_calls[-1] == TradeHistoryFilter(
-        opened_from_utc=datetime(2026, 1, 1, 17, tzinfo=UTC)
+        from_utc=datetime(2026, 1, 1, 17, tzinfo=UTC)
     )
 
     click(window.trade_history.basket_filters.reset_button)
@@ -898,6 +900,7 @@ def test_spot_overview_leaves_the_futures_rows_out(qtbot: QtBot) -> None:
         "Strategy Preset",
         "Amount",
         "Max Entries",
+        "Cooldown (days)",
         "Created at",
     )
     for value in (
@@ -926,6 +929,7 @@ def test_futures_overview_keeps_the_policy_rows(qtbot: QtBot) -> None:
         "Strategy Preset",
         "Amount",
         "Max Entries",
+        "Cooldown (days)",
         "Leverage",
         "Margin Mode",
         "Position Mode",
@@ -4564,6 +4568,7 @@ def test_opening_settings_fills_the_line_form_from_what_is_stored(
 
 def test_saving_line_settings_hands_them_off_and_reads_them_back(
     qtbot: QtBot,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """What the form shows after saving is what was stored, not what was typed.
 
@@ -4573,6 +4578,9 @@ def test_saving_line_settings_hands_them_off_and_reads_them_back(
     """
     saved: list[tuple[bool, str, str]] = []
     readings = [(False, "", ""), (True, "U123", "stored-token")]
+    # The box that says so is modal, and a real one would hold this test
+    # inside it. What it says is a separate test's subject.
+    monkeypatch.setattr(QMessageBox, "information", lambda *args: None)
 
     def save(enabled: bool, target_id: str, access_token: str) -> None:
         saved.append((enabled, target_id, access_token))
@@ -4633,6 +4641,90 @@ def test_line_settings_that_cannot_be_stored_are_reported_where_they_were_typed(
     qtbot.waitUntil(lambda: bool(seen))
     assert "Could not save the LINE settings." in seen[0]
     qtbot.waitUntil(panel.save_line_button.isEnabled)
+
+
+def test_saving_line_settings_says_so(
+    qtbot: QtBot,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A trader who pressed Save has to be told it landed.
+
+    Nothing else on this page says so. The button goes back to reading "Save
+    Settings" whether the settings were kept or never left the form, and the
+    token field empties and refills either way — so without this, a save that
+    worked and a save that quietly did nothing look the same.
+    """
+    seen: list[str] = []
+    monkeypatch.setattr(
+        QMessageBox,
+        "information",
+        lambda parent, title, text, *args: seen.append(text),
+    )
+    window = MainWindow(
+        create_session=unused_create,
+        load_active=no_active_session,
+        list_basket_history=empty_basket_history,
+        list_trade_fills=empty_trade_fills,
+        save_line_notifications=lambda enabled, target_id, token: None,
+    )
+    qtbot.addWidget(window)
+    window.show()
+    qtbot.waitUntil(window.setup.isVisible)
+    _click_settings(window)
+    panel = window.workspace.settings_panel
+    qtbot.waitUntil(panel.save_line_button.isEnabled)
+
+    click(panel.save_line_button)
+
+    qtbot.waitUntil(lambda: bool(seen))
+    assert seen == [settings_workflow_module.SETTINGS_SAVED_TEXT]
+
+
+def test_line_settings_that_could_not_be_saved_are_never_called_saved(
+    qtbot: QtBot,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The worst thing this box could do is appear when the save failed.
+
+    A trader told their token was kept stops checking. They would go on
+    believing the Bot can reach LINE, and find out it cannot at the one
+    moment it had something to tell them.
+    """
+    said_saved: list[str] = []
+    warned: list[str] = []
+
+    def save(enabled: bool, target_id: str, access_token: str) -> None:
+        del enabled, target_id, access_token
+        raise RuntimeError("nowhere to keep them")
+
+    monkeypatch.setattr(
+        QMessageBox,
+        "information",
+        lambda parent, title, text, *args: said_saved.append(text),
+    )
+    monkeypatch.setattr(
+        QMessageBox,
+        "warning",
+        lambda parent, title, text, *args: warned.append(text),
+    )
+    window = MainWindow(
+        create_session=unused_create,
+        load_active=no_active_session,
+        list_basket_history=empty_basket_history,
+        list_trade_fills=empty_trade_fills,
+        save_line_notifications=save,
+    )
+    qtbot.addWidget(window)
+    window.show()
+    qtbot.waitUntil(window.setup.isVisible)
+    _click_settings(window)
+    panel = window.workspace.settings_panel
+
+    click(panel.save_line_button)
+
+    qtbot.waitUntil(lambda: bool(warned))
+    qtbot.waitUntil(panel.save_line_button.isEnabled)
+    assert said_saved == []
 
 
 _LIVE_PRICE_CANDLE = flat_candle(datetime(2026, 8, 2, 9, 0, tzinfo=UTC), "78355.24")
@@ -4812,3 +4904,32 @@ def test_presenting_a_closing_window_does_not_bring_it_back(qtbot: QtBot) -> Non
     window.present()
 
     assert not window.isVisible()
+
+
+@pytest.mark.parametrize(
+    ("cooldown", "text"),
+    [
+        (CooldownPolicy.default(), "30"),
+        (CooldownPolicy.off(), "Off"),
+        (CooldownPolicy.for_days(1), "1"),
+        (CooldownPolicy.for_days(3), "3"),
+    ],
+)
+def test_the_overview_says_how_this_session_s_cooldown_ends(
+    qtbot: QtBot, cooldown: CooldownPolicy, text: str
+) -> None:
+    """The Cooldown is pinned for the Session, so the card states it as a fact."""
+    session = configured_spot_session()
+    session = replace(
+        session,
+        config=replace(
+            session.config,
+            entry_policy=replace(session.config.entry_policy, cooldown=cooldown),
+        ),
+    )
+    overview = SessionOverviewWidget()
+    qtbot.addWidget(overview)
+
+    overview.show_session(session)
+
+    assert overview.cooldown_value.text() == text

@@ -89,10 +89,11 @@ def test_desktop_trade_history_reads_durable_spot_and_futures_records(
     show_every_day(window.trade_history.basket_filters, qtbot)
 
     qtbot.waitUntil(lambda: window.trade_history.basket_table.rowCount() == 2)
-    assert basket_requests[0].opened_from_utc is not None
+    assert basket_requests[0].from_utc is not None
     assert basket_requests[-1] == TradeHistoryFilter()
     assert _table_row_text(window.trade_history.basket_table, 0) == (
         "2026-01-03 07:00:00",
+        "2026-01-03 08:00:00",
         "Futures",
         "BTC/USDT",
         "5m",
@@ -102,6 +103,7 @@ def test_desktop_trade_history_reads_durable_spot_and_futures_records(
     )
     assert _table_row_text(window.trade_history.basket_table, 1) == (
         "2026-01-01 07:00:00",
+        "2026-01-02 07:00:00",
         "Spot",
         "BTC/USDT",
         "5m",
@@ -188,7 +190,7 @@ def test_desktop_trade_history_filters_all_rows_and_survives_restart(
     open_trade_history(first)
     show_every_day(first.trade_history.basket_filters, qtbot)
     qtbot.waitUntil(lambda: first.trade_history.basket_table.rowCount() == 51)
-    assert table_item(first.trade_history.basket_table, 0, 3).text() == "15m"
+    assert table_item(first.trade_history.basket_table, 0, 4).text() == "15m"
     first_page_opened_at = tuple(
         table_item(first.trade_history.basket_table, row, 0).text() for row in range(51)
     )
@@ -202,12 +204,12 @@ def test_desktop_trade_history_filters_all_rows_and_survives_restart(
     first.trade_history.basket_filters.to_date.setDate(qdate(newest_date))
     click(first.trade_history.basket_filters.search_button)
     qtbot.waitUntil(lambda: first.trade_history.basket_table.rowCount() == 1)
-    assert table_item(first.trade_history.basket_table, 0, 3).text() == "15m"
-    assert table_item(first.trade_history.basket_table, 0, 1).text() == "Futures"
+    assert table_item(first.trade_history.basket_table, 0, 4).text() == "15m"
+    assert table_item(first.trade_history.basket_table, 0, 2).text() == "Futures"
     assert basket_requests[-1] == TradeHistoryFilter(
         # The picked day is a Bangkok day, which opens at 17:00 UTC.
-        opened_from_utc=datetime(2026, 2, 19, 17, 0, tzinfo=UTC),
-        opened_before_utc=datetime(2026, 2, 20, 17, 0, tzinfo=UTC),
+        from_utc=datetime(2026, 2, 19, 17, 0, tzinfo=UTC),
+        before_utc=datetime(2026, 2, 20, 17, 0, tzinfo=UTC),
     )
 
     click(first.trade_history.basket_filters.reset_button)
@@ -223,7 +225,7 @@ def test_desktop_trade_history_filters_all_rows_and_survives_restart(
     open_trade_history(restarted)
     show_every_day(restarted.trade_history.basket_filters, qtbot)
     qtbot.waitUntil(lambda: restarted.trade_history.basket_table.rowCount() == 51)
-    assert table_item(restarted.trade_history.basket_table, 0, 3).text() == "15m"
+    assert table_item(restarted.trade_history.basket_table, 0, 4).text() == "15m"
 
 
 def test_trade_history_read_failure_is_fail_closed_and_sanitized(

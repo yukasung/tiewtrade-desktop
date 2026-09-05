@@ -174,6 +174,10 @@ class BasketSnapshot:
     # one just completed is not what a standing Cooldown is blocking. Left at
     # its default, every row falls back to reading the Basket's own gate.
     completed_pairs: int = 0
+    # The day a standing Cooldown lifts on by itself. None where none stands —
+    # the screen shows what the domain stamped here and never works out a gate
+    # of its own.
+    cooldown_ends_at_utc: datetime | None = None
 
     def __post_init__(self) -> None:
         _require_text(self.symbol, "symbol")
@@ -194,6 +198,7 @@ class BasketSnapshot:
         if type(self.completed_pairs) is not int or self.completed_pairs < 0:
             raise ValueError("completed_pairs must be a non-negative integer")
         _require_utc(self.updated_at_utc, "updated_at_utc")
+        _require_utc(self.cooldown_ends_at_utc, "cooldown_ends_at_utc", allow_none=True)
 
     def target_for(self, entry_number: int) -> BasketEntryTargetSnapshot | None:
         """The Group this Entry is in and the price it leaves at."""
@@ -477,7 +482,11 @@ def _require_text(value: str, name: str) -> None:
         raise ValueError(f"{name} must not be empty")
 
 
-def _require_utc(value: datetime, name: str) -> None:
+def _require_utc(
+    value: datetime | None, name: str, *, allow_none: bool = False
+) -> None:
+    if value is None and allow_none:
+        return
     if not isinstance(value, datetime) or value.tzinfo is None:
         raise ValueError(f"{name} must use UTC")
     if value.utcoffset() != timedelta(0):

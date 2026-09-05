@@ -23,6 +23,7 @@ from tiewtrade.application.paper_session_sink import (
 from tiewtrade.application.session_notice import (
     BasketClosedNotice,
     CooldownCancelledNotice,
+    CooldownEndedNotice,
     CooldownStartedNotice,
     EntryOpenedNotice,
     SessionNotice,
@@ -56,11 +57,12 @@ class FakeSnapshot:
     closed_basket: ClosedBasket | None = None
     entry_gate: EntryGate | None = None
     entry_completed_pairs: int = 0
+    cooldown_ends_at: datetime | None = None
 
 
 class FakeCoordinator:
     def __init__(self, snapshot: FakeSnapshot) -> None:
-        self._snapshot = snapshot
+        self.snapshot = snapshot
         self.completed_candles: list[Candle] = []
         self.in_progress_candles: list[Candle] = []
         self.closed_entries: list[int] = []
@@ -106,7 +108,7 @@ class FakeCoordinator:
 
     def _persistent(self) -> PersistentSessionSnapshot[FakeSnapshot]:
         return PersistentSessionSnapshot(
-            session=self._snapshot,
+            session=self.snapshot,
             persistence_state=PersistenceState.READY,
         )
 
@@ -378,6 +380,7 @@ def test_a_gate_that_just_closed_says_a_cooldown_started() -> None:
         opened_entry(
             entry_gate=EntryGate(EntryGateState.COOLDOWN),
             entry_completed_pairs=1,
+            cooldown_ends_at=LIFTS_AT,
             basket_entry_count=2,
         ),
         notify=notices.append,
@@ -397,7 +400,7 @@ def test_a_gate_that_just_closed_says_a_cooldown_started() -> None:
 
 
 def test_a_cooldown_that_goes_on_standing_is_only_said_once() -> None:
-    """A Cooldown does not lapse, so every candle after it reads the same gate.
+    """Every candle a Cooldown stands through reads the same gate.
 
     Saying it again each candle would be saying nothing new to a trader whose
     phone is already holding the message.
@@ -408,6 +411,7 @@ def test_a_cooldown_that_goes_on_standing_is_only_said_once() -> None:
             FakeSnapshot(),
             basket_id=BASKET_ID,
             entry_gate=EntryGate(EntryGateState.COOLDOWN),
+            cooldown_ends_at=LIFTS_AT,
         ),
         notify=notices.append,
     )
@@ -546,3 +550,104 @@ def test_a_snapshot_with_no_fill_in_it_reads_as_no_notice() -> None:
 
 def test_a_snapshot_that_let_no_basket_go_reads_as_no_notice() -> None:
     assert basket_closed_notice(FakeSnapshot(), configured_session()) is None
+
+
+COOLING = EntryGate(EntryGateState.COOLDOWN)
+OPEN = EntryGate(EntryGateState.OPEN)
+LIFTS_AT = datetime(2026, 8, 5, tzinfo=UTC)
+
+
+def test_a_cooldown_that_waits_says_the_day_it_lifts_on() -> None:
+    notices: list[SessionNotice] = []
+    sink, _ = sink_for(
+        opened_entry(
+            entry_gate=COOLING,
+            entry_completed_pairs=1,
+            cooldown_ends_at=LIFTS_AT,
+            basket_entry_count=2,
+        ),
+        notify=notices.append,
+    )
+
+    run_completed(sink)
+
+    cooldown = notices[1]
+    assert isinstance(cooldown, CooldownStartedNotice)
+    assert cooldown.ends_at == LIFTS_AT
+
+
+def test_a_cooldown_that_lapsed_on_its_own_is_said_out_loud() -> None:
+    """Nobody pressed anything, so nothing else would tell the trader."""
+    notices: list[SessionNotice] = []
+    sink, coordinator = sink_for(
+        replace(
+            FakeSnapshot(),
+            basket_id=BASKET_ID,
+            entry_gate=COOLING,
+            entry_completed_pairs=1,
+            cooldown_ends_at=LIFTS_AT,
+        ),
+        notify=notices.append,
+    )
+    run_completed(sink)
+    notices.clear()
+
+    coordinator.snapshot = replace(coordinator.snapshot, entry_gate=OPEN)
+    run_completed(sink, minute=10)
+
+    assert [type(notice) for notice in notices] == [CooldownEndedNotice]
+    ended = notices[0]
+    assert isinstance(ended, CooldownEndedNotice)
+    assert ended.completed_pairs == 1
+    assert ended.ended_at == NOTICE_CLOCK
+
+
+def test_a_cooldown_a_sale_broke_up_is_not_said_to_have_lapsed() -> None:
+    """The trader ended that one by selling, and knows they did.
+
+    A Pair a sale broke up names no day it lifts on, which is exactly what
+    tells a Cooldown that ran out from one the trader ended.
+    """
+    notices: list[SessionNotice] = []
+    sink, coordinator = sink_for(
+        replace(
+            FakeSnapshot(),
+            basket_id=BASKET_ID,
+            entry_gate=COOLING,
+            entry_completed_pairs=1,
+            cooldown_ends_at=LIFTS_AT,
+        ),
+        notify=notices.append,
+    )
+    run_completed(sink)
+    notices.clear()
+
+    coordinator.snapshot = replace(
+        coordinator.snapshot, entry_gate=OPEN, cooldown_ends_at=None
+    )
+    run_completed(sink, minute=10)
+
+    assert notices == []
+
+
+def test_a_cooldown_the_trader_cancelled_is_not_said_to_have_lapsed_after() -> None:
+    """Cancelling already says its own piece; the next candle adds nothing."""
+    notices: list[SessionNotice] = []
+    sink, coordinator = sink_for(
+        replace(
+            FakeSnapshot(),
+            basket_id=BASKET_ID,
+            entry_gate=COOLING,
+            entry_completed_pairs=1,
+            cooldown_ends_at=LIFTS_AT,
+        ),
+        notify=notices.append,
+    )
+    run_completed(sink)
+    coordinator.snapshot = replace(coordinator.snapshot, entry_gate=OPEN)
+    assert sink.waive_cooldown(datetime(2026, 8, 2, 11, tzinfo=UTC))
+    notices.clear()
+
+    run_completed(sink, minute=10)
+
+    assert notices == []

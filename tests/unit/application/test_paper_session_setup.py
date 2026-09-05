@@ -12,7 +12,9 @@ from tiewtrade.application.paper_session_setup import (
     PaperSessionSetupValues,
     PaperSessionUnavailableError,
     PaperSessionValidationError,
+    setup_values_of,
 )
+from tiewtrade.trading.cooldown_policy import CooldownPolicy
 from tiewtrade.trading.session_config import MarketType, TradeMode
 
 SESSION_ID = UUID("00000000-0000-0000-0000-000000000123")
@@ -187,3 +189,65 @@ def test_persistence_unavailable_error_is_not_reported_as_validation() -> None:
 
     with pytest.raises(PaperSessionUnavailableError, match="persistence unavailable"):
         use_case.execute(spot_values())
+
+
+def _configured(values: PaperSessionSetupValues) -> ConfiguredPaperSession:
+    use_case = CreatePaperSession(
+        create_active=lambda session: PaperSessionCreateOutcome(
+            session=session, created=True
+        ),
+        session_ids=lambda: SESSION_ID,
+        clock=lambda: CREATED_AT,
+    )
+    return use_case.execute(values).session
+
+
+def test_a_form_that_names_no_cooldown_waits_the_longest_one() -> None:
+    """Assembled without a choice, a Session is the most cautious one there is."""
+    session = _configured(spot_values())
+
+    assert session.config.entry_policy.cooldown == CooldownPolicy.default()
+
+
+@pytest.mark.parametrize(
+    ("days", "expected"),
+    [
+        (None, CooldownPolicy.off()),
+        ("1", CooldownPolicy.for_days(1)),
+        ("3", CooldownPolicy.for_days(3)),
+        ("30", CooldownPolicy.for_days(30)),
+    ],
+)
+def test_a_form_states_the_cooldown_the_session_is_pinned_to(
+    days: str | None, expected: CooldownPolicy
+) -> None:
+    session = _configured(replace(spot_values(), cooldown_days=days))
+
+    assert session.config.entry_policy.cooldown == expected
+
+
+@pytest.mark.parametrize("days", ["0", "31", "many"])
+def test_days_the_policy_refuses_are_reported_against_the_field_that_asked(
+    days: str,
+) -> None:
+    with pytest.raises(PaperSessionValidationError) as caught:
+        _configured(replace(spot_values(), cooldown_days=days))
+
+    assert caught.value.field == "cooldown_days"
+
+
+@pytest.mark.parametrize(
+    "cooldown",
+    [CooldownPolicy.off(), CooldownPolicy.for_days(3), CooldownPolicy.default()],
+)
+def test_a_session_reads_back_onto_the_form_it_was_started_from(
+    cooldown: CooldownPolicy,
+) -> None:
+    """An untouched form compares equal to the Session it was filled from."""
+    values = replace(
+        spot_values(),
+        cooldown_days=None if cooldown.days is None else str(cooldown.days),
+    )
+    session = _configured(values)
+
+    assert setup_values_of(session) == values

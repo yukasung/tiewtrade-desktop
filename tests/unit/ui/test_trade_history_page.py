@@ -79,7 +79,8 @@ def test_page_exposes_filters_and_exact_table_columns(qtbot: QtBot) -> None:
     qtbot.addWidget(page)
 
     assert page.basket_headers == (
-        "Date",
+        "Opened",
+        "Closed",
         "Market",
         "Pair",
         "Timeframe",

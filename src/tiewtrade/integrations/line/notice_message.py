@@ -28,6 +28,7 @@ from tiewtrade.application.session_notice import (
     BasketClosedNotice,
     BotErrorNotice,
     CooldownCancelledNotice,
+    CooldownEndedNotice,
     CooldownStartedNotice,
     EntryOpenedNotice,
     MarketFeedLostNotice,
@@ -55,6 +56,8 @@ def notice_message(notice: SessionNotice) -> str:
             return basket_closed_message(notice)
         case CooldownStartedNotice():
             return cooldown_started_message(notice)
+        case CooldownEndedNotice():
+            return cooldown_ended_message(notice)
         case CooldownCancelledNotice():
             return cooldown_cancelled_message(notice)
         case MarketFeedLostNotice():
@@ -101,16 +104,31 @@ def basket_closed_message(notice: BasketClosedNotice) -> str:
 
 
 def cooldown_started_message(notice: CooldownStartedNotice) -> str:
-    """A Cooldown began, which nothing but the trader will end."""
+    """A Cooldown began, and when it lifts if the trader leaves it alone."""
     return _message(
         "Cooldown started",
         notice.market,
         [
             f"{_pairs(notice.completed_pairs)} completed"
             f" · {_entries(notice.open_entry_count)} open",
-            "The Bot will not open a new Entry until you cancel the Cooldown.",
+            f"The Bot will not open a new Entry until {_moment(notice.ends_at)},"
+            " or until you cancel the Cooldown.",
         ],
         _at("Started", notice.started_at),
+    )
+
+
+def cooldown_ended_message(notice: CooldownEndedNotice) -> str:
+    """A Cooldown ran out of days, which nobody pressed anything to do."""
+    return _message(
+        "Cooldown ended",
+        notice.market,
+        [
+            f"{_pairs(notice.completed_pairs)} completed",
+            "The Cooldown ran out of days on its own."
+            " The Bot can open a new Entry again.",
+        ],
+        _at("Ended", notice.ended_at),
     )
 
 
@@ -185,7 +203,11 @@ def _market(market: SessionMarket) -> str:
 
 
 def _at(label: str, moment: datetime) -> str:
-    return f"{label} {moment:%Y-%m-%d %H:%M:%S} UTC"
+    return f"{label} {_moment(moment)}"
+
+
+def _moment(moment: datetime) -> str:
+    return f"{moment:%Y-%m-%d %H:%M:%S} UTC"
 
 
 def _pairs(count: int) -> str:

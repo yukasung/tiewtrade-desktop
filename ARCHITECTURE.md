@@ -115,7 +115,7 @@ generic interface ล่วงหน้า เมื่อมี consumer ขอ
 การแจ้งเตือนออกนอกเครื่องเป็น side effect ที่ไม่มี trading decision ใดพึ่งพา `trading` และ
 `execution` จึงไม่รู้จักมันเลย `application` เป็นเจ้าของ notice ทุกชนิดใน
 `application/session_notice.py` (`EntryOpenedNotice`, `BasketClosedNotice`,
-`CooldownStartedNotice`, `CooldownCancelledNotice`, `MarketFeedLostNotice`,
+`CooldownStartedNotice`, `CooldownEndedNotice`, `CooldownCancelledNotice`, `MarketFeedLostNotice`,
 `MarketFeedRestoredNotice`, `BotErrorNotice`) และ contract `SessionNotifier`
 ส่วน `integrations/line` เป็นผู้ implement contract นี้ผ่าน LINE Messaging API push
 (LINE Notify ปิดบริการเมื่อ มี.ค. 2025 จึงใช้ไม่ได้)
@@ -130,6 +130,7 @@ generic interface ล่วงหน้า เมื่อมี consumer ขอ
 | Entry เปิด | `PaperRuntimeSink` | snapshot มี Entry Fill |
 | Position ปิด | `PaperRuntimeSink` | snapshot มี `closed_basket` (candle ปิด, candle ระหว่างแท่ง, และการขาย Entry สุดท้ายตามคำสั่งเทรดเดอร์) |
 | Cooldown เริ่ม | `PaperRuntimeSink` | Entry gate เพิ่งเปลี่ยนเป็น `COOLDOWN` |
+| Cooldown หมดอายุเอง | `PaperRuntimeSink` | Entry gate เพิ่งเปลี่ยนออกจาก `COOLDOWN` และ snapshot ยังบอกวันที่ Cooldown จะปลด (Pair ที่ถูกขายไปหนึ่ง Entry ไม่มีวันให้บอก จึงไม่แจ้ง) |
 | Cooldown ถูกยกเลิก | `PaperRuntimeSink` | `waive_cooldown` สำเร็จ |
 | ข้อมูลตลาดขาด / กลับมา | `PaperRuntimeController` | runtime transition |
 | Bot หยุดเพราะ error | `PaperRuntimeController` | `_publish_blocked` |
@@ -174,7 +175,7 @@ Session ที่ได้รับ candle ย้อนหลังจะคื�
 ## Cooldown Waiver
 
 `trading` เป็นเจ้าของกลไก waive Cooldown แบบ pure ใน `EntryPairLifecycle`
-(`waive_cooldown`/`restore_waiver`) โดยไม่รู้จัก persistence ผู้ใช้ waive ได้ครั้งเดียวต่อ
+(`waive_cooldown`/`restore_waiver`) โดยไม่รู้จัก persistence waiver แปลว่า "ไม่รอให้ครบวัน" และผู้ใช้ waive ได้ครั้งเดียวต่อ
 Cooldown หนึ่งรอบ ผ่าน use case ที่ `application` เป็นเจ้าของ ซึ่งเดินตาม pattern
 เดียวกับ manual Close Entry คือถามที่ Runtime ก่อนถ้ากำลังถือ Session นั้นอยู่ ไม่งั้น fallback
 ไปที่ database ตรงๆ waiver ถูก persist คู่กับ Fills ของ Basket ใน `integrations/sqlite`
@@ -186,6 +187,19 @@ persist: `EntryPairLifecycle.release_fill` รับเลข Entry ที่ข
 ส่วน `replayed` อ่านข้อเท็จจริงเดียวกันนี้กลับจากเลข Entry ที่ยังเปิดค้าง จึงไม่มี schema หรือ
 migration เพิ่ม — waiver คือคำสั่งของผู้ใช้ที่ไม่มี Fill ใดบันทึกไว้ จึงต้องเก็บ ส่วนการที่ Pair
 ไม่ครบแล้วเป็นสิ่งที่ Entries ที่เหลือบอกได้เอง
+
+การรอของ Cooldown ก็ไม่ต้องเก็บอะไรเพิ่มด้วยเหตุผลเดียวกัน: Cooldown ยืนอยู่ได้ก็ต่อเมื่อ
+Basket ยังถือทั้งสอง Entries ของ Pair อยู่ Fill ที่ทำให้ Pair ครบจึงเป็นหนึ่งใน Entry ที่ replay
+อ่านกลับพร้อม `filled_at` ของมันเสมอ — `replayed` อ่านเวลาที่ Pair ครบจากตรงนั้น สิ่งที่ต้องเก็บ
+คือ Cooldown Policy เอง เพราะเป็นค่าของ Session ไม่ใช่ของ Basket จึงเป็นคอลัมน์
+`cooldown_days` บน `bot_sessions` (schema v18) โดย `NULL` แปลว่า Cooldown ปิดอยู่ และ
+คอลัมน์นี้มี DEFAULT เป็น 30 เพื่อให้ migration ที่ rebuild ตารางโดยไม่ได้ระบุ Cooldown
+ทำให้ Session ระมัดระวังขึ้นเท่านั้น ไม่มีทางหลวมลง
+
+`EntryPairLifecycle.entry_gate` รับเวลาที่จะตอบ ณ ขณะนั้นเข้ามาเป็น argument ไม่เคยอ่านนาฬิกาเอง
+เพื่อให้ `trading` ไม่ถือ clock ผู้ที่ป้อนเวลาให้คือ Session ซึ่งใช้เวลาปิดของ candle ล่าสุดที่รับมา
+— market time ไม่ใช่นาฬิกาเครื่อง จึงทำให้ replay ชุดเดิมได้คำตอบเดิมเสมอ ฝั่ง UI ห้ามคำนวณ gate เอง
+ให้อ่านค่าที่ตัดสินมาแล้วจาก snapshot และ format วันที่ที่ domain แสตมป์มาให้เท่านั้น
 
 Paper Spot และ Paper Futures ต่าง waive Cooldown ได้ทั้งคู่ผ่าน coordinator เดียวกัน แต่
 ต่างกันที่ persistence: Paper Spot persist waiver ลง SQLite เพราะ replay Basket ที่เปิดอยู่

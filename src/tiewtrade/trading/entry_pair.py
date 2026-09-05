@@ -1,5 +1,6 @@
 from collections.abc import Sequence
 from dataclasses import dataclass
+from datetime import datetime
 from enum import StrEnum
 
 from tiewtrade.trading.entry_policy import EntryPolicy
@@ -58,13 +59,17 @@ class EntryPairLifecycle:
         # same thing replay has to read back off the Entries still open, and
         # a rule stated twice is a rule that drifts.
         self._released_entries: set[int] = set()
+        # When the Fill that completed the latest Pair happened, in market
+        # time. A Cooldown is measured from here; a Session whose Cooldown is
+        # off never reads it.
+        self._pair_completed_at: datetime | None = None
 
     @classmethod
     def replayed(
         cls,
         policy: EntryPolicy,
         *,
-        open_entry_numbers: Sequence[int],
+        open_entries: Sequence[tuple[int, datetime]],
         settled_entry_count: int = 0,
         waived_pair: int | None,
     ) -> "EntryPairLifecycle":
@@ -88,13 +93,25 @@ class EntryPairLifecycle:
         Which Entries are open, rather than merely how many, because a Pair a
         sale broke up is read back off exactly that — a Cooldown lifted that
         way is not stored, it is restated by the Entries that are still here.
+
+        Each open Entry brings the time its Fill happened, so a standing
+        Cooldown can be read back too. Nothing is stored for it: a Cooldown only
+        stands while the Basket holds both Entries of the Pair, so the Fill
+        that completed a standing Pair is always one of the Entries here.
         """
         lifecycle = cls(policy)
-        lifecycle._entry_count = len(open_entry_numbers)
+        filled_at_by_entry = dict(open_entries)
+        lifecycle._entry_count = len(open_entries)
         lifecycle._filled_total = lifecycle._entry_count + settled_entry_count
         lifecycle._completed_pairs = lifecycle._filled_total // 2
-        lifecycle._released_entries = set(range(1, lifecycle._filled_total + 1)) - set(
-            open_entry_numbers
+        lifecycle._released_entries = (
+            set(range(1, lifecycle._filled_total + 1)) - filled_at_by_entry.keys()
+        )
+        # None when the completing Fill has since been sold — and a Pair
+        # missing an Entry is a Pair whose Cooldown has already ended, so no
+        # Cooldown ever has to be answered for without a time to answer from.
+        lifecycle._pair_completed_at = filled_at_by_entry.get(
+            lifecycle._completed_pairs * 2
         )
         if waived_pair is not None:
             lifecycle._restore_waiver(waived_pair)
@@ -108,56 +125,96 @@ class EntryPairLifecycle:
     def completed_pairs(self) -> int:
         return self._completed_pairs
 
-    def entry_gate(self) -> EntryGate:
-        """Whether the Basket may take another Entry as it stands.
+    def entry_gate(self, as_of: datetime) -> EntryGate:
+        """Whether the Basket may take another Entry as of a moment in time.
 
-        A completed Pair closes the gate and nothing but the trader opens it:
-        a Cooldown does not lapse on its own, so the answer here turns on what
-        the Basket holds and what the trader has said, never on the clock.
+        A completed Pair closes the gate, and the Session's Cooldown Policy
+        says what opens it again: the days it named having passed, or the
+        trader's say before that. A Session whose Cooldown is off never closes
+        the gate here at all.
+
+        The moment to answer as of is handed in rather than read off a clock,
+        so this stays a function of the Basket and the market's own time — the
+        same candles replayed give the same answer every time.
         """
         if self._entry_count >= self._policy.max_entries:
             return EntryGate(EntryGateState.MAX_ENTRIES_REACHED)
         if self._filled_total == 0 or self._filled_total % 2 == 1:
             return EntryGate(EntryGateState.OPEN)
+        if self._policy.cooldown.never_cools_down:
+            return EntryGate(EntryGateState.OPEN)
         if self._waived_pair == self._completed_pairs:
             return EntryGate(EntryGateState.OPEN)
-        if not self._holds_whole_pair(self._completed_pairs):
+        if not self._holds_the_latest_pair:
+            return EntryGate(EntryGateState.OPEN)
+        if self._has_lapsed(as_of):
             return EntryGate(EntryGateState.OPEN)
         return EntryGate(EntryGateState.COOLDOWN)
 
-    def entry_gate_for(self, entry_number: int) -> EntryGate:
+    def entry_gate_for(self, entry_number: int, as_of: datetime) -> EntryGate:
         """The gate as it stands for one Entry, not the Pair overall.
 
         A Cooldown blocks the next Entry, not the ones an earlier,
         already-resolved Pair left open — those Entries were never blocked by
         a Cooldown that only started after they filled.
         """
-        gate = self.entry_gate()
+        gate = self.entry_gate(as_of)
         if gate.state is not EntryGateState.COOLDOWN:
             return gate
         if entry_pair_index(entry_number) < self._completed_pairs:
             return EntryGate(EntryGateState.OPEN)
         return gate
 
-    def can_enter(self) -> bool:
-        return self.entry_gate().is_open
+    def can_enter(self, as_of: datetime) -> bool:
+        return self.entry_gate(as_of).is_open
 
-    def record_fill(self) -> None:
-        if not self.can_enter():
+    def cooldown_ends_at(self) -> datetime | None:
+        """When the Cooldown standing over this Basket lifts on its own.
+
+        None whenever nothing is waiting on the clock — no Pair has completed,
+        the Session's Cooldown is off, or a sale has already broken up the Pair
+        a Cooldown would have stood over.
+        """
+        if self._pair_completed_at is None or not self._holds_the_latest_pair:
+            return None
+        return self._policy.cooldown.ends_at(completed_at=self._pair_completed_at)
+
+    def record_fill(self, filled_at: datetime) -> None:
+        if not self.can_enter(filled_at):
             raise ValueError("entry is blocked by pair lifecycle")
-        self._count_fill()
+        self._count_fill(filled_at)
 
-    def _count_fill(self) -> None:
+    def _count_fill(self, filled_at: datetime) -> None:
         """Take a Fill into the count, whoever decided it should happen.
 
         Every second Fill completes a Pair, which is the rule the gate is read
         against. It is stated once here so the two ways in — a live Entry that
         passed the gate, and replay that never asks it — cannot drift apart.
+
+        The Fill that completes a Pair is also when that Pair's Cooldown
+        starts, so its market time is kept here for a Policy that waits.
         """
         self._entry_count += 1
         self._filled_total += 1
         if self._filled_total % 2 == 0:
             self._completed_pairs += 1
+            self._pair_completed_at = filled_at
+
+    @property
+    def _holds_the_latest_pair(self) -> bool:
+        """Whether a Cooldown has anything to stand on, asked in one place.
+
+        Both the gate and the day it lifts on turn on this, and a rule stated
+        twice is a rule that drifts.
+        """
+        return self._holds_whole_pair(self._completed_pairs)
+
+    def _has_lapsed(self, as_of: datetime) -> bool:
+        if self._pair_completed_at is None:
+            return False
+        return self._policy.cooldown.has_lapsed(
+            completed_at=self._pair_completed_at, as_of=as_of
+        )
 
     def release_fill(self, entry_number: int) -> None:
         """Hand back the place an Entry held when that Entry is sold.
@@ -178,14 +235,15 @@ class EntryPairLifecycle:
         self._entry_count -= 1
         self._released_entries.add(entry_number)
 
-    def waive_cooldown(self) -> None:
+    def waive_cooldown(self, as_of: datetime) -> None:
         """Let a trader open past the Cooldown blocking this Pair, on their say.
 
-        A Cooldown stands until it is waived, so this is the only way one is
-        lifted — and it lifts exactly the one blocking the gate now. The next
-        Pair this Basket completes closes the gate again.
+        Every Cooldown lifts on its own eventually, so this is only ever the
+        trader choosing not to wait out the rest of one. It lifts exactly the
+        Cooldown blocking the gate now, and the next Pair this Basket
+        completes closes the gate again for its own days.
         """
-        if self.entry_gate().state is not EntryGateState.COOLDOWN:
+        if self.entry_gate(as_of).state is not EntryGateState.COOLDOWN:
             raise ValueError("no Cooldown is blocking this Pair")
         self._waived_pair = self._completed_pairs
 
@@ -214,3 +272,4 @@ class EntryPairLifecycle:
         self._completed_pairs = 0
         self._waived_pair = None
         self._released_entries = set()
+        self._pair_completed_at = None

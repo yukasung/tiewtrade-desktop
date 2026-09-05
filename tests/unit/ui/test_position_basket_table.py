@@ -1,5 +1,5 @@
 from dataclasses import replace
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
 import pytest
@@ -24,6 +24,9 @@ from tiewtrade.application.trading_workspace import (
     ready_position_basket_tab,
     stale_position_basket_tab,
 )
+from tiewtrade.trading.cooldown_policy import CooldownPolicy
+from tiewtrade.trading.entry_pair import EntryGateState, EntryPairLifecycle
+from tiewtrade.trading.entry_policy import EntryPolicy
 from tiewtrade.ui.blank_text import BLANK
 from tiewtrade.ui.position_basket_table import PositionBasketTable
 from tiewtrade.ui.theme import DARK_THEME, NEGATIVE_COLOR, POSITIVE_COLOR
@@ -470,6 +473,14 @@ def test_entry_pnl_reads_as_a_two_decimal_figure_coloured_by_its_sign(
             id="cooldown",
         ),
         pytest.param(
+            basket_snapshot(
+                entry_gate=BasketEntryGate.COOLDOWN,
+                cooldown_ends_at_utc=datetime(2026, 8, 29, 3, tzinfo=UTC),
+            ),
+            "Cooldown until 2026-08-29 10:00:00",
+            id="cooldown-that-lifts-by-itself",
+        ),
+        pytest.param(
             basket_snapshot(entry_gate=BasketEntryGate.MAX_ENTRIES_REACHED),
             "Max Entries reached",
             id="max-entries",
@@ -871,3 +882,73 @@ def test_the_order_button_fits_the_row_it_sits_in(qtbot: QtBot) -> None:
     close_column = len(PositionBasketTable.COLUMNS)
     assert table.columnWidth(close_column) < table.columnWidth(close_column - 1)
     assert button.width() < table.viewport().width() // 4
+
+
+def test_a_session_whose_cooldown_is_off_never_offers_to_cancel_one(
+    qtbot: QtBot,
+) -> None:
+    """A Basket that completed a Pair under Off has no Cooldown to lift.
+
+    Walked from the rule rather than from a snapshot spelled out by hand: the
+    button is offered off the gate alone, so what proves it stays hidden is
+    that the gate a completed Pair leaves under this Policy is still Open.
+    """
+    policy = EntryPolicy(max_entries=10, cooldown=CooldownPolicy.off())
+    lifecycle = EntryPairLifecycle(policy)
+    filled_at = datetime(2026, 8, 2, tzinfo=UTC)
+    lifecycle.record_fill(filled_at)
+    lifecycle.record_fill(filled_at)
+
+    gate = lifecycle.entry_gate(filled_at + timedelta(days=365))
+
+    widget = PositionBasketTable()
+    qtbot.addWidget(widget)
+    widget.show()
+    widget.show_snapshot(
+        ready_position_basket_tab(
+            basket_snapshot(
+                entry_gate=BasketEntryGate(gate.state),
+                completed_pairs=lifecycle.completed_pairs,
+                cooldown_ends_at_utc=lifecycle.cooldown_ends_at(),
+            ),
+            observed_at_utc=OBSERVED_AT,
+        )
+    )
+
+    assert lifecycle.completed_pairs == 1
+    assert widget.cancel_cooldown_button.isVisible() is False
+
+
+def test_a_session_that_waits_days_offers_to_cancel_the_wait(qtbot: QtBot) -> None:
+    """A Cooldown that lapses on its own is still one the trader may cut short.
+
+    The row names the day it would lift by itself, and the button beside it is
+    how the trader says they would rather not wait for that day.
+    """
+    policy = EntryPolicy(max_entries=10, cooldown=CooldownPolicy.for_days(10))
+    lifecycle = EntryPairLifecycle(policy)
+    filled_at = datetime(2026, 8, 2, tzinfo=UTC)
+    lifecycle.record_fill(filled_at)
+    lifecycle.record_fill(filled_at)
+
+    gate = lifecycle.entry_gate(filled_at + timedelta(days=9))
+
+    widget = PositionBasketTable()
+    qtbot.addWidget(widget)
+    widget.show()
+    widget.show_snapshot(
+        ready_position_basket_tab(
+            basket_snapshot(
+                entry_gate=BasketEntryGate(gate.state),
+                completed_pairs=lifecycle.completed_pairs,
+                cooldown_ends_at_utc=lifecycle.cooldown_ends_at(),
+            ),
+            observed_at_utc=OBSERVED_AT,
+        )
+    )
+
+    assert gate.state is EntryGateState.COOLDOWN
+    assert lifecycle.cooldown_ends_at() == filled_at + timedelta(days=10)
+    assert widget.cancel_cooldown_button.isVisible() is True
+    assert widget.cancel_cooldown_button.isEnabled() is True
+    assert _cell(widget, "Status").text() == "Cooldown until 2026-08-12 07:00:00"

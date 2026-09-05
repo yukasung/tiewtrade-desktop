@@ -28,6 +28,7 @@ from tiewtrade.strategies.indicators import WilderIndicators
 from tiewtrade.strategies.rsi_step_grid.preset import RsiStepGridPreset
 from tiewtrade.strategies.rsi_step_grid.strategy import RsiStepGridStrategy
 from tiewtrade.trading.basket import BasketCloseReason, SettledEntries
+from tiewtrade.trading.cooldown_policy import CooldownPolicy
 from tiewtrade.trading.entry_pair import (
     EntryGate,
     EntryGateState,
@@ -40,6 +41,9 @@ from tiewtrade.trading.session_config import (
     TradeMode,
 )
 from tiewtrade.trading.symbol_rules import SymbolRules
+
+GATE_AS_OF = datetime(2026, 8, 5, tzinfo=UTC)
+"""A candle later than the Fills these Sessions hold, to read their gate at."""
 
 
 def test_session_rejects_a_non_paper_spot_configuration() -> None:
@@ -683,7 +687,9 @@ def test_a_reopened_basket_counts_its_entries_against_the_pair_gate() -> None:
         )
     )
 
-    gate = resumed._lifecycle.entry_gate()
+    # Asked on a candle the Cooldown these Fills started is still standing on,
+    # which is where a Session that had just taken them back would ask it.
+    gate = resumed._lifecycle.entry_gate(filled_at + timedelta(minutes=10))
 
     assert resumed.snapshot.basket_entry_count == 2
     assert gate.state is EntryGateState.COOLDOWN
@@ -864,7 +870,7 @@ def test_entry_transition_is_atomic_when_lifecycle_rejects_fill(
         close_price="101",
     )
 
-    def reject_fill(self: EntryPairLifecycle) -> None:
+    def reject_fill(self: EntryPairLifecycle, filled_at: datetime) -> None:
         raise ValueError("entry is blocked by pair lifecycle")
 
     monkeypatch.setattr(EntryPairLifecycle, "record_fill", reject_fill)
@@ -1285,7 +1291,7 @@ def test_manual_close_ends_the_cooldown_the_pair_it_sold_from_left() -> None:
     )
 
     assert snapshot.accepted is True
-    assert session._lifecycle.entry_gate().state is EntryGateState.OPEN
+    assert session._lifecycle.entry_gate(GATE_AS_OF).state is EntryGateState.OPEN
     assert [entry.entry_number for entry in session.open_entries] == [2]
 
 
@@ -1315,7 +1321,7 @@ def test_manual_close_from_an_earlier_pair_leaves_a_later_cooldown_standing() ->
     )
 
     assert resolved_pair.accepted is True
-    assert session._lifecycle.entry_gate().state is EntryGateState.COOLDOWN
+    assert session._lifecycle.entry_gate(GATE_AS_OF).state is EntryGateState.COOLDOWN
     assert [entry.entry_number for entry in session.open_entries] == [2, 3, 4]
 
     cooling_pair = session.close_entry(
@@ -1323,7 +1329,7 @@ def test_manual_close_from_an_earlier_pair_leaves_a_later_cooldown_standing() ->
     )
 
     assert cooling_pair.accepted is True
-    assert session._lifecycle.entry_gate().state is EntryGateState.OPEN
+    assert session._lifecycle.entry_gate(GATE_AS_OF).state is EntryGateState.OPEN
 
 
 def test_a_session_holding_nothing_has_no_entry_to_sell() -> None:
@@ -1340,9 +1346,17 @@ def step_grid_paper_session(
     *,
     min_notional: Decimal = Decimal("5"),
     open_basket: OpenBasketState | None = None,
+    cooldown: CooldownPolicy | None = None,
 ) -> PaperSpotSession:
+    entry_policy = EntryPolicy(
+        max_entries=4,
+        cooldown=CooldownPolicy.default() if cooldown is None else cooldown,
+    )
     return PaperSpotSession(
-        session_config(preset_version="rsi-step-grid-v1"),
+        session_config(
+            preset_version="rsi-step-grid-v1",
+            entry_policy=entry_policy,
+        ),
         MarketDataConfig(symbol="BTCUSDT", timeframe="5m"),
         SymbolRules(
             symbol="BTCUSDT",
@@ -1563,3 +1577,102 @@ def session_config(**overrides: object) -> SessionConfig:
     }
     values.update(overrides)
     return SessionConfig(**values)  # type: ignore[arg-type]
+
+
+WAITING_DAYS = 3
+
+
+def _pair_filled_at_the_start_of_the_year() -> OpenBasketState:
+    """A Basket holding a whole Pair, filled on the first two candles of 2026."""
+    filled_at = datetime(2026, 1, 1, tzinfo=UTC)
+    return OpenBasketState(
+        basket_id=UUID("00000000-0000-0000-0000-0000000000c3"),
+        entries=(
+            OpenBasketEntry(
+                entry_number=1,
+                price=Decimal("100"),
+                quantity=Decimal("1"),
+                filled_at=filled_at,
+                atr=Decimal("2"),
+                group_id=1,
+            ),
+            OpenBasketEntry(
+                entry_number=2,
+                price=Decimal("98"),
+                quantity=Decimal("1"),
+                filled_at=filled_at + timedelta(minutes=5),
+                atr=Decimal("2"),
+                group_id=1,
+            ),
+        ),
+        closed_basket_count=0,
+        waived_pair=None,
+    )
+
+
+def _waiting_session() -> PaperSpotSession:
+    """A Session whose Cooldown lapses on its own, holding a cooling Pair."""
+    return step_grid_paper_session(
+        open_basket=_pair_filled_at_the_start_of_the_year(),
+        cooldown=CooldownPolicy.for_days(WAITING_DAYS),
+    )
+
+
+def test_a_waiting_cooldown_is_read_against_the_candle_the_session_last_saw() -> None:
+    """Market time decides it, so the same candles always answer the same way."""
+    session = _waiting_session()
+    still_waiting = candle(10, open_price="100", close_price="101")
+
+    snapshot = session.process_completed_candle(
+        still_waiting, received_at=still_waiting.close_time, backfilled=False
+    )
+
+    assert snapshot.entry_gate == EntryGate(EntryGateState.COOLDOWN)
+
+
+def test_a_waiting_cooldown_opens_once_the_market_has_moved_past_its_day() -> None:
+    session = _waiting_session()
+    past_the_day = candle(
+        WAITING_DAYS * 24 * 60 + 10, open_price="100", close_price="101"
+    )
+
+    snapshot = session.process_completed_candle(
+        past_the_day, received_at=past_the_day.close_time, backfilled=False
+    )
+
+    assert snapshot.entry_gate == EntryGate(EntryGateState.OPEN)
+
+
+def test_a_cooldown_that_lapsed_during_a_gap_opens_but_fills_nothing() -> None:
+    """A Cooldown runs out in the market whether or not the feed was watching.
+
+    The backfilled candle carrying the Session past the day may open the gate
+    — that happened — but it may not open an Entry, so no Entry is taken at a
+    price the market has already left behind.
+    """
+    session = _waiting_session()
+    after_the_gap = candle(
+        WAITING_DAYS * 24 * 60 + 10, open_price="100", close_price="101"
+    )
+
+    snapshot = session.process_completed_candle(
+        after_the_gap, received_at=after_the_gap.close_time, backfilled=True
+    )
+
+    assert snapshot.entry_gate == EntryGate(EntryGateState.OPEN)
+    assert snapshot.entry_fill is None
+    assert snapshot.basket_entry_count == 2
+
+
+def test_a_session_that_never_cools_down_takes_its_next_entry_at_once() -> None:
+    session = step_grid_paper_session(
+        open_basket=_pair_filled_at_the_start_of_the_year(),
+        cooldown=CooldownPolicy.off(),
+    )
+    first = candle(10, open_price="100", close_price="101")
+
+    snapshot = session.process_completed_candle(
+        first, received_at=first.close_time, backfilled=False
+    )
+
+    assert snapshot.entry_gate == EntryGate(EntryGateState.OPEN)

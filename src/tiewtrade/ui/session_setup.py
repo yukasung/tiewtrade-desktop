@@ -22,14 +22,22 @@ from tiewtrade.application.paper_session_setup import (
 )
 from tiewtrade.application.paper_symbols import PAPER_SYMBOLS
 from tiewtrade.market_data.config import SUPPORTED_V1_TIMEFRAME_CHOICES
+from tiewtrade.trading.cooldown_policy import CooldownPolicy
 from tiewtrade.trading.futures_policy import FuturesTradingPolicy
 from tiewtrade.trading.session_config import MarketType
+from tiewtrade.ui.cooldown_text import cooldown_text
 from tiewtrade.ui.money_text import QUOTE_ASSET
 from tiewtrade.ui.pair_text import pair_text
 
 _AMOUNT_LABEL = f"Amount ({QUOTE_ASSET})"
 _AMOUNT_DECIMALS = 8
 """As many decimals as the quote asset is ever stated in."""
+
+_COOLDOWN_OFF = "off"
+"""What the list holds for the one choice that is not a number of days."""
+
+_COOLDOWN_LABEL = "Cooldown (days)"
+"""The unit is said here, so the list itself is thirty plain numbers."""
 
 
 class SessionSetupWidget(QWidget):
@@ -88,6 +96,22 @@ class SessionSetupWidget(QWidget):
         self.max_entries.setValue(10)
         self.max_entries_error = self._error_label("max_entries", self.max_entries)
 
+        # Every Cooldown a Session can have, spelled out, because there are
+        # only thirty-one of them: a number of days, or none at all. One list
+        # is what a trader picks from, rather than a switch that decides
+        # whether a second field means anything.
+        self.cooldown = QComboBox()
+        self.cooldown.setObjectName("cooldown")
+        self.cooldown.addItem(cooldown_text(CooldownPolicy.off()), _COOLDOWN_OFF)
+        for days in range(CooldownPolicy.MINIMUM_DAYS, CooldownPolicy.MAXIMUM_DAYS + 1):
+            self.cooldown.addItem(
+                cooldown_text(CooldownPolicy.for_days(days)), str(days)
+            )
+        self.cooldown.setCurrentIndex(
+            self.cooldown.findData(str(CooldownPolicy.DEFAULT_DAYS))
+        )
+        self.cooldown_error = self._error_label("cooldown_days", self.cooldown)
+
         self.strategy = QComboBox()
         self.strategy.setObjectName("strategy")
 
@@ -117,6 +141,7 @@ class SessionSetupWidget(QWidget):
         self.strategy.setAccessibleName("Strategy")
         self.capital_per_entry.setAccessibleName(_AMOUNT_LABEL)
         self.max_entries.setAccessibleName("Maximum Entries")
+        self.cooldown.setAccessibleName(_COOLDOWN_LABEL)
         self.leverage.setAccessibleName("Futures Leverage")
         self.create_button.setAccessibleName("Start Paper Bot")
 
@@ -126,12 +151,14 @@ class SessionSetupWidget(QWidget):
 
     def values(self) -> PaperSessionSetupValues:
         futures = self._market_type() is MarketType.FUTURES
+        cooldown = str(self.cooldown.currentData())
         return PaperSessionSetupValues(
             market_type=str(self.market_type.currentData()),
             symbol=str(self.symbol.currentData()),
             timeframe=str(self.timeframe.currentData()),
             capital_per_entry=self.capital_per_entry.text().strip(),
             max_entries=str(self.max_entries.value()),
+            cooldown_days=None if cooldown == _COOLDOWN_OFF else cooldown,
             futures_leverage=str(self.leverage.value()) if futures else None,
             preset_version=str(self.strategy.currentData()),
         )
@@ -148,6 +175,9 @@ class SessionSetupWidget(QWidget):
         self.timeframe.setCurrentIndex(self.timeframe.findData(values.timeframe))
         self.capital_per_entry.setText(values.capital_per_entry)
         self.max_entries.setValue(int(values.max_entries))
+        self.cooldown.setCurrentIndex(
+            self.cooldown.findData(values.cooldown_days or _COOLDOWN_OFF)
+        )
         if values.futures_leverage is not None:
             self.leverage.setValue(int(values.futures_leverage))
         self._populate_strategy()
@@ -169,6 +199,7 @@ class SessionSetupWidget(QWidget):
             self.strategy,
             self.capital_per_entry,
             self.max_entries,
+            self.cooldown,
             self.leverage,
             self.create_button,
         ):
@@ -249,6 +280,12 @@ class SessionSetupWidget(QWidget):
             "Max Entries",
             self.max_entries,
             (self.max_entries_error,),
+        )
+        self._add_row(
+            self._form_layout,
+            _COOLDOWN_LABEL,
+            self.cooldown,
+            (self.cooldown_error,),
         )
         # Futures asks for one number more than Spot does, so it is a row of
         # this form that appears and goes rather than a panel of its own.

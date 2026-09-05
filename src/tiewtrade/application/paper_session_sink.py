@@ -13,6 +13,7 @@ thread, a loop, and a stream of snapshots.
 
 import logging
 from collections.abc import Callable
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from decimal import Decimal
 from threading import Lock
@@ -88,6 +89,19 @@ type CloseOneEntry[Snapshot] = Callable[
 
 type WaiveCooldown[Snapshot] = Callable[[datetime], PersistentSessionSnapshot[Snapshot]]
 """Lift the Cooldown holding this Basket now, recorded before it is published."""
+
+
+@dataclass(frozen=True, slots=True)
+class _GateChange:
+    """What one candle did to the Entry gate, read once and answered from twice.
+
+    `cooled` is a Cooldown that just started; `lapsed` is one that just ended
+    without the trader asking — the days it was given ran out. Neither is a
+    state the snapshot carries: they are the difference between two snapshots.
+    """
+
+    cooled: bool
+    lapsed: bool
 
 
 class PaperRuntimeSink[Snapshot: CandleSnapshot]:
@@ -195,7 +209,7 @@ class PaperRuntimeSink[Snapshot: CandleSnapshot]:
             self._require_running(snapshot)
             self._candle = candle
             self._publish_snapshot(snapshot, candle, candle.close_time)
-            cooling = self._gate_just_closed(snapshot)
+            gate = self._take_gate_change(snapshot)
         # Outside the lock: whoever is told about this is somewhere else on
         # the network, and the next candle is due whether or not they have
         # answered yet.
@@ -207,7 +221,8 @@ class PaperRuntimeSink[Snapshot: CandleSnapshot]:
         self._say(
             lambda notices: notices.basket_closed, snapshot, snapshot.closed_basket
         )
-        self._say(lambda notices: notices.cooldown_started, snapshot, cooling)
+        self._say(lambda notices: notices.cooldown_started, snapshot, gate.cooled)
+        self._say(lambda notices: notices.cooldown_ended, snapshot, gate.lapsed)
 
     async def process_in_progress(
         self,
@@ -325,18 +340,27 @@ class PaperRuntimeSink[Snapshot: CandleSnapshot]:
         except Exception:
             _logger.exception("saying what the Session did failed")
 
-    def _gate_just_closed(self, snapshot: Snapshot) -> bool:
-        """Whether this snapshot is where a Cooldown started.
+    def _take_gate_change(self, snapshot: Snapshot) -> _GateChange:
+        """What the gate did between the last candle and this one.
 
-        A snapshot says what the gate is, never that it changed, and a
-        Cooldown is worth saying once — when it closes — rather than on every
+        A snapshot says what the gate is, never that it changed, so the sink
+        remembers the last one and compares. A Cooldown is worth saying once —
+        when it closes, and again when it runs out — rather than on every
         candle it goes on standing through.
+
+        Both readings come back together because both answer for the same
+        replacement: the gate this sink remembers is taken and replaced once
+        per candle, and there is no moment in between for either to be read
+        against the wrong one.
         """
         was = self._entry_gate
-        self._entry_gate = gate_state(snapshot)
-        return (
-            self._entry_gate is EntryGateState.COOLDOWN
-            and was is not EntryGateState.COOLDOWN
+        now = gate_state(snapshot)
+        self._entry_gate = now
+        return _GateChange(
+            cooled=now is EntryGateState.COOLDOWN
+            and was is not EntryGateState.COOLDOWN,
+            lapsed=was is EntryGateState.COOLDOWN
+            and now is not EntryGateState.COOLDOWN,
         )
 
     @staticmethod

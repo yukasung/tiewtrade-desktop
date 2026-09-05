@@ -22,6 +22,7 @@ from tiewtrade.application.paper_session_setup import ConfiguredPaperSession
 from tiewtrade.application.session_notice import (
     BasketClosedNotice,
     CooldownCancelledNotice,
+    CooldownEndedNotice,
     CooldownStartedNotice,
     EntryOpenedNotice,
     SessionMarket,
@@ -68,6 +69,9 @@ class CandleSnapshot(Protocol):
     def entry_completed_pairs(self) -> int: ...
 
     @property
+    def cooldown_ends_at(self) -> datetime | None: ...
+
+    @property
     def failed_closed(self) -> bool: ...
 
 
@@ -79,14 +83,16 @@ type SnapshotReading = Callable[[CandleSnapshot], None]
 class SnapshotNotices:
     """The things the sink says out loud, each read off a snapshot.
 
-    Four readings rather than one, because the sink does not decide what a
-    message is worth saying — it decides *when* each of them is true, which is
-    four different moments in a candle and two of them not on a candle at all.
+    A reading each rather than one between them, because the sink does not
+    decide what a message is worth saying — it decides *when* each of them is
+    true, which is a different moment in a candle every time and one of them
+    not on a candle at all.
     """
 
     entry_opened: SnapshotReading
     basket_closed: SnapshotReading
     cooldown_started: SnapshotReading
+    cooldown_ended: SnapshotReading
     cooldown_cancelled: SnapshotReading
 
 
@@ -159,8 +165,11 @@ def cooldown_started_notice(
 
     Whether it *just* closed is the sink's reading, not this one's: a snapshot
     says what the gate is and never that it changed.
+
+    A Cooldown that has closed the gate always names the day it lifts on, so
+    a snapshot carrying no day is not one a Cooldown just started on.
     """
-    if snapshot.basket_id is None:
+    if snapshot.basket_id is None or snapshot.cooldown_ends_at is None:
         return None
     return CooldownStartedNotice(
         market=session_market(session),
@@ -168,6 +177,29 @@ def cooldown_started_notice(
         completed_pairs=snapshot.entry_completed_pairs,
         open_entry_count=snapshot.basket_entry_count,
         started_at=started_at,
+        ends_at=snapshot.cooldown_ends_at,
+    )
+
+
+def cooldown_ended_notice(
+    snapshot: CandleSnapshot,
+    session: ConfiguredPaperSession,
+    *,
+    ended_at: datetime,
+) -> CooldownEndedNotice | None:
+    """Read a Cooldown that has just run out of the days it was given.
+
+    Whether the gate *just* opened is the sink's reading. What is read here is
+    the other half of it: a Pair that still names a day it lifts on is one the
+    clock opened, and a Pair a sale broke up names none.
+    """
+    if snapshot.basket_id is None or snapshot.cooldown_ends_at is None:
+        return None
+    return CooldownEndedNotice(
+        market=session_market(session),
+        basket_id=snapshot.basket_id,
+        completed_pairs=snapshot.entry_completed_pairs,
+        ended_at=ended_at,
     )
 
 
@@ -202,8 +234,8 @@ def snapshot_notices(
 ) -> SnapshotNotices | None:
     """Join a Session's identity onto every reading the sink says out loud.
 
-    Two of the four carry a moment the snapshot does not: a gate closing and a
-    gate lifting are things that are true from now on rather than things that
+    Everything a gate does carries a moment the snapshot does not: closing,
+    running out, and being lifted are true from now on rather than things that
     happened at a price, so they are stamped where they are noticed.
     """
     if notify is None:
@@ -218,6 +250,9 @@ def snapshot_notices(
     def say_cooldown_started(snapshot: CandleSnapshot) -> None:
         _say(notify, cooldown_started_notice(snapshot, session, started_at=clock()))
 
+    def say_cooldown_ended(snapshot: CandleSnapshot) -> None:
+        _say(notify, cooldown_ended_notice(snapshot, session, ended_at=clock()))
+
     def say_cooldown_cancelled(snapshot: CandleSnapshot) -> None:
         _say(
             notify,
@@ -228,6 +263,7 @@ def snapshot_notices(
         entry_opened=say_entry_opened,
         basket_closed=say_basket_closed,
         cooldown_started=say_cooldown_started,
+        cooldown_ended=say_cooldown_ended,
         cooldown_cancelled=say_cooldown_cancelled,
     )
 
