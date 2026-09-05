@@ -65,6 +65,7 @@ from tiewtrade.market_data.candle import Candle
 from tiewtrade.market_data.candle_source import MarketDataKlineUpdate
 from tiewtrade.market_data.config import MarketDataConfig
 from tiewtrade.strategies.rsi_step_grid.preset import RsiStepGridPreset
+from tiewtrade.trading.cooldown_policy import CooldownPolicy
 from tiewtrade.trading.futures_policy import MarginMode, PositionMode
 from tiewtrade.trading.session_config import MarketType, TradeMode
 from tiewtrade.trading.symbol_rules import SymbolRules
@@ -85,6 +86,7 @@ class _SessionCase:
     timeframe: str
     max_entries: int
     futures_leverage: int | None
+    cooldown: CooldownPolicy
 
 
 class _ImmediateRuntimeScheduler:
@@ -160,7 +162,7 @@ class _AcceptancePublicCandleSource:
     "case",
     [
         pytest.param(
-            _SessionCase("spot", "5m", 10, None),
+            _SessionCase("spot", "5m", 10, None, CooldownPolicy.until_cancelled()),
             id="spot",
         ),
     ],
@@ -334,7 +336,11 @@ def test_desktop_restart_blocked_runtime_reopens_setup_form(
     active_sessions = SQLiteActivePaperSessions(database)
     session = (
         CreatePaperSession(create_active=active_sessions.create)
-        .execute(_setup_values(_SessionCase("spot", "5m", 10, None)))
+        .execute(
+            _setup_values(
+                _SessionCase("spot", "5m", 10, None, CooldownPolicy.until_cancelled())
+            )
+        )
         .session
     )
     lifecycle = SQLitePaperRuntimeLifecycle(database)
@@ -395,11 +401,11 @@ def test_desktop_restart_blocked_runtime_reopens_setup_form(
     "case",
     [
         pytest.param(
-            _SessionCase("spot", "15m", 12, None),
+            _SessionCase("spot", "15m", 12, None, CooldownPolicy.until_cancelled()),
             id="spot",
         ),
         pytest.param(
-            _SessionCase("futures", "1h", 14, 4),
+            _SessionCase("futures", "1h", 14, 4, CooldownPolicy.until_cancelled()),
             id="futures",
         ),
     ],
@@ -473,7 +479,11 @@ def test_spot_partial_fills_keep_one_order_and_basket_entry_across_tabs(
     active_sessions = SQLiteActivePaperSessions(database)
     session = (
         CreatePaperSession(create_active=active_sessions.create)
-        .execute(_setup_values(_SessionCase("spot", "5m", 10, None)))
+        .execute(
+            _setup_values(
+                _SessionCase("spot", "5m", 10, None, CooldownPolicy.until_cancelled())
+            )
+        )
         .session
     )
     store = SQLiteTradeHistory(database)
@@ -567,6 +577,7 @@ def test_spot_partial_fills_keep_one_order_and_basket_entry_across_tabs(
                 timeframe="15m",
                 max_entries=12,
                 futures_leverage=None,
+                cooldown=CooldownPolicy.for_days(3),
             ),
             id="spot",
         ),
@@ -576,6 +587,7 @@ def test_spot_partial_fills_keep_one_order_and_basket_entry_across_tabs(
                 timeframe="1h",
                 max_entries=14,
                 futures_leverage=4,
+                cooldown=CooldownPolicy.off(),
             ),
             id="futures",
         ),
@@ -712,6 +724,16 @@ def test_desktop_paper_session_create_overview_and_restart_restore(
     )
 
     assert restarted_window.setup.timeframe.currentData() == case.timeframe
+    # The Cooldown is pinned for the Session, so the restarted form has to
+    # show the one it is running rather than the one it opens on.
+    assert (
+        restarted_window.setup.cooldown_mode.currentData() == case.cooldown.mode.value
+    )
+    assert restarted_window.setup.cooldown_days_row.isHidden() is (
+        case.cooldown.days is None
+    )
+    if case.cooldown.days is not None:
+        assert restarted_window.setup.cooldown_days.value() == case.cooldown.days
     assert _active_session_count(database) == 1
     assert _trade_side_effect_counts(database) == initial_side_effect_counts
 
@@ -729,11 +751,11 @@ def test_desktop_paper_session_create_overview_and_restart_restore(
     "case",
     [
         pytest.param(
-            _SessionCase("spot", "15m", 12, None),
+            _SessionCase("spot", "15m", 12, None, CooldownPolicy.until_cancelled()),
             id="spot",
         ),
         pytest.param(
-            _SessionCase("futures", "1h", 14, 4),
+            _SessionCase("futures", "1h", 14, 4, CooldownPolicy.until_cancelled()),
             id="futures",
         ),
     ],
@@ -889,6 +911,7 @@ def test_desktop_session_sqlite_write_failure_after_setup_fails_closed(
             timeframe="15m",
             max_entries=12,
             futures_leverage=None,
+            cooldown=CooldownPolicy.until_cancelled(),
         ),
     )
     click(window.setup.create_button)
@@ -929,6 +952,7 @@ def test_desktop_session_validation_failure_after_setup_preserves_input(
             timeframe="15m",
             max_entries=12,
             futures_leverage=None,
+            cooldown=CooldownPolicy.until_cancelled(),
         ),
     )
     window.setup.capital_per_entry.setText("0")
@@ -1126,6 +1150,11 @@ def _enter_form_values(window: MainWindow, case: _SessionCase) -> None:
     setup.timeframe.setCurrentIndex(setup.timeframe.findData(case.timeframe))
     setup.capital_per_entry.setText("200000")
     setup.max_entries.setValue(case.max_entries)
+    setup.cooldown_mode.setCurrentIndex(
+        setup.cooldown_mode.findData(case.cooldown.mode.value)
+    )
+    if case.cooldown.days is not None:
+        setup.cooldown_days.setValue(case.cooldown.days)
     if case.market_type == "spot":
         return
     assert case.futures_leverage is not None
@@ -1229,6 +1258,7 @@ def _assert_durable_session_matches_case(
     assert config.preset_version == "rsi-step-grid-v1"
     assert config.capital_per_entry == Decimal("200000")
     assert config.entry_policy.max_entries == case.max_entries
+    assert config.entry_policy.cooldown == case.cooldown
     assert session.market_data.symbol == "BTCUSDT"
     assert session.market_data.timeframe == case.timeframe
     assert session.created_at_utc == expected_created_at
