@@ -76,7 +76,7 @@ class SettingsPanel(QWidget):
 
         # Inside the field rather than beside it: the token needs the whole
         # width of the page, and a button in the row would take some of it.
-        self.reveal_token = QAction(_eye_icon(crossed=False), REVEAL_TOKEN_TEXT, self)
+        self.reveal_token = QAction(_eye_icon(crossed=True), REVEAL_TOKEN_TEXT, self)
         self.reveal_token.setCheckable(True)
         self.reveal_token.toggled.connect(self._show_token_being_typed)
         self.line_access_token.addAction(
@@ -154,7 +154,7 @@ class SettingsPanel(QWidget):
         self.line_access_token.setEchoMode(
             QLineEdit.EchoMode.Normal if revealed else QLineEdit.EchoMode.Password
         )
-        self.reveal_token.setIcon(_eye_icon(crossed=revealed))
+        self.reveal_token.setIcon(_eye_icon(crossed=not revealed))
         self.reveal_token.setText(HIDE_TOKEN_TEXT if revealed else REVEAL_TOKEN_TEXT)
 
     def say_line_notifications_unreadable(self) -> None:
@@ -176,7 +176,12 @@ class SettingsPanel(QWidget):
 
 
 def _eye_icon(*, crossed: bool) -> QIcon:
-    """An eye, struck through once what it was hiding is on screen."""
+    """An eye, struck through while what it would show is still covered.
+
+    The stroke reads as the offer every other password field makes — click
+    to see this — rather than as a report of what the field is doing, so it
+    is on the button that uncovers the token and off the one that hides it.
+    """
     # Painted at 3x and tagged, so the outline stays smooth on a retina screen.
     ratio = 3
     pixmap = QPixmap(_EYE_ICON_SIZE * ratio, _EYE_ICON_SIZE * ratio)

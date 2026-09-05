@@ -1,14 +1,25 @@
+from PySide6.QtCore import QSize
+from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import QLabel, QLineEdit
 from pytestqt.qtbot import QtBot
 
 from tests.support.qt_interactions import click
 from tiewtrade.ui.settings_panel import (
+    _EYE_ICON_SIZE,
     SAVE_LINE_BUSY_TEXT,
     SAVE_LINE_IDLE_TEXT,
     TOKEN_MISSING_PLACEHOLDER,
     TOKEN_UNREADABLE_TEXT,
     SettingsPanel,
+    _eye_icon,
 )
+
+
+def _looks_like(icon: QIcon, *, crossed: bool) -> bool:
+    size = QSize(_EYE_ICON_SIZE, _EYE_ICON_SIZE)
+    return (
+        icon.pixmap(size).toImage() == _eye_icon(crossed=crossed).pixmap(size).toImage()
+    )
 
 
 def test_clear_database_button_is_always_enabled(qtbot: QtBot) -> None:
@@ -98,6 +109,28 @@ def test_the_token_field_starts_as_dots(qtbot: QtBot) -> None:
 
     assert panel.line_access_token.echoMode() is QLineEdit.EchoMode.Password
     assert not panel.reveal_token.isChecked()
+
+
+def test_the_eye_is_struck_through_while_the_token_is_hidden(
+    qtbot: QtBot,
+) -> None:
+    """The button says what a click does, not what the field is doing.
+
+    A struck-through eye is the one every other password field offers to
+    open, so a covered token wears it and an uncovered one does not.
+    """
+    panel = SettingsPanel()
+    qtbot.addWidget(panel)
+
+    assert _looks_like(panel.reveal_token.icon(), crossed=True)
+
+    panel.reveal_token.trigger()
+
+    assert _looks_like(panel.reveal_token.icon(), crossed=False)
+
+    panel.reveal_token.trigger()
+
+    assert _looks_like(panel.reveal_token.icon(), crossed=True)
 
 
 def test_the_token_being_typed_can_be_read_back_and_hidden_again(
