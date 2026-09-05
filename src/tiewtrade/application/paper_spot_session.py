@@ -396,7 +396,7 @@ class PaperSpotSession:
             return self._snapshot(accepted=False)
         try:
             transition = self._new_transition()
-            transition.lifecycle.waive_cooldown()
+            transition.lifecycle.waive_cooldown(observed_at)
             waived_pair = transition.lifecycle.completed_pairs
             self._commit_transition(transition)
             return self._snapshot(
@@ -460,7 +460,7 @@ class PaperSpotSession:
             tick_size=self._symbol_rules.tick_size,
         )
         transition.entry_number_filled = transition.basket.entries[-1].entry_number
-        transition.accept_pending_intent()
+        transition.accept_pending_intent(fill.filled_at)
         return fill
 
     def _fail_closed(self) -> None:
@@ -531,12 +531,15 @@ class PaperSpotSession:
     def _entry_gate(self) -> EntryGate | None:
         """The gate, once the Session has seen a candle to state one against.
 
-        The gate itself no longer turns on the clock, but a Session that has
-        watched no market yet is not holding a Basket to answer for either.
+        The candle the Session last saw is also the clock the gate is asked
+        against — market time, never the machine's, so a Cooldown that waits
+        answers the same way every time these candles are replayed. A Session
+        that has watched no market yet has no time to ask as of, and is not
+        holding a Basket to answer for either.
         """
         if self._candles.last_close_time is None:
             return None
-        return self._lifecycle.entry_gate()
+        return self._lifecycle.entry_gate(self._candles.last_close_time)
 
     def _snapshot(
         self,

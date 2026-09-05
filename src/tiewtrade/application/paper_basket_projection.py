@@ -177,7 +177,7 @@ def reopened_basket_snapshot(
         take_profit_price=reopened.basket.take_profit_price,
         targets=reopened.basket.open_entry_targets(),
         position_side=reopened.basket.position_side,
-        entry_gate=reopened.lifecycle.entry_gate(),
+        entry_gate=reopened.lifecycle.entry_gate(observed_at_utc),
         completed_pairs=reopened.lifecycle.completed_pairs,
         observed_at_utc=observed_at_utc,
     )

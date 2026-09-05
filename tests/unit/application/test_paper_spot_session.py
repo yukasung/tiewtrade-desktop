@@ -41,6 +41,9 @@ from tiewtrade.trading.session_config import (
 )
 from tiewtrade.trading.symbol_rules import SymbolRules
 
+GATE_AS_OF = datetime(2026, 8, 5, tzinfo=UTC)
+"""A candle later than the Fills these Sessions hold, to read their gate at."""
+
 
 def test_session_rejects_a_non_paper_spot_configuration() -> None:
     config = session_config(trade_mode=TradeMode.LIVE)
@@ -683,7 +686,7 @@ def test_a_reopened_basket_counts_its_entries_against_the_pair_gate() -> None:
         )
     )
 
-    gate = resumed._lifecycle.entry_gate()
+    gate = resumed._lifecycle.entry_gate(GATE_AS_OF)
 
     assert resumed.snapshot.basket_entry_count == 2
     assert gate.state is EntryGateState.COOLDOWN
@@ -864,7 +867,7 @@ def test_entry_transition_is_atomic_when_lifecycle_rejects_fill(
         close_price="101",
     )
 
-    def reject_fill(self: EntryPairLifecycle) -> None:
+    def reject_fill(self: EntryPairLifecycle, filled_at: datetime) -> None:
         raise ValueError("entry is blocked by pair lifecycle")
 
     monkeypatch.setattr(EntryPairLifecycle, "record_fill", reject_fill)
@@ -1285,7 +1288,7 @@ def test_manual_close_ends_the_cooldown_the_pair_it_sold_from_left() -> None:
     )
 
     assert snapshot.accepted is True
-    assert session._lifecycle.entry_gate().state is EntryGateState.OPEN
+    assert session._lifecycle.entry_gate(GATE_AS_OF).state is EntryGateState.OPEN
     assert [entry.entry_number for entry in session.open_entries] == [2]
 
 
@@ -1315,7 +1318,7 @@ def test_manual_close_from_an_earlier_pair_leaves_a_later_cooldown_standing() ->
     )
 
     assert resolved_pair.accepted is True
-    assert session._lifecycle.entry_gate().state is EntryGateState.COOLDOWN
+    assert session._lifecycle.entry_gate(GATE_AS_OF).state is EntryGateState.COOLDOWN
     assert [entry.entry_number for entry in session.open_entries] == [2, 3, 4]
 
     cooling_pair = session.close_entry(
@@ -1323,7 +1326,7 @@ def test_manual_close_from_an_earlier_pair_leaves_a_later_cooldown_standing() ->
     )
 
     assert cooling_pair.accepted is True
-    assert session._lifecycle.entry_gate().state is EntryGateState.OPEN
+    assert session._lifecycle.entry_gate(GATE_AS_OF).state is EntryGateState.OPEN
 
 
 def test_a_session_holding_nothing_has_no_entry_to_sell() -> None:

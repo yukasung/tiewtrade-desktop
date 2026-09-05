@@ -15,6 +15,9 @@ from tiewtrade.trading.basket import SettledEntries
 from tiewtrade.trading.entry_pair import EntryGateState
 from tiewtrade.trading.entry_policy import EntryPolicy
 
+AFTER_THE_FILLS = datetime(2026, 2, 1, tzinfo=UTC)
+"""A candle later than every Fill below, which is where the gate is read."""
+
 
 def _entry(number: int, price: str, *, day: int) -> OpenBasketEntry:
     return OpenBasketEntry(
@@ -49,19 +52,19 @@ def test_reopen_basket_restores_a_waiver_matching_the_completed_pair() -> None:
     # The two Entries replayed below complete this Basket's first Pair.
     reopened = _reopen(_state(waived_pair=1))
 
-    assert reopened.lifecycle.can_enter()
+    assert reopened.lifecycle.can_enter(AFTER_THE_FILLS)
 
 
 def test_reopen_basket_ignores_a_waiver_for_a_different_pair() -> None:
     reopened = _reopen(_state(waived_pair=2))
 
-    assert not reopened.lifecycle.can_enter()
+    assert not reopened.lifecycle.can_enter(AFTER_THE_FILLS)
 
 
 def test_reopen_basket_without_a_waiver_stays_in_cooldown() -> None:
     reopened = _reopen(_state(waived_pair=None))
 
-    assert not reopened.lifecycle.can_enter()
+    assert not reopened.lifecycle.can_enter(AFTER_THE_FILLS)
 
 
 def _four_entry_state(*, waived_pair: int | None) -> OpenBasketState:
@@ -91,7 +94,7 @@ def test_reopen_basket_leaves_the_pair_a_stale_waiver_no_longer_names() -> None:
     """A waiver lifts the Cooldown it named, never the one that replaced it."""
     reopened = _reopen(_four_entry_state(waived_pair=1))
 
-    assert not reopened.lifecycle.can_enter()
+    assert not reopened.lifecycle.can_enter(AFTER_THE_FILLS)
 
 
 def test_reopen_basket_counts_a_sale_that_already_happened_toward_its_pair() -> None:
@@ -116,7 +119,8 @@ def test_reopen_basket_counts_a_sale_that_already_happened_toward_its_pair() -> 
 
     assert reopened.lifecycle.entry_count == 3
     assert reopened.lifecycle.completed_pairs == 2
-    assert reopened.lifecycle.entry_gate().state is EntryGateState.COOLDOWN
+    gate = reopened.lifecycle.entry_gate(AFTER_THE_FILLS)
+    assert gate.state is EntryGateState.COOLDOWN
 
 
 def test_reopen_basket_refuses_more_open_entries_than_the_quota_allows() -> None:

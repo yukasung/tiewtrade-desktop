@@ -58,11 +58,11 @@ class PaperCandleTransition:
         self.strategy.on_entry_rejected(intent.intent_id)
         self.pending_intent = None
 
-    def accept_pending_intent(self) -> None:
+    def accept_pending_intent(self, filled_at: datetime) -> None:
         """Take the Intent in, once the Entry it asked for has actually filled."""
         intent = self.pending_intent
         assert intent is not None
-        self.lifecycle.record_fill()
+        self.lifecycle.record_fill(filled_at)
         self.strategy.on_entry_filled(intent.intent_id)
         self.pending_intent = None
 
@@ -87,7 +87,7 @@ class PaperCandleTransition:
         basket = self.basket
         can_enter = (
             not exited_on_this_candle
-            and self.lifecycle.can_enter()
+            and self.lifecycle.can_enter(candle.close_time)
             and (basket is None or basket.entry_count < max_entries)
         )
         # Entry numbers count every Entry the Basket has ever taken, so one

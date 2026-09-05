@@ -257,13 +257,13 @@ def test_a_snapshot_reads_every_entry_at_the_gate_the_lifecycle_holds_it_at() ->
         basket = basket_snapshot(
             entry_count=len(reached.open_entry_numbers),
             entries=_entries_numbered(reached.open_entry_numbers),
-            entry_gate=BasketEntryGate(lifecycle.entry_gate().state),
+            entry_gate=BasketEntryGate(lifecycle.entry_gate(reached.as_of).state),
             completed_pairs=lifecycle.completed_pairs,
         )
 
         for number in reached.open_entry_numbers:
             assert basket.entry_gate_for(number).value == (
-                lifecycle.entry_gate_for(number).state.value
+                lifecycle.entry_gate_for(number, reached.as_of).state.value
             ), f"Entry {number} of {reached.open_entry_numbers} reads two ways"
 
 
