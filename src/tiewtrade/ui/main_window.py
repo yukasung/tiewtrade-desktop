@@ -907,7 +907,9 @@ class MainWindow(QMainWindow):
             return
         self._ask_then_act(
             self._waive_cooldown,
-            lambda: ask_about_cancelling_cooldown(self),
+            lambda: ask_about_cancelling_cooldown(
+                self, cooldown_ends_at=basket.cooldown_ends_at_utc
+            ),
             cancel_cooldown,
         )
 

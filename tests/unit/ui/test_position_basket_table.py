@@ -470,6 +470,14 @@ def test_entry_pnl_reads_as_a_two_decimal_figure_coloured_by_its_sign(
             id="cooldown",
         ),
         pytest.param(
+            basket_snapshot(
+                entry_gate=BasketEntryGate.COOLDOWN,
+                cooldown_ends_at_utc=datetime(2026, 8, 29, 3, tzinfo=UTC),
+            ),
+            "Cooldown until 2026-08-29 10:00:00",
+            id="cooldown-that-lifts-by-itself",
+        ),
+        pytest.param(
             basket_snapshot(entry_gate=BasketEntryGate.MAX_ENTRIES_REACHED),
             "Max Entries reached",
             id="max-entries",

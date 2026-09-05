@@ -4,9 +4,12 @@ Only the wording lives here — the shape they all share, down to which answer a
 stray Enter finds, is `destructive_question.ask_before_acting`.
 """
 
+from datetime import datetime
+
 from PySide6.QtWidgets import QWidget
 
 from tiewtrade.ui.destructive_question import ask_before_acting
+from tiewtrade.ui.display_time import display_timestamp
 
 
 def ask_about_selling_one_entry(parent: QWidget | None, entry_number: int) -> bool:
@@ -47,21 +50,31 @@ def ask_about_closing_all_at_market(parent: QWidget | None) -> bool:
     )
 
 
-def ask_about_cancelling_cooldown(parent: QWidget | None) -> bool:
+def ask_about_cancelling_cooldown(
+    parent: QWidget | None, *, cooldown_ends_at: datetime | None = None
+) -> bool:
     """Ask before a Cooldown the strategy itself set is lifted.
 
-    A Cooldown does not lapse, so lifting it is the trader stepping around a
-    risk policy rather than hurrying one along — the question says so in as
-    many words.
+    A Cooldown that waits on the trader does not lapse at all, so lifting it
+    is stepping around a risk policy rather than hurrying one along. One that
+    waits out days is the opposite: the question names the day it would lift
+    on by itself, because that is what the trader is choosing not to wait for.
     """
+    detail = (
+        "The strategy is holding this Basket back after an Entry Pair. "
+        "Lifting the Cooldown lets one Entry open now; the next Pair is "
+        "held back again."
+    )
+    if cooldown_ends_at is not None:
+        detail = (
+            "This Cooldown lifts on its own at "
+            f"{display_timestamp(cooldown_ends_at)}. Lifting it now opens one "
+            "Entry immediately; the next Pair is held back again."
+        )
     return ask_before_acting(
         parent,
         title="Cancel Cooldown",
         question="Lift this Cooldown and open a new Entry now?",
-        detail=(
-            "The strategy is holding this Basket back after an Entry Pair. "
-            "Lifting the Cooldown lets one Entry open now; the next Pair is "
-            "held back again."
-        ),
+        detail=detail,
         confirm_label="Cancel Cooldown",
     )
