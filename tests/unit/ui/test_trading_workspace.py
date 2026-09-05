@@ -8,7 +8,11 @@ from PySide6.QtWidgets import QWidget
 from pytestqt.qtbot import QtBot
 
 from tests.support.paper_session_setup import configured_spot_session
-from tests.support.workspace_snapshots import basket_entries, basket_targets
+from tests.support.workspace_snapshots import (
+    basket_entries,
+    basket_snapshot,
+    basket_targets,
+)
 from tiewtrade.application.chart_data import ChartRange, ChartReadState, ChartSnapshot
 from tiewtrade.application.trading_workspace import (
     BasketEntryGate,
@@ -424,3 +428,74 @@ def test_opening_a_history_tab_announces_it_once(qtbot: QtBot) -> None:
     workspace.show_tab(WorkspaceTab.TRADE_HISTORY)
 
     assert activations == [None, None]
+
+
+def test_cooldown_notice_card_sits_in_the_right_column_and_starts_hidden(
+    qtbot: QtBot,
+) -> None:
+    workspace = TradingWorkspace()
+    qtbot.addWidget(workspace)
+    workspace.resize(1200, 700)
+    workspace.show()
+
+    assert not workspace.cooldown_notice_card.isVisible()
+
+    workspace.cooldown_notice_card.show()
+
+    header_rect = _widget_rect_in_viewport(workspace.workspace_header, workspace)
+    notice_rect = _widget_rect_in_viewport(workspace.cooldown_notice_card, workspace)
+    price_rect = _widget_rect_in_viewport(workspace.live_price_card, workspace)
+    assert header_rect.bottom() < notice_rect.top()
+    assert notice_rect.bottom() < price_rect.top()
+    assert notice_rect.left() == header_rect.left()
+    assert notice_rect.width() == BOT_CONTROL_WIDTH
+
+
+def test_a_cooling_basket_raises_the_notice_beside_the_bot_control(
+    qtbot: QtBot,
+) -> None:
+    workspace = TradingWorkspace()
+    qtbot.addWidget(workspace)
+    workspace.resize(1200, 700)
+    workspace.show()
+    observed_at = datetime(2026, 8, 2, 1, 2, 4, tzinfo=UTC)
+    cooling = replace(
+        configured_workspace_snapshot(
+            configured_spot_session(), observed_at_utc=observed_at
+        ),
+        position_basket=ready_position_basket_tab(
+            basket_snapshot(
+                entry_gate=BasketEntryGate.COOLDOWN,
+                cooldown_ends_at_utc=datetime(2026, 8, 31, 12, tzinfo=UTC),
+            ),
+            observed_at_utc=observed_at,
+        ),
+    )
+
+    workspace.show_workspace_snapshot(cooling)
+
+    assert workspace.cooldown_notice_card.isVisible()
+    assert "Cooldown until 2026-08-31" in workspace.cooldown_notice_card.label.text()
+
+    workspace.show_workspace_snapshot(
+        replace(
+            cooling,
+            position_basket=ready_position_basket_tab(
+                basket_snapshot(entry_gate=BasketEntryGate.OPEN),
+                observed_at_utc=observed_at,
+            ),
+        )
+    )
+
+    assert not workspace.cooldown_notice_card.isVisible()
+
+
+def test_going_back_to_setup_takes_the_cooldown_notice_away(qtbot: QtBot) -> None:
+    workspace = TradingWorkspace()
+    qtbot.addWidget(workspace)
+    workspace.show()
+    workspace.cooldown_notice_card.show()
+
+    workspace.show_setup()
+
+    assert not workspace.cooldown_notice_card.isVisible()

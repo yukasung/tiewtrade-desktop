@@ -21,6 +21,7 @@ from tiewtrade.application.trading_workspace import TradingWorkspaceSnapshot
 from tiewtrade.ui.bot_control import BotControlWidget
 from tiewtrade.ui.candlestick_chart import CandlestickChartWidget
 from tiewtrade.ui.connection_notice import ConnectionNoticeCard
+from tiewtrade.ui.cooldown_notice import CooldownNoticeCard
 from tiewtrade.ui.live_price_card import LivePriceCard
 from tiewtrade.ui.position_basket_table import PositionBasketTable
 from tiewtrade.ui.session_setup import SessionSetupWidget
@@ -70,6 +71,7 @@ class TradingWorkspace(QWidget):
 
         self.chart = CandlestickChartWidget()
         self.connection_notice_card = ConnectionNoticeCard()
+        self.cooldown_notice_card = CooldownNoticeCard()
         self.live_price_card = LivePriceCard()
 
         self.workspace_header = QFrame()
@@ -132,6 +134,7 @@ class TradingWorkspace(QWidget):
         if not isinstance(value, TradingWorkspaceSnapshot):
             return
         self.position_basket.show_snapshot(value.position_basket)
+        self.cooldown_notice_card.show_basket(value.position_basket.basket)
 
     @Slot(str)
     def show_setup_for_validation(self, field: str) -> None:
@@ -146,6 +149,9 @@ class TradingWorkspace(QWidget):
         self.bot_control_scroll.ensureWidgetVisible(error_label)
 
     def _activate_setup(self) -> None:
+        # There is no Session on the setup form, so there is no Cooldown for
+        # a notice beside it to be about.
+        self.cooldown_notice_card.hide()
         self._remember_and_maybe_show(self.setup)
 
     def show_configured_session(self, session: ConfiguredPaperSession) -> None:
@@ -249,6 +255,7 @@ class TradingWorkspace(QWidget):
         side_layout.setSpacing(12)
         side_layout.addWidget(self.workspace_header)
         side_layout.addWidget(self.connection_notice_card)
+        side_layout.addWidget(self.cooldown_notice_card)
         side_layout.addWidget(self.live_price_card)
         side_layout.addWidget(self.bot_control, 1)
 

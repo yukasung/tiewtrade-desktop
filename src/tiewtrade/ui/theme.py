@@ -88,13 +88,22 @@ QWidget[state="warning"] {
     color: #F0B90B;
     border-radius: 6px;
 }
-QFrame#connectionNoticeCard {
-    background: #2A2412;
-    border: 1px solid #6B5A1B;
+QFrame#noticeCard {
     border-radius: 8px;
 }
-QFrame#connectionNoticeCard QLabel {
+QFrame#noticeCard[level="warning"] {
+    background: #2A2412;
+    border: 1px solid #6B5A1B;
+}
+QFrame#noticeCard[level="warning"] QLabel {
     color: #F0B90B;
+}
+QFrame#noticeCard[level="info"] {
+    background: #12233A;
+    border: 1px solid #2B4C7E;
+}
+QFrame#noticeCard[level="info"] QLabel {
+    color: #7FB0F0;
 }
 QWidget[state="positive"] { color: #0ECB81; }
 QWidget[state="negative"] { color: #F6465D; }
