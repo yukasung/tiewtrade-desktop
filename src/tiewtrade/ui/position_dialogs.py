@@ -55,10 +55,8 @@ def ask_about_cancelling_cooldown(
 ) -> bool:
     """Ask before a Cooldown the strategy itself set is lifted.
 
-    A Cooldown that waits on the trader does not lapse at all, so lifting it
-    is stepping around a risk policy rather than hurrying one along. One that
-    waits out days is the opposite: the question names the day it would lift
-    on by itself, because that is what the trader is choosing not to wait for.
+    The question names the day the Cooldown would lift on by itself, because
+    that is exactly what the trader is choosing not to wait for.
     """
     detail = (
         "The strategy is holding this Basket back after an Entry Pair. "

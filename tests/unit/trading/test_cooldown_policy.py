@@ -2,30 +2,31 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 
-from tiewtrade.trading.cooldown_policy import CooldownMode, CooldownPolicy
+from tiewtrade.trading.cooldown_policy import CooldownPolicy
 
 COMPLETED_AT = datetime(2026, 3, 1, 12, 0, tzinfo=UTC)
 
 
-def test_until_cancelled_carries_no_duration() -> None:
-    policy = CooldownPolicy.until_cancelled()
-
-    assert policy.mode is CooldownMode.UNTIL_CANCELLED
-    assert policy.days is None
-
-
-def test_off_carries_no_duration() -> None:
+def test_a_cooldown_that_is_off_waits_no_days() -> None:
     policy = CooldownPolicy.off()
 
-    assert policy.mode is CooldownMode.OFF
     assert policy.days is None
+    assert policy.never_cools_down
 
 
 def test_for_days_carries_the_duration_it_was_given() -> None:
     policy = CooldownPolicy.for_days(7)
 
-    assert policy.mode is CooldownMode.DURATION
     assert policy.days == 7
+    assert not policy.never_cools_down
+
+
+def test_a_session_that_names_no_cooldown_waits_the_longest_one() -> None:
+    """The default is the most it can hold a Basket back, not the least."""
+    assert CooldownPolicy.default() == CooldownPolicy.for_days(
+        CooldownPolicy.MAXIMUM_DAYS
+    )
+    assert CooldownPolicy.DEFAULT_DAYS == 30
 
 
 def test_exposes_supported_day_bounds() -> None:
@@ -49,28 +50,16 @@ def test_rejects_a_duration_outside_the_supported_days(days: object) -> None:
         CooldownPolicy.for_days(days)  # type: ignore[arg-type]
 
 
-def test_rejects_a_duration_mode_without_days() -> None:
-    with pytest.raises(ValueError, match="days"):
-        CooldownPolicy(mode=CooldownMode.DURATION)
+def test_a_cooldown_that_is_off_never_lapses_because_it_never_starts() -> None:
+    policy = CooldownPolicy.off()
 
-
-@pytest.mark.parametrize("mode", [CooldownMode.OFF, CooldownMode.UNTIL_CANCELLED])
-def test_rejects_days_on_a_mode_that_does_not_wait(mode: CooldownMode) -> None:
-    with pytest.raises(ValueError, match="days"):
-        CooldownPolicy(mode=mode, days=7)
-
-
-@pytest.mark.parametrize(
-    "policy",
-    [CooldownPolicy.off(), CooldownPolicy.until_cancelled()],
-)
-def test_only_a_duration_ever_lapses(policy: CooldownPolicy) -> None:
     assert not policy.has_lapsed(
         completed_at=COMPLETED_AT, as_of=COMPLETED_AT + timedelta(days=3650)
     )
+    assert policy.ends_at(completed_at=COMPLETED_AT) is None
 
 
-def test_a_duration_lapses_on_the_day_it_names_and_not_before() -> None:
+def test_a_cooldown_lapses_on_the_day_it_names_and_not_before() -> None:
     policy = CooldownPolicy.for_days(3)
     deadline = COMPLETED_AT + timedelta(days=3)
 
@@ -84,15 +73,7 @@ def test_a_duration_lapses_on_the_day_it_names_and_not_before() -> None:
     )
 
 
-def test_a_duration_names_when_it_lifts() -> None:
+def test_a_cooldown_names_when_it_lifts() -> None:
     policy = CooldownPolicy.for_days(3)
 
     assert policy.ends_at(completed_at=COMPLETED_AT) == COMPLETED_AT + timedelta(days=3)
-
-
-@pytest.mark.parametrize(
-    "policy",
-    [CooldownPolicy.off(), CooldownPolicy.until_cancelled()],
-)
-def test_a_cooldown_that_does_not_lapse_names_no_end(policy: CooldownPolicy) -> None:
-    assert policy.ends_at(completed_at=COMPLETED_AT) is None

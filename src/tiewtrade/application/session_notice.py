@@ -77,9 +77,9 @@ class CooldownStartedNotice:
     """The Basket completed an Entry Pair, so the gate closed behind it.
 
     Worth saying because the Bot will take no further Entry until it opens
-    again, however far the market moves. `ends_at` is the day it lifts on for
-    a Session whose Cooldown waits out days, and None for one that stands
-    until the trader lifts it.
+    again, however far the market moves. A Cooldown that started is one the
+    Session gave days to — a Session whose Cooldown is off never starts one —
+    so `ends_at` is the day it lifts on, and there is always one to name.
     """
 
     market: SessionMarket
@@ -87,7 +87,7 @@ class CooldownStartedNotice:
     completed_pairs: int
     open_entry_count: int
     started_at: datetime
-    ends_at: datetime | None = None
+    ends_at: datetime
 
 
 @dataclass(frozen=True, slots=True)

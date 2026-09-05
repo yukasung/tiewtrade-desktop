@@ -202,66 +202,43 @@ def _configured(values: PaperSessionSetupValues) -> ConfiguredPaperSession:
     return use_case.execute(values).session
 
 
-def test_a_form_that_names_no_cooldown_starts_the_one_that_waits_to_be_cancelled() -> (
-    None
-):
+def test_a_form_that_names_no_cooldown_waits_the_longest_one() -> None:
+    """Assembled without a choice, a Session is the most cautious one there is."""
     session = _configured(spot_values())
 
-    assert session.config.entry_policy.cooldown == CooldownPolicy.until_cancelled()
+    assert session.config.entry_policy.cooldown == CooldownPolicy.default()
 
 
 @pytest.mark.parametrize(
-    ("mode", "days", "expected"),
+    ("days", "expected"),
     [
-        ("off", None, CooldownPolicy.off()),
-        ("until_cancelled", None, CooldownPolicy.until_cancelled()),
-        ("duration", "3", CooldownPolicy.for_days(3)),
+        (None, CooldownPolicy.off()),
+        ("1", CooldownPolicy.for_days(1)),
+        ("3", CooldownPolicy.for_days(3)),
+        ("30", CooldownPolicy.for_days(30)),
     ],
 )
 def test_a_form_states_the_cooldown_the_session_is_pinned_to(
-    mode: str, days: str | None, expected: CooldownPolicy
+    days: str | None, expected: CooldownPolicy
 ) -> None:
-    session = _configured(
-        replace(spot_values(), cooldown_mode=mode, cooldown_days=days)
-    )
+    session = _configured(replace(spot_values(), cooldown_days=days))
 
     assert session.config.entry_policy.cooldown == expected
 
 
-def test_a_cooldown_that_waits_must_say_how_many_days() -> None:
-    values = replace(spot_values(), cooldown_mode="duration", cooldown_days=None)
-
+@pytest.mark.parametrize("days", ["0", "31", "many"])
+def test_days_the_policy_refuses_are_reported_against_the_field_that_asked(
+    days: str,
+) -> None:
     with pytest.raises(PaperSessionValidationError) as caught:
-        _configured(values)
+        _configured(replace(spot_values(), cooldown_days=days))
 
     assert caught.value.field == "cooldown_days"
-
-
-def test_days_out_of_range_are_reported_against_the_field_that_asked() -> None:
-    values = replace(spot_values(), cooldown_mode="duration", cooldown_days="31")
-
-    with pytest.raises(PaperSessionValidationError) as caught:
-        _configured(values)
-
-    assert caught.value.field == "cooldown_days"
-
-
-def test_a_cooldown_nobody_offers_is_reported_against_its_own_field() -> None:
-    values = replace(spot_values(), cooldown_mode="sometimes")
-
-    with pytest.raises(PaperSessionValidationError) as caught:
-        _configured(values)
-
-    assert caught.value.field == "cooldown_mode"
 
 
 @pytest.mark.parametrize(
     "cooldown",
-    [
-        CooldownPolicy.until_cancelled(),
-        CooldownPolicy.off(),
-        CooldownPolicy.for_days(3),
-    ],
+    [CooldownPolicy.off(), CooldownPolicy.for_days(3), CooldownPolicy.default()],
 )
 def test_a_session_reads_back_onto_the_form_it_was_started_from(
     cooldown: CooldownPolicy,
@@ -269,7 +246,6 @@ def test_a_session_reads_back_onto_the_form_it_was_started_from(
     """An untouched form compares equal to the Session it was filled from."""
     values = replace(
         spot_values(),
-        cooldown_mode=cooldown.mode.value,
         cooldown_days=None if cooldown.days is None else str(cooldown.days),
     )
     session = _configured(values)

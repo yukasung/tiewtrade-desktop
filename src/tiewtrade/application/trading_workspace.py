@@ -174,9 +174,9 @@ class BasketSnapshot:
     # one just completed is not what a standing Cooldown is blocking. Left at
     # its default, every row falls back to reading the Basket's own gate.
     completed_pairs: int = 0
-    # The day a standing Cooldown lifts on by itself, for a Session whose
-    # Cooldown waits out days. None under every other Policy — the screen
-    # shows what the domain stamped here and never works out a gate of its own.
+    # The day a standing Cooldown lifts on by itself. None where none stands —
+    # the screen shows what the domain stamped here and never works out a gate
+    # of its own.
     cooldown_ends_at_utc: datetime | None = None
 
     def __post_init__(self) -> None:

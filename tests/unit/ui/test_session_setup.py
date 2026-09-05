@@ -1,3 +1,5 @@
+from dataclasses import replace
+
 import pytest
 from PySide6.QtGui import QValidator
 from pytestqt.qtbot import QtBot
@@ -238,72 +240,67 @@ def test_amount_field_accepts_only_a_number(qtbot: QtBot) -> None:
     assert _validator_state(validator, "") is not QValidator.State.Invalid
 
 
-def test_the_form_opens_on_the_cooldown_that_waits_to_be_cancelled(
-    qtbot: QtBot,
+def test_the_form_opens_on_the_longest_cooldown(qtbot: QtBot) -> None:
+    """The safest of the choices, so an untouched form is never the loosest."""
+    widget = SessionSetupWidget()
+    qtbot.addWidget(widget)
+
+    assert widget.values().cooldown_days == "30"
+    assert widget.cooldown.currentText() == "30 days"
+    assert widget.cooldown.accessibleName() == "Cooldown"
+
+
+def test_the_form_offers_off_and_every_day_it_supports(qtbot: QtBot) -> None:
+    widget = SessionSetupWidget()
+    qtbot.addWidget(widget)
+
+    labels = [widget.cooldown.itemText(i) for i in range(widget.cooldown.count())]
+
+    assert labels[:4] == ["Off", "1 day", "2 days", "3 days"]
+    assert labels[-1] == "30 days"
+    assert len(labels) == CooldownPolicy.MAXIMUM_DAYS + 1
+
+
+def test_choosing_off_states_no_days_at_all(qtbot: QtBot) -> None:
+    widget = SessionSetupWidget()
+    qtbot.addWidget(widget)
+
+    widget.cooldown.setCurrentIndex(widget.cooldown.findText("Off"))
+
+    assert widget.values().cooldown_days is None
+
+
+def test_choosing_a_number_of_days_states_that_number(qtbot: QtBot) -> None:
+    widget = SessionSetupWidget()
+    qtbot.addWidget(widget)
+
+    widget.cooldown.setCurrentIndex(widget.cooldown.findText("1 day"))
+
+    assert widget.values().cooldown_days == "1"
+
+
+@pytest.mark.parametrize(
+    ("cooldown", "expected"),
+    [
+        (CooldownPolicy.off(), "Off"),
+        (CooldownPolicy.for_days(1), "1 day"),
+        (CooldownPolicy.for_days(3), "3 days"),
+    ],
+)
+def test_a_session_reads_back_onto_the_form(
+    qtbot: QtBot, cooldown: CooldownPolicy, expected: str
 ) -> None:
     widget = SessionSetupWidget()
     qtbot.addWidget(widget)
-
-    values = widget.values()
-
-    assert values.cooldown_mode == "until_cancelled"
-    assert values.cooldown_days is None
-    assert widget.cooldown_mode.accessibleName() == "Cooldown"
-    assert widget.cooldown_days.accessibleName() == "Cooldown Days"
-    assert widget.cooldown_days_row.isHidden()
-
-
-def test_the_form_offers_every_way_a_cooldown_can_end(qtbot: QtBot) -> None:
-    widget = SessionSetupWidget()
-    qtbot.addWidget(widget)
-
-    assert [
-        widget.cooldown_mode.itemData(index)
-        for index in range(widget.cooldown_mode.count())
-    ] == ["until_cancelled", "duration", "off"]
-
-
-def test_choosing_a_cooldown_that_waits_asks_for_its_days(qtbot: QtBot) -> None:
-    widget = SessionSetupWidget()
-    qtbot.addWidget(widget)
-
-    widget.cooldown_mode.setCurrentIndex(widget.cooldown_mode.findData("duration"))
-
-    assert widget.cooldown_days_row.isHidden() is False
-    assert widget.cooldown_days.minimum() == CooldownPolicy.MINIMUM_DAYS
-    assert widget.cooldown_days.maximum() == CooldownPolicy.MAXIMUM_DAYS
-    assert widget.values().cooldown_days == str(widget.cooldown_days.value())
-
-
-def test_a_cooldown_that_never_waits_states_no_days(qtbot: QtBot) -> None:
-    """A number left behind in a hidden row is not a Session's Cooldown."""
-    widget = SessionSetupWidget()
-    qtbot.addWidget(widget)
-    widget.cooldown_mode.setCurrentIndex(widget.cooldown_mode.findData("duration"))
-    widget.cooldown_days.setValue(9)
-
-    widget.cooldown_mode.setCurrentIndex(widget.cooldown_mode.findData("off"))
-
-    values = widget.values()
-
-    assert values.cooldown_mode == "off"
-    assert values.cooldown_days is None
-    assert widget.cooldown_days_row.isHidden()
-
-
-def test_a_session_that_waits_days_reads_back_onto_the_form(qtbot: QtBot) -> None:
-    widget = SessionSetupWidget()
-    qtbot.addWidget(widget)
-    session = _session_waiting_days(3)
+    session = _session_with_cooldown(cooldown)
 
     widget.set_values_from_session(session)
 
+    assert widget.cooldown.currentText() == expected
     assert widget.values() == setup_values_of(session)
-    assert widget.cooldown_days_row.isHidden() is False
-    assert widget.cooldown_days.value() == 3
 
 
-def test_a_cooldown_days_error_reaches_the_field_that_asked(qtbot: QtBot) -> None:
+def test_a_cooldown_error_reaches_the_field_that_asked(qtbot: QtBot) -> None:
     widget = SessionSetupWidget()
     qtbot.addWidget(widget)
 
@@ -312,20 +309,16 @@ def test_a_cooldown_days_error_reaches_the_field_that_asked(qtbot: QtBot) -> Non
     revealed = widget.reveal_validation_field("cooldown_days")
 
     assert revealed is not None
-    assert revealed[0] is widget.cooldown_days
+    assert revealed[0] is widget.cooldown
     assert revealed[1].text() == "days must be between 1 and 30"
 
 
-def _session_waiting_days(days: int) -> ConfiguredPaperSession:
-    from dataclasses import replace
-
+def _session_with_cooldown(cooldown: CooldownPolicy) -> ConfiguredPaperSession:
     session = configured_spot_session()
     return replace(
         session,
         config=replace(
             session.config,
-            entry_policy=replace(
-                session.config.entry_policy, cooldown=CooldownPolicy.for_days(days)
-            ),
+            entry_policy=replace(session.config.entry_policy, cooldown=cooldown),
         ),
     )

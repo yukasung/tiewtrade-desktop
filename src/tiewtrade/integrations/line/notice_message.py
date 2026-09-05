@@ -104,27 +104,15 @@ def basket_closed_message(notice: BasketClosedNotice) -> str:
 
 
 def cooldown_started_message(notice: CooldownStartedNotice) -> str:
-    """A Cooldown began, and what it will take to end it.
-
-    A Cooldown that waits out days names the day it lifts on, because a
-    trader reading this one has nothing to do about it and a trader reading
-    the other one does.
-    """
-    waiting = (
-        "The Bot will not open a new Entry until you cancel the Cooldown."
-        if notice.ends_at is None
-        else (
-            f"The Bot will not open a new Entry until {_moment(notice.ends_at)},"
-            " or until you cancel the Cooldown."
-        )
-    )
+    """A Cooldown began, and when it lifts if the trader leaves it alone."""
     return _message(
         "Cooldown started",
         notice.market,
         [
             f"{_pairs(notice.completed_pairs)} completed"
             f" · {_entries(notice.open_entry_count)} open",
-            waiting,
+            f"The Bot will not open a new Entry until {_moment(notice.ends_at)},"
+            " or until you cancel the Cooldown.",
         ],
         _at("Started", notice.started_at),
     )

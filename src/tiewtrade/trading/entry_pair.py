@@ -3,7 +3,6 @@ from dataclasses import dataclass
 from datetime import datetime
 from enum import StrEnum
 
-from tiewtrade.trading.cooldown_policy import CooldownMode
 from tiewtrade.trading.entry_policy import EntryPolicy
 
 
@@ -61,8 +60,8 @@ class EntryPairLifecycle:
         # a rule stated twice is a rule that drifts.
         self._released_entries: set[int] = set()
         # When the Fill that completed the latest Pair happened, in market
-        # time. A Cooldown that waits is measured from here; the other two
-        # modes never read it.
+        # time. A Cooldown is measured from here; a Session whose Cooldown is
+        # off never reads it.
         self._pair_completed_at: datetime | None = None
 
     @classmethod
@@ -95,8 +94,8 @@ class EntryPairLifecycle:
         sale broke up is read back off exactly that — a Cooldown lifted that
         way is not stored, it is restated by the Entries that are still here.
 
-        Each open Entry brings the time its Fill happened, so a Cooldown that
-        waits can be read back too. Nothing is stored for it: a Cooldown only
+        Each open Entry brings the time its Fill happened, so a standing
+        Cooldown can be read back too. Nothing is stored for it: a Cooldown only
         stands while the Basket holds both Entries of the Pair, so the Fill
         that completed a standing Pair is always one of the Entries here.
         """
@@ -129,10 +128,10 @@ class EntryPairLifecycle:
     def entry_gate(self, as_of: datetime) -> EntryGate:
         """Whether the Basket may take another Entry as of a moment in time.
 
-        A completed Pair closes the gate, and what opens it again is the
-        Session's Cooldown Policy: never closed at all under `OFF`, the
-        trader's say under `UNTIL_CANCELLED`, and either that or the days
-        having passed under `DURATION`.
+        A completed Pair closes the gate, and the Session's Cooldown Policy
+        says what opens it again: the days it named having passed, or the
+        trader's say before that. A Session whose Cooldown is off never closes
+        the gate here at all.
 
         The moment to answer as of is handed in rather than read off a clock,
         so this stays a function of the Basket and the market's own time — the
@@ -142,7 +141,7 @@ class EntryPairLifecycle:
             return EntryGate(EntryGateState.MAX_ENTRIES_REACHED)
         if self._filled_total == 0 or self._filled_total % 2 == 1:
             return EntryGate(EntryGateState.OPEN)
-        if self._policy.cooldown.mode is CooldownMode.OFF:
+        if self._policy.cooldown.never_cools_down:
             return EntryGate(EntryGateState.OPEN)
         if self._waived_pair == self._completed_pairs:
             return EntryGate(EntryGateState.OPEN)

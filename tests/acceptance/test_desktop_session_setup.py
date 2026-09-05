@@ -162,7 +162,7 @@ class _AcceptancePublicCandleSource:
     "case",
     [
         pytest.param(
-            _SessionCase("spot", "5m", 10, None, CooldownPolicy.until_cancelled()),
+            _SessionCase("spot", "5m", 10, None, CooldownPolicy.default()),
             id="spot",
         ),
     ],
@@ -338,7 +338,7 @@ def test_desktop_restart_blocked_runtime_reopens_setup_form(
         CreatePaperSession(create_active=active_sessions.create)
         .execute(
             _setup_values(
-                _SessionCase("spot", "5m", 10, None, CooldownPolicy.until_cancelled())
+                _SessionCase("spot", "5m", 10, None, CooldownPolicy.default())
             )
         )
         .session
@@ -401,11 +401,11 @@ def test_desktop_restart_blocked_runtime_reopens_setup_form(
     "case",
     [
         pytest.param(
-            _SessionCase("spot", "15m", 12, None, CooldownPolicy.until_cancelled()),
+            _SessionCase("spot", "15m", 12, None, CooldownPolicy.default()),
             id="spot",
         ),
         pytest.param(
-            _SessionCase("futures", "1h", 14, 4, CooldownPolicy.until_cancelled()),
+            _SessionCase("futures", "1h", 14, 4, CooldownPolicy.default()),
             id="futures",
         ),
     ],
@@ -481,7 +481,7 @@ def test_spot_partial_fills_keep_one_order_and_basket_entry_across_tabs(
         CreatePaperSession(create_active=active_sessions.create)
         .execute(
             _setup_values(
-                _SessionCase("spot", "5m", 10, None, CooldownPolicy.until_cancelled())
+                _SessionCase("spot", "5m", 10, None, CooldownPolicy.default())
             )
         )
         .session
@@ -726,14 +726,9 @@ def test_desktop_paper_session_create_overview_and_restart_restore(
     assert restarted_window.setup.timeframe.currentData() == case.timeframe
     # The Cooldown is pinned for the Session, so the restarted form has to
     # show the one it is running rather than the one it opens on.
-    assert (
-        restarted_window.setup.cooldown_mode.currentData() == case.cooldown.mode.value
+    assert restarted_window.setup.cooldown.currentData() == (
+        "off" if case.cooldown.days is None else str(case.cooldown.days)
     )
-    assert restarted_window.setup.cooldown_days_row.isHidden() is (
-        case.cooldown.days is None
-    )
-    if case.cooldown.days is not None:
-        assert restarted_window.setup.cooldown_days.value() == case.cooldown.days
     assert _active_session_count(database) == 1
     assert _trade_side_effect_counts(database) == initial_side_effect_counts
 
@@ -751,11 +746,11 @@ def test_desktop_paper_session_create_overview_and_restart_restore(
     "case",
     [
         pytest.param(
-            _SessionCase("spot", "15m", 12, None, CooldownPolicy.until_cancelled()),
+            _SessionCase("spot", "15m", 12, None, CooldownPolicy.default()),
             id="spot",
         ),
         pytest.param(
-            _SessionCase("futures", "1h", 14, 4, CooldownPolicy.until_cancelled()),
+            _SessionCase("futures", "1h", 14, 4, CooldownPolicy.default()),
             id="futures",
         ),
     ],
@@ -911,7 +906,7 @@ def test_desktop_session_sqlite_write_failure_after_setup_fails_closed(
             timeframe="15m",
             max_entries=12,
             futures_leverage=None,
-            cooldown=CooldownPolicy.until_cancelled(),
+            cooldown=CooldownPolicy.default(),
         ),
     )
     click(window.setup.create_button)
@@ -952,7 +947,7 @@ def test_desktop_session_validation_failure_after_setup_preserves_input(
             timeframe="15m",
             max_entries=12,
             futures_leverage=None,
-            cooldown=CooldownPolicy.until_cancelled(),
+            cooldown=CooldownPolicy.default(),
         ),
     )
     window.setup.capital_per_entry.setText("0")
@@ -1150,11 +1145,11 @@ def _enter_form_values(window: MainWindow, case: _SessionCase) -> None:
     setup.timeframe.setCurrentIndex(setup.timeframe.findData(case.timeframe))
     setup.capital_per_entry.setText("200000")
     setup.max_entries.setValue(case.max_entries)
-    setup.cooldown_mode.setCurrentIndex(
-        setup.cooldown_mode.findData(case.cooldown.mode.value)
+    setup.cooldown.setCurrentIndex(
+        setup.cooldown.findData(
+            "off" if case.cooldown.days is None else str(case.cooldown.days)
+        )
     )
-    if case.cooldown.days is not None:
-        setup.cooldown_days.setValue(case.cooldown.days)
     if case.market_type == "spot":
         return
     assert case.futures_leverage is not None

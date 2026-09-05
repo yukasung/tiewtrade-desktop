@@ -4,6 +4,7 @@ from pathlib import Path
 import pytest
 
 from tiewtrade.integrations.sqlite.database import (
+    _V17_BOT_SESSIONS_TABLE_SQL,
     SQLiteDatabase,
     UnsupportedDatabaseSchemaError,
 )
@@ -49,13 +50,13 @@ def test_reader_can_read_committed_snapshot_while_writer_is_active(
 def test_migrate_reports_newer_schema_with_version_facts(tmp_path: Path) -> None:
     database = SQLiteDatabase(tmp_path / "tiewtrade.sqlite3")
     with database.connect() as connection:
-        connection.execute("PRAGMA user_version = 18")
+        connection.execute("PRAGMA user_version = 19")
 
     with pytest.raises(UnsupportedDatabaseSchemaError) as caught:
         database.migrate()
 
-    assert caught.value.database_version == 18
-    assert caught.value.supported_version == 17
+    assert caught.value.database_version == 19
+    assert caught.value.supported_version == 18
 
 
 def test_migrate_creates_cooldown_waivers_table_on_a_fresh_database(
@@ -285,7 +286,7 @@ def _v16_bot_session(connection: sqlite3.Connection) -> None:
     )
 
 
-def test_migrate_gives_an_older_session_the_cooldown_it_was_already_running(
+def test_migrate_gives_an_older_session_the_longest_cooldown(
     tmp_path: Path,
 ) -> None:
     """Every Session written before the choice existed waits to be cancelled."""
@@ -300,27 +301,16 @@ def test_migrate_gives_an_older_session_the_cooldown_it_was_already_running(
     database.migrate()
 
     with database.connect() as connection:
-        row = connection.execute(
-            "SELECT cooldown_mode, cooldown_days FROM bot_sessions"
-        ).fetchone()
+        row = connection.execute("SELECT cooldown_days FROM bot_sessions").fetchone()
 
-    assert row["cooldown_mode"] == "until_cancelled"
-    assert row["cooldown_days"] is None
+    # v17 called this "until cancelled"; v18 says the same thing as the
+    # longest wait there is, which is the closest choice that remains.
+    assert row["cooldown_days"] == 30
 
 
-@pytest.mark.parametrize(
-    ("mode", "days"),
-    [
-        ("off", 7),
-        ("until_cancelled", 7),
-        ("duration", None),
-        ("duration", 0),
-        ("duration", 31),
-        ("sometimes", None),
-    ],
-)
-def test_a_session_row_cannot_state_a_cooldown_the_policy_would_reject(
-    tmp_path: Path, mode: str, days: int | None
+@pytest.mark.parametrize("days", [0, 31, -1])
+def test_a_session_row_cannot_state_days_the_policy_would_reject(
+    tmp_path: Path, days: int
 ) -> None:
     database = SQLiteDatabase(tmp_path / "tiewtrade.sqlite3")
     database.migrate()
@@ -332,12 +322,86 @@ def test_a_session_row_cannot_state_a_cooldown_the_policy_would_reject(
                 INSERT INTO bot_sessions (
                     session_id, trade_mode, market_type, symbol, timeframe,
                     preset_version, capital_per_entry, max_entries,
-                    cooldown_mode, cooldown_days, created_at_utc
+                    cooldown_days, created_at_utc
                 ) VALUES (
                     'session', 'paper', 'spot', 'BTCUSDT', '5m',
-                    'rsi-step-grid-v1', '250', 4, ?, ?,
+                    'rsi-step-grid-v1', '250', 4, ?,
                     '2026-01-01T00:00:00+00:00'
                 )
                 """,
-                (mode, days),
+                (days,),
             )
+
+
+@pytest.mark.parametrize(
+    ("mode", "days", "expected"),
+    [
+        ("until_cancelled", None, 30),
+        ("off", None, None),
+        ("duration", 3, 3),
+    ],
+)
+def test_migrate_says_a_v17_cooldown_as_the_days_it_waits(
+    tmp_path: Path, mode: str, days: int | None, expected: int | None
+) -> None:
+    """A Cooldown is days or nothing now, so the three older names collapse."""
+    database = SQLiteDatabase(tmp_path / "tiewtrade.sqlite3")
+    database.migrate()
+    with database.connect() as connection:
+        connection.execute("DROP TABLE bot_sessions")
+        connection.execute(_V17_BOT_SESSIONS_TABLE_SQL.format(table="bot_sessions"))
+        connection.execute(
+            """
+            INSERT INTO bot_sessions (
+                session_id, trade_mode, market_type, symbol, timeframe,
+                preset_version, capital_per_entry, max_entries,
+                cooldown_mode, cooldown_days, created_at_utc
+            ) VALUES (
+                'session', 'paper', 'spot', 'BTCUSDT', '5m',
+                'rsi-step-grid-v1', '250', 4, ?, ?,
+                '2026-01-01T00:00:00+00:00'
+            )
+            """,
+            (mode, days),
+        )
+        connection.execute("PRAGMA user_version = 17")
+
+    database.migrate()
+
+    with database.connect() as connection:
+        row = connection.execute("SELECT * FROM bot_sessions").fetchone()
+
+    assert row["cooldown_days"] == expected
+    assert "cooldown_mode" not in row.keys()
+
+
+def test_a_rebuild_that_names_no_cooldown_leaves_the_longest_one(
+    tmp_path: Path,
+) -> None:
+    """An older Session must never come back with its Cooldown switched off.
+
+    Migrations before v17 rebuild this table without naming a Cooldown at all,
+    because none existed when they were written. The column's default is what
+    answers for them, and it has to answer with the most cautious Cooldown
+    there is rather than with none.
+    """
+    database = SQLiteDatabase(tmp_path / "tiewtrade.sqlite3")
+    database.migrate()
+
+    with database.connect() as connection:
+        connection.execute(
+            """
+            INSERT INTO bot_sessions (
+                session_id, trade_mode, market_type, symbol, timeframe,
+                preset_version, capital_per_entry, max_entries, created_at_utc
+            ) VALUES (
+                'session', 'paper', 'spot', 'BTCUSDT', '5m',
+                'rsi-step-grid-v1', '250', 4, '2026-01-01T00:00:00+00:00'
+            )
+            """
+        )
+        days = connection.execute("SELECT cooldown_days FROM bot_sessions").fetchone()[
+            "cooldown_days"
+        ]
+
+    assert days == 30

@@ -450,8 +450,8 @@ def test_a_waiting_cooldown_is_measured_from_the_fill_that_completed_the_pair() 
     assert lifecycle.cooldown_ends_at() == PAIR_COMPLETED_AT + timedelta(days=3)
 
 
-def test_a_cooldown_that_never_lapses_names_no_end() -> None:
-    assert completed_pair_under(policy()).cooldown_ends_at() is None
+def test_a_cooldown_that_is_off_names_no_end_because_none_started() -> None:
+    assert completed_pair_under(off_policy()).cooldown_ends_at() is None
 
 
 def test_a_trader_need_not_wait_out_a_cooldown_that_would_lapse() -> None:

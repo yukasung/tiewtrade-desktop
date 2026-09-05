@@ -18,6 +18,7 @@ from tiewtrade.trading.basket import BasketCloseReason
 
 MARKET = SessionMarket(session_id=uuid4(), symbol="BTCUSDT", timeframe="5m")
 MOMENT = datetime(2026, 8, 26, 10, 5, tzinfo=UTC)
+LIFTS_AT = datetime(2026, 8, 29, 10, 5, tzinfo=UTC)
 
 
 def _entry(
@@ -128,7 +129,7 @@ def test_a_position_the_trader_closed_says_who_closed_it() -> None:
     assert "Closed by you · Profit 23.68 USDT" in message
 
 
-def test_a_cooldown_says_that_nothing_but_the_trader_will_end_it() -> None:
+def test_a_cooldown_says_the_day_it_lifts_on_and_the_way_out_of_it() -> None:
     message = notice_message(
         CooldownStartedNotice(
             market=MARKET,
@@ -136,6 +137,7 @@ def test_a_cooldown_says_that_nothing_but_the_trader_will_end_it() -> None:
             completed_pairs=2,
             open_entry_count=4,
             started_at=MOMENT,
+            ends_at=LIFTS_AT,
         )
     )
 
@@ -144,7 +146,8 @@ def test_a_cooldown_says_that_nothing_but_the_trader_will_end_it() -> None:
         "BTCUSDT 5m",
         "",
         "2 Entry Pairs completed · 4 Entries open",
-        "The Bot will not open a new Entry until you cancel the Cooldown.",
+        "The Bot will not open a new Entry until 2026-08-29 10:05:00 UTC,"
+        " or until you cancel the Cooldown.",
         "",
         "Started 2026-08-26 10:05:00 UTC",
     ]
@@ -228,6 +231,7 @@ def test_a_cooldown_of_one_pair_and_one_entry_reads_in_the_singular() -> None:
             completed_pairs=1,
             open_entry_count=1,
             started_at=MOMENT,
+            ends_at=LIFTS_AT,
         )
     )
 
@@ -260,30 +264,6 @@ def test_every_message_reads_as_three_blocks_split_by_a_blank_line() -> None:
         assert headline.splitlines()[1] == "BTCUSDT 5m"
         assert "" not in body.splitlines()
         assert when.endswith(" UTC")
-
-
-def test_a_cooldown_that_waits_says_the_day_it_lifts_on_by_itself() -> None:
-    message = notice_message(
-        CooldownStartedNotice(
-            market=MARKET,
-            basket_id=uuid4(),
-            completed_pairs=2,
-            open_entry_count=4,
-            started_at=MOMENT,
-            ends_at=datetime(2026, 8, 29, 10, 5, tzinfo=UTC),
-        )
-    )
-
-    assert message.splitlines() == [
-        "Cooldown started",
-        "BTCUSDT 5m",
-        "",
-        "2 Entry Pairs completed · 4 Entries open",
-        "The Bot will not open a new Entry until 2026-08-29 10:05:00 UTC,"
-        " or until you cancel the Cooldown.",
-        "",
-        "Started 2026-08-26 10:05:00 UTC",
-    ]
 
 
 def test_a_cooldown_that_ran_out_says_the_bot_may_buy_again() -> None:

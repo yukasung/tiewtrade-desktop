@@ -380,7 +380,7 @@ def test_a_gate_that_just_closed_says_a_cooldown_started() -> None:
         opened_entry(
             entry_gate=EntryGate(EntryGateState.COOLDOWN),
             entry_completed_pairs=1,
-            cooldown_ends_at=None,
+            cooldown_ends_at=LIFTS_AT,
             basket_entry_count=2,
         ),
         notify=notices.append,
@@ -400,7 +400,7 @@ def test_a_gate_that_just_closed_says_a_cooldown_started() -> None:
 
 
 def test_a_cooldown_that_goes_on_standing_is_only_said_once() -> None:
-    """A Cooldown does not lapse, so every candle after it reads the same gate.
+    """Every candle a Cooldown stands through reads the same gate.
 
     Saying it again each candle would be saying nothing new to a trader whose
     phone is already holding the message.
@@ -411,6 +411,7 @@ def test_a_cooldown_that_goes_on_standing_is_only_said_once() -> None:
             FakeSnapshot(),
             basket_id=BASKET_ID,
             entry_gate=EntryGate(EntryGateState.COOLDOWN),
+            cooldown_ends_at=LIFTS_AT,
         ),
         notify=notices.append,
     )

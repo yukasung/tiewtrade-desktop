@@ -165,8 +165,11 @@ def cooldown_started_notice(
 
     Whether it *just* closed is the sink's reading, not this one's: a snapshot
     says what the gate is and never that it changed.
+
+    A Cooldown that has closed the gate always names the day it lifts on, so
+    a snapshot carrying no day is not one a Cooldown just started on.
     """
-    if snapshot.basket_id is None:
+    if snapshot.basket_id is None or snapshot.cooldown_ends_at is None:
         return None
     return CooldownStartedNotice(
         market=session_market(session),

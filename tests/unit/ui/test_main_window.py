@@ -4909,7 +4909,7 @@ def test_presenting_a_closing_window_does_not_bring_it_back(qtbot: QtBot) -> Non
 @pytest.mark.parametrize(
     ("cooldown", "text"),
     [
-        (CooldownPolicy.until_cancelled(), "Until cancelled"),
+        (CooldownPolicy.default(), "30 days"),
         (CooldownPolicy.off(), "Off"),
         (CooldownPolicy.for_days(1), "1 day"),
         (CooldownPolicy.for_days(3), "3 days"),

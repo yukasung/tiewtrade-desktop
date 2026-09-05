@@ -24,7 +24,7 @@ class UnsupportedDatabaseSchemaError(ValueError):
 
 
 class SQLiteDatabase:
-    _SCHEMA_VERSION = 17
+    _SCHEMA_VERSION = 18
     _BUSY_TIMEOUT_MS = 5_000
 
     def __init__(self, path: Path) -> None:
@@ -138,6 +138,8 @@ class SQLiteDatabase:
                     )
                 if 1 <= version <= 16:
                     _migrate_session_cooldown_policy_v17(connection)
+                if 1 <= version <= 17:
+                    _migrate_cooldown_days_only_v18(connection)
                 connection.execute(f"PRAGMA user_version = {self._SCHEMA_VERSION}")
         finally:
             connection.close()
@@ -412,15 +414,60 @@ def _migrate_session_cooldown_policy_v17(connection: sqlite3.Connection) -> None
     # table without today's shape has no Session in it to carry over.
     if not _has_column(connection, "bot_sessions", "capital_per_entry"):
         return
-    if not _column_is_missing(connection, "bot_sessions", "cooldown_mode"):
+    # Asked of the days rather than of the mode, because a table created in
+    # today's shape has the days already and never had a mode to be missing —
+    # this has something to do only where neither has been written yet.
+    if not _column_is_missing(connection, "bot_sessions", "cooldown_days"):
         return
     rows = connection.execute("SELECT * FROM bot_sessions").fetchall()
     kept = [
         (
-            *tuple(row[name] for name in _BOT_SESSIONS_COLUMN_NAMES[:8]),
+            *tuple(row[name] for name in _V12_BOT_SESSIONS_COLUMN_NAMES[:8]),
             "until_cancelled",
             None,
-            *tuple(row[name] for name in _BOT_SESSIONS_COLUMN_NAMES[10:]),
+            *tuple(row[name] for name in _V12_BOT_SESSIONS_COLUMN_NAMES[8:]),
+        )
+        for row in rows
+    ]
+    _raise_scratch_bot_sessions(connection, _V17_BOT_SESSIONS_TABLE_SQL)
+    placeholders = ", ".join("?" for _ in _V17_BOT_SESSIONS_COLUMN_NAMES)
+    connection.executemany(
+        f"""
+        INSERT INTO new_bot_sessions
+        ({", ".join(_V17_BOT_SESSIONS_COLUMN_NAMES)})
+        VALUES ({placeholders})
+        """,
+        kept,
+    )
+    connection.execute("DROP TABLE bot_sessions")
+    connection.execute("ALTER TABLE new_bot_sessions RENAME TO bot_sessions")
+    _create_bot_sessions_indexes(connection)
+
+
+def _migrate_cooldown_days_only_v18(connection: sqlite3.Connection) -> None:
+    """Say a Cooldown as the days it waits, and nothing where it waits none.
+
+    v17 let a Session choose between three Cooldowns, one of which never
+    lapsed at all. A Cooldown is now a number of days or nothing, so the mode
+    column has one bit left to carry and the days column already carries it:
+    no days is a Cooldown switched off.
+
+    A Session that was waiting to be cancelled becomes the longest wait there
+    is. That is the closest of the remaining choices to the rule it was
+    running, and the only one that cannot loosen a risk policy behind the
+    trader's back — it holds the Basket back longer than any other, and the
+    Cancel Cooldown button still lets them out of it.
+    """
+    # Asked of the column this reads rather than of the one it drops: a
+    # database with no such table has no Session in it to say anything about.
+    if not _has_column(connection, "bot_sessions", "cooldown_mode"):
+        return
+    rows = connection.execute("SELECT * FROM bot_sessions").fetchall()
+    converted = [
+        (
+            *tuple(row[name] for name in _V12_BOT_SESSIONS_COLUMN_NAMES[:8]),
+            _cooldown_days_of(row),
+            *tuple(row[name] for name in _V12_BOT_SESSIONS_COLUMN_NAMES[8:]),
         )
         for row in rows
     ]
@@ -431,11 +478,20 @@ def _migrate_session_cooldown_policy_v17(connection: sqlite3.Connection) -> None
         INSERT INTO new_bot_sessions ({_BOT_SESSIONS_COLUMNS})
         VALUES ({placeholders})
         """,
-        kept,
+        converted,
     )
     connection.execute("DROP TABLE bot_sessions")
     connection.execute("ALTER TABLE new_bot_sessions RENAME TO bot_sessions")
     _create_bot_sessions_indexes(connection)
+
+
+def _cooldown_days_of(row: sqlite3.Row) -> int | None:
+    """The days this Session's Cooldown waits, under the three older names."""
+    if row["cooldown_mode"] == "off":
+        return None
+    if row["cooldown_mode"] == "until_cancelled":
+        return _MAXIMUM_COOLDOWN_DAYS
+    return int(row["cooldown_days"])
 
 
 def _capital_per_entry_of(row: sqlite3.Row) -> Decimal:
@@ -537,6 +593,54 @@ _BOT_SESSIONS_TABLE_SQL = """
             max_entries INTEGER NOT NULL CHECK (
                 max_entries BETWEEN 2 AND 20 AND max_entries % 2 = 0
             ),
+            -- No days at all is a Cooldown switched off. There is nothing
+            -- else for a Session to say about one, so nothing else is stored.
+            -- The default is the longest wait rather than none, so a migration
+            -- that rebuilds this table without naming the column can only ever
+            -- leave a Session more cautious, never less.
+            cooldown_days INTEGER DEFAULT 30 CHECK (
+                cooldown_days IS NULL OR cooldown_days BETWEEN 1 AND 30
+            ),
+            futures_policy_version TEXT,
+            futures_leverage INTEGER,
+            futures_trading_capital_ratio TEXT,
+            futures_collateral_buffer_ratio TEXT,
+            futures_margin_mode TEXT,
+            futures_position_mode TEXT,
+            created_at_utc TEXT NOT NULL,
+            ended_at_utc TEXT,
+            CHECK (
+                (market_type = 'spot' AND futures_policy_version IS NULL)
+                OR
+                (market_type = 'futures' AND futures_policy_version IS NOT NULL)
+            )
+        )
+"""
+
+_MAXIMUM_COOLDOWN_DAYS = 30
+"""The longest Cooldown a Session can wait, as the schema allows one.
+
+Stated here rather than read off `CooldownPolicy` because a migration answers
+for the shape a database had at its own moment, and must go on saying the same
+thing after the domain moves on.
+"""
+
+# The shape bot_sessions had at v17, frozen: a Session named a Cooldown mode
+# beside the days, before no-days-at-all became the way to say one was off.
+_V17_BOT_SESSIONS_TABLE_SQL = """
+        CREATE TABLE IF NOT EXISTS {table} (
+            session_id TEXT PRIMARY KEY,
+            trade_mode TEXT NOT NULL CHECK (trade_mode = 'paper'),
+            market_type TEXT NOT NULL CHECK (
+                market_type IN ('spot', 'futures')
+            ),
+            symbol TEXT NOT NULL,
+            timeframe TEXT NOT NULL,
+            preset_version TEXT NOT NULL,
+            capital_per_entry TEXT NOT NULL,
+            max_entries INTEGER NOT NULL CHECK (
+                max_entries BETWEEN 2 AND 20 AND max_entries % 2 = 0
+            ),
             cooldown_mode TEXT NOT NULL DEFAULT 'until_cancelled' CHECK (
                 cooldown_mode IN ('off', 'duration', 'until_cancelled')
             ),
@@ -556,13 +660,32 @@ _BOT_SESSIONS_TABLE_SQL = """
                 OR
                 (market_type = 'futures' AND futures_policy_version IS NOT NULL)
             ),
-            -- Days belong to a Cooldown that waits, and to no other, which is
-            -- the same rule CooldownPolicy states of itself.
             CHECK (
                 (cooldown_mode = 'duration') = (cooldown_days IS NOT NULL)
             )
         )
 """
+
+_V17_BOT_SESSIONS_COLUMN_NAMES = (
+    "session_id",
+    "trade_mode",
+    "market_type",
+    "symbol",
+    "timeframe",
+    "preset_version",
+    "capital_per_entry",
+    "max_entries",
+    "cooldown_mode",
+    "cooldown_days",
+    "futures_policy_version",
+    "futures_leverage",
+    "futures_trading_capital_ratio",
+    "futures_collateral_buffer_ratio",
+    "futures_margin_mode",
+    "futures_position_mode",
+    "created_at_utc",
+    "ended_at_utc",
+)
 
 # What a Session stated at v12, in order. A migration writes the columns of
 # its own moment and leaves later ones to the defaults the table gives them,
@@ -597,7 +720,6 @@ _BOT_SESSIONS_COLUMN_NAMES = (
     "preset_version",
     "capital_per_entry",
     "max_entries",
-    "cooldown_mode",
     "cooldown_days",
     "futures_policy_version",
     "futures_leverage",
@@ -611,8 +733,7 @@ _BOT_SESSIONS_COLUMN_NAMES = (
 
 _BOT_SESSIONS_COLUMNS = """
             session_id, trade_mode, market_type, symbol, timeframe,
-            preset_version, capital_per_entry, max_entries,
-            cooldown_mode, cooldown_days,
+            preset_version, capital_per_entry, max_entries, cooldown_days,
             futures_policy_version, futures_leverage,
             futures_trading_capital_ratio, futures_collateral_buffer_ratio,
             futures_margin_mode, futures_position_mode,

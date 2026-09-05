@@ -6,10 +6,10 @@ from tiewtrade.application.paper_session_setup import (
     ConfiguredPaperSession,
     preset_display_name,
 )
-from tiewtrade.trading.cooldown_policy import CooldownMode, CooldownPolicy
 from tiewtrade.trading.futures_policy import FuturesTradingPolicy
 from tiewtrade.trading.session_config import MarketType
 from tiewtrade.ui.blank_text import BLANK
+from tiewtrade.ui.cooldown_text import cooldown_text
 from tiewtrade.ui.display_time import display_timestamp
 from tiewtrade.ui.money_text import QUOTE_ASSET
 from tiewtrade.ui.pair_text import pair_text
@@ -93,7 +93,7 @@ class SessionOverviewWidget(QWidget):
             f"{_amount_text(config.capital_per_entry)} {QUOTE_ASSET}"
         )
         self.max_entries_value.setText(str(config.entry_policy.max_entries))
-        self.cooldown_value.setText(_cooldown_text(config.entry_policy.cooldown))
+        self.cooldown_value.setText(cooldown_text(config.entry_policy.cooldown))
         self._show_market_policy(session)
         self.created_at_value.setText(display_timestamp(session.created_at_utc))
 
@@ -209,10 +209,3 @@ def _amount_text(value: Decimal) -> str:
     trailing zero there is precision the record was given.
     """
     return format(value.normalize(), "f")
-
-
-def _cooldown_text(policy: CooldownPolicy) -> str:
-    """How this Session's Cooldown ends, in the words the form offered it in."""
-    if policy.days is None:
-        return "Off" if policy.mode is CooldownMode.OFF else "Until cancelled"
-    return f"{policy.days} day" if policy.days == 1 else f"{policy.days} days"

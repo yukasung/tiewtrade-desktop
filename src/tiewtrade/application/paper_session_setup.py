@@ -12,7 +12,7 @@ from tiewtrade.strategies.registry import (
     strategy_definition_for,
     strategy_definitions_for,
 )
-from tiewtrade.trading.cooldown_policy import CooldownMode, CooldownPolicy
+from tiewtrade.trading.cooldown_policy import CooldownPolicy
 from tiewtrade.trading.entry_policy import EntryPolicy
 from tiewtrade.trading.futures_policy import FuturesTradingPolicy
 from tiewtrade.trading.session_config import MarketType, SessionConfig, TradeMode
@@ -47,10 +47,10 @@ class PaperSessionSetupValues:
     max_entries: str
     futures_leverage: str | None
     preset_version: str = "rsi-step-grid-v1"
-    # A form that names no Cooldown asks for the one this product had before
-    # a Session could choose, which is what every Session already running is.
-    cooldown_mode: str = CooldownMode.UNTIL_CANCELLED.value
-    cooldown_days: str | None = None
+    # None is a Cooldown switched off. A form that names nothing at all asks
+    # for the longest wait rather than no wait, so a Session assembled without
+    # a choice is never quietly the least cautious one.
+    cooldown_days: str | None = str(CooldownPolicy.DEFAULT_DAYS)
 
 
 @dataclass(frozen=True, slots=True)
@@ -87,7 +87,6 @@ def setup_values_of(session: ConfiguredPaperSession) -> PaperSessionSetupValues:
         timeframe=session.market_data.timeframe,
         capital_per_entry=format(config.capital_per_entry, "f"),
         max_entries=str(config.entry_policy.max_entries),
-        cooldown_mode=cooldown.mode.value,
         cooldown_days=None if cooldown.days is None else str(cooldown.days),
         futures_leverage=(
             None if futures_policy is None else str(futures_policy.leverage)
@@ -235,24 +234,13 @@ def _parse(values: PaperSessionSetupValues) -> _ParsedSetup:
 def _cooldown_policy(values: PaperSessionSetupValues) -> CooldownPolicy:
     """The Cooldown this form asks for, pinned for the Session's whole life.
 
-    Days are read only where they mean something. A form showing a Cooldown
-    that never waits may still be carrying the number in a hidden field, and
-    reading it there would turn a stale widget into a rejected Session.
+    No days at all is a Cooldown switched off, which is the one other thing
+    the form can ask for — so there is nothing else to read here.
     """
-    mode = _cooldown_mode(values.cooldown_mode)
-    if mode is not CooldownMode.DURATION:
-        return CooldownPolicy(mode=mode)
-    days = _integer(_required(values.cooldown_days, "cooldown_days"), "cooldown_days")
+    if values.cooldown_days is None:
+        return CooldownPolicy.off()
+    days = _integer(values.cooldown_days, "cooldown_days")
     return _validate_field("cooldown_days", lambda: CooldownPolicy.for_days(days))
-
-
-def _cooldown_mode(value: str) -> CooldownMode:
-    try:
-        return CooldownMode(value)
-    except ValueError as error:
-        raise PaperSessionValidationError(
-            "cooldown_mode", "Select how a Cooldown ends"
-        ) from error
 
 
 def _strategy_definition_for_market_type(

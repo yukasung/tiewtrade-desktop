@@ -18,7 +18,7 @@ from tiewtrade.integrations.sqlite.connection_cleanup import (
 from tiewtrade.integrations.sqlite.database import SQLiteDatabase
 from tiewtrade.market_data.config import MarketDataConfig
 from tiewtrade.strategies.registry import strategy_definition_for
-from tiewtrade.trading.cooldown_policy import CooldownMode, CooldownPolicy
+from tiewtrade.trading.cooldown_policy import CooldownPolicy
 from tiewtrade.trading.entry_policy import EntryPolicy
 from tiewtrade.trading.futures_policy import (
     FuturesTradingPolicy,
@@ -30,12 +30,12 @@ from tiewtrade.trading.session_config import MarketType, SessionConfig, TradeMod
 _INSERT_SQL = """
 INSERT INTO bot_sessions (
     session_id, trade_mode, market_type, symbol, timeframe, preset_version,
-    capital_per_entry, max_entries, cooldown_mode, cooldown_days,
+    capital_per_entry, max_entries, cooldown_days,
     futures_policy_version, futures_leverage,
     futures_trading_capital_ratio, futures_collateral_buffer_ratio,
     futures_margin_mode,
     futures_position_mode, created_at_utc, ended_at_utc
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 """
 
 
@@ -163,10 +163,7 @@ def _session_from_row(row: sqlite3.Row) -> ConfiguredPaperSession:
         capital_per_entry=Decimal(row["capital_per_entry"]),
         entry_policy=EntryPolicy(
             row["max_entries"],
-            cooldown=CooldownPolicy(
-                mode=CooldownMode(row["cooldown_mode"]),
-                days=row["cooldown_days"],
-            ),
+            cooldown=CooldownPolicy(days=row["cooldown_days"]),
         ),
         futures_policy=futures_policy,
     )
@@ -199,7 +196,6 @@ def _session_values(session: ConfiguredPaperSession) -> tuple[object, ...]:
         config.preset_version,
         str(config.capital_per_entry),
         config.entry_policy.max_entries,
-        config.entry_policy.cooldown.mode.value,
         config.entry_policy.cooldown.days,
         None if futures is None else futures.version,
         None if futures is None else futures.leverage,

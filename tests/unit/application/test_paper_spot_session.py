@@ -687,7 +687,9 @@ def test_a_reopened_basket_counts_its_entries_against_the_pair_gate() -> None:
         )
     )
 
-    gate = resumed._lifecycle.entry_gate(GATE_AS_OF)
+    # Asked on a candle the Cooldown these Fills started is still standing on,
+    # which is where a Session that had just taken them back would ask it.
+    gate = resumed._lifecycle.entry_gate(filled_at + timedelta(minutes=10))
 
     assert resumed.snapshot.basket_entry_count == 2
     assert gate.state is EntryGateState.COOLDOWN

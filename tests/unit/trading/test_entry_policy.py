@@ -1,15 +1,15 @@
 import pytest
 
-from tiewtrade.trading.cooldown_policy import CooldownMode, CooldownPolicy
+from tiewtrade.trading.cooldown_policy import CooldownPolicy
 from tiewtrade.trading.entry_policy import EntryPolicy
 
 
-def test_a_policy_stated_by_entries_alone_still_waits_to_be_cancelled() -> None:
-    """The Cooldown a Session gets when nobody chose one is the one it had."""
+def test_a_policy_stated_by_entries_alone_waits_the_longest_cooldown() -> None:
+    """A Session assembled without a choice holds a Basket back the most."""
     policy = EntryPolicy(max_entries=4)
 
     assert policy.max_entries == 4
-    assert policy.cooldown.mode is CooldownMode.UNTIL_CANCELLED
+    assert policy.cooldown == CooldownPolicy.default()
 
 
 def test_a_chosen_cooldown_is_carried_alongside_the_entry_count() -> None:
