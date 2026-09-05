@@ -283,6 +283,40 @@ def _migrate_drop_slippage_v10(connection: sqlite3.Connection) -> None:
         connection.execute("ALTER TABLE bot_sessions DROP COLUMN slippage_bps")
 
 
+def _rebuild_bot_sessions(
+    connection: sqlite3.Connection,
+    *,
+    table_sql: str,
+    column_names: tuple[str, ...],
+    rows: list[tuple[object, ...]],
+) -> None:
+    """Put bot_sessions back in a new shape, carrying the rows given.
+
+    A migration that has to convert each row in Python does the same five
+    things every time, because SQLite cannot add a CHECK to rows already
+    written: raise a scratch table in the new shape, copy into it, drop the
+    old one, rename, and put back the single-active index that went with the
+    table it indexed. (The two that only drop a column copy inside SQL instead,
+    having no row to convert, and raise their own scratch table.)
+
+    `table_sql` and `column_names` are the shape of the migration's own moment,
+    not whatever shape the code has since moved on to — a migration that reads
+    today's shape writes a column its rows were never given.
+    """
+    _raise_scratch_bot_sessions(connection, table_sql)
+    placeholders = ", ".join("?" for _ in column_names)
+    connection.executemany(
+        f"""
+        INSERT INTO new_bot_sessions ({", ".join(column_names)})
+        VALUES ({placeholders})
+        """,
+        rows,
+    )
+    connection.execute("DROP TABLE bot_sessions")
+    connection.execute("ALTER TABLE new_bot_sessions RENAME TO bot_sessions")
+    _create_bot_sessions_indexes(connection)
+
+
 def _raise_scratch_bot_sessions(connection: sqlite3.Connection, table_sql: str) -> None:
     """Put up an empty table to rebuild bot_sessions into.
 
@@ -381,19 +415,12 @@ def _migrate_capital_per_entry_v12(connection: sqlite3.Connection) -> None:
         )
         for row in rows
     ]
-    _raise_scratch_bot_sessions(connection, _BOT_SESSIONS_TABLE_SQL)
-    placeholders = ", ".join("?" for _ in _V12_BOT_SESSIONS_COLUMN_NAMES)
-    connection.executemany(
-        f"""
-        INSERT INTO new_bot_sessions ({", ".join(_V12_BOT_SESSIONS_COLUMN_NAMES)})
-        VALUES ({placeholders})
-        """,
-        converted,
+    _rebuild_bot_sessions(
+        connection,
+        table_sql=_BOT_SESSIONS_TABLE_SQL,
+        column_names=_V12_BOT_SESSIONS_COLUMN_NAMES,
+        rows=converted,
     )
-    connection.execute("DROP TABLE bot_sessions")
-    connection.execute("ALTER TABLE new_bot_sessions RENAME TO bot_sessions")
-    # The single-active index went with the table it indexed.
-    _create_bot_sessions_indexes(connection)
 
 
 def _migrate_session_cooldown_policy_v17(connection: sqlite3.Connection) -> None:
@@ -430,19 +457,12 @@ def _migrate_session_cooldown_policy_v17(connection: sqlite3.Connection) -> None
         )
         for row in rows
     ]
-    _raise_scratch_bot_sessions(connection, _V17_BOT_SESSIONS_TABLE_SQL)
-    placeholders = ", ".join("?" for _ in _V17_BOT_SESSIONS_COLUMN_NAMES)
-    connection.executemany(
-        f"""
-        INSERT INTO new_bot_sessions
-        ({", ".join(_V17_BOT_SESSIONS_COLUMN_NAMES)})
-        VALUES ({placeholders})
-        """,
-        kept,
+    _rebuild_bot_sessions(
+        connection,
+        table_sql=_V17_BOT_SESSIONS_TABLE_SQL,
+        column_names=_V17_BOT_SESSIONS_COLUMN_NAMES,
+        rows=kept,
     )
-    connection.execute("DROP TABLE bot_sessions")
-    connection.execute("ALTER TABLE new_bot_sessions RENAME TO bot_sessions")
-    _create_bot_sessions_indexes(connection)
 
 
 def _migrate_cooldown_days_only_v18(connection: sqlite3.Connection) -> None:
@@ -472,18 +492,12 @@ def _migrate_cooldown_days_only_v18(connection: sqlite3.Connection) -> None:
         )
         for row in rows
     ]
-    _raise_scratch_bot_sessions(connection, _BOT_SESSIONS_TABLE_SQL)
-    placeholders = ", ".join("?" for _ in _BOT_SESSIONS_COLUMN_NAMES)
-    connection.executemany(
-        f"""
-        INSERT INTO new_bot_sessions ({_BOT_SESSIONS_COLUMNS})
-        VALUES ({placeholders})
-        """,
-        converted,
+    _rebuild_bot_sessions(
+        connection,
+        table_sql=_BOT_SESSIONS_TABLE_SQL,
+        column_names=_BOT_SESSIONS_COLUMN_NAMES,
+        rows=converted,
     )
-    connection.execute("DROP TABLE bot_sessions")
-    connection.execute("ALTER TABLE new_bot_sessions RENAME TO bot_sessions")
-    _create_bot_sessions_indexes(connection)
 
 
 def _cooldown_days_of(row: sqlite3.Row) -> int | None:
