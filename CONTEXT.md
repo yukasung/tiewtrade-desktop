@@ -50,21 +50,21 @@ Paper และ Live ใช้ business rules ชุดเดียวกัน�
 - `trade_mode` — `PAPER` หรือ `LIVE`
 - `available_capital` และ `preset_version`
 - `max_entries` — เลือกจาก form ก่อนเริ่ม Session
-- `cooldown_policy` — เลือกจาก form ก่อนเริ่ม Session ว่า Cooldown ของ Session นี้จบลงอย่างไร
+- `cooldown_policy` — เลือกจาก form ก่อนเริ่ม Session ว่า Cooldown ของ Session นี้ยืนอยู่กี่วัน หรือปิดไปเลย
 
 ระบบใช้ `UTC` เป็น timezone กลางเสมอ และไม่เปิดให้เปลี่ยน timezone ใน session configuration
 
-ค่าจาก form ต้องผ่าน validation แล้วสร้างเป็น immutable Session policy ห้ามเปลี่ยนระหว่าง Session โดย `max_entries` ต้องเป็นเลขคู่ตั้งแต่ 2–20 และ `cooldown_policy` ถูกตรึงตลอด Session เช่นเดียวกัน โดยโหมด `DURATION` ต้องระบุจำนวนวัน 1–30
+ค่าจาก form ต้องผ่าน validation แล้วสร้างเป็น immutable Session policy ห้ามเปลี่ยนระหว่าง Session โดย `max_entries` ต้องเป็นเลขคู่ตั้งแต่ 2–20 และ `cooldown_policy` ถูกตรึงตลอด Session เช่นเดียวกัน โดยจำนวนวันต้องอยู่ระหว่าง 1–30
 
-RSI parameters, take-profit rule และการจับคู่ Entry Pair ยังคงอยู่ใน Strategy Preset หรือ product policy และไม่ใช่ค่าที่ผู้ใช้เปลี่ยนระหว่าง Session โดยรูปของ take-profit rule เป็น product policy กลาง ส่วน ATR multiplier ที่ป้อนให้สูตรมาจาก Preset ส่วนที่ผู้ใช้เลือกได้คือ Cooldown Policy ซึ่งบอกว่า Cooldown ที่ Entry Pair สร้างขึ้นจบลงอย่างไร ไม่ใช่การเปลี่ยนกฎว่า Pair เกิดเมื่อไหร่
+RSI parameters, take-profit rule และการจับคู่ Entry Pair ยังคงอยู่ใน Strategy Preset หรือ product policy และไม่ใช่ค่าที่ผู้ใช้เปลี่ยนระหว่าง Session โดยรูปของ take-profit rule เป็น product policy กลาง ส่วน ATR multiplier ที่ป้อนให้สูตรมาจาก Preset ส่วนที่ผู้ใช้เลือกได้คือ Cooldown Policy ซึ่งบอกว่า Cooldown ที่ Entry Pair สร้างขึ้นยืนอยู่นานเท่าไหร่ ไม่ใช่การเปลี่ยนกฎว่า Pair เกิดเมื่อไหร่
 
-Cooldown Policy เลือกตอนสร้าง Session และตรึงตลอด Session มีสามแบบ: `OFF` — Entry Pair ที่ครบไม่ปิด gate เลย, `DURATION` — ปิด gate แล้วเปิดเองเมื่อผ่านไป N วัน (1–30) นับจากเวลาที่ Pair ครบ, และ `UNTIL_CANCELLED` — ค่าเริ่มต้น ยืนอยู่จนกว่าผู้ใช้จะกด "Cancel Cooldown" โหมด `DURATION` วัดด้วยเวลาของ candle ที่ Session รับล่าสุด ไม่ใช่นาฬิกาของเครื่อง เพื่อให้ replay ชุด candle เดิมให้คำตอบเดิมทุกครั้ง
+Cooldown Policy เลือกตอนสร้าง Session และตรึงตลอด Session เป็นจำนวนวันที่ Cooldown จะยืนอยู่ (1–30 วัน) หรือ `Off` คือ Entry Pair ที่ครบไม่ปิด gate เลย ค่าเริ่มต้นคือ 30 วัน ซึ่งเป็นตัวเลือกที่บล็อกนานที่สุดที่มี Session ที่ประกอบขึ้นโดยไม่ได้เลือกจึงระมัดระวังที่สุดเสมอ ไม่ใช่หลวมที่สุด จำนวนวันวัดด้วยเวลาของ candle ที่ Session รับล่าสุด ไม่ใช่นาฬิกาของเครื่อง เพื่อให้ replay ชุด candle เดิมให้คำตอบเดิมทุกครั้ง
 
 Cooldown เกิดขึ้นเมื่อ Basket ทำ Entry Pair ครบสอง Entries โดย Cooldown ระบุว่า Basket กำลังถือทั้งสอง Entries ของ Pair ล่าสุดพร้อมกัน จึงจบลงทันทีที่ Entry ใด Entry หนึ่งของ Pair นั้นถูกปิด ไม่ว่าจะด้วย Take Profit หรือการปิดเอง (การปิด Entry ของ Pair ก่อนหน้าที่จบไปแล้วไม่นับ เพราะ Pair ล่าสุดยังถือครบอยู่) ข้อเท็จจริงนี้ไม่ต้องเก็บลงฐานข้อมูล เพราะ replay อ่านกลับได้จากเลข Entry ที่ยังเปิดค้างอยู่ ด้วยเหตุผลเดียวกันนี้เวลาที่ Pair ครบก็ไม่ต้องเก็บเช่นกัน — Cooldown ยืนอยู่ได้ก็ต่อเมื่อทั้งสอง Entries ของ Pair นั้นยังเปิดอยู่ Fill ที่ทำให้ Pair ครบจึงอยู่ในกลุ่ม Entry ที่ replay อ่านกลับพร้อม `filled_at` ของมันเสมอ
 
-ถ้ายังถือครบทั้งคู่และ Cooldown ยังไม่หมดอายุ Basket จะถูกบล็อกจนกว่าผู้ใช้กดปุ่ม "Cancel Cooldown" พร้อม confirmation dialog ภายใต้ `UNTIL_CANCELLED` นี่คือการข้าม risk policy ที่ตั้งใจไว้ ส่วนภายใต้ `DURATION` คือการเลือกไม่รอให้ครบวัน dialog จึงบอกวันที่ Cooldown จะปลดเอง ภายใต้ `OFF` ไม่มี Cooldown ให้ยกเลิก ปุ่มจึงไม่ปรากฏเพราะ gate ไม่เคยเป็น Cooldown การกดหนึ่งครั้งยกเลิกได้เฉพาะ Cooldown รอบที่กำลังบล็อกอยู่ Pair ถัดไปที่ Basket เดียวกันทำครบยังเข้า Cooldown ตามปกติ waiver ผูกกับ Basket และ persist คู่กับ Fills ของมัน จึงอยู่รอดแม้ restart หรือ replay กลับ ปุ่มนี้ใช้ได้ทั้ง Paper Spot และ Paper Futures โดย Paper Spot เก็บ waiver ลงฐานข้อมูลจึงอยู่รอดข้าม restart ส่วน Paper Futures ไม่เก็บ เพราะไม่รับ Basket ที่เปิดค้างกลับมาอยู่แล้ว waiver จึงมีอายุเท่ากับ Runtime ที่ถืออยู่
+ถ้ายังถือครบทั้งคู่และ Cooldown ยังไม่ครบวัน Basket จะถูกบล็อกจนกว่าจะครบ หรือจนกว่าผู้ใช้กดปุ่ม "Cancel Cooldown" พร้อม confirmation dialog ซึ่งคือการเลือกไม่รอให้ครบวัน dialog จึงบอกวันที่ Cooldown จะปลดเอง ส่วน Session ที่ตั้ง Cooldown เป็น `Off` ไม่มี Cooldown ให้ยกเลิก ปุ่มจึงไม่ปรากฏเพราะ gate ไม่เคยเป็น Cooldown การกดหนึ่งครั้งยกเลิกได้เฉพาะ Cooldown รอบที่กำลังบล็อกอยู่ Pair ถัดไปที่ Basket เดียวกันทำครบยังเข้า Cooldown ตามปกติ waiver ผูกกับ Basket และ persist คู่กับ Fills ของมัน จึงอยู่รอดแม้ restart หรือ replay กลับ ปุ่มนี้ใช้ได้ทั้ง Paper Spot และ Paper Futures โดย Paper Spot เก็บ waiver ลงฐานข้อมูลจึงอยู่รอดข้าม restart ส่วน Paper Futures ไม่เก็บ เพราะไม่รับ Basket ที่เปิดค้างกลับมาอยู่แล้ว waiver จึงมีอายุเท่ากับ Runtime ที่ถืออยู่
 
-เมื่อ Cooldown แบบ `DURATION` หมดอายุเอง ระบบจะแจ้งผู้ใช้ (`CooldownEndedNotice`) เพราะไม่มีใครกดอะไรเลย จึงไม่มีอย่างอื่นบอกว่า Bot กลับมาเปิด Entry ได้แล้ว ส่วน Cooldown ที่จบเพราะมีการปิด Entry ของ Pair นั้น ไม่แจ้ง เพราะผู้ใช้เป็นคนทำเอง
+เมื่อ Cooldown หมดอายุเอง ระบบจะแจ้งผู้ใช้ (`CooldownEndedNotice`) เพราะไม่มีใครกดอะไรเลย จึงไม่มีอย่างอื่นบอกว่า Bot กลับมาเปิด Entry ได้แล้ว ส่วน Cooldown ที่จบเพราะมีการปิด Entry ของ Pair นั้น ไม่แจ้ง เพราะผู้ใช้เป็นคนทำเอง
 
 กฎเฉพาะตลาดต้องถูกตรวจสอบที่ boundary ก่อนเริ่ม session:
 

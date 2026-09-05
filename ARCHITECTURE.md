@@ -130,7 +130,7 @@ generic interface ล่วงหน้า เมื่อมี consumer ขอ
 | Entry เปิด | `PaperRuntimeSink` | snapshot มี Entry Fill |
 | Position ปิด | `PaperRuntimeSink` | snapshot มี `closed_basket` (candle ปิด, candle ระหว่างแท่ง, และการขาย Entry สุดท้ายตามคำสั่งเทรดเดอร์) |
 | Cooldown เริ่ม | `PaperRuntimeSink` | Entry gate เพิ่งเปลี่ยนเป็น `COOLDOWN` |
-| Cooldown หมดอายุเอง | `PaperRuntimeSink` | Entry gate เพิ่งเปลี่ยนออกจาก `COOLDOWN` และ snapshot ยังบอกวันที่ Cooldown จะปลด |
+| Cooldown หมดอายุเอง | `PaperRuntimeSink` | Entry gate เพิ่งเปลี่ยนออกจาก `COOLDOWN` และ snapshot ยังบอกวันที่ Cooldown จะปลด (Pair ที่ถูกขายไปหนึ่ง Entry ไม่มีวันให้บอก จึงไม่แจ้ง) |
 | Cooldown ถูกยกเลิก | `PaperRuntimeSink` | `waive_cooldown` สำเร็จ |
 | ข้อมูลตลาดขาด / กลับมา | `PaperRuntimeController` | runtime transition |
 | Bot หยุดเพราะ error | `PaperRuntimeController` | `_publish_blocked` |
@@ -175,7 +175,7 @@ Session ที่ได้รับ candle ย้อนหลังจะคื�
 ## Cooldown Waiver
 
 `trading` เป็นเจ้าของกลไก waive Cooldown แบบ pure ใน `EntryPairLifecycle`
-(`waive_cooldown`/`restore_waiver`) โดยไม่รู้จัก persistence ผู้ใช้ waive ได้ครั้งเดียวต่อ
+(`waive_cooldown`/`restore_waiver`) โดยไม่รู้จัก persistence waiver แปลว่า "ไม่รอให้ครบวัน" และผู้ใช้ waive ได้ครั้งเดียวต่อ
 Cooldown หนึ่งรอบ ผ่าน use case ที่ `application` เป็นเจ้าของ ซึ่งเดินตาม pattern
 เดียวกับ manual Close Entry คือถามที่ Runtime ก่อนถ้ากำลังถือ Session นั้นอยู่ ไม่งั้น fallback
 ไปที่ database ตรงๆ waiver ถูก persist คู่กับ Fills ของ Basket ใน `integrations/sqlite`
@@ -188,11 +188,13 @@ persist: `EntryPairLifecycle.release_fill` รับเลข Entry ที่ข
 migration เพิ่ม — waiver คือคำสั่งของผู้ใช้ที่ไม่มี Fill ใดบันทึกไว้ จึงต้องเก็บ ส่วนการที่ Pair
 ไม่ครบแล้วเป็นสิ่งที่ Entries ที่เหลือบอกได้เอง
 
-Cooldown แบบ `DURATION` ก็ไม่ต้องเก็บอะไรเพิ่มด้วยเหตุผลเดียวกัน: Cooldown ยืนอยู่ได้ก็ต่อเมื่อ
+การรอของ Cooldown ก็ไม่ต้องเก็บอะไรเพิ่มด้วยเหตุผลเดียวกัน: Cooldown ยืนอยู่ได้ก็ต่อเมื่อ
 Basket ยังถือทั้งสอง Entries ของ Pair อยู่ Fill ที่ทำให้ Pair ครบจึงเป็นหนึ่งใน Entry ที่ replay
 อ่านกลับพร้อม `filled_at` ของมันเสมอ — `replayed` อ่านเวลาที่ Pair ครบจากตรงนั้น สิ่งที่ต้องเก็บ
 คือ Cooldown Policy เอง เพราะเป็นค่าของ Session ไม่ใช่ของ Basket จึงเป็นคอลัมน์
-`cooldown_mode`/`cooldown_days` บน `bot_sessions` (schema v17)
+`cooldown_days` บน `bot_sessions` (schema v18) โดย `NULL` แปลว่า Cooldown ปิดอยู่ และ
+คอลัมน์นี้มี DEFAULT เป็น 30 เพื่อให้ migration ที่ rebuild ตารางโดยไม่ได้ระบุ Cooldown
+ทำให้ Session ระมัดระวังขึ้นเท่านั้น ไม่มีทางหลวมลง
 
 `EntryPairLifecycle.entry_gate` รับเวลาที่จะตอบ ณ ขณะนั้นเข้ามาเป็น argument ไม่เคยอ่านนาฬิกาเอง
 เพื่อให้ `trading` ไม่ถือ clock ผู้ที่ป้อนเวลาให้คือ Session ซึ่งใช้เวลาปิดของ candle ล่าสุดที่รับมา
