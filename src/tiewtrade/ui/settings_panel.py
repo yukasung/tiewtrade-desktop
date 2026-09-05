@@ -74,11 +74,11 @@ class SettingsPanel(QWidget):
         heading = QLabel("SETTINGS")
         heading.setObjectName("eyebrow")
 
-        bot_heading = QLabel("TITLE")
-        bot_heading.setObjectName("eyebrow")
         # A remark, not an identity: nothing is bound to it and nothing reads
         # it but the toolbar, so it may be changed or emptied at any time,
-        # while the Bot is running included.
+        # while the Bot is running included. It gets no heading of its own —
+        # a section called TITLE over a field called Title said it twice, and
+        # the eyebrow above already says what page this is.
         self.bot_title = QLineEdit()
         self.bot_title.setMaxLength(BOT_TITLE_MAX_LENGTH)
         self.bot_title.setPlaceholderText(BOT_TITLE_PLACEHOLDER)
@@ -143,7 +143,6 @@ class SettingsPanel(QWidget):
         layout.setContentsMargins(20, 20, 20, 20)
         layout.setSpacing(12)
         layout.addWidget(heading)
-        layout.addWidget(bot_heading)
         layout.addLayout(bot_form)
         layout.addWidget(line_heading)
         layout.addLayout(line_enabled_row)
