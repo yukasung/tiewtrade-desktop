@@ -11,6 +11,7 @@ from tiewtrade.application.session_notice import EntryOpenedNotice, SessionMarke
 from tiewtrade.integrations.notifications.notice_queue import (
     NoticeNotifier,
     PushOutcome,
+    PushResult,
 )
 
 NOTICE = EntryOpenedNotice(
@@ -27,16 +28,18 @@ NOTICE = EntryOpenedNotice(
 class FakePush:
     """A push that answers what the test says, and remembers the asking."""
 
-    def __init__(self, outcomes: list[PushOutcome | Exception]) -> None:
+    def __init__(self, outcomes: list[PushOutcome | PushResult | Exception]) -> None:
         self._outcomes = outcomes
         self.messages: list[str] = []
 
-    async def push(self, message: str) -> PushOutcome:
+    async def push(self, message: str) -> PushResult:
         self.messages.append(message)
         outcome = self._outcomes.pop(0) if self._outcomes else PushOutcome.DELIVERED
         if isinstance(outcome, Exception):
             raise outcome
-        return outcome
+        if isinstance(outcome, PushResult):
+            return outcome
+        return PushResult(outcome)
 
 
 def _notify_and_settle(push: FakePush, *, notices: int = 1) -> None:
@@ -103,10 +106,10 @@ def test_notifying_never_waits_on_a_full_queue(
         held = asyncio.Event()
 
         class HeldPush(FakePush):
-            async def push(self, message: str) -> PushOutcome:
+            async def push(self, message: str) -> PushResult:
                 self.messages.append(message)
                 await held.wait()
-                return PushOutcome.DELIVERED
+                return PushResult(PushOutcome.DELIVERED)
 
         push = HeldPush([])
         async with NoticeNotifier(
@@ -209,3 +212,33 @@ def test_the_log_says_which_chat_service_a_notice_was_going_to(
 
     assert "telegram.notification.dropped" in caplog.text
     assert "line.notification" not in caplog.text
+
+
+def test_a_refusal_says_in_the_log_what_the_service_answered_with(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A refusal is a setting to correct, and the status says which one.
+
+    400 is a chat id the service does not know, 401 a token that was never
+    right, 403 a chat the bot was removed from — three different things for
+    a trader to go and fix, and "rejected" on its own tells them none of it.
+    """
+    push = FakePush([PushResult(PushOutcome.REJECTED, 400)])
+
+    with caplog.at_level(logging.WARNING):
+        _notify_and_settle(push)
+
+    assert "drop_reason=rejected status=400" in caplog.text
+
+
+def test_a_service_that_never_answered_has_no_status_to_report(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A timeout is not a status, and an invented one would read as an answer."""
+    push = FakePush([RuntimeError("connection reset"), RuntimeError("again")])
+
+    with caplog.at_level(logging.WARNING):
+        _notify_and_settle(push)
+
+    assert "drop_reason=retryable" in caplog.text
+    assert "status=" not in caplog.text

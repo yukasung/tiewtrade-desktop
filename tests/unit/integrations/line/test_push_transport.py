@@ -7,7 +7,10 @@ import aiohttp
 import pytest
 
 from tiewtrade.integrations.line.push_transport import PUSH_URL, LineMessagingApiPush
-from tiewtrade.integrations.notifications.notice_queue import PushOutcome
+from tiewtrade.integrations.notifications.notice_queue import (
+    PushOutcome,
+    PushResult,
+)
 
 
 class FakeResponse:
@@ -37,7 +40,7 @@ class FakeSession:
         return None
 
 
-def _push(session: FakeSession) -> PushOutcome:
+def _push(session: FakeSession) -> PushResult:
     transport = LineMessagingApiPush(
         channel_access_token="token-value",
         target_id="U123",
@@ -49,7 +52,7 @@ def _push(session: FakeSession) -> PushOutcome:
 def test_a_push_carries_the_message_the_token_and_the_recipient() -> None:
     session = FakeSession()
 
-    assert _push(session) is PushOutcome.DELIVERED
+    assert _push(session).outcome is PushOutcome.DELIVERED
 
     call = session.calls[0]
     assert call["url"] == PUSH_URL
@@ -77,7 +80,10 @@ def test_what_line_answers_decides_whether_it_is_worth_asking_again(
     status: int,
     outcome: PushOutcome,
 ) -> None:
-    assert _push(FakeSession(status=status)) is outcome
+    result = _push(FakeSession(status=status))
+
+    assert result.outcome is outcome
+    assert result.status == status
 
 
 @pytest.mark.parametrize(
@@ -87,4 +93,9 @@ def test_what_line_answers_decides_whether_it_is_worth_asking_again(
 def test_a_transport_that_never_answered_is_worth_asking_again(
     error: Exception,
 ) -> None:
-    assert _push(FakeSession(error=error)) is PushOutcome.RETRYABLE
+    result = _push(FakeSession(error=error))
+
+    assert result.outcome is PushOutcome.RETRYABLE
+    # Nothing answered, so there is no status to carry — an invented one
+    # would read in the log as an answer the service never gave.
+    assert result.status is None

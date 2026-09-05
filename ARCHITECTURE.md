@@ -167,8 +167,9 @@ Telegram วาง token ไว้ใน path ของ URL ไม่ใช่ h
 `notification_composition.py` เป็น seam เดียวที่ประกอบ keyring adapter เข้ากับ transport
 โดย `desktop_main` และ `ui` รับเฉพาะ callable ที่ประกอบไว้แล้ว จึงไม่ import keyring หรือ
 transport เอง หน้าจอ Settings มีคนละ section ต่อหนึ่งช่อง เปิด/ปิดด้วยสวิตช์ของตัวเอง และ
-เปิดดู token ทีละช่อง log ของช่องทางบอกได้แค่ชื่อช่อง ชนิด notice และ symbol ไม่เคยบอก
-ตัวเลขผลกำไรขาดทุน
+เปิดดู token ทีละช่อง log ของช่องทางบอกได้แค่ชื่อช่อง ชนิด notice, symbol และ HTTP status
+ที่ปลายทางตอบกลับตอนปฏิเสธ (400 คือ recipient ผิด, 401 คือ token ผิด, 403 คือถูกบล็อก —
+เทรดเดอร์จะได้รู้ว่าต้องไปแก้ค่าไหน) ไม่เคยบอกตัวเลขผลกำไรขาดทุนและไม่เคยมี token อยู่ในนั้น
 
 Session อ่านค่าตั้งค่าตอน Runtime เริ่มทำงาน การแก้ค่าจึงมีผลกับการ Start ครั้งถัดไป
 

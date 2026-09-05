@@ -25,6 +25,7 @@ decision.
 import asyncio
 import logging
 from collections.abc import Awaitable
+from dataclasses import dataclass
 from enum import StrEnum
 from types import TracebackType
 from typing import Protocol, Self
@@ -66,10 +67,29 @@ class PushOutcome(StrEnum):
     REJECTED = "rejected"
 
 
+@dataclass(frozen=True, slots=True)
+class PushResult:
+    """What one push came to, and what the chat service answered it with.
+
+    The outcome alone is what the queue decides on, and for a while it was
+    all a push returned. It is not enough to act on, though: a refusal is a
+    setting for the trader to correct, and which setting depends entirely on
+    the status behind it — a token that was never right, a chat the bot was
+    removed from, a chat id nobody knows. Reading that out of the log beats
+    reaching for the chat service's own API to ask it again by hand.
+
+    A status is what the service *answered*, so there is none when it never
+    did: a timeout, a socket that closed, a transport that raised.
+    """
+
+    outcome: PushOutcome
+    status: int | None = None
+
+
 class NoticePush(Protocol):
     """Put one text message in front of whichever chat service is set up."""
 
-    def push(self, message: str) -> Awaitable[PushOutcome]: ...
+    def push(self, message: str) -> Awaitable[PushResult]: ...
 
 
 class NoticeNotifier:
@@ -187,24 +207,28 @@ class NoticeNotifier:
 
     async def _deliver(self, notice: SessionNotice) -> None:
         message = notice_message(notice)
-        outcome = await self._attempt(message, notice)
-        if outcome is PushOutcome.RETRYABLE:
+        result = await self._attempt(message, notice)
+        if result.outcome is PushOutcome.RETRYABLE:
             await asyncio.sleep(self._retry_delay_seconds)
-            outcome = await self._attempt(message, notice)
-        if outcome is PushOutcome.DELIVERED:
+            result = await self._attempt(message, notice)
+        if result.outcome is PushOutcome.DELIVERED:
             self._log(logging.INFO, NoticeEventName.SENT, _fields(notice))
             return
         self._log(
             logging.WARNING,
             NoticeEventName.DROPPED,
-            _fields(notice, drop_reason=outcome.value),
+            _fields(
+                notice,
+                drop_reason=result.outcome.value,
+                **({} if result.status is None else {"status": result.status}),
+            ),
         )
 
     async def _attempt(
         self,
         message: str,
         notice: SessionNotice,
-    ) -> PushOutcome:
+    ) -> PushResult:
         """One push, with anything the transport throws read as worth retrying.
 
         A transport that raises is a transport that did not answer, which is
@@ -221,7 +245,7 @@ class NoticeNotifier:
                 NoticeEventName.FAILED,
                 _fields(notice, failure_reason=type(error).__name__),
             )
-            return PushOutcome.RETRYABLE
+            return PushResult(PushOutcome.RETRYABLE)
 
     def _log(
         self,

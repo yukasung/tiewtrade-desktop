@@ -14,7 +14,10 @@ from tiewtrade.integrations.keyring.line_notifications import LineNotificationSe
 from tiewtrade.integrations.keyring.telegram_notifications import (
     TelegramNotificationSettings,
 )
-from tiewtrade.integrations.notifications.notice_queue import PushOutcome
+from tiewtrade.integrations.notifications.notice_queue import (
+    PushOutcome,
+    PushResult,
+)
 
 NOTICE = EntryOpenedNotice(
     market=SessionMarket(session_id=uuid4(), symbol="BTCUSDT", timeframe="5m"),
@@ -33,9 +36,9 @@ class RecordingPush:
         self.opened_with: dict[str, str] = {}
         self.closed = False
 
-    async def push(self, message: str) -> PushOutcome:
+    async def push(self, message: str) -> PushResult:
         self.messages.append(message)
-        return PushOutcome.DELIVERED
+        return PushResult(PushOutcome.DELIVERED)
 
     async def __aenter__(self) -> RecordingPush:
         return self

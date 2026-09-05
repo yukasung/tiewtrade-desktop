@@ -6,7 +6,10 @@ from typing import Any
 import aiohttp
 import pytest
 
-from tiewtrade.integrations.notifications.notice_queue import PushOutcome
+from tiewtrade.integrations.notifications.notice_queue import (
+    PushOutcome,
+    PushResult,
+)
 from tiewtrade.integrations.telegram.push_transport import (
     TelegramBotApiPush,
     push_url,
@@ -40,7 +43,7 @@ class FakeSession:
         return None
 
 
-def _push(session: FakeSession) -> PushOutcome:
+def _push(session: FakeSession) -> PushResult:
     transport = TelegramBotApiPush(
         bot_token="123:token-value",
         chat_id="-1001234",
@@ -52,7 +55,10 @@ def _push(session: FakeSession) -> PushOutcome:
 def test_a_push_carries_the_message_the_token_and_the_chat() -> None:
     session = FakeSession()
 
-    assert _push(session) is PushOutcome.DELIVERED
+    result = _push(session)
+
+    assert result.outcome is PushOutcome.DELIVERED
+    assert result.status == 200
 
     call = session.calls[0]
     assert call["url"] == push_url("123:token-value")
@@ -76,7 +82,7 @@ def test_the_message_goes_as_written_with_no_formatting_asked_for() -> None:
 def test_a_service_that_cannot_answer_now_is_worth_asking_again(
     status: int,
 ) -> None:
-    assert _push(FakeSession(status=status)) is PushOutcome.RETRYABLE
+    assert _push(FakeSession(status=status)).outcome is PushOutcome.RETRYABLE
 
 
 @pytest.mark.parametrize("status", [400, 401, 403, 404])
@@ -84,21 +90,25 @@ def test_a_refusal_telegram_will_repeat_is_not_retried(status: int) -> None:
     """A revoked token, a chat the bot left, a chat id nobody knows.
 
     All three are settings for the trader to correct, and asking again in two
-    seconds would only be refused the same way.
+    seconds would only be refused the same way. Which of the three it was is
+    the status, and it goes back with the refusal so the log can say it.
     """
-    assert _push(FakeSession(status=status)) is PushOutcome.REJECTED
+    result = _push(FakeSession(status=status))
+
+    assert result.outcome is PushOutcome.REJECTED
+    assert result.status == status
 
 
 def test_a_network_that_never_answers_is_worth_asking_again() -> None:
     session = FakeSession(error=aiohttp.ClientError())
 
-    assert _push(session) is PushOutcome.RETRYABLE
+    assert _push(session).outcome is PushOutcome.RETRYABLE
 
 
 def test_a_timeout_is_worth_asking_again() -> None:
     session = FakeSession(error=TimeoutError())
 
-    assert _push(session) is PushOutcome.RETRYABLE
+    assert _push(session).outcome is PushOutcome.RETRYABLE
 
 
 def test_the_token_travels_in_the_path_and_nowhere_else() -> None:

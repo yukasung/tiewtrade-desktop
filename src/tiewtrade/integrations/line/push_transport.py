@@ -16,7 +16,10 @@ from typing import Self
 
 import aiohttp
 
-from tiewtrade.integrations.notifications.notice_queue import PushOutcome
+from tiewtrade.integrations.notifications.notice_queue import (
+    PushOutcome,
+    PushResult,
+)
 
 _logger = logging.getLogger(__name__)
 
@@ -57,7 +60,7 @@ class LineMessagingApiPush:
             await self._session.close()
             self._session = None
 
-    async def push(self, message: str) -> PushOutcome:
+    async def push(self, message: str) -> PushResult:
         """Send one message, and say only whether it is worth sending again.
 
         A 429 is LINE saying the account has sent too much this month, which
@@ -78,13 +81,13 @@ class LineMessagingApiPush:
                 },
                 timeout=aiohttp.ClientTimeout(total=REQUEST_TIMEOUT_SECONDS),
             ) as response:
-                return _outcome_for_status(response.status)
+                return PushResult(_outcome_for_status(response.status), response.status)
         except asyncio.CancelledError:
             raise
         except TimeoutError:
-            return PushOutcome.RETRYABLE
+            return PushResult(PushOutcome.RETRYABLE)
         except aiohttp.ClientError:
-            return PushOutcome.RETRYABLE
+            return PushResult(PushOutcome.RETRYABLE)
 
     def _network_session(self) -> aiohttp.ClientSession:
         if self._session is None:
