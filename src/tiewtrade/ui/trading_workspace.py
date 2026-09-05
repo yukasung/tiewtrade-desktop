@@ -237,7 +237,13 @@ class TradingWorkspace(QWidget):
         self.bot_control_scroll.setObjectName("botControlScroll")
         self.bot_control_scroll.viewport().setObjectName("botControlViewport")
         self.bot_control_scroll.setWidgetResizable(True)
+        # The side column is narrow, and a scroll bar would take its width
+        # out of the readings. The panel still scrolls by wheel and still
+        # answers `ensureWidgetVisible`; it just never paints a track.
         self.bot_control_scroll.setHorizontalScrollBarPolicy(
+            Qt.ScrollBarPolicy.ScrollBarAlwaysOff
+        )
+        self.bot_control_scroll.setVerticalScrollBarPolicy(
             Qt.ScrollBarPolicy.ScrollBarAlwaysOff
         )
         self.bot_control_scroll.setFrameShape(QFrame.Shape.NoFrame)
@@ -245,6 +251,7 @@ class TradingWorkspace(QWidget):
             QSizePolicy.Policy.Ignored,
             QSizePolicy.Policy.Minimum,
         )
+        self._size_stack_to_current_page()
         self.bot_control_scroll.setWidget(self._bot_pages)
         bot_layout.addWidget(self.bot_control_scroll, 1)
 
@@ -290,6 +297,26 @@ class TradingWorkspace(QWidget):
         )
         self.trade_history_activated.emit()
 
+    def _size_stack_to_current_page(self) -> None:
+        """Let the stack ask only for the height of the page on screen.
+
+        A stack otherwise asks for the tallest page it holds, which would
+        stretch a short page — Bot Control — past the viewport and take its
+        button out of sight. An ignored page contributes no height.
+        """
+        current = self._bot_pages.currentWidget()
+        for index in range(self._bot_pages.count()):
+            page = self._bot_pages.widget(index)
+            if page is None:
+                continue
+            page.setSizePolicy(
+                QSizePolicy.Policy.Preferred,
+                QSizePolicy.Policy.Minimum
+                if page is current
+                else QSizePolicy.Policy.Ignored,
+            )
+        self._bot_pages.adjustSize()
+
     def _remember_and_maybe_show(self, page: QWidget) -> None:
         """Take a state-driven page, but only show it if Settings is not up.
 
@@ -304,5 +331,6 @@ class TradingWorkspace(QWidget):
 
     def _show_bot_page(self, page: QWidget) -> None:
         self._bot_pages.setCurrentWidget(page)
+        self._size_stack_to_current_page()
         self.bot_control_scroll.horizontalScrollBar().setValue(0)
         self.bot_control_scroll.verticalScrollBar().setValue(0)

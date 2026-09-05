@@ -317,30 +317,24 @@ QWidget#tradeHistoryViewport, QWidget#tradeHistoryContent {
     background: #141A22;
     border: 0;
 }
-QScrollArea#botControlScroll QScrollBar:vertical,
 QScrollArea#tradeHistoryScroll QScrollBar:vertical {
     background: #0B0E11;
     border: 0;
     margin: 0;
     width: 12px;
 }
-QScrollArea#botControlScroll QScrollBar::handle:vertical,
 QScrollArea#tradeHistoryScroll QScrollBar::handle:vertical {
     background: #3A4656;
     border: 0;
     border-radius: 6px;
     min-height: 24px;
 }
-QScrollArea#botControlScroll QScrollBar::add-line:vertical,
-QScrollArea#botControlScroll QScrollBar::sub-line:vertical,
 QScrollArea#tradeHistoryScroll QScrollBar::add-line:vertical,
 QScrollArea#tradeHistoryScroll QScrollBar::sub-line:vertical {
     background: #0B0E11;
     border: 0;
     height: 0;
 }
-QScrollArea#botControlScroll QScrollBar::add-page:vertical,
-QScrollArea#botControlScroll QScrollBar::sub-page:vertical,
 QScrollArea#tradeHistoryScroll QScrollBar::add-page:vertical,
 QScrollArea#tradeHistoryScroll QScrollBar::sub-page:vertical {
     background: #0B0E11;

@@ -3,7 +3,7 @@ from datetime import UTC, datetime
 from decimal import Decimal
 from pathlib import Path
 
-from PySide6.QtCore import QPoint, QRect
+from PySide6.QtCore import QPoint, QRect, Qt
 from PySide6.QtWidgets import QWidget
 from pytestqt.qtbot import QtBot
 
@@ -499,3 +499,45 @@ def test_going_back_to_setup_takes_the_cooldown_notice_away(qtbot: QtBot) -> Non
     workspace.show_setup()
 
     assert not workspace.cooldown_notice_card.isVisible()
+
+
+def test_bot_control_scrolls_without_showing_a_scrollbar(qtbot: QtBot) -> None:
+    """The side column is narrow, so a bar eats width the readings need.
+
+    The panel still scrolls — by wheel, and whenever the form asks for a
+    field to be brought into view — it just never paints a track for it.
+    """
+    workspace = TradingWorkspace()
+    qtbot.addWidget(workspace)
+    workspace.resize(1200, 400)
+    workspace.show()
+
+    scroll = workspace.bot_control_scroll
+    assert scroll.verticalScrollBarPolicy() == Qt.ScrollBarPolicy.ScrollBarAlwaysOff
+    assert scroll.horizontalScrollBarPolicy() == Qt.ScrollBarPolicy.ScrollBarAlwaysOff
+    assert not scroll.verticalScrollBar().isVisible()
+    assert scroll.viewport().width() == scroll.width()
+
+
+def test_bot_control_page_is_not_stretched_by_the_taller_setup_form(
+    qtbot: QtBot,
+) -> None:
+    """A short window still shows the whole Bot Control page, button and all.
+
+    The pages share one stack, and the setup form is the tallest of them.
+    If the stack asked for that height on every page, Bot Control would be
+    stretched past the viewport and its button would fall out of sight.
+    """
+    workspace = TradingWorkspace()
+    qtbot.addWidget(workspace)
+    workspace.resize(1200, 560)
+    workspace.show()
+    session = configured_spot_session()
+
+    workspace.show_configured_session(session)
+
+    viewport = workspace.bot_control_scroll.viewport()
+    button = workspace.bot_control_widget.start_button
+    assert button.isVisible()
+    bottom = button.mapTo(viewport, QPoint(0, button.height())).y()
+    assert bottom <= viewport.height()
