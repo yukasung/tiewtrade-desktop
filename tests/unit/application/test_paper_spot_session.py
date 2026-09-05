@@ -1346,9 +1346,17 @@ def step_grid_paper_session(
     *,
     min_notional: Decimal = Decimal("5"),
     open_basket: OpenBasketState | None = None,
+    cooldown: CooldownPolicy | None = None,
 ) -> PaperSpotSession:
+    entry_policy = EntryPolicy(
+        max_entries=4,
+        cooldown=CooldownPolicy.default() if cooldown is None else cooldown,
+    )
     return PaperSpotSession(
-        session_config(preset_version="rsi-step-grid-v1"),
+        session_config(
+            preset_version="rsi-step-grid-v1",
+            entry_policy=entry_policy,
+        ),
         MarketDataConfig(symbol="BTCUSDT", timeframe="5m"),
         SymbolRules(
             symbol="BTCUSDT",
@@ -1604,21 +1612,9 @@ def _pair_filled_at_the_start_of_the_year() -> OpenBasketState:
 
 def _waiting_session() -> PaperSpotSession:
     """A Session whose Cooldown lapses on its own, holding a cooling Pair."""
-    return PaperSpotSession(
-        session_config(
-            entry_policy=EntryPolicy(
-                max_entries=4, cooldown=CooldownPolicy.for_days(WAITING_DAYS)
-            )
-        ),
-        MarketDataConfig(symbol="BTCUSDT", timeframe="5m"),
-        SymbolRules(
-            symbol="BTCUSDT",
-            tick_size=Decimal("0.01"),
-            step_size=Decimal("0.001"),
-            min_notional=Decimal("5"),
-        ),
-        RsiStepGridPreset.v1(),
+    return step_grid_paper_session(
         open_basket=_pair_filled_at_the_start_of_the_year(),
+        cooldown=CooldownPolicy.for_days(WAITING_DAYS),
     )
 
 
@@ -1669,19 +1665,9 @@ def test_a_cooldown_that_lapsed_during_a_gap_opens_but_fills_nothing() -> None:
 
 
 def test_a_session_that_never_cools_down_takes_its_next_entry_at_once() -> None:
-    session = PaperSpotSession(
-        session_config(
-            entry_policy=EntryPolicy(max_entries=4, cooldown=CooldownPolicy.off())
-        ),
-        MarketDataConfig(symbol="BTCUSDT", timeframe="5m"),
-        SymbolRules(
-            symbol="BTCUSDT",
-            tick_size=Decimal("0.01"),
-            step_size=Decimal("0.001"),
-            min_notional=Decimal("5"),
-        ),
-        RsiStepGridPreset.v1(),
+    session = step_grid_paper_session(
         open_basket=_pair_filled_at_the_start_of_the_year(),
+        cooldown=CooldownPolicy.off(),
     )
     first = candle(10, open_price="100", close_price="101")
 

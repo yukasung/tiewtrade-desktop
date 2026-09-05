@@ -71,6 +71,7 @@ from tiewtrade.trading.session_config import MarketType, TradeMode
 from tiewtrade.trading.symbol_rules import SymbolRules
 from tiewtrade.trading.trade_history import BasketStatus
 from tiewtrade.ui.bot_lifecycle_workflow import RuntimeSnapshotRelay
+from tiewtrade.ui.cooldown_text import cooldown_text
 from tiewtrade.ui.display_time import display_timestamp
 from tiewtrade.ui.main_window import BotActions, MainWindow
 from tiewtrade.ui.position_basket_table import PositionBasketTable
@@ -726,9 +727,7 @@ def test_desktop_paper_session_create_overview_and_restart_restore(
     assert restarted_window.setup.timeframe.currentData() == case.timeframe
     # The Cooldown is pinned for the Session, so the restarted form has to
     # show the one it is running rather than the one it opens on.
-    assert restarted_window.setup.cooldown.currentData() == (
-        "off" if case.cooldown.days is None else str(case.cooldown.days)
-    )
+    assert restarted_window.setup.cooldown.currentText() == cooldown_text(case.cooldown)
     assert _active_session_count(database) == 1
     assert _trade_side_effect_counts(database) == initial_side_effect_counts
 
@@ -1145,10 +1144,10 @@ def _enter_form_values(window: MainWindow, case: _SessionCase) -> None:
     setup.timeframe.setCurrentIndex(setup.timeframe.findData(case.timeframe))
     setup.capital_per_entry.setText("200000")
     setup.max_entries.setValue(case.max_entries)
+    # Picked by what the row says, the way a trader picks it, rather than by
+    # copying the encoding the widget keeps to itself.
     setup.cooldown.setCurrentIndex(
-        setup.cooldown.findData(
-            "off" if case.cooldown.days is None else str(case.cooldown.days)
-        )
+        setup.cooldown.findText(cooldown_text(case.cooldown))
     )
     if case.market_type == "spot":
         return

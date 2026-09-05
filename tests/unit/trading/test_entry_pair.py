@@ -31,12 +31,31 @@ def open_entries(*numbers: int) -> tuple[tuple[int, datetime], ...]:
     return tuple((number, walk_time(number)) for number in numbers)
 
 
+def off_policy(max_entries: int = 10) -> EntryPolicy:
+    return EntryPolicy(max_entries=max_entries, cooldown=CooldownPolicy.off())
+
+
+def waiting_policy(days: int = 3, max_entries: int = 10) -> EntryPolicy:
+    return EntryPolicy(max_entries=max_entries, cooldown=CooldownPolicy.for_days(days))
+
+
+def completed_pair_under(
+    policy_value: EntryPolicy, *, completed_at: datetime = PAIR_COMPLETED_AT
+) -> EntryPairLifecycle:
+    """A Basket that has just completed its first Pair, under a chosen Policy.
+
+    The second Fill lands exactly on `completed_at`, so a test that waits out
+    days counts them from a moment it named itself.
+    """
+    lifecycle = EntryPairLifecycle(policy_value)
+    lifecycle.record_fill(completed_at - MINUTE)
+    lifecycle.record_fill(completed_at)
+    return lifecycle
+
+
 def completed_pair(max_entries: int = 10) -> EntryPairLifecycle:
     """A Basket holding one completed Pair, which is a Basket in Cooldown."""
-    lifecycle = EntryPairLifecycle(policy(max_entries))
-    lifecycle.record_fill(AT)
-    lifecycle.record_fill(AT)
-    return lifecycle
+    return completed_pair_under(policy(max_entries), completed_at=AT)
 
 
 def test_a_basket_that_has_never_traded_may_enter() -> None:
@@ -402,22 +421,6 @@ def test_replay_reaches_the_same_gate_as_the_lifecycle_it_replays() -> None:
             assert replayed.entry_gate_for(
                 number, reached.as_of
             ) == reached.lifecycle.entry_gate_for(number, reached.as_of)
-
-
-def off_policy(max_entries: int = 10) -> EntryPolicy:
-    return EntryPolicy(max_entries=max_entries, cooldown=CooldownPolicy.off())
-
-
-def waiting_policy(days: int = 3, max_entries: int = 10) -> EntryPolicy:
-    return EntryPolicy(max_entries=max_entries, cooldown=CooldownPolicy.for_days(days))
-
-
-def completed_pair_under(policy_value: EntryPolicy) -> EntryPairLifecycle:
-    """A Basket that has just completed its first Pair, under a chosen Policy."""
-    lifecycle = EntryPairLifecycle(policy_value)
-    lifecycle.record_fill(PAIR_COMPLETED_AT - MINUTE)
-    lifecycle.record_fill(PAIR_COMPLETED_AT)
-    return lifecycle
 
 
 def test_a_session_that_cools_down_for_no_time_never_closes_its_gate() -> None:
