@@ -12,6 +12,7 @@ from tiewtrade.application.paper_session_setup import (
     PaperSessionSetupValues,
     setup_values_of,
 )
+from tiewtrade.trading.cooldown_policy import CooldownPolicy
 from tiewtrade.trading.futures_policy import FuturesTradingPolicy
 from tiewtrade.ui.session_setup import SessionSetupWidget
 
@@ -235,3 +236,96 @@ def test_amount_field_accepts_only_a_number(qtbot: QtBot) -> None:
     # A field being filled in is not yet a field that is wrong: an empty
     # Amount is still what the form reports as a missing Amount.
     assert _validator_state(validator, "") is not QValidator.State.Invalid
+
+
+def test_the_form_opens_on_the_cooldown_that_waits_to_be_cancelled(
+    qtbot: QtBot,
+) -> None:
+    widget = SessionSetupWidget()
+    qtbot.addWidget(widget)
+
+    values = widget.values()
+
+    assert values.cooldown_mode == "until_cancelled"
+    assert values.cooldown_days is None
+    assert widget.cooldown_mode.accessibleName() == "Cooldown"
+    assert widget.cooldown_days.accessibleName() == "Cooldown Days"
+    assert widget.cooldown_days_row.isHidden()
+
+
+def test_the_form_offers_every_way_a_cooldown_can_end(qtbot: QtBot) -> None:
+    widget = SessionSetupWidget()
+    qtbot.addWidget(widget)
+
+    assert [
+        widget.cooldown_mode.itemData(index)
+        for index in range(widget.cooldown_mode.count())
+    ] == ["until_cancelled", "duration", "off"]
+
+
+def test_choosing_a_cooldown_that_waits_asks_for_its_days(qtbot: QtBot) -> None:
+    widget = SessionSetupWidget()
+    qtbot.addWidget(widget)
+
+    widget.cooldown_mode.setCurrentIndex(widget.cooldown_mode.findData("duration"))
+
+    assert widget.cooldown_days_row.isHidden() is False
+    assert widget.cooldown_days.minimum() == CooldownPolicy.MINIMUM_DAYS
+    assert widget.cooldown_days.maximum() == CooldownPolicy.MAXIMUM_DAYS
+    assert widget.values().cooldown_days == str(widget.cooldown_days.value())
+
+
+def test_a_cooldown_that_never_waits_states_no_days(qtbot: QtBot) -> None:
+    """A number left behind in a hidden row is not a Session's Cooldown."""
+    widget = SessionSetupWidget()
+    qtbot.addWidget(widget)
+    widget.cooldown_mode.setCurrentIndex(widget.cooldown_mode.findData("duration"))
+    widget.cooldown_days.setValue(9)
+
+    widget.cooldown_mode.setCurrentIndex(widget.cooldown_mode.findData("off"))
+
+    values = widget.values()
+
+    assert values.cooldown_mode == "off"
+    assert values.cooldown_days is None
+    assert widget.cooldown_days_row.isHidden()
+
+
+def test_a_session_that_waits_days_reads_back_onto_the_form(qtbot: QtBot) -> None:
+    widget = SessionSetupWidget()
+    qtbot.addWidget(widget)
+    session = _session_waiting_days(3)
+
+    widget.set_values_from_session(session)
+
+    assert widget.values() == setup_values_of(session)
+    assert widget.cooldown_days_row.isHidden() is False
+    assert widget.cooldown_days.value() == 3
+
+
+def test_a_cooldown_days_error_reaches_the_field_that_asked(qtbot: QtBot) -> None:
+    widget = SessionSetupWidget()
+    qtbot.addWidget(widget)
+
+    widget.show_field_error("cooldown_days", "days must be between 1 and 30")
+
+    revealed = widget.reveal_validation_field("cooldown_days")
+
+    assert revealed is not None
+    assert revealed[0] is widget.cooldown_days
+    assert revealed[1].text() == "days must be between 1 and 30"
+
+
+def _session_waiting_days(days: int) -> ConfiguredPaperSession:
+    from dataclasses import replace
+
+    session = configured_spot_session()
+    return replace(
+        session,
+        config=replace(
+            session.config,
+            entry_policy=replace(
+                session.config.entry_policy, cooldown=CooldownPolicy.for_days(days)
+            ),
+        ),
+    )

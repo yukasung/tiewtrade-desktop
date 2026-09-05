@@ -6,6 +6,7 @@ from tiewtrade.application.paper_session_setup import (
     ConfiguredPaperSession,
     preset_display_name,
 )
+from tiewtrade.trading.cooldown_policy import CooldownMode, CooldownPolicy
 from tiewtrade.trading.futures_policy import FuturesTradingPolicy
 from tiewtrade.trading.session_config import MarketType
 from tiewtrade.ui.blank_text import BLANK
@@ -35,6 +36,7 @@ class SessionOverviewWidget(QWidget):
         "Strategy Preset",
         "Amount",
         "Max Entries",
+        "Cooldown",
     )
     _FUTURES_LABELS = ("Leverage", "Margin Mode", "Position Mode")
     _CREATED_LABEL = "Created at"
@@ -49,6 +51,7 @@ class SessionOverviewWidget(QWidget):
         self.preset_value = self._value_label()
         self.capital_per_entry_value = self._value_label()
         self.max_entries_value = self._value_label()
+        self.cooldown_value = self._value_label()
         self.leverage_value = self._value_label()
         self.margin_mode_value = self._value_label()
         self.position_mode_value = self._value_label()
@@ -61,6 +64,7 @@ class SessionOverviewWidget(QWidget):
             "Strategy Preset": self.preset_value,
             "Amount": self.capital_per_entry_value,
             "Max Entries": self.max_entries_value,
+            "Cooldown": self.cooldown_value,
             "Leverage": self.leverage_value,
             "Margin Mode": self.margin_mode_value,
             "Position Mode": self.position_mode_value,
@@ -89,6 +93,7 @@ class SessionOverviewWidget(QWidget):
             f"{_amount_text(config.capital_per_entry)} {QUOTE_ASSET}"
         )
         self.max_entries_value.setText(str(config.entry_policy.max_entries))
+        self.cooldown_value.setText(_cooldown_text(config.entry_policy.cooldown))
         self._show_market_policy(session)
         self.created_at_value.setText(display_timestamp(session.created_at_utc))
 
@@ -204,3 +209,10 @@ def _amount_text(value: Decimal) -> str:
     trailing zero there is precision the record was given.
     """
     return format(value.normalize(), "f")
+
+
+def _cooldown_text(policy: CooldownPolicy) -> str:
+    """How this Session's Cooldown ends, in the words the form offered it in."""
+    if policy.days is None:
+        return "Off" if policy.mode is CooldownMode.OFF else "Until cancelled"
+    return f"{policy.days} day" if policy.days == 1 else f"{policy.days} days"

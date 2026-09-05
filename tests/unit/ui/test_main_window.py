@@ -87,6 +87,7 @@ from tiewtrade.integrations.sqlite.active_paper_sessions import (
     SQLiteActivePaperSessions,
 )
 from tiewtrade.integrations.sqlite.database import SQLiteDatabase
+from tiewtrade.trading.cooldown_policy import CooldownPolicy
 from tiewtrade.trading.futures_policy import FuturesTradingPolicy
 from tiewtrade.trading.session_config import MarketType, TradeMode
 from tiewtrade.trading.trade_history import TradeFill
@@ -899,6 +900,7 @@ def test_spot_overview_leaves_the_futures_rows_out(qtbot: QtBot) -> None:
         "Strategy Preset",
         "Amount",
         "Max Entries",
+        "Cooldown",
         "Created at",
     )
     for value in (
@@ -927,6 +929,7 @@ def test_futures_overview_keeps_the_policy_rows(qtbot: QtBot) -> None:
         "Strategy Preset",
         "Amount",
         "Max Entries",
+        "Cooldown",
         "Leverage",
         "Margin Mode",
         "Position Mode",
@@ -4901,3 +4904,32 @@ def test_presenting_a_closing_window_does_not_bring_it_back(qtbot: QtBot) -> Non
     window.present()
 
     assert not window.isVisible()
+
+
+@pytest.mark.parametrize(
+    ("cooldown", "text"),
+    [
+        (CooldownPolicy.until_cancelled(), "Until cancelled"),
+        (CooldownPolicy.off(), "Off"),
+        (CooldownPolicy.for_days(1), "1 day"),
+        (CooldownPolicy.for_days(3), "3 days"),
+    ],
+)
+def test_the_overview_says_how_this_session_s_cooldown_ends(
+    qtbot: QtBot, cooldown: CooldownPolicy, text: str
+) -> None:
+    """The Cooldown is pinned for the Session, so the card states it as a fact."""
+    session = configured_spot_session()
+    session = replace(
+        session,
+        config=replace(
+            session.config,
+            entry_policy=replace(session.config.entry_policy, cooldown=cooldown),
+        ),
+    )
+    overview = SessionOverviewWidget()
+    qtbot.addWidget(overview)
+
+    overview.show_session(session)
+
+    assert overview.cooldown_value.text() == text

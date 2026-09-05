@@ -12,7 +12,9 @@ from tiewtrade.application.paper_session_setup import (
     PaperSessionSetupValues,
     PaperSessionUnavailableError,
     PaperSessionValidationError,
+    setup_values_of,
 )
+from tiewtrade.trading.cooldown_policy import CooldownPolicy
 from tiewtrade.trading.session_config import MarketType, TradeMode
 
 SESSION_ID = UUID("00000000-0000-0000-0000-000000000123")
@@ -187,3 +189,89 @@ def test_persistence_unavailable_error_is_not_reported_as_validation() -> None:
 
     with pytest.raises(PaperSessionUnavailableError, match="persistence unavailable"):
         use_case.execute(spot_values())
+
+
+def _configured(values: PaperSessionSetupValues) -> ConfiguredPaperSession:
+    use_case = CreatePaperSession(
+        create_active=lambda session: PaperSessionCreateOutcome(
+            session=session, created=True
+        ),
+        session_ids=lambda: SESSION_ID,
+        clock=lambda: CREATED_AT,
+    )
+    return use_case.execute(values).session
+
+
+def test_a_form_that_names_no_cooldown_starts_the_one_that_waits_to_be_cancelled() -> (
+    None
+):
+    session = _configured(spot_values())
+
+    assert session.config.entry_policy.cooldown == CooldownPolicy.until_cancelled()
+
+
+@pytest.mark.parametrize(
+    ("mode", "days", "expected"),
+    [
+        ("off", None, CooldownPolicy.off()),
+        ("until_cancelled", None, CooldownPolicy.until_cancelled()),
+        ("duration", "3", CooldownPolicy.for_days(3)),
+    ],
+)
+def test_a_form_states_the_cooldown_the_session_is_pinned_to(
+    mode: str, days: str | None, expected: CooldownPolicy
+) -> None:
+    session = _configured(
+        replace(spot_values(), cooldown_mode=mode, cooldown_days=days)
+    )
+
+    assert session.config.entry_policy.cooldown == expected
+
+
+def test_a_cooldown_that_waits_must_say_how_many_days() -> None:
+    values = replace(spot_values(), cooldown_mode="duration", cooldown_days=None)
+
+    with pytest.raises(PaperSessionValidationError) as caught:
+        _configured(values)
+
+    assert caught.value.field == "cooldown_days"
+
+
+def test_days_out_of_range_are_reported_against_the_field_that_asked() -> None:
+    values = replace(spot_values(), cooldown_mode="duration", cooldown_days="31")
+
+    with pytest.raises(PaperSessionValidationError) as caught:
+        _configured(values)
+
+    assert caught.value.field == "cooldown_days"
+
+
+def test_a_cooldown_nobody_offers_is_reported_against_its_own_field() -> None:
+    values = replace(spot_values(), cooldown_mode="sometimes")
+
+    with pytest.raises(PaperSessionValidationError) as caught:
+        _configured(values)
+
+    assert caught.value.field == "cooldown_mode"
+
+
+@pytest.mark.parametrize(
+    "cooldown",
+    [
+        CooldownPolicy.until_cancelled(),
+        CooldownPolicy.off(),
+        CooldownPolicy.for_days(3),
+    ],
+)
+def test_a_session_reads_back_onto_the_form_it_was_started_from(
+    cooldown: CooldownPolicy,
+) -> None:
+    """An untouched form compares equal to the Session it was filled from."""
+    values = replace(
+        spot_values(),
+        cooldown_mode=cooldown.mode.value,
+        cooldown_days=None if cooldown.days is None else str(cooldown.days),
+    )
+    session = _configured(values)
+
+    assert setup_values_of(session) == values
