@@ -145,7 +145,7 @@ class EntryPairLifecycle:
             return EntryGate(EntryGateState.OPEN)
         if self._waived_pair == self._completed_pairs:
             return EntryGate(EntryGateState.OPEN)
-        if not self._holds_whole_pair(self._completed_pairs):
+        if not self._holds_the_latest_pair:
             return EntryGate(EntryGateState.OPEN)
         if self._has_lapsed(as_of):
             return EntryGate(EntryGateState.OPEN)
@@ -175,9 +175,7 @@ class EntryPairLifecycle:
         the Session's Cooldown is off, or a sale has already broken up the Pair
         a Cooldown would have stood over.
         """
-        if self._pair_completed_at is None:
-            return None
-        if not self._holds_whole_pair(self._completed_pairs):
+        if self._pair_completed_at is None or not self._holds_the_latest_pair:
             return None
         return self._policy.cooldown.ends_at(completed_at=self._pair_completed_at)
 
@@ -201,6 +199,15 @@ class EntryPairLifecycle:
         if self._filled_total % 2 == 0:
             self._completed_pairs += 1
             self._pair_completed_at = filled_at
+
+    @property
+    def _holds_the_latest_pair(self) -> bool:
+        """Whether a Cooldown has anything to stand on, asked in one place.
+
+        Both the gate and the day it lifts on turn on this, and a rule stated
+        twice is a rule that drifts.
+        """
+        return self._holds_whole_pair(self._completed_pairs)
 
     def _has_lapsed(self, as_of: datetime) -> bool:
         if self._pair_completed_at is None:
