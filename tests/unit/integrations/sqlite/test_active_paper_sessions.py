@@ -30,6 +30,7 @@ from tiewtrade.integrations.sqlite.database import (
 from tiewtrade.integrations.sqlite.paper_runtime_lifecycle import (
     SQLitePaperRuntimeLifecycle,
 )
+from tiewtrade.trading.cooldown_policy import CooldownPolicy
 
 
 def test_retire_stopped_session_removes_only_active_registration(
@@ -230,7 +231,7 @@ def test_migration_from_v2_preserves_trade_history_record(tmp_path: Path) -> Non
             """
         ).fetchone()
 
-    assert version == 16
+    assert version == 17
     assert basket_id == "basket-sentinel"
     assert bot_sessions_exists is not None
 
@@ -271,7 +272,7 @@ def test_migration_to_v11_takes_the_spot_ratio_out_of_a_session(
             )
         )
 
-    assert version == 16
+    assert version == 17
     assert "spot_trading_capital_ratio" not in columns
     # The one guarantee the rebuilt table has to keep carrying.
     assert "bot_sessions_single_active_idx" in indexes
@@ -655,3 +656,34 @@ def test_database_constraint_rejects_a_second_active_session(tmp_path: Path) -> 
                 f"INSERT INTO bot_sessions VALUES ({placeholders})",
                 duplicate,
             )
+
+
+@pytest.mark.parametrize(
+    "cooldown",
+    [
+        CooldownPolicy.until_cancelled(),
+        CooldownPolicy.off(),
+        CooldownPolicy.for_days(3),
+    ],
+)
+def test_a_session_comes_back_with_the_cooldown_it_was_started_with(
+    tmp_path: Path, cooldown: CooldownPolicy
+) -> None:
+    """The Cooldown is pinned for the Session, so a restart may not reword it."""
+    database = SQLiteDatabase(tmp_path / "tiewtrade.sqlite3")
+    database.migrate()
+    store = SQLiteActivePaperSessions(database)
+    session = configured_spot_session()
+    session = replace(
+        session,
+        config=replace(
+            session.config,
+            entry_policy=replace(session.config.entry_policy, cooldown=cooldown),
+        ),
+    )
+    store.create(session)
+
+    active = store.get_active()
+
+    assert active is not None
+    assert active.config.entry_policy.cooldown == cooldown

@@ -28,6 +28,7 @@ from tiewtrade.strategies.indicators import WilderIndicators
 from tiewtrade.strategies.rsi_step_grid.preset import RsiStepGridPreset
 from tiewtrade.strategies.rsi_step_grid.strategy import RsiStepGridStrategy
 from tiewtrade.trading.basket import BasketCloseReason, SettledEntries
+from tiewtrade.trading.cooldown_policy import CooldownPolicy
 from tiewtrade.trading.entry_pair import (
     EntryGate,
     EntryGateState,
@@ -1566,3 +1567,124 @@ def session_config(**overrides: object) -> SessionConfig:
     }
     values.update(overrides)
     return SessionConfig(**values)  # type: ignore[arg-type]
+
+
+WAITING_DAYS = 3
+
+
+def _pair_filled_at_the_start_of_the_year() -> OpenBasketState:
+    """A Basket holding a whole Pair, filled on the first two candles of 2026."""
+    filled_at = datetime(2026, 1, 1, tzinfo=UTC)
+    return OpenBasketState(
+        basket_id=UUID("00000000-0000-0000-0000-0000000000c3"),
+        entries=(
+            OpenBasketEntry(
+                entry_number=1,
+                price=Decimal("100"),
+                quantity=Decimal("1"),
+                filled_at=filled_at,
+                atr=Decimal("2"),
+                group_id=1,
+            ),
+            OpenBasketEntry(
+                entry_number=2,
+                price=Decimal("98"),
+                quantity=Decimal("1"),
+                filled_at=filled_at + timedelta(minutes=5),
+                atr=Decimal("2"),
+                group_id=1,
+            ),
+        ),
+        closed_basket_count=0,
+        waived_pair=None,
+    )
+
+
+def _waiting_session() -> PaperSpotSession:
+    """A Session whose Cooldown lapses on its own, holding a cooling Pair."""
+    return PaperSpotSession(
+        session_config(
+            entry_policy=EntryPolicy(
+                max_entries=4, cooldown=CooldownPolicy.for_days(WAITING_DAYS)
+            )
+        ),
+        MarketDataConfig(symbol="BTCUSDT", timeframe="5m"),
+        SymbolRules(
+            symbol="BTCUSDT",
+            tick_size=Decimal("0.01"),
+            step_size=Decimal("0.001"),
+            min_notional=Decimal("5"),
+        ),
+        RsiStepGridPreset.v1(),
+        open_basket=_pair_filled_at_the_start_of_the_year(),
+    )
+
+
+def test_a_waiting_cooldown_is_read_against_the_candle_the_session_last_saw() -> None:
+    """Market time decides it, so the same candles always answer the same way."""
+    session = _waiting_session()
+    still_waiting = candle(10, open_price="100", close_price="101")
+
+    snapshot = session.process_completed_candle(
+        still_waiting, received_at=still_waiting.close_time, backfilled=False
+    )
+
+    assert snapshot.entry_gate == EntryGate(EntryGateState.COOLDOWN)
+
+
+def test_a_waiting_cooldown_opens_once_the_market_has_moved_past_its_day() -> None:
+    session = _waiting_session()
+    past_the_day = candle(
+        WAITING_DAYS * 24 * 60 + 10, open_price="100", close_price="101"
+    )
+
+    snapshot = session.process_completed_candle(
+        past_the_day, received_at=past_the_day.close_time, backfilled=False
+    )
+
+    assert snapshot.entry_gate == EntryGate(EntryGateState.OPEN)
+
+
+def test_a_cooldown_that_lapsed_during_a_gap_opens_but_fills_nothing() -> None:
+    """A Cooldown runs out in the market whether or not the feed was watching.
+
+    The backfilled candle carrying the Session past the day may open the gate
+    — that happened — but it may not open an Entry, so no Entry is taken at a
+    price the market has already left behind.
+    """
+    session = _waiting_session()
+    after_the_gap = candle(
+        WAITING_DAYS * 24 * 60 + 10, open_price="100", close_price="101"
+    )
+
+    snapshot = session.process_completed_candle(
+        after_the_gap, received_at=after_the_gap.close_time, backfilled=True
+    )
+
+    assert snapshot.entry_gate == EntryGate(EntryGateState.OPEN)
+    assert snapshot.entry_fill is None
+    assert snapshot.basket_entry_count == 2
+
+
+def test_a_session_that_never_cools_down_takes_its_next_entry_at_once() -> None:
+    session = PaperSpotSession(
+        session_config(
+            entry_policy=EntryPolicy(max_entries=4, cooldown=CooldownPolicy.off())
+        ),
+        MarketDataConfig(symbol="BTCUSDT", timeframe="5m"),
+        SymbolRules(
+            symbol="BTCUSDT",
+            tick_size=Decimal("0.01"),
+            step_size=Decimal("0.001"),
+            min_notional=Decimal("5"),
+        ),
+        RsiStepGridPreset.v1(),
+        open_basket=_pair_filled_at_the_start_of_the_year(),
+    )
+    first = candle(10, open_price="100", close_price="101")
+
+    snapshot = session.process_completed_candle(
+        first, received_at=first.close_time, backfilled=False
+    )
+
+    assert snapshot.entry_gate == EntryGate(EntryGateState.OPEN)

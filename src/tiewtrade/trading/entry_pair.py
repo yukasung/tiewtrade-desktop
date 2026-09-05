@@ -173,9 +173,12 @@ class EntryPairLifecycle:
         """When the Cooldown standing over this Basket lifts on its own.
 
         None whenever nothing is waiting on the clock — no Pair has completed,
-        or the Policy is one that never lapses.
+        the Policy is one that never lapses, or a sale has already broken up
+        the Pair a Cooldown would have stood over.
         """
         if self._pair_completed_at is None:
+            return None
+        if not self._holds_whole_pair(self._completed_pairs):
             return None
         return self._policy.cooldown.ends_at(completed_at=self._pair_completed_at)
 

@@ -1,8 +1,9 @@
-from datetime import datetime
+from datetime import datetime, timedelta
 
 import pytest
 
 from tests.support.entry_pair_walk import reachable_lifecycles, walk_time
+from tiewtrade.trading.cooldown_policy import CooldownPolicy
 from tiewtrade.trading.entry_pair import (
     EntryGate,
     EntryGateState,
@@ -13,6 +14,12 @@ from tiewtrade.trading.entry_policy import EntryPolicy
 
 AT = walk_time(1)
 """One candle, which is all a Cooldown that never lapses is ever asked as of."""
+
+PAIR_COMPLETED_AT = walk_time(2)
+"""The candle a Pair completes on, which a Cooldown that waits counts from."""
+
+MINUTE = timedelta(minutes=1)
+SECOND = timedelta(seconds=1)
 
 
 def policy(max_entries: int = 10) -> EntryPolicy:
@@ -395,3 +402,142 @@ def test_replay_reaches_the_same_gate_as_the_lifecycle_it_replays() -> None:
             assert replayed.entry_gate_for(
                 number, reached.as_of
             ) == reached.lifecycle.entry_gate_for(number, reached.as_of)
+
+
+def off_policy(max_entries: int = 10) -> EntryPolicy:
+    return EntryPolicy(max_entries=max_entries, cooldown=CooldownPolicy.off())
+
+
+def waiting_policy(days: int = 3, max_entries: int = 10) -> EntryPolicy:
+    return EntryPolicy(max_entries=max_entries, cooldown=CooldownPolicy.for_days(days))
+
+
+def completed_pair_under(policy_value: EntryPolicy) -> EntryPairLifecycle:
+    """A Basket that has just completed its first Pair, under a chosen Policy."""
+    lifecycle = EntryPairLifecycle(policy_value)
+    lifecycle.record_fill(PAIR_COMPLETED_AT - MINUTE)
+    lifecycle.record_fill(PAIR_COMPLETED_AT)
+    return lifecycle
+
+
+def test_a_session_that_cools_down_for_no_time_never_closes_its_gate() -> None:
+    lifecycle = completed_pair_under(off_policy())
+
+    assert lifecycle.entry_gate(PAIR_COMPLETED_AT) == EntryGate(EntryGateState.OPEN)
+    assert lifecycle.completed_pairs == 1
+
+
+def test_a_cooldown_that_never_starts_leaves_nothing_to_cancel() -> None:
+    lifecycle = completed_pair_under(off_policy())
+
+    with pytest.raises(ValueError, match="no Cooldown"):
+        lifecycle.waive_cooldown(PAIR_COMPLETED_AT)
+
+
+def test_a_waiting_cooldown_stands_until_the_day_it_named() -> None:
+    """The day it named opens the gate; a second short of it does not."""
+    lifecycle = completed_pair_under(waiting_policy(days=3))
+    lifts_at = PAIR_COMPLETED_AT + timedelta(days=3)
+
+    assert lifecycle.entry_gate(PAIR_COMPLETED_AT) == EntryGate(EntryGateState.COOLDOWN)
+    assert lifecycle.entry_gate(lifts_at - SECOND) == EntryGate(EntryGateState.COOLDOWN)
+    assert lifecycle.entry_gate(lifts_at) == EntryGate(EntryGateState.OPEN)
+
+
+def test_a_waiting_cooldown_is_measured_from_the_fill_that_completed_the_pair() -> None:
+    lifecycle = completed_pair_under(waiting_policy(days=3))
+
+    assert lifecycle.cooldown_ends_at() == PAIR_COMPLETED_AT + timedelta(days=3)
+
+
+def test_a_cooldown_that_never_lapses_names_no_end() -> None:
+    assert completed_pair_under(policy()).cooldown_ends_at() is None
+
+
+def test_a_trader_need_not_wait_out_a_cooldown_that_would_lapse() -> None:
+    lifecycle = completed_pair_under(waiting_policy(days=3))
+
+    lifecycle.waive_cooldown(PAIR_COMPLETED_AT)
+
+    assert lifecycle.can_enter(PAIR_COMPLETED_AT)
+
+
+def test_the_pair_after_a_waived_one_waits_out_its_own_days() -> None:
+    lifecycle = completed_pair_under(waiting_policy(days=3))
+    lifecycle.waive_cooldown(PAIR_COMPLETED_AT)
+    lifecycle.record_fill(PAIR_COMPLETED_AT)
+    second_pair_at = PAIR_COMPLETED_AT + timedelta(days=1)
+    lifecycle.record_fill(second_pair_at)
+
+    assert lifecycle.entry_gate(second_pair_at + timedelta(days=2)) == EntryGate(
+        EntryGateState.COOLDOWN
+    )
+    assert lifecycle.entry_gate(second_pair_at + timedelta(days=3)) == EntryGate(
+        EntryGateState.OPEN
+    )
+
+
+def test_selling_out_of_a_waiting_pair_opens_the_gate_without_waiting() -> None:
+    lifecycle = completed_pair_under(waiting_policy(days=3))
+
+    lifecycle.release_fill(1)
+
+    assert lifecycle.can_enter(PAIR_COMPLETED_AT)
+
+
+def test_a_lapsed_cooldown_does_not_close_again_without_a_new_pair() -> None:
+    """Time only ever runs one way, and so does the gate this Pair left open."""
+    lifecycle = completed_pair_under(waiting_policy(days=3))
+    lapsed_at = PAIR_COMPLETED_AT + timedelta(days=3)
+
+    assert lifecycle.can_enter(lapsed_at)
+    assert lifecycle.can_enter(lapsed_at + timedelta(days=30))
+
+
+def test_a_waiting_cooldown_reads_the_same_after_a_restart() -> None:
+    """Replay reads the Pair's completion off the Fill that is still open."""
+    waiting = waiting_policy(days=3)
+    lifecycle = completed_pair_under(waiting)
+    lifts_at = PAIR_COMPLETED_AT + timedelta(days=3)
+
+    replayed = EntryPairLifecycle.replayed(
+        waiting,
+        open_entries=((1, PAIR_COMPLETED_AT - MINUTE), (2, PAIR_COMPLETED_AT)),
+        waived_pair=None,
+    )
+
+    assert replayed.cooldown_ends_at() == lifecycle.cooldown_ends_at()
+    assert replayed.entry_gate(lifts_at - SECOND) == EntryGate(EntryGateState.COOLDOWN)
+    assert replayed.entry_gate(lifts_at) == EntryGate(EntryGateState.OPEN)
+
+
+def test_replay_needs_no_time_for_a_pair_it_no_longer_holds_whole() -> None:
+    """A sold Entry takes its Pair's Cooldown with it, so nothing waits on it."""
+    replayed = EntryPairLifecycle.replayed(
+        waiting_policy(days=3),
+        open_entries=((2, PAIR_COMPLETED_AT),),
+        settled_entry_count=1,
+        waived_pair=None,
+    )
+
+    assert replayed.cooldown_ends_at() is None
+    assert replayed.can_enter(PAIR_COMPLETED_AT)
+
+
+def test_reset_forgets_when_the_pair_completed() -> None:
+    lifecycle = completed_pair_under(waiting_policy(days=3))
+
+    lifecycle.reset()
+
+    assert lifecycle.cooldown_ends_at() is None
+
+
+def test_every_reachable_basket_replays_the_same_under_a_waiting_cooldown() -> None:
+    """The walk's own rule, asked again of a Cooldown that lapses on its own."""
+    waiting = waiting_policy(days=3)
+    for reached in reachable_lifecycles(waiting):
+        replayed = reached.replayed(waiting)
+
+        assert replayed.entry_gate(reached.as_of) == reached.lifecycle.entry_gate(
+            reached.as_of
+        ), f"{reached.open_entry_numbers} replays as a different gate"

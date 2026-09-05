@@ -24,7 +24,7 @@ class UnsupportedDatabaseSchemaError(ValueError):
 
 
 class SQLiteDatabase:
-    _SCHEMA_VERSION = 16
+    _SCHEMA_VERSION = 17
     _BUSY_TIMEOUT_MS = 5_000
 
     def __init__(self, path: Path) -> None:
@@ -136,6 +136,8 @@ class SQLiteDatabase:
                         "ALTER TABLE trade_fills "
                         "ADD COLUMN group_take_profit_price TEXT"
                     )
+                if 1 <= version <= 16:
+                    _migrate_session_cooldown_policy_v17(connection)
                 connection.execute(f"PRAGMA user_version = {self._SCHEMA_VERSION}")
         finally:
             connection.close()
@@ -370,9 +372,55 @@ def _migrate_capital_per_entry_v12(connection: sqlite3.Connection) -> None:
     rows = connection.execute("SELECT * FROM bot_sessions").fetchall()
     converted = [
         (
-            *tuple(row[name] for name in _BOT_SESSIONS_COLUMN_NAMES[:6]),
+            *tuple(row[name] for name in _V12_BOT_SESSIONS_COLUMN_NAMES[:6]),
             str(_capital_per_entry_of(row)),
-            *tuple(row[name] for name in _BOT_SESSIONS_COLUMN_NAMES[7:]),
+            *tuple(row[name] for name in _V12_BOT_SESSIONS_COLUMN_NAMES[7:]),
+        )
+        for row in rows
+    ]
+    _raise_scratch_bot_sessions(connection, _BOT_SESSIONS_TABLE_SQL)
+    placeholders = ", ".join("?" for _ in _V12_BOT_SESSIONS_COLUMN_NAMES)
+    connection.executemany(
+        f"""
+        INSERT INTO new_bot_sessions ({", ".join(_V12_BOT_SESSIONS_COLUMN_NAMES)})
+        VALUES ({placeholders})
+        """,
+        converted,
+    )
+    connection.execute("DROP TABLE bot_sessions")
+    connection.execute("ALTER TABLE new_bot_sessions RENAME TO bot_sessions")
+    # The single-active index went with the table it indexed.
+    _create_bot_sessions_indexes(connection)
+
+
+def _migrate_session_cooldown_policy_v17(connection: sqlite3.Connection) -> None:
+    """Let a Session say how its Cooldown ends, and say what the old ones did.
+
+    A Cooldown used to be one fixed rule, so no Session stated one. Every
+    Session written before the choice existed was running the rule that waits
+    to be cancelled, and comes back running exactly that.
+
+    This is not the calendar-month Cooldown v13 dropped: a Cooldown that waits
+    is measured from the market time of the Fill that completed the Pair, which
+    the Fills already record, and a waiver still names a Pair. So nothing here
+    touches the waivers — only the Session gains what it now chooses.
+
+    The table is rebuilt rather than altered because a CHECK cannot be added to
+    rows already written any other way.
+    """
+    # Asked of the column the copy below reads, not only of the one it adds: a
+    # table without today's shape has no Session in it to carry over.
+    if not _has_column(connection, "bot_sessions", "capital_per_entry"):
+        return
+    if not _column_is_missing(connection, "bot_sessions", "cooldown_mode"):
+        return
+    rows = connection.execute("SELECT * FROM bot_sessions").fetchall()
+    kept = [
+        (
+            *tuple(row[name] for name in _BOT_SESSIONS_COLUMN_NAMES[:8]),
+            "until_cancelled",
+            None,
+            *tuple(row[name] for name in _BOT_SESSIONS_COLUMN_NAMES[10:]),
         )
         for row in rows
     ]
@@ -383,11 +431,10 @@ def _migrate_capital_per_entry_v12(connection: sqlite3.Connection) -> None:
         INSERT INTO new_bot_sessions ({_BOT_SESSIONS_COLUMNS})
         VALUES ({placeholders})
         """,
-        converted,
+        kept,
     )
     connection.execute("DROP TABLE bot_sessions")
     connection.execute("ALTER TABLE new_bot_sessions RENAME TO bot_sessions")
-    # The single-active index went with the table it indexed.
     _create_bot_sessions_indexes(connection)
 
 
@@ -490,6 +537,12 @@ _BOT_SESSIONS_TABLE_SQL = """
             max_entries INTEGER NOT NULL CHECK (
                 max_entries BETWEEN 2 AND 20 AND max_entries % 2 = 0
             ),
+            cooldown_mode TEXT NOT NULL DEFAULT 'until_cancelled' CHECK (
+                cooldown_mode IN ('off', 'duration', 'until_cancelled')
+            ),
+            cooldown_days INTEGER CHECK (
+                cooldown_days IS NULL OR cooldown_days BETWEEN 1 AND 30
+            ),
             futures_policy_version TEXT,
             futures_leverage INTEGER,
             futures_trading_capital_ratio TEXT,
@@ -502,13 +555,19 @@ _BOT_SESSIONS_TABLE_SQL = """
                 (market_type = 'spot' AND futures_policy_version IS NULL)
                 OR
                 (market_type = 'futures' AND futures_policy_version IS NOT NULL)
+            ),
+            -- Days belong to a Cooldown that waits, and to no other, which is
+            -- the same rule CooldownPolicy states of itself.
+            CHECK (
+                (cooldown_mode = 'duration') = (cooldown_days IS NOT NULL)
             )
         )
 """
 
-# Every column of bot_sessions in one order, for a rebuild that copies rather
-# than reshapes: naming them keeps the copy honest if the shape moves again.
-_BOT_SESSIONS_COLUMN_NAMES = (
+# What a Session stated at v12, in order. A migration writes the columns of
+# its own moment and leaves later ones to the defaults the table gives them,
+# so adding a column never has to be remembered in every migration before it.
+_V12_BOT_SESSIONS_COLUMN_NAMES = (
     "session_id",
     "trade_mode",
     "market_type",
@@ -527,9 +586,33 @@ _BOT_SESSIONS_COLUMN_NAMES = (
     "ended_at_utc",
 )
 
+# Every column of bot_sessions in one order, for a rebuild that copies rather
+# than reshapes: naming them keeps the copy honest if the shape moves again.
+_BOT_SESSIONS_COLUMN_NAMES = (
+    "session_id",
+    "trade_mode",
+    "market_type",
+    "symbol",
+    "timeframe",
+    "preset_version",
+    "capital_per_entry",
+    "max_entries",
+    "cooldown_mode",
+    "cooldown_days",
+    "futures_policy_version",
+    "futures_leverage",
+    "futures_trading_capital_ratio",
+    "futures_collateral_buffer_ratio",
+    "futures_margin_mode",
+    "futures_position_mode",
+    "created_at_utc",
+    "ended_at_utc",
+)
+
 _BOT_SESSIONS_COLUMNS = """
             session_id, trade_mode, market_type, symbol, timeframe,
             preset_version, capital_per_entry, max_entries,
+            cooldown_mode, cooldown_days,
             futures_policy_version, futures_leverage,
             futures_trading_capital_ratio, futures_collateral_buffer_ratio,
             futures_margin_mode, futures_position_mode,

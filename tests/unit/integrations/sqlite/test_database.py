@@ -1,3 +1,4 @@
+import sqlite3
 from pathlib import Path
 
 import pytest
@@ -48,13 +49,13 @@ def test_reader_can_read_committed_snapshot_while_writer_is_active(
 def test_migrate_reports_newer_schema_with_version_facts(tmp_path: Path) -> None:
     database = SQLiteDatabase(tmp_path / "tiewtrade.sqlite3")
     with database.connect() as connection:
-        connection.execute("PRAGMA user_version = 17")
+        connection.execute("PRAGMA user_version = 18")
 
     with pytest.raises(UnsupportedDatabaseSchemaError) as caught:
         database.migrate()
 
-    assert caught.value.database_version == 17
-    assert caught.value.supported_version == 16
+    assert caught.value.database_version == 18
+    assert caught.value.supported_version == 17
 
 
 def test_migrate_creates_cooldown_waivers_table_on_a_fresh_database(
@@ -242,3 +243,101 @@ def test_clear_all_data_empties_every_table_and_keeps_the_schema_version(
         "paper_runtime_lifecycle": 0,
         "paper_cooldown_waivers": 0,
     }
+
+
+_V16_BOT_SESSIONS_TABLE_SQL = """
+    CREATE TABLE bot_sessions (
+        session_id TEXT PRIMARY KEY,
+        trade_mode TEXT NOT NULL CHECK (trade_mode = 'paper'),
+        market_type TEXT NOT NULL CHECK (market_type IN ('spot', 'futures')),
+        symbol TEXT NOT NULL,
+        timeframe TEXT NOT NULL,
+        preset_version TEXT NOT NULL,
+        capital_per_entry TEXT NOT NULL,
+        max_entries INTEGER NOT NULL CHECK (
+            max_entries BETWEEN 2 AND 20 AND max_entries % 2 = 0
+        ),
+        futures_policy_version TEXT,
+        futures_leverage INTEGER,
+        futures_trading_capital_ratio TEXT,
+        futures_collateral_buffer_ratio TEXT,
+        futures_margin_mode TEXT,
+        futures_position_mode TEXT,
+        created_at_utc TEXT NOT NULL,
+        ended_at_utc TEXT
+    )
+"""
+"""bot_sessions as v16 left it: no Cooldown of the Session's own."""
+
+
+def _v16_bot_session(connection: sqlite3.Connection) -> None:
+    """One Spot Session as v16 wrote it, before a Cooldown could be chosen."""
+    connection.execute(
+        """
+        INSERT INTO bot_sessions (
+            session_id, trade_mode, market_type, symbol, timeframe,
+            preset_version, capital_per_entry, max_entries, created_at_utc
+        ) VALUES (
+            'session', 'paper', 'spot', 'BTCUSDT', '5m',
+            'rsi-step-grid-v1', '250', 4, '2026-01-01T00:00:00+00:00'
+        )
+        """
+    )
+
+
+def test_migrate_gives_an_older_session_the_cooldown_it_was_already_running(
+    tmp_path: Path,
+) -> None:
+    """Every Session written before the choice existed waits to be cancelled."""
+    database = SQLiteDatabase(tmp_path / "tiewtrade.sqlite3")
+    database.migrate()
+    with database.connect() as connection:
+        connection.execute("DROP TABLE bot_sessions")
+        connection.execute(_V16_BOT_SESSIONS_TABLE_SQL)
+        _v16_bot_session(connection)
+        connection.execute("PRAGMA user_version = 16")
+
+    database.migrate()
+
+    with database.connect() as connection:
+        row = connection.execute(
+            "SELECT cooldown_mode, cooldown_days FROM bot_sessions"
+        ).fetchone()
+
+    assert row["cooldown_mode"] == "until_cancelled"
+    assert row["cooldown_days"] is None
+
+
+@pytest.mark.parametrize(
+    ("mode", "days"),
+    [
+        ("off", 7),
+        ("until_cancelled", 7),
+        ("duration", None),
+        ("duration", 0),
+        ("duration", 31),
+        ("sometimes", None),
+    ],
+)
+def test_a_session_row_cannot_state_a_cooldown_the_policy_would_reject(
+    tmp_path: Path, mode: str, days: int | None
+) -> None:
+    database = SQLiteDatabase(tmp_path / "tiewtrade.sqlite3")
+    database.migrate()
+
+    with database.connect() as connection:
+        with pytest.raises(sqlite3.IntegrityError):
+            connection.execute(
+                """
+                INSERT INTO bot_sessions (
+                    session_id, trade_mode, market_type, symbol, timeframe,
+                    preset_version, capital_per_entry, max_entries,
+                    cooldown_mode, cooldown_days, created_at_utc
+                ) VALUES (
+                    'session', 'paper', 'spot', 'BTCUSDT', '5m',
+                    'rsi-step-grid-v1', '250', 4, ?, ?,
+                    '2026-01-01T00:00:00+00:00'
+                )
+                """,
+                (mode, days),
+            )
