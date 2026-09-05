@@ -19,7 +19,9 @@ from tiewtrade.ui.main_window import (
 )
 from tiewtrade.ui.session_workflow import CreateSession, LoadActiveSession
 from tiewtrade.ui.settings_workflow import (
+    ReadBotTitle,
     ReadLineNotifications,
+    SaveBotTitle,
     SaveLineNotifications,
 )
 from tiewtrade.ui.theme import DARK_THEME, apply_dark_appearance
@@ -43,6 +45,8 @@ def run_desktop(
     clear_database: Callable[[], None] | None = None,
     save_line_notifications: SaveLineNotifications | None = None,
     read_line_notifications: ReadLineNotifications | None = None,
+    save_bot_title: SaveBotTitle | None = None,
+    read_bot_title: ReadBotTitle | None = None,
     activation_name: str | None = None,
 ) -> int:
     app = the_qt_application()
@@ -60,6 +64,8 @@ def run_desktop(
         clear_database=clear_database,
         save_line_notifications=save_line_notifications,
         read_line_notifications=read_line_notifications,
+        save_bot_title=save_bot_title,
+        read_bot_title=read_bot_title,
     )
     window.setStyleSheet(DARK_THEME)
     window.show()

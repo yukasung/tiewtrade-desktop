@@ -541,3 +541,19 @@ def test_bot_control_page_is_not_stretched_by_the_taller_setup_form(
     assert button.isVisible()
     bottom = button.mapTo(viewport, QPoint(0, button.height())).y()
     assert bottom <= viewport.height()
+
+
+def test_the_toolbar_wears_the_whole_title_it_is_given(qtbot: QtBot) -> None:
+    """The title is all of it: the application's name is only the default."""
+    workspace = TradingWorkspace()
+    qtbot.addWidget(workspace)
+
+    assert workspace.toolbar_title.text() == "TiewTrade"
+
+    workspace.show_bot_title("Khun Somchai")
+
+    assert workspace.toolbar_title.text() == "Khun Somchai"
+
+    workspace.show_bot_title("   ")
+
+    assert workspace.toolbar_title.text() == "TiewTrade"

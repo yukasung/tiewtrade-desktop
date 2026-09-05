@@ -62,7 +62,9 @@ from tiewtrade.ui.session_workflow import (
     SessionWorkflow,
 )
 from tiewtrade.ui.settings_workflow import (
+    ReadBotTitle,
     ReadLineNotifications,
+    SaveBotTitle,
     SaveLineNotifications,
     SettingsWorkflow,
 )
@@ -174,6 +176,8 @@ class MainWindow(QMainWindow):
         clear_database: Callable[[], None] | None = None,
         save_line_notifications: SaveLineNotifications | None = None,
         read_line_notifications: ReadLineNotifications | None = None,
+        save_bot_title: SaveBotTitle | None = None,
+        read_bot_title: ReadBotTitle | None = None,
     ) -> None:
         super().__init__()
         self._blocked_notice = blocked_notice or self._open_blocked_notice
@@ -205,10 +209,16 @@ class MainWindow(QMainWindow):
             clear_database=clear_database,
             save_line_notifications=save_line_notifications,
             read_line_notifications=read_line_notifications,
+            save_bot_title=save_bot_title,
+            read_bot_title=read_bot_title,
             thread_pool=self._thread_pool,
             parent=self,
         )
         self._settings.database_cleared.connect(self._database_cleared)
+        # The toolbar wears whatever this installation is called, from the
+        # first frame and again whenever it is changed on the Settings page.
+        self._settings.bot_title_changed.connect(self.workspace.show_bot_title)
+        self._settings.refresh_bot_title()
         self._system_notice = SystemNoticeWorkflow(
             connection_notice=(
                 connection_notice or self.workspace.connection_notice_card

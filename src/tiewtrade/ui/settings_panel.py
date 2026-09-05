@@ -11,6 +11,13 @@ confirming to its window rather than asking it here.
 The LINE fields are filled in from what is stored, the token among them:
 a form that offers to change a token has to show which one it is changing.
 It arrives covered and stays that way unless the trader asks to see it.
+
+The Title at the top is the one value here that is read back out on screen
+rather than sent anywhere: it is what the toolbar says, all of it, so someone
+looking after several installations can tell which one the window in front of
+them is. What it says is the trader's business — a customer's name, a machine,
+a strategy they are trying — so the form asks for a title, offers the name of
+the application as the one to start from, and lets them take that out.
 """
 
 from PySide6.QtCore import QPointF, QRectF, Qt, Signal
@@ -24,12 +31,22 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from tiewtrade.ui.bot_title import bot_title_or_default
 from tiewtrade.ui.toggle_switch import ToggleSwitch
 
 CLEAR_DATABASE_BUSY_TEXT = "Clearing…"
 CLEAR_DATABASE_IDLE_TEXT = "Clear All Database"
-SAVE_LINE_BUSY_TEXT = "Saving…"
-SAVE_LINE_IDLE_TEXT = "Save Settings"
+SAVE_SETTINGS_BUSY_TEXT = "Saving…"
+SAVE_SETTINGS_IDLE_TEXT = "Save Settings"
+BOT_TITLE_PLACEHOLDER = "Shown at the top of the window"
+BOT_TITLE_MAX_LENGTH = 60
+"""As much of a remark as the toolbar can hold beside the name of the app.
+
+Whoever stores the title trims it too, against a file edited by hand rather
+than through this form — this is the same rule said where the typing happens,
+so a trader is stopped at the last character instead of losing the rest of
+what they typed on a save that looked like it worked.
+"""
 TOKEN_MISSING_PLACEHOLDER = "Messaging API channel access token"
 TOKEN_UNREADABLE_TEXT = "The saved LINE settings could not be read on this machine."
 REVEAL_TOKEN_TEXT = "Show the token being typed"
@@ -46,7 +63,8 @@ class SettingsPanel(QWidget):
     """The values and one-off actions that belong to the installation."""
 
     clear_database_requested = Signal()
-    line_notifications_save_requested = Signal(bool, str, str)
+    #: The whole page at once: the Title, then the LINE settings.
+    settings_save_requested = Signal(str, bool, str, str)
     back_requested = Signal()
 
     def __init__(self, parent: QWidget | None = None) -> None:
@@ -55,6 +73,19 @@ class SettingsPanel(QWidget):
 
         heading = QLabel("SETTINGS")
         heading.setObjectName("eyebrow")
+
+        bot_heading = QLabel("TITLE")
+        bot_heading.setObjectName("eyebrow")
+        # A remark, not an identity: nothing is bound to it and nothing reads
+        # it but the toolbar, so it may be changed or emptied at any time,
+        # while the Bot is running included.
+        self.bot_title = QLineEdit()
+        self.bot_title.setMaxLength(BOT_TITLE_MAX_LENGTH)
+        self.bot_title.setPlaceholderText(BOT_TITLE_PLACEHOLDER)
+        bot_form = QVBoxLayout()
+        bot_form.setContentsMargins(0, 0, 0, 0)
+        bot_form.setSpacing(12)
+        bot_form.addLayout(_field_row("Title", self.bot_title))
 
         line_heading = QLabel("LINE NOTIFICATIONS")
         line_heading.setObjectName("eyebrow")
@@ -90,9 +121,9 @@ class SettingsPanel(QWidget):
         self.line_token_state.setWordWrap(True)
         self.line_token_state.setVisible(False)
 
-        self.save_line_button = QPushButton(SAVE_LINE_IDLE_TEXT)
-        self.save_line_button.setObjectName("secondaryButton")
-        self.save_line_button.clicked.connect(self._save_line_notifications)
+        self.save_settings_button = QPushButton(SAVE_SETTINGS_IDLE_TEXT)
+        self.save_settings_button.setObjectName("secondaryButton")
+        self.save_settings_button.clicked.connect(self._save_settings)
 
         line_form = QVBoxLayout()
         line_form.setContentsMargins(0, 0, 0, 0)
@@ -112,6 +143,8 @@ class SettingsPanel(QWidget):
         layout.setContentsMargins(20, 20, 20, 20)
         layout.setSpacing(12)
         layout.addWidget(heading)
+        layout.addWidget(bot_heading)
+        layout.addLayout(bot_form)
         layout.addWidget(line_heading)
         layout.addLayout(line_enabled_row)
         layout.addLayout(line_form)
@@ -120,7 +153,7 @@ class SettingsPanel(QWidget):
         # yet to come will fill, so they stay where a trader last left them
         # instead of sliding down the page as fields are added above.
         layout.addStretch()
-        layout.addWidget(self.save_line_button)
+        layout.addWidget(self.save_settings_button)
         layout.addWidget(self.clear_database_button)
         layout.addWidget(self.back_button)
 
@@ -129,10 +162,20 @@ class SettingsPanel(QWidget):
         self.clear_database_button.setText(
             CLEAR_DATABASE_BUSY_TEXT if busy else CLEAR_DATABASE_IDLE_TEXT
         )
-        self.save_line_button.setEnabled(not busy)
-        self.save_line_button.setText(
-            SAVE_LINE_BUSY_TEXT if busy else SAVE_LINE_IDLE_TEXT
+        self.save_settings_button.setEnabled(not busy)
+        self.save_settings_button.setText(
+            SAVE_SETTINGS_BUSY_TEXT if busy else SAVE_SETTINGS_IDLE_TEXT
         )
+
+    def show_bot_title(self, title: str) -> None:
+        """Fill the Title from what is stored, or from the name to start from.
+
+        An installation nobody has titled shows the application's own name as
+        text in the field rather than as a greyed-out suggestion behind it:
+        the point of the default is that a trader can edit it or take it out,
+        and a placeholder is neither.
+        """
+        self.bot_title.setText(bot_title_or_default(title))
 
     def show_line_notifications(self, reading: LineNotificationsReading) -> None:
         """Fill the form from what is stored, the token field included.
@@ -167,8 +210,9 @@ class SettingsPanel(QWidget):
         self.line_token_state.setText(TOKEN_UNREADABLE_TEXT)
         self.line_token_state.setVisible(True)
 
-    def _save_line_notifications(self) -> None:
-        self.line_notifications_save_requested.emit(
+    def _save_settings(self) -> None:
+        self.settings_save_requested.emit(
+            self.bot_title.text().strip(),
             self.line_enabled.isChecked(),
             self.line_target_id.text().strip(),
             self.line_access_token.text().strip(),

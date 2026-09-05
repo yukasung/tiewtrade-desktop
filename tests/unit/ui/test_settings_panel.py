@@ -6,8 +6,9 @@ from pytestqt.qtbot import QtBot
 from tests.support.qt_interactions import click
 from tiewtrade.ui.settings_panel import (
     _EYE_ICON_SIZE,
-    SAVE_LINE_BUSY_TEXT,
-    SAVE_LINE_IDLE_TEXT,
+    BOT_TITLE_MAX_LENGTH,
+    SAVE_SETTINGS_BUSY_TEXT,
+    SAVE_SETTINGS_IDLE_TEXT,
     TOKEN_MISSING_PLACEHOLDER,
     TOKEN_UNREADABLE_TEXT,
     SettingsPanel,
@@ -87,19 +88,55 @@ def test_set_busy_disables_the_button_and_changes_its_label(qtbot: QtBot) -> Non
     assert panel.clear_database_button.text() == "Clear All Database"
 
 
-def test_saving_line_settings_emits_what_the_form_holds(qtbot: QtBot) -> None:
+def test_saving_emits_everything_the_form_holds(qtbot: QtBot) -> None:
+    """One button, one save: the page is kept the way it is read."""
     panel = SettingsPanel()
     qtbot.addWidget(panel)
+    panel.bot_title.setText("  Khun Somchai  ")
     panel.line_enabled.setChecked(True)
     panel.line_target_id.setText("  U123  ")
     panel.line_access_token.setText("  token-value  ")
 
-    with qtbot.waitSignal(
-        panel.line_notifications_save_requested, timeout=1000
-    ) as emitted:
-        click(panel.save_line_button)
+    with qtbot.waitSignal(panel.settings_save_requested, timeout=1000) as emitted:
+        click(panel.save_settings_button)
 
-    assert emitted.args == [True, "U123", "token-value"]
+    assert emitted.args == ["Khun Somchai", True, "U123", "token-value"]
+
+
+def test_the_bot_title_is_filled_in_from_what_is_stored(qtbot: QtBot) -> None:
+    """A form that offers to change a title has to show the one it changes."""
+    panel = SettingsPanel()
+    qtbot.addWidget(panel)
+
+    panel.show_bot_title("Khun Somchai")
+
+    assert panel.bot_title.text() == "Khun Somchai"
+
+
+def test_an_untitled_installation_offers_the_name_to_start_from(
+    qtbot: QtBot,
+) -> None:
+    """Typed into the field, not suggested behind it: it is there to be edited.
+
+    A trader who wants their own title has to be able to take this one out,
+    and a placeholder is nothing to take out.
+    """
+    panel = SettingsPanel()
+    qtbot.addWidget(panel)
+
+    panel.show_bot_title("")
+
+    assert panel.bot_title.text() == "TiewTrade"
+
+
+def test_the_bot_title_stops_at_what_a_toolbar_can_hold(qtbot: QtBot) -> None:
+    """Stopped at the last character, rather than trimmed behind their back."""
+    panel = SettingsPanel()
+    qtbot.addWidget(panel)
+
+    panel.bot_title.setText("x" * (BOT_TITLE_MAX_LENGTH + 20))
+
+    assert len(panel.bot_title.text()) == BOT_TITLE_MAX_LENGTH
 
 
 def test_the_token_field_starts_as_dots(qtbot: QtBot) -> None:
@@ -228,10 +265,10 @@ def test_set_busy_holds_the_save_button_too(qtbot: QtBot) -> None:
 
     panel.set_busy(True)
 
-    assert not panel.save_line_button.isEnabled()
-    assert panel.save_line_button.text() == SAVE_LINE_BUSY_TEXT
+    assert not panel.save_settings_button.isEnabled()
+    assert panel.save_settings_button.text() == SAVE_SETTINGS_BUSY_TEXT
 
     panel.set_busy(False)
 
-    assert panel.save_line_button.isEnabled()
-    assert panel.save_line_button.text() == SAVE_LINE_IDLE_TEXT
+    assert panel.save_settings_button.isEnabled()
+    assert panel.save_settings_button.text() == SAVE_SETTINGS_IDLE_TEXT
