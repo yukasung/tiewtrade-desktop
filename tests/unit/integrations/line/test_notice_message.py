@@ -6,6 +6,7 @@ from tiewtrade.application.session_notice import (
     BasketClosedNotice,
     BotErrorNotice,
     CooldownCancelledNotice,
+    CooldownEndedNotice,
     CooldownStartedNotice,
     EntryOpenedNotice,
     MarketFeedLostNotice,
@@ -259,3 +260,48 @@ def test_every_message_reads_as_three_blocks_split_by_a_blank_line() -> None:
         assert headline.splitlines()[1] == "BTCUSDT 5m"
         assert "" not in body.splitlines()
         assert when.endswith(" UTC")
+
+
+def test_a_cooldown_that_waits_says_the_day_it_lifts_on_by_itself() -> None:
+    message = notice_message(
+        CooldownStartedNotice(
+            market=MARKET,
+            basket_id=uuid4(),
+            completed_pairs=2,
+            open_entry_count=4,
+            started_at=MOMENT,
+            ends_at=datetime(2026, 8, 29, 10, 5, tzinfo=UTC),
+        )
+    )
+
+    assert message.splitlines() == [
+        "Cooldown started",
+        "BTCUSDT 5m",
+        "",
+        "2 Entry Pairs completed · 4 Entries open",
+        "The Bot will not open a new Entry until 2026-08-29 10:05:00 UTC,"
+        " or until you cancel the Cooldown.",
+        "",
+        "Started 2026-08-26 10:05:00 UTC",
+    ]
+
+
+def test_a_cooldown_that_ran_out_says_the_bot_may_buy_again() -> None:
+    message = notice_message(
+        CooldownEndedNotice(
+            market=MARKET,
+            basket_id=uuid4(),
+            completed_pairs=2,
+            ended_at=MOMENT,
+        )
+    )
+
+    assert message.splitlines() == [
+        "Cooldown ended",
+        "BTCUSDT 5m",
+        "",
+        "2 Entry Pairs completed",
+        "The Cooldown ran out of days on its own. The Bot can open a new Entry again.",
+        "",
+        "Ended 2026-08-26 10:05:00 UTC",
+    ]

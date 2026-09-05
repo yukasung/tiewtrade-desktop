@@ -100,6 +100,10 @@ class PaperSpotSessionSnapshot:
     # Entry Pairs the Basket has completed across its whole life, never back —
     # the same count that decides which Entry a standing Cooldown blocks.
     entry_completed_pairs: int
+    # When the Cooldown standing over this Basket lifts on its own, for a
+    # Session whose Cooldown waits out days. None under every other Policy,
+    # and none where no Cooldown is standing to end.
+    cooldown_ends_at: datetime | None
 
     @property
     def sold_entry_numbers(self) -> tuple[int, ...]:
@@ -598,4 +602,5 @@ class PaperSpotSession:
             waived_pair=waived_pair,
             waived_at=waived_at,
             entry_completed_pairs=self._lifecycle.completed_pairs,
+            cooldown_ends_at=self._lifecycle.cooldown_ends_at(),
         )

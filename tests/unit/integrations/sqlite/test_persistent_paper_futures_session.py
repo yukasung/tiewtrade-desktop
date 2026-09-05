@@ -151,6 +151,7 @@ def snapshot(
         failure_reason=None,
         entry_gate=EntryGate(EntryGateState.OPEN),
         entry_completed_pairs=0,
+        cooldown_ends_at=None,
         entry_group_id=1 if entry is not None else None,
         entry_group_take_profit_price=(Decimal("105") if entry is not None else None),
     )

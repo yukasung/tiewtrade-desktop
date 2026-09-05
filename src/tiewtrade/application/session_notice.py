@@ -76,8 +76,10 @@ class BasketClosedNotice:
 class CooldownStartedNotice:
     """The Basket completed an Entry Pair, so the gate closed behind it.
 
-    Worth saying because a Cooldown does not lapse: until the trader lifts it
-    the Bot will take no further Entry, however far the market moves.
+    Worth saying because the Bot will take no further Entry until it opens
+    again, however far the market moves. `ends_at` is the day it lifts on for
+    a Session whose Cooldown waits out days, and None for one that stands
+    until the trader lifts it.
     """
 
     market: SessionMarket
@@ -85,6 +87,21 @@ class CooldownStartedNotice:
     completed_pairs: int
     open_entry_count: int
     started_at: datetime
+    ends_at: datetime | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class CooldownEndedNotice:
+    """The Cooldown ran out of days, so the gate opened with nobody asking.
+
+    Worth saying for exactly that reason: nothing the trader did produced it,
+    so nothing else on screen would have told them the Bot may buy again.
+    """
+
+    market: SessionMarket
+    basket_id: UUID
+    completed_pairs: int
+    ended_at: datetime
 
 
 @dataclass(frozen=True, slots=True)
@@ -136,6 +153,7 @@ type SessionNotice = (
     EntryOpenedNotice
     | BasketClosedNotice
     | CooldownStartedNotice
+    | CooldownEndedNotice
     | CooldownCancelledNotice
     | MarketFeedLostNotice
     | MarketFeedRestoredNotice

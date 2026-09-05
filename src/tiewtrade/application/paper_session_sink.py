@@ -140,6 +140,7 @@ class PaperRuntimeSink[Snapshot: CandleSnapshot]:
         # starting is a change rather than a fact a snapshot carries, so the
         # sink is what remembers where the gate was to change from.
         self._entry_gate: EntryGateState | None = None
+        self._gate_just_lapsed = False
 
     async def warm_up(
         self,
@@ -196,6 +197,7 @@ class PaperRuntimeSink[Snapshot: CandleSnapshot]:
             self._candle = candle
             self._publish_snapshot(snapshot, candle, candle.close_time)
             cooling = self._gate_just_closed(snapshot)
+            lapsed = self._gate_just_lapsed
         # Outside the lock: whoever is told about this is somewhere else on
         # the network, and the next candle is due whether or not they have
         # answered yet.
@@ -208,6 +210,7 @@ class PaperRuntimeSink[Snapshot: CandleSnapshot]:
             lambda notices: notices.basket_closed, snapshot, snapshot.closed_basket
         )
         self._say(lambda notices: notices.cooldown_started, snapshot, cooling)
+        self._say(lambda notices: notices.cooldown_ended, snapshot, lapsed)
 
     async def process_in_progress(
         self,
@@ -331,9 +334,17 @@ class PaperRuntimeSink[Snapshot: CandleSnapshot]:
         A snapshot says what the gate is, never that it changed, and a
         Cooldown is worth saying once — when it closes — rather than on every
         candle it goes on standing through.
+
+        The other side of the same reading is left behind in
+        `_gate_just_lapsed`, so the gate this sink last saw is replaced once
+        per candle and both readings answer for the same replacement.
         """
         was = self._entry_gate
         self._entry_gate = gate_state(snapshot)
+        self._gate_just_lapsed = (
+            was is EntryGateState.COOLDOWN
+            and self._entry_gate is not EntryGateState.COOLDOWN
+        )
         return (
             self._entry_gate is EntryGateState.COOLDOWN
             and was is not EntryGateState.COOLDOWN

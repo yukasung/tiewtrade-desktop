@@ -101,6 +101,7 @@ def entry_snapshot() -> PaperSpotSessionSnapshot:
         waived_pair=None,
         waived_at=None,
         entry_completed_pairs=0,
+        cooldown_ends_at=None,
         entry_group_id=1,
         entry_group_take_profit_price=Decimal("105"),
     )
@@ -127,6 +128,7 @@ def close_snapshot() -> PaperSpotSessionSnapshot:
         waived_pair=None,
         waived_at=None,
         entry_completed_pairs=0,
+        cooldown_ends_at=None,
         entry_group_id=None,
         entry_group_take_profit_price=None,
     )
