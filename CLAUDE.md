@@ -89,9 +89,15 @@ market-data code, and is pinned for the whole session. `timezone` is always `UTC
 `max_entries` is shared across market types, pinned for the session, and must be an even
 number 2–20. RSI parameters, take-profit rule, and Entry Pair live in the Strategy
 Preset/product policy, not session config. A Cooldown starts when a Basket completes an
-Entry Pair and never lapses on its own — only the "Cancel Cooldown" action lifts it, one
-Cooldown at a time. Both Paper markets can lift one; Spot persists the waiver so it
-survives a restart, Futures does not (it never takes an open Basket back). `TradeMode.LIVE` must always go
+Entry Pair, and how it ends is the session's Cooldown Policy — chosen on the setup form
+and pinned for the session: `UNTIL_CANCELLED` (the default; only "Cancel Cooldown" lifts
+it), `DURATION` (lifts itself after 1–30 days, measured against candle time so replay
+stays deterministic, and "Cancel Cooldown" still cuts the wait short), or `OFF` (a
+completed Pair never closes the gate). "Cancel Cooldown" lifts one Cooldown at a time.
+Both Paper markets can lift one; Spot persists the waiver so it survives a restart,
+Futures does not (it never takes an open Basket back). Nothing is persisted for a
+`DURATION` Cooldown: the Fill that completed a standing Pair is always among the Entries
+replay reads back, and its time comes with it. `TradeMode.LIVE` must always go
 through Preflight and explicit user confirmation — setting `LIVE` is not itself a command
 to trade.
 
