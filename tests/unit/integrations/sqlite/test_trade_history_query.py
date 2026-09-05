@@ -213,9 +213,9 @@ def test_list_basket_history_filters_every_supported_dimension(
         ),
         (
             TradeHistoryFilter(from_utc=boundary),
-            # Newest first by the moment each is read at: the round that
-            # closed an hour in comes before the one still open at it.
-            (target, alternatives[1]),
+            # The round still open has no close to be dated by, and the other
+            # closed before the window.
+            (target,),
             Decimal("5.123"),
         ),
         (
@@ -482,13 +482,14 @@ def test_list_basket_history_reads_a_round_by_the_day_it_closed(
     assert tuple(item.basket_id for item in result.items) == (HIGH_ID,)
 
 
-def test_list_basket_history_reads_a_round_still_open_by_the_day_it_opened(
+def test_a_round_still_open_falls_out_of_a_narrowed_history(
     history: SQLiteTradeHistory,
 ) -> None:
-    """A Position that has not closed has only the day it opened to be read by.
+    """A round with nothing realised yet has no day to be listed under.
 
-    It still belongs in the list — dating it by a close that has not happened
-    would drop the round a trader is holding right now.
+    The row is read for the result it paid, and one still running has not paid
+    one — a trader watches that on the Position tab. Nothing excludes it by a
+    clause of its own: a NULL close fails the comparison.
     """
     midnight = datetime(2026, 2, 2, tzinfo=UTC)
     running = replace(
@@ -506,6 +507,9 @@ def test_list_basket_history_reads_a_round_still_open_by_the_day_it_opened(
         ),
     )
 
-    result = history.list_basket_history(TradeHistoryFilter(from_utc=midnight))
+    narrowed = history.list_basket_history(TradeHistoryFilter(from_utc=midnight))
+    unnarrowed = history.list_basket_history(TradeHistoryFilter())
 
-    assert tuple(item.basket_id for item in result.items) == (HIGH_ID,)
+    assert narrowed.items == ()
+    # A query naming no window still answers with it, as it always has.
+    assert tuple(item.basket_id for item in unnarrowed.items) == (HIGH_ID,)

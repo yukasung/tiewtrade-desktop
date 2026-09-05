@@ -50,13 +50,13 @@ def test_reader_can_read_committed_snapshot_while_writer_is_active(
 def test_migrate_reports_newer_schema_with_version_facts(tmp_path: Path) -> None:
     database = SQLiteDatabase(tmp_path / "tiewtrade.sqlite3")
     with database.connect() as connection:
-        connection.execute("PRAGMA user_version = 19")
+        connection.execute("PRAGMA user_version = 20")
 
     with pytest.raises(UnsupportedDatabaseSchemaError) as caught:
         database.migrate()
 
-    assert caught.value.database_version == 19
-    assert caught.value.supported_version == 18
+    assert caught.value.database_version == 20
+    assert caught.value.supported_version == 19
 
 
 def test_migrate_creates_cooldown_waivers_table_on_a_fresh_database(
@@ -454,3 +454,52 @@ def test_migrate_rebuilds_bot_sessions_for_a_session_a_runtime_points_at(
 
     assert session["cooldown_days"] == 30
     assert lifecycle["session_id"] == "session"
+
+
+def test_migrate_indexes_the_day_a_basket_closed(tmp_path: Path) -> None:
+    """Narrowing history to a range is a question asked of the closing day.
+
+    The history index orders the list by the day a Basket opened and answers
+    nothing about the other column, so a range would have been read by
+    scanning every round ever closed.
+    """
+    database = SQLiteDatabase(tmp_path / "tiewtrade.sqlite3")
+    database.migrate()
+
+    with database.connect() as connection:
+        plan = connection.execute(
+            """
+            EXPLAIN QUERY PLAN
+            SELECT * FROM basket_results
+            WHERE closed_at_utc >= ? AND closed_at_utc < ?
+            """,
+            ("2026-01-01T00:00:00+00:00", "2026-01-02T00:00:00+00:00"),
+        ).fetchall()
+
+    assert any("basket_results_closed_idx" in row["detail"] for row in plan), [
+        row["detail"] for row in plan
+    ]
+
+
+def test_migrate_indexes_the_closing_day_of_a_database_carried_forward(
+    tmp_path: Path,
+) -> None:
+    """A file that already held rounds gets the index too, not only a new one."""
+    path = tmp_path / "tiewtrade.sqlite3"
+    database = SQLiteDatabase(path)
+    database.migrate()
+    with database.connect() as connection:
+        connection.execute("DROP INDEX basket_results_closed_idx")
+        connection.execute("PRAGMA user_version = 18")
+
+    database.migrate()
+
+    with database.connect() as connection:
+        indexes = {
+            row["name"]
+            for row in connection.execute(
+                "SELECT name FROM sqlite_master WHERE type = 'index'"
+            )
+        }
+
+    assert "basket_results_closed_idx" in indexes

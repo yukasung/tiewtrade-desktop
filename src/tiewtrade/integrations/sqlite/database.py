@@ -24,7 +24,7 @@ class UnsupportedDatabaseSchemaError(ValueError):
 
 
 class SQLiteDatabase:
-    _SCHEMA_VERSION = 18
+    _SCHEMA_VERSION = 19
     _BUSY_TIMEOUT_MS = 5_000
 
     def __init__(self, path: Path) -> None:
@@ -147,6 +147,15 @@ class SQLiteDatabase:
                     _migrate_session_cooldown_policy_v17(connection)
                 if 1 <= version <= 17:
                     _migrate_cooldown_days_only_v18(connection)
+                if (
+                    1 <= version <= 18
+                    and _table_exists(connection, "basket_results")
+                    and _has_column(connection, "basket_results", "closed_at_utc")
+                ):
+                    # History narrowed to a day now reads the day a Basket
+                    # closed, which no index covered while the range was read
+                    # over the day it opened.
+                    _create_basket_closed_index(connection)
                 connection.execute(f"PRAGMA user_version = {self._SCHEMA_VERSION}")
         finally:
             connection.close()
@@ -235,6 +244,7 @@ def _create_schema(connection: sqlite3.Connection) -> None:
         ON basket_results (opened_at_utc DESC, basket_id DESC)
         """
     )
+    _create_basket_closed_index(connection)
     connection.execute(
         """
         CREATE INDEX IF NOT EXISTS trade_fills_basket_time_idx
@@ -242,6 +252,21 @@ def _create_schema(connection: sqlite3.Connection) -> None:
         """
     )
     _create_chart_history_indexes(connection)
+
+
+def _create_basket_closed_index(connection: sqlite3.Connection) -> None:
+    """History narrowed to a range reads the day a Basket closed.
+
+    The history index orders the list by the day a Basket opened, which is
+    still what the list is ordered by; narrowing it is a separate question
+    asked of a separate column.
+    """
+    connection.execute(
+        """
+        CREATE INDEX IF NOT EXISTS basket_results_closed_idx
+        ON basket_results (closed_at_utc DESC, basket_id DESC)
+        """
+    )
 
 
 def _create_chart_history_indexes(connection: sqlite3.Connection) -> None:

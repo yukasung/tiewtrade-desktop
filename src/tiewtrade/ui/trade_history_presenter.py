@@ -83,20 +83,19 @@ def trade_history_filter(values: TradeHistoryFilterValues) -> TradeHistoryFilter
     )
 
 
+def _closed_text(basket: BasketResult) -> str:
+    """When the round realised its result, or nothing while it still runs."""
+    if basket.closed_at_utc is None:
+        return BLANK
+    return display_timestamp(basket.closed_at_utc)
+
+
 BASKET_COLUMNS: tuple[Column[BasketResult], ...] = (
-    # Both ends of the round, because they answer different questions: when
-    # the Bot committed capital, and when the result below landed. A round
-    # can open one day and close the next, so one date cannot say both.
+    # Two stamps, because a round is listed under the day it closed but read
+    # for how long it ran. One "Date" column could only be one of the two, and
+    # whichever it was would read as the other half the time.
     Column("Opened", LEFT, lambda basket: display_timestamp(basket.opened_at_utc)),
-    Column(
-        "Closed",
-        LEFT,
-        lambda basket: (
-            BLANK
-            if basket.closed_at_utc is None
-            else display_timestamp(basket.closed_at_utc)
-        ),
-    ),
+    Column("Closed", LEFT, _closed_text),
     Column("Market", CENTER, lambda basket: display_enum(basket.market_type.value)),
     Column("Pair", LEFT, lambda basket: pair_text(basket.symbol)),
     Column("Timeframe", CENTER, lambda basket: basket.timeframe),

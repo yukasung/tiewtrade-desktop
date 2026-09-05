@@ -252,7 +252,7 @@ class SQLiteTradeHistory:
                 f"""
                 SELECT * FROM basket_results
                 {where_sql}
-                ORDER BY COALESCE(closed_at_utc, opened_at_utc) DESC, basket_id DESC
+                ORDER BY opened_at_utc DESC, basket_id DESC
                 """,
                 parameters,
             ).fetchall()
@@ -466,28 +466,26 @@ def _where(
     return f"WHERE {' AND '.join(clauses)}", tuple(parameters)
 
 
-_BASKET_DAY = "COALESCE(closed_at_utc, opened_at_utc)"
-"""The moment a round is read by: when it closed, or when it opened if it has not.
-
-A Position opened before midnight goes on running after it, and the result it
-realises belongs to the day it closed — read by the day it opened, today's
-result would sit hidden behind an older round. A round still open has no close
-to be read by, so it answers for the day it started, which keeps the one a
-trader is holding right now in the list.
-"""
-
-
 def _basket_where(
     filters: TradeHistoryFilter,
     *,
     closed_only: bool = False,
 ) -> tuple[str, tuple[object, ...]]:
+    """The same filters, dated by the day the Basket closed.
+
+    A round that opened before midnight and took profit after it realised its
+    result on the new day, and that is the day a trader looks for it under.
+    Dated by the day it opened, a take profit would be missing from the window
+    it happened in. A Basket still open has no such day yet, and a NULL close
+    is excluded by the comparison rather than by a clause of its own — a round
+    a trader is still holding is read on the Position tab, not here.
+    """
     clauses, parameters = _basket_facets(filters, prefix="", closed_only=closed_only)
     if filters.from_utc is not None:
-        clauses.append(f"{_BASKET_DAY} >= ?")
+        clauses.append("closed_at_utc >= ?")
         parameters.append(utc_text(filters.from_utc))
     if filters.before_utc is not None:
-        clauses.append(f"{_BASKET_DAY} < ?")
+        clauses.append("closed_at_utc < ?")
         parameters.append(utc_text(filters.before_utc))
     return _where(clauses, parameters)
 
