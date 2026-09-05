@@ -8,9 +8,15 @@ say if it does not — is for whoever owns the actual clearing to decide,
 the same way `PositionBasketTable.close_all_requested` leaves the
 confirming to its window rather than asking it here.
 
-The LINE fields are filled in from what is stored, the token among them:
-a form that offers to change a token has to show which one it is changing.
-It arrives covered and stays that way unless the trader asks to see it.
+The LINE and Telegram fields are filled in from what is stored, the tokens
+among them: a form that offers to change a token has to show which one it is
+changing. They arrive covered and stay that way unless the trader asks to see
+one, and each token is uncovered on its own — revealing the one being typed
+should not put the other on screen beside it.
+
+The two channels are a section each rather than one section with a choice in
+it, because they are not a choice: a trader may run either, both, or neither,
+and each is turned on by its own switch.
 
 The Title at the top is the one value here that is read back out on screen
 rather than sent anywhere: it is what the toolbar says, all of it, so someone
@@ -49,6 +55,10 @@ what they typed on a save that looked like it worked.
 """
 TOKEN_MISSING_PLACEHOLDER = "Messaging API channel access token"
 TOKEN_UNREADABLE_TEXT = "The saved LINE settings could not be read on this machine."
+TELEGRAM_TOKEN_MISSING_PLACEHOLDER = "Bot token from BotFather"
+TELEGRAM_TOKEN_UNREADABLE_TEXT = (
+    "The saved Telegram settings could not be read on this machine."
+)
 REVEAL_TOKEN_TEXT = "Show the token being typed"
 HIDE_TOKEN_TEXT = "Hide the token being typed"
 
@@ -58,13 +68,16 @@ _EYE_ICON_COLOR = "#94A3B8"
 type LineNotificationsReading = tuple[bool, str, str]
 """Turned on, who the messages go to, and the token they are sent with."""
 
+type TelegramNotificationsReading = tuple[bool, str, str]
+"""The same three things, for the chat a Telegram bot sends into."""
+
 
 class SettingsPanel(QWidget):
     """The values and one-off actions that belong to the installation."""
 
     clear_database_requested = Signal()
-    #: The whole page at once: the Title, then the LINE settings.
-    settings_save_requested = Signal(str, bool, str, str)
+    #: The whole page at once: the Title, then LINE, then Telegram.
+    settings_save_requested = Signal(str, bool, str, str, bool, str, str)
     back_requested = Signal()
 
     def __init__(self, parent: QWidget | None = None) -> None:
@@ -93,33 +106,32 @@ class SettingsPanel(QWidget):
         # A switch rather than a tick: this setting is not a fact about the
         # Session, it is something left running or left off.
         self.line_enabled = ToggleSwitch()
-        line_enabled_label = QLabel("Send a LINE message")
-        line_enabled_row = QHBoxLayout()
-        line_enabled_row.setSpacing(10)
-        line_enabled_row.addWidget(self.line_enabled)
-        line_enabled_row.addWidget(line_enabled_label)
-        line_enabled_row.addStretch()
+        line_enabled_row = _switch_row(self.line_enabled, "Send a LINE message")
         self.line_target_id = QLineEdit()
         self.line_target_id.setPlaceholderText("User or group ID")
-        self.line_access_token = QLineEdit()
-        self.line_access_token.setEchoMode(QLineEdit.EchoMode.Password)
-        self.line_access_token.setPlaceholderText(TOKEN_MISSING_PLACEHOLDER)
-
-        # Inside the field rather than beside it: the token needs the whole
-        # width of the page, and a button in the row would take some of it.
-        self.reveal_token = QAction(_eye_icon(crossed=True), REVEAL_TOKEN_TEXT, self)
-        self.reveal_token.setCheckable(True)
-        self.reveal_token.toggled.connect(self._show_token_being_typed)
-        self.line_access_token.addAction(
-            self.reveal_token, QLineEdit.ActionPosition.TrailingPosition
+        self.line_access_token, self.reveal_token = _covered_field(
+            self, TOKEN_MISSING_PLACEHOLDER
         )
-
         # Blank unless something is wrong: what a trader has to be told about
         # these settings is that they could not be read, not that they were.
-        self.line_token_state = QLabel()
-        self.line_token_state.setObjectName("fieldError")
-        self.line_token_state.setWordWrap(True)
-        self.line_token_state.setVisible(False)
+        self.line_token_state = _error_line()
+
+        telegram_heading = QLabel("TELEGRAM NOTIFICATIONS")
+        telegram_heading.setObjectName("eyebrow")
+
+        self.telegram_enabled = ToggleSwitch()
+        telegram_enabled_row = _switch_row(
+            self.telegram_enabled, "Send a Telegram message"
+        )
+        # A chat id, not a username: a bot can only send into a chat it has
+        # been added to, and that chat is named by a number the trader reads
+        # off their own bot rather than by the handle they see in the app.
+        self.telegram_chat_id = QLineEdit()
+        self.telegram_chat_id.setPlaceholderText("Chat, group or channel ID")
+        self.telegram_bot_token, self.reveal_telegram_token = _covered_field(
+            self, TELEGRAM_TOKEN_MISSING_PLACEHOLDER
+        )
+        self.telegram_token_state = _error_line()
 
         self.save_settings_button = QPushButton(SAVE_SETTINGS_IDLE_TEXT)
         self.save_settings_button.setObjectName("secondaryButton")
@@ -130,6 +142,12 @@ class SettingsPanel(QWidget):
         line_form.setSpacing(12)
         line_form.addLayout(_field_row("Send to", self.line_target_id))
         line_form.addLayout(_field_row("Access token", self.line_access_token))
+
+        telegram_form = QVBoxLayout()
+        telegram_form.setContentsMargins(0, 0, 0, 0)
+        telegram_form.setSpacing(12)
+        telegram_form.addLayout(_field_row("Send to", self.telegram_chat_id))
+        telegram_form.addLayout(_field_row("Bot token", self.telegram_bot_token))
 
         self.clear_database_button = QPushButton(CLEAR_DATABASE_IDLE_TEXT)
         self.clear_database_button.setObjectName("destructiveButton")
@@ -148,6 +166,10 @@ class SettingsPanel(QWidget):
         layout.addLayout(line_enabled_row)
         layout.addLayout(line_form)
         layout.addWidget(self.line_token_state)
+        layout.addWidget(telegram_heading)
+        layout.addLayout(telegram_enabled_row)
+        layout.addLayout(telegram_form)
+        layout.addWidget(self.telegram_token_state)
         # The actions sit at the foot of the page, under the space the values
         # yet to come will fill, so they stay where a trader last left them
         # instead of sliding down the page as fields are added above.
@@ -191,13 +213,17 @@ class SettingsPanel(QWidget):
         self.line_token_state.clear()
         self.line_token_state.setVisible(False)
 
-    def _show_token_being_typed(self, revealed: bool) -> None:
-        """Uncover the token, which is covered whenever the form is filled."""
-        self.line_access_token.setEchoMode(
-            QLineEdit.EchoMode.Normal if revealed else QLineEdit.EchoMode.Password
-        )
-        self.reveal_token.setIcon(_eye_icon(crossed=not revealed))
-        self.reveal_token.setText(HIDE_TOKEN_TEXT if revealed else REVEAL_TOKEN_TEXT)
+    def show_telegram_notifications(
+        self, reading: TelegramNotificationsReading
+    ) -> None:
+        """Fill the Telegram half of the form, on the same terms as the LINE half."""
+        enabled, chat_id, bot_token = reading
+        self.telegram_enabled.setChecked(enabled)
+        self.telegram_chat_id.setText(chat_id)
+        self.reveal_telegram_token.setChecked(False)
+        self.telegram_bot_token.setText(bot_token)
+        self.telegram_token_state.clear()
+        self.telegram_token_state.setVisible(False)
 
     def say_line_notifications_unreadable(self) -> None:
         """Say the settings could not be read, rather than that there are none.
@@ -209,12 +235,25 @@ class SettingsPanel(QWidget):
         self.line_token_state.setText(TOKEN_UNREADABLE_TEXT)
         self.line_token_state.setVisible(True)
 
+    def say_telegram_notifications_unreadable(self) -> None:
+        """The same thing said under the Telegram fields, for the same reason.
+
+        Said under the channel it is about rather than once for the page: the
+        two are stored apart, and a trader whose LINE settings read back fine
+        should not be told to go looking at them.
+        """
+        self.telegram_token_state.setText(TELEGRAM_TOKEN_UNREADABLE_TEXT)
+        self.telegram_token_state.setVisible(True)
+
     def _save_settings(self) -> None:
         self.settings_save_requested.emit(
             self.bot_title.text().strip(),
             self.line_enabled.isChecked(),
             self.line_target_id.text().strip(),
             self.line_access_token.text().strip(),
+            self.telegram_enabled.isChecked(),
+            self.telegram_chat_id.text().strip(),
+            self.telegram_bot_token.text().strip(),
         )
 
 
@@ -247,6 +286,54 @@ def _eye_icon(*, crossed: bool) -> QIcon:
     icon = QIcon()
     icon.addPixmap(pixmap)
     return icon
+
+
+def _covered_field(owner: QWidget, placeholder: str) -> tuple[QLineEdit, QAction]:
+    """A covered field with the eye that uncovers it, wired to that field alone.
+
+    The eye sits inside the field rather than beside it: a token needs the
+    whole width of the page, and a button in the row would take some of it.
+    Each field carries its own, so uncovering one token leaves the other as
+    the page found it.
+    """
+    field = QLineEdit()
+    field.setEchoMode(QLineEdit.EchoMode.Password)
+    field.setPlaceholderText(placeholder)
+    reveal = QAction(_eye_icon(crossed=True), REVEAL_TOKEN_TEXT, owner)
+    reveal.setCheckable(True)
+    reveal.toggled.connect(
+        lambda revealed: _show_token_being_typed(field, reveal, revealed)
+    )
+    field.addAction(reveal, QLineEdit.ActionPosition.TrailingPosition)
+    return field, reveal
+
+
+def _show_token_being_typed(field: QLineEdit, reveal: QAction, revealed: bool) -> None:
+    """Uncover a token, which is covered whenever the form is filled."""
+    field.setEchoMode(
+        QLineEdit.EchoMode.Normal if revealed else QLineEdit.EchoMode.Password
+    )
+    reveal.setIcon(_eye_icon(crossed=not revealed))
+    reveal.setText(HIDE_TOKEN_TEXT if revealed else REVEAL_TOKEN_TEXT)
+
+
+def _switch_row(switch: ToggleSwitch, label: str) -> QHBoxLayout:
+    """A switch with what it turns on written beside it."""
+    row = QHBoxLayout()
+    row.setSpacing(10)
+    row.addWidget(switch)
+    row.addWidget(QLabel(label))
+    row.addStretch()
+    return row
+
+
+def _error_line() -> QLabel:
+    """A line kept blank until there is something wrong to say on it."""
+    line = QLabel()
+    line.setObjectName("fieldError")
+    line.setWordWrap(True)
+    line.setVisible(False)
+    return line
 
 
 def _field_row(label: str, field: QWidget) -> QVBoxLayout:

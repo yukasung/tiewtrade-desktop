@@ -69,12 +69,14 @@ from tiewtrade.integrations.sqlite.paper_runtime_lifecycle import (
     SQLitePaperRuntimeLifecycle,
 )
 from tiewtrade.integrations.sqlite.trade_history import SQLiteTradeHistory
-from tiewtrade.line_notification_composition import (
-    line_notification_reading,
-    line_session_notifier,
-    save_line_notification_settings,
-)
 from tiewtrade.market_data.candle import Candle
+from tiewtrade.notification_composition import (
+    line_notification_reading,
+    save_line_notification_settings,
+    save_telegram_notification_settings,
+    session_notifier,
+    telegram_notification_reading,
+)
 from tiewtrade.strategies.protocols import StrategyPreset
 from tiewtrade.strategies.registry import strategy_definition_for
 from tiewtrade.trading.session_config import MarketType
@@ -543,7 +545,7 @@ def _run_desktop_holding_the_installation(
         prepare_database=prepare_database,
         symbol_rules=_symbol_rules_for,
         source_factory=BinancePublicMarketData,
-        notifier_factory=line_session_notifier,
+        notifier_factory=session_notifier,
     )
 
     def shutdown_desktop_runtimes() -> None:
@@ -576,6 +578,8 @@ def _run_desktop_holding_the_installation(
         clear_database=_migrate_first(prepare_database, database.clear_all_data),
         save_line_notifications=_keep_line_notifications,
         read_line_notifications=line_notification_reading,
+        save_telegram_notifications=_keep_telegram_notifications,
+        read_telegram_notifications=telegram_notification_reading,
         # Beside the database, for the same reason the log is: it is what
         # this installation is, and it outlives every Session it has had.
         save_bot_title=partial(save_bot_title, resolved_database_path.parent),
@@ -593,6 +597,18 @@ def _keep_line_notifications(
         enabled=enabled,
         target_id=target_id,
         channel_access_token=access_token,
+    )
+
+
+def _keep_telegram_notifications(
+    enabled: bool,
+    chat_id: str,
+    bot_token: str,
+) -> None:
+    save_telegram_notification_settings(
+        enabled=enabled,
+        chat_id=chat_id,
+        bot_token=bot_token,
     )
 
 

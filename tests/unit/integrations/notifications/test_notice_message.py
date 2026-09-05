@@ -13,7 +13,7 @@ from tiewtrade.application.session_notice import (
     MarketFeedRestoredNotice,
     SessionMarket,
 )
-from tiewtrade.integrations.line.notice_message import notice_message
+from tiewtrade.integrations.notifications.notice_message import notice_message
 from tiewtrade.trading.basket import BasketCloseReason
 
 MARKET = SessionMarket(session_id=uuid4(), symbol="BTCUSDT", timeframe="5m")

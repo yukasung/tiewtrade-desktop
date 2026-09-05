@@ -1,10 +1,16 @@
-"""Say what the Bot did, over the LINE Messaging API.
+"""Queue what the Bot did, and push it to a chat service one message at a time.
+
+What differs between LINE and Telegram is the request that carries a message,
+and that lives in each channel's own transport. Everything else — holding a
+notice, retrying it once, giving up on it, and saying so in the log — reads
+the same whichever chat service is on the other end, so it is written once
+here and told which channel it is working for.
 
 A message is worth sending and never worth waiting for. The Bot decides on a
-completed candle, and the candle after it is due whether or not LINE answered
-the last one — so notices are queued and pushed by a worker of this module's
-own, and the Session that raised one is never made to wait on a socket, never
-blocked by a slow reply, and never stopped by a failed one.
+completed candle, and the candle after it is due whether or not the chat
+service answered the last one — so notices are queued and pushed by a worker
+of this module's own, and the Session that raised one is never made to wait on
+a socket, never blocked by a slow reply, and never stopped by a failed one.
 
 Notices arrive from two places: the candle loop, on the Runtime's own thread,
 and the thread a trader's ask comes in on. Both are taken here, and only this
@@ -24,15 +30,15 @@ from types import TracebackType
 from typing import Protocol, Self
 
 from tiewtrade.application.session_notice import SessionNotice
-from tiewtrade.integrations.line.notice_message import notice_message
+from tiewtrade.integrations.notifications.notice_message import notice_message
 
 _logger = logging.getLogger(__name__)
 
 # How many unsent notices to hold before dropping the newest.
 #
 # A Session raises at most a handful a candle, so a queue this deep is only
-# ever reached by LINE being unreachable for far longer than the messages
-# would still be worth reading. Holding more would only queue up a burst of
+# ever reached by the chat service being unreachable for far longer than the
+# messages would still be worth reading. Holding more would only queue up a burst of
 # stale notices to arrive at once when it comes back.
 DEFAULT_QUEUE_SIZE = 16
 DEFAULT_RETRY_DELAY_SECONDS = 2.0
@@ -40,30 +46,33 @@ DEFAULT_RETRY_DELAY_SECONDS = 2.0
 SHUTDOWN_DRAIN_SECONDS = 10.0
 
 
-class LineEventName(StrEnum):
-    SENT = "line.notification.sent"
-    FAILED = "line.notification.failed"
-    DROPPED = "line.notification.dropped"
+class NoticeEventName(StrEnum):
+    """What happened to one notice, said under the channel it was going to."""
+
+    SENT = "notification.sent"
+    FAILED = "notification.failed"
+    DROPPED = "notification.dropped"
 
 
-class LinePushOutcome(StrEnum):
+class PushOutcome(StrEnum):
     """What became of one push, as far as trying again is concerned."""
 
     DELIVERED = "delivered"
-    # LINE could not be reached, or could not answer — worth one more try.
+    # The chat service could not be reached, or could not answer — worth one
+    # more try.
     RETRYABLE = "retryable"
-    # LINE answered and refused: a bad token, an unknown recipient, a message
-    # it will not take. Trying again would only be refused the same way.
+    # The chat service answered and refused: a bad token, an unknown recipient,
+    # a message it will not take. Trying again would be refused the same way.
     REJECTED = "rejected"
 
 
-class LinePush(Protocol):
-    """Put one text message in front of LINE."""
+class NoticePush(Protocol):
+    """Put one text message in front of whichever chat service is set up."""
 
-    def push(self, message: str) -> Awaitable[LinePushOutcome]: ...
+    def push(self, message: str) -> Awaitable[PushOutcome]: ...
 
 
-class LineNoticeNotifier:
+class NoticeNotifier:
     """Queues notices and pushes them, one at a time, off the candle loop.
 
     Opened for the life of one Runtime: entering starts the worker, and leaving
@@ -72,12 +81,17 @@ class LineNoticeNotifier:
 
     def __init__(
         self,
-        push: LinePush,
+        push: NoticePush,
         *,
+        channel: str,
         queue_size: int = DEFAULT_QUEUE_SIZE,
         retry_delay_seconds: float = DEFAULT_RETRY_DELAY_SECONDS,
     ) -> None:
         self._push = push
+        # Named rather than inferred from the transport: the log is read to
+        # find out which chat service stopped answering, and a class name is
+        # not that answer once a second channel exists.
+        self._channel = channel
         self._retry_delay_seconds = retry_delay_seconds
         self._queue: asyncio.Queue[SessionNotice] = asyncio.Queue(maxsize=queue_size)
         self._worker: asyncio.Task[None] | None = None
@@ -107,9 +121,9 @@ class LineNoticeNotifier:
         try:
             await asyncio.wait_for(self._queue.join(), SHUTDOWN_DRAIN_SECONDS)
         except TimeoutError:
-            _log(
+            self._log(
                 logging.WARNING,
-                LineEventName.DROPPED,
+                NoticeEventName.DROPPED,
                 {"drop_reason": "runtime stopped before the queue was empty"},
             )
         worker.cancel()
@@ -128,9 +142,9 @@ class LineNoticeNotifier:
         """
         loop = self._loop
         if loop is None:
-            _log(
+            self._log(
                 logging.WARNING,
-                LineEventName.DROPPED,
+                NoticeEventName.DROPPED,
                 _fields(notice, drop_reason="nothing is listening for notices"),
             )
             return
@@ -144,9 +158,9 @@ class LineNoticeNotifier:
         try:
             loop.call_soon_threadsafe(self._enqueue, notice)
         except RuntimeError:
-            _log(
+            self._log(
                 logging.WARNING,
-                LineEventName.DROPPED,
+                NoticeEventName.DROPPED,
                 _fields(notice, drop_reason="the Runtime loop has closed"),
             )
 
@@ -154,10 +168,13 @@ class LineNoticeNotifier:
         try:
             self._queue.put_nowait(notice)
         except asyncio.QueueFull:
-            _log(
+            self._log(
                 logging.WARNING,
-                LineEventName.DROPPED,
-                _fields(notice, drop_reason="more notices than LINE is taking"),
+                NoticeEventName.DROPPED,
+                _fields(
+                    notice,
+                    drop_reason="more notices than the chat service is taking",
+                ),
             )
 
     async def _deliver_queued(self) -> None:
@@ -171,15 +188,15 @@ class LineNoticeNotifier:
     async def _deliver(self, notice: SessionNotice) -> None:
         message = notice_message(notice)
         outcome = await self._attempt(message, notice)
-        if outcome is LinePushOutcome.RETRYABLE:
+        if outcome is PushOutcome.RETRYABLE:
             await asyncio.sleep(self._retry_delay_seconds)
             outcome = await self._attempt(message, notice)
-        if outcome is LinePushOutcome.DELIVERED:
-            _log(logging.INFO, LineEventName.SENT, _fields(notice))
+        if outcome is PushOutcome.DELIVERED:
+            self._log(logging.INFO, NoticeEventName.SENT, _fields(notice))
             return
-        _log(
+        self._log(
             logging.WARNING,
-            LineEventName.DROPPED,
+            NoticeEventName.DROPPED,
             _fields(notice, drop_reason=outcome.value),
         )
 
@@ -187,7 +204,7 @@ class LineNoticeNotifier:
         self,
         message: str,
         notice: SessionNotice,
-    ) -> LinePushOutcome:
+    ) -> PushOutcome:
         """One push, with anything the transport throws read as worth retrying.
 
         A transport that raises is a transport that did not answer, which is
@@ -199,12 +216,28 @@ class LineNoticeNotifier:
         except asyncio.CancelledError:
             raise
         except Exception as error:
-            _log(
+            self._log(
                 logging.WARNING,
-                LineEventName.FAILED,
+                NoticeEventName.FAILED,
                 _fields(notice, failure_reason=type(error).__name__),
             )
-            return LinePushOutcome.RETRYABLE
+            return PushOutcome.RETRYABLE
+
+    def _log(
+        self,
+        level: int,
+        event: NoticeEventName,
+        fields: dict[str, object],
+    ) -> None:
+        """One line per event, with nothing in it that identifies the account.
+
+        The channel goes in front of the event, so a log holding both LINE and
+        Telegram lines can be read for one of them. The token is held by the
+        transport and never reaches here, so no field written by this class
+        can carry it into a log file.
+        """
+        detail = " ".join(f"{name}={value}" for name, value in fields.items())
+        _logger.log(level, "%s.%s %s", self._channel, event.value, detail)
 
 
 def _fields(notice: SessionNotice, **extra: object) -> dict[str, object]:
@@ -220,13 +253,3 @@ def _fields(notice: SessionNotice, **extra: object) -> dict[str, object]:
     }
     fields.update(extra)
     return fields
-
-
-def _log(level: int, event: LineEventName, fields: dict[str, object]) -> None:
-    """One line per event, with nothing in it that identifies the account.
-
-    The token is held by the transport and never reaches here, so no field
-    written by this module can carry it into a log file.
-    """
-    detail = " ".join(f"{name}={value}" for name, value in fields.items())
-    _logger.log(level, "%s %s", event.value, detail)

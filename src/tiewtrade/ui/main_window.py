@@ -64,8 +64,10 @@ from tiewtrade.ui.session_workflow import (
 from tiewtrade.ui.settings_workflow import (
     ReadBotTitle,
     ReadLineNotifications,
+    ReadTelegramNotifications,
     SaveBotTitle,
     SaveLineNotifications,
+    SaveTelegramNotifications,
     SettingsWorkflow,
 )
 from tiewtrade.ui.start_decision import StartCourse, course_before_start
@@ -176,6 +178,8 @@ class MainWindow(QMainWindow):
         clear_database: Callable[[], None] | None = None,
         save_line_notifications: SaveLineNotifications | None = None,
         read_line_notifications: ReadLineNotifications | None = None,
+        save_telegram_notifications: SaveTelegramNotifications | None = None,
+        read_telegram_notifications: ReadTelegramNotifications | None = None,
         save_bot_title: SaveBotTitle | None = None,
         read_bot_title: ReadBotTitle | None = None,
     ) -> None:
@@ -209,6 +213,8 @@ class MainWindow(QMainWindow):
             clear_database=clear_database,
             save_line_notifications=save_line_notifications,
             read_line_notifications=read_line_notifications,
+            save_telegram_notifications=save_telegram_notifications,
+            read_telegram_notifications=read_telegram_notifications,
             save_bot_title=save_bot_title,
             read_bot_title=read_bot_title,
             thread_pool=self._thread_pool,

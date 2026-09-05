@@ -1,7 +1,7 @@
 """The Settings panel: what this installation keeps, and what it can throw away.
 
-Everything here runs off the UI thread. Reading or writing the LINE settings
-touches wherever this machine keeps them, which can put a prompt of the
+Everything here runs off the UI thread. Reading or writing the notification
+settings touches wherever this machine keeps them, which can put a prompt of the
 operating system's own in front of the trader and wait on an answer — not
 something a window may do while it is being drawn. Clearing the database is a
 write across every table there is.
@@ -19,13 +19,23 @@ from PySide6.QtWidgets import QMessageBox
 from tiewtrade.application.trading_workspace import BotRuntimeState
 from tiewtrade.ui.guarded_action import GuardedAction
 from tiewtrade.ui.settings_dialogs import ask_about_clearing_database
-from tiewtrade.ui.settings_panel import LineNotificationsReading, SettingsPanel
+from tiewtrade.ui.settings_panel import (
+    LineNotificationsReading,
+    SettingsPanel,
+    TelegramNotificationsReading,
+)
 
 type SaveLineNotifications = Callable[[bool, str, str], None]
 """Keep these LINE settings, wherever this installation keeps them."""
 
 type ReadLineNotifications = Callable[[], LineNotificationsReading]
-"""Read back the LINE settings — never the token, only that there is one."""
+"""Read back the LINE settings, the token among them."""
+
+type SaveTelegramNotifications = Callable[[bool, str, str], None]
+"""Keep these Telegram settings, wherever this installation keeps them."""
+
+type ReadTelegramNotifications = Callable[[], TelegramNotificationsReading]
+"""Read back the Telegram settings, the bot token among them."""
 
 type SaveBotTitle = Callable[[str], None]
 """Keep what this installation calls itself, wherever it is kept."""
@@ -42,10 +52,9 @@ token field empties and refills either way — so a save that worked and a save
 that quietly did nothing look identical without this.
 
 Worded for the button rather than for what is behind it today. The button says
-"Save Settings" and this page is built to hold the values still to come — a
-Binance API key among them — so an acknowledgement naming LINE would have to
-be rewritten by whoever adds the second setting, and would be wrong for the
-saves in between.
+"Save Settings" and this page holds several — the Title, LINE, Telegram, and a
+Binance API key still to come — so an acknowledgement naming one of them would
+be wrong for every save that changed another.
 """
 
 # The database may be cleared whenever the Bot is not actually trading or
@@ -78,6 +87,8 @@ class SettingsWorkflow(QObject):
         clear_database: Callable[[], None] | None = None,
         save_line_notifications: SaveLineNotifications | None = None,
         read_line_notifications: ReadLineNotifications | None = None,
+        save_telegram_notifications: SaveTelegramNotifications | None = None,
+        read_telegram_notifications: ReadTelegramNotifications | None = None,
         save_bot_title: SaveBotTitle | None = None,
         read_bot_title: ReadBotTitle | None = None,
         thread_pool: QThreadPool | None = None,
@@ -88,6 +99,8 @@ class SettingsWorkflow(QObject):
         self._clear_database = clear_database
         self._save_line_notifications = save_line_notifications
         self._read_line_notifications = read_line_notifications
+        self._save_telegram_notifications = save_telegram_notifications
+        self._read_telegram_notifications = read_telegram_notifications
         self._save_bot_title = save_bot_title
         self._read_bot_title = read_bot_title
         pool = thread_pool or QThreadPool.globalInstance()
@@ -117,10 +130,14 @@ class SettingsWorkflow(QObject):
         # Reading is its own action rather than a second use of the one that
         # saves: what is saved is read back straight afterwards, and an action
         # already running is an action that refuses to start again.
-        self._show_line_settings = GuardedAction(
+        #
+        # Both channels are read under the one action, because the page has
+        # one busy state: two actions would fight over it, and the second
+        # would be refused by the first while it was still running.
+        self._show_notification_settings = GuardedAction(
             available=busy,
-            report_failure=panel.say_line_notifications_unreadable,
-            failure_log="Could not read the LINE notification settings",
+            report_failure=self._say_nothing_could_be_read,
+            failure_log="Could not read the notification settings",
             start=pool.start,
         )
         # The Title is read at launch, before anything is on the Settings page
@@ -139,6 +156,19 @@ class SettingsWorkflow(QObject):
 
     def _say_busy(self, available: bool) -> None:
         self._panel.set_busy(not available)
+
+    def _say_nothing_could_be_read(self) -> None:
+        """Say it under each channel that was actually asked for.
+
+        A reading is one run over both, so a failure is a failure of the
+        whole run — but a channel nothing was ever going to read has nothing
+        to report, and a line under it would only send a trader looking for
+        settings this installation was never wired to fetch.
+        """
+        if self._read_line_notifications is not None:
+            self._panel.say_line_notifications_unreadable()
+        if self._read_telegram_notifications is not None:
+            self._panel.say_telegram_notifications_unreadable()
 
     def set_bot_state(self, state: BotRuntimeState | None) -> None:
         """Take what the Bot is doing, which is what a wipe has to wait for."""
@@ -171,42 +201,72 @@ class SettingsWorkflow(QObject):
         the reading is not something the window can wait on.
         """
         self.refresh_bot_title()
-        read = self._read_line_notifications
-        if read is None or self._show_line_settings.is_running:
+        read_line = self._read_line_notifications
+        read_telegram = self._read_telegram_notifications
+        if read_line is None and read_telegram is None:
             return
-        self._show_line_settings.run(read, succeeded=self._reading_landed)
+        if self._show_notification_settings.is_running:
+            return
+        self._show_notification_settings.run(
+            lambda: (
+                read_line() if read_line is not None else None,
+                read_telegram() if read_telegram is not None else None,
+            ),
+            succeeded=self._reading_landed,
+        )
 
     @Slot(object)
-    def _reading_landed(self, reading: object) -> None:
-        if not isinstance(reading, tuple):
+    def _reading_landed(self, readings: object) -> None:
+        if not isinstance(readings, tuple):
             return
-        self._panel.show_line_notifications(reading)
+        line, telegram = readings
+        if isinstance(line, tuple):
+            self._panel.show_line_notifications(line)
+        if isinstance(telegram, tuple):
+            self._panel.show_telegram_notifications(telegram)
 
-    @Slot(str, bool, str, str)
+    @Slot(str, bool, str, str, bool, str, str)
     def _save_requested(
         self,
         bot_title: str,
-        enabled: bool,
+        line_enabled: bool,
         target_id: str,
         access_token: str,
+        telegram_enabled: bool,
+        chat_id: str,
+        bot_token: str,
     ) -> None:
         """Keep everything the page holds, under the one button that asks.
 
-        Both values are kept in one action rather than one each, because the
-        page has one button and one busy state: two actions would answer it
-        twice, and a trader would be told twice that their settings landed.
+        Every value is kept in one action rather than one each, because the
+        page has one button and one busy state: several actions would answer
+        it several times, and a trader would be told more than once that
+        their settings landed.
 
-        The LINE settings go first. They are the half kept somewhere this
-        application does not own, and the half a machine can refuse to keep,
-        so a save that fails is a save that has touched nothing yet.
+        The tokens go first, before the Title. They are the part kept
+        somewhere this application does not own, and the part a machine can
+        refuse to keep, so a save that fails is a save that has touched
+        nothing the trader would have to undo.
         """
-        save = self._save_line_notifications
-        if save is None or self._keep_settings.is_running:
+        save_line = self._save_line_notifications
+        save_telegram = self._save_telegram_notifications
+        if save_line is None and save_telegram is None:
+            return
+        if self._keep_settings.is_running:
             return
         save_title = self._save_bot_title
         self._keep_settings.run(
             lambda: self._keep_everything(
-                lambda: save(enabled, target_id, access_token),
+                (
+                    None
+                    if save_line is None
+                    else lambda: save_line(line_enabled, target_id, access_token)
+                ),
+                (
+                    None
+                    if save_telegram is None
+                    else lambda: save_telegram(telegram_enabled, chat_id, bot_token)
+                ),
                 save_title,
                 bot_title,
             ),
@@ -215,11 +275,15 @@ class SettingsWorkflow(QObject):
 
     @staticmethod
     def _keep_everything(
-        keep_line_settings: Callable[[], None],
+        keep_line_settings: Callable[[], None] | None,
+        keep_telegram_settings: Callable[[], None] | None,
         save_bot_title: SaveBotTitle | None,
         bot_title: str,
     ) -> None:
-        keep_line_settings()
+        if keep_line_settings is not None:
+            keep_line_settings()
+        if keep_telegram_settings is not None:
+            keep_telegram_settings()
         if save_bot_title is not None:
             save_bot_title(bot_title)
 

@@ -71,7 +71,7 @@ from tiewtrade.integrations.sqlite.paper_runtime_lifecycle import (
     SQLitePaperRuntimeLifecycle,
 )
 from tiewtrade.integrations.sqlite.trade_history import SQLiteTradeHistory
-from tiewtrade.line_notification_composition import line_session_notifier
+from tiewtrade.notification_composition import session_notifier
 from tiewtrade.trading.session_config import MarketType
 from tiewtrade.trading.symbol_rules import SymbolRules
 from tiewtrade.ui.bot_lifecycle_workflow import LifecycleAction, RuntimeSnapshotRelay
@@ -194,7 +194,7 @@ def _runtime_actions(database: SQLiteDatabase) -> PaperRuntimeActions:
             session.market_data.symbol, session.config.market_type
         ),
         source_factory=BinancePublicMarketData,
-        notifier_factory=line_session_notifier,
+        notifier_factory=session_notifier,
     )
 
 

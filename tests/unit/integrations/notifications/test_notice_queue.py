@@ -8,9 +8,9 @@ from uuid import uuid4
 import pytest
 
 from tiewtrade.application.session_notice import EntryOpenedNotice, SessionMarket
-from tiewtrade.integrations.line.messaging_api import (
-    LineNoticeNotifier,
-    LinePushOutcome,
+from tiewtrade.integrations.notifications.notice_queue import (
+    NoticeNotifier,
+    PushOutcome,
 )
 
 NOTICE = EntryOpenedNotice(
@@ -25,15 +25,15 @@ NOTICE = EntryOpenedNotice(
 
 
 class FakePush:
-    """A LINE push that answers what the test says, and remembers the asking."""
+    """A push that answers what the test says, and remembers the asking."""
 
-    def __init__(self, outcomes: list[LinePushOutcome | Exception]) -> None:
+    def __init__(self, outcomes: list[PushOutcome | Exception]) -> None:
         self._outcomes = outcomes
         self.messages: list[str] = []
 
-    async def push(self, message: str) -> LinePushOutcome:
+    async def push(self, message: str) -> PushOutcome:
         self.messages.append(message)
-        outcome = self._outcomes.pop(0) if self._outcomes else LinePushOutcome.DELIVERED
+        outcome = self._outcomes.pop(0) if self._outcomes else PushOutcome.DELIVERED
         if isinstance(outcome, Exception):
             raise outcome
         return outcome
@@ -41,8 +41,8 @@ class FakePush:
 
 def _notify_and_settle(push: FakePush, *, notices: int = 1) -> None:
     async def run() -> None:
-        async with LineNoticeNotifier(
-            push, retry_delay_seconds=0, queue_size=8
+        async with NoticeNotifier(
+            push, channel="line", retry_delay_seconds=0, queue_size=8
         ) as notifier:
             for _ in range(notices):
                 notifier.notify(NOTICE)
@@ -51,7 +51,7 @@ def _notify_and_settle(push: FakePush, *, notices: int = 1) -> None:
 
 
 def test_a_delivered_notice_is_pushed_once() -> None:
-    push = FakePush([LinePushOutcome.DELIVERED])
+    push = FakePush([PushOutcome.DELIVERED])
 
     _notify_and_settle(push)
 
@@ -60,7 +60,7 @@ def test_a_delivered_notice_is_pushed_once() -> None:
 
 
 def test_a_retryable_push_is_tried_once_more() -> None:
-    push = FakePush([LinePushOutcome.RETRYABLE, LinePushOutcome.DELIVERED])
+    push = FakePush([PushOutcome.RETRYABLE, PushOutcome.DELIVERED])
 
     _notify_and_settle(push)
 
@@ -70,7 +70,7 @@ def test_a_retryable_push_is_tried_once_more() -> None:
 def test_a_push_that_keeps_failing_is_dropped_rather_than_retried_forever(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    push = FakePush([LinePushOutcome.RETRYABLE, LinePushOutcome.RETRYABLE])
+    push = FakePush([PushOutcome.RETRYABLE, PushOutcome.RETRYABLE])
 
     with caplog.at_level(logging.WARNING):
         _notify_and_settle(push)
@@ -80,7 +80,7 @@ def test_a_push_that_keeps_failing_is_dropped_rather_than_retried_forever(
 
 
 def test_a_rejected_push_is_not_retried() -> None:
-    push = FakePush([LinePushOutcome.REJECTED])
+    push = FakePush([PushOutcome.REJECTED])
 
     _notify_and_settle(push)
 
@@ -88,7 +88,7 @@ def test_a_rejected_push_is_not_retried() -> None:
 
 
 def test_a_transport_that_raises_does_not_stop_the_next_notice() -> None:
-    push = FakePush([RuntimeError("connection reset"), LinePushOutcome.DELIVERED])
+    push = FakePush([RuntimeError("connection reset"), PushOutcome.DELIVERED])
 
     _notify_and_settle(push, notices=2)
 
@@ -103,14 +103,14 @@ def test_notifying_never_waits_on_a_full_queue(
         held = asyncio.Event()
 
         class HeldPush(FakePush):
-            async def push(self, message: str) -> LinePushOutcome:
+            async def push(self, message: str) -> PushOutcome:
                 self.messages.append(message)
                 await held.wait()
-                return LinePushOutcome.DELIVERED
+                return PushOutcome.DELIVERED
 
         push = HeldPush([])
-        async with LineNoticeNotifier(
-            push, retry_delay_seconds=0, queue_size=1
+        async with NoticeNotifier(
+            push, channel="line", retry_delay_seconds=0, queue_size=1
         ) as notifier:
             for _ in range(5):
                 notifier.notify(NOTICE)
@@ -135,7 +135,7 @@ def test_every_notice_left_in_the_queue_is_pushed_before_the_runtime_goes() -> N
 def test_a_failing_push_never_writes_the_token_into_the_log(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    push = FakePush([LinePushOutcome.REJECTED])
+    push = FakePush([PushOutcome.REJECTED])
 
     with caplog.at_level(logging.DEBUG):
         _notify_and_settle(push)
@@ -152,12 +152,12 @@ def test_a_notice_raised_off_the_runtime_thread_still_goes_out() -> None:
     its own loop — a notice handed to it from anywhere else would be lost, or
     worse, would corrupt the queue the candle loop is using.
     """
-    push = FakePush([LinePushOutcome.DELIVERED])
+    push = FakePush([PushOutcome.DELIVERED])
     handed_over = threading.Event()
 
     async def run() -> None:
-        async with LineNoticeNotifier(
-            push, retry_delay_seconds=0, queue_size=8
+        async with NoticeNotifier(
+            push, channel="line", retry_delay_seconds=0, queue_size=8
         ) as notifier:
 
             def ask_from_another_thread() -> None:
@@ -178,10 +178,34 @@ def test_a_notice_raised_after_the_notifier_closed_is_dropped_quietly(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     push = FakePush([])
-    notifier = LineNoticeNotifier(push, retry_delay_seconds=0, queue_size=8)
+    notifier = NoticeNotifier(push, channel="line", retry_delay_seconds=0, queue_size=8)
 
     with caplog.at_level(logging.WARNING):
         notifier.notify(NOTICE)
 
     assert push.messages == []
     assert "line.notification.dropped" in caplog.text
+
+
+def test_the_log_says_which_chat_service_a_notice_was_going_to(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Two channels write into one log, and a dropped notice belongs to one.
+
+    A trader whose Telegram bot was removed from its chat reads the log to
+    find out which of their two channels stopped — an event name that said
+    only "notification.dropped" would leave them checking both.
+    """
+    push = FakePush([PushOutcome.REJECTED])
+
+    async def run() -> None:
+        async with NoticeNotifier(
+            push, channel="telegram", retry_delay_seconds=0, queue_size=8
+        ) as notifier:
+            notifier.notify(NOTICE)
+
+    with caplog.at_level(logging.WARNING):
+        asyncio.run(run())
+
+    assert "telegram.notification.dropped" in caplog.text
+    assert "line.notification" not in caplog.text

@@ -6,8 +6,8 @@ from typing import Any
 import aiohttp
 import pytest
 
-from tiewtrade.integrations.line.messaging_api import LinePushOutcome
 from tiewtrade.integrations.line.push_transport import PUSH_URL, LineMessagingApiPush
+from tiewtrade.integrations.notifications.notice_queue import PushOutcome
 
 
 class FakeResponse:
@@ -37,7 +37,7 @@ class FakeSession:
         return None
 
 
-def _push(session: FakeSession) -> LinePushOutcome:
+def _push(session: FakeSession) -> PushOutcome:
     transport = LineMessagingApiPush(
         channel_access_token="token-value",
         target_id="U123",
@@ -49,7 +49,7 @@ def _push(session: FakeSession) -> LinePushOutcome:
 def test_a_push_carries_the_message_the_token_and_the_recipient() -> None:
     session = FakeSession()
 
-    assert _push(session) is LinePushOutcome.DELIVERED
+    assert _push(session) is PushOutcome.DELIVERED
 
     call = session.calls[0]
     assert call["url"] == PUSH_URL
@@ -64,18 +64,18 @@ def test_a_push_carries_the_message_the_token_and_the_recipient() -> None:
 @pytest.mark.parametrize(
     ("status", "outcome"),
     [
-        (200, LinePushOutcome.DELIVERED),
-        (429, LinePushOutcome.RETRYABLE),
-        (500, LinePushOutcome.RETRYABLE),
-        (503, LinePushOutcome.RETRYABLE),
-        (400, LinePushOutcome.REJECTED),
-        (401, LinePushOutcome.REJECTED),
-        (403, LinePushOutcome.REJECTED),
+        (200, PushOutcome.DELIVERED),
+        (429, PushOutcome.RETRYABLE),
+        (500, PushOutcome.RETRYABLE),
+        (503, PushOutcome.RETRYABLE),
+        (400, PushOutcome.REJECTED),
+        (401, PushOutcome.REJECTED),
+        (403, PushOutcome.REJECTED),
     ],
 )
 def test_what_line_answers_decides_whether_it_is_worth_asking_again(
     status: int,
-    outcome: LinePushOutcome,
+    outcome: PushOutcome,
 ) -> None:
     assert _push(FakeSession(status=status)) is outcome
 
@@ -87,4 +87,4 @@ def test_what_line_answers_decides_whether_it_is_worth_asking_again(
 def test_a_transport_that_never_answered_is_worth_asking_again(
     error: Exception,
 ) -> None:
-    assert _push(FakeSession(error=error)) is LinePushOutcome.RETRYABLE
+    assert _push(FakeSession(error=error)) is PushOutcome.RETRYABLE

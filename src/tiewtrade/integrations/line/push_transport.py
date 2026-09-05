@@ -1,6 +1,6 @@
 """The one place that holds a LINE channel access token and talks to LINE.
 
-Kept apart from the notifier so that queueing, retrying and logging can be
+Kept apart from the queue so that queueing, retrying and logging can be
 read and tested without a token anywhere near them: nothing in this module
 is written to a log, and the token leaves it only as an Authorization header
 on the way out.
@@ -16,7 +16,7 @@ from typing import Self
 
 import aiohttp
 
-from tiewtrade.integrations.line.messaging_api import LinePushOutcome
+from tiewtrade.integrations.notifications.notice_queue import PushOutcome
 
 _logger = logging.getLogger(__name__)
 
@@ -57,7 +57,7 @@ class LineMessagingApiPush:
             await self._session.close()
             self._session = None
 
-    async def push(self, message: str) -> LinePushOutcome:
+    async def push(self, message: str) -> PushOutcome:
         """Send one message, and say only whether it is worth sending again.
 
         A 429 is LINE saying the account has sent too much this month, which
@@ -82,9 +82,9 @@ class LineMessagingApiPush:
         except asyncio.CancelledError:
             raise
         except TimeoutError:
-            return LinePushOutcome.RETRYABLE
+            return PushOutcome.RETRYABLE
         except aiohttp.ClientError:
-            return LinePushOutcome.RETRYABLE
+            return PushOutcome.RETRYABLE
 
     def _network_session(self) -> aiohttp.ClientSession:
         if self._session is None:
@@ -93,12 +93,12 @@ class LineMessagingApiPush:
         return self._session
 
 
-def _outcome_for_status(status: int) -> LinePushOutcome:
+def _outcome_for_status(status: int) -> PushOutcome:
     if 200 <= status < 300:
-        return LinePushOutcome.DELIVERED
+        return PushOutcome.DELIVERED
     if status == 429 or 500 <= status < 600:
-        return LinePushOutcome.RETRYABLE
+        return PushOutcome.RETRYABLE
     # A 401 is a token that is wrong or withdrawn, a 400 a recipient LINE
     # does not know. Both are settings to be corrected, not weather to wait
     # out, and the notifier logs the refusal without the token in it.
-    return LinePushOutcome.REJECTED
+    return PushOutcome.REJECTED
