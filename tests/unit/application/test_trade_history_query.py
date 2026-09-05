@@ -16,8 +16,8 @@ from tiewtrade.trading.session_config import MarketType, TradeMode
 @pytest.mark.parametrize(
     "create_filter",
     [
-        lambda value: TradeHistoryFilter(opened_from_utc=value),
-        lambda value: TradeHistoryFilter(opened_before_utc=value),
+        lambda value: TradeHistoryFilter(from_utc=value),
+        lambda value: TradeHistoryFilter(before_utc=value),
     ],
 )
 def test_trade_history_filter_requires_utc_bounds(
@@ -40,8 +40,8 @@ def test_trade_history_filter_requires_ordered_time_bounds() -> None:
 
     with pytest.raises(ValueError, match="before"):
         TradeHistoryFilter(
-            opened_from_utc=boundary,
-            opened_before_utc=boundary,
+            from_utc=boundary,
+            before_utc=boundary,
         )
 
 

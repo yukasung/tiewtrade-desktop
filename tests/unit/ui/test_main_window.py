@@ -740,7 +740,7 @@ def test_trade_history_filter_and_reset_requests_are_wired(qtbot: QtBot) -> None
 
     qtbot.waitUntil(lambda: len(basket_calls) == 2)
     assert basket_calls[-1] == TradeHistoryFilter(
-        opened_from_utc=datetime(2026, 1, 1, 17, tzinfo=UTC)
+        from_utc=datetime(2026, 1, 1, 17, tzinfo=UTC)
     )
 
     click(window.trade_history.basket_filters.reset_button)

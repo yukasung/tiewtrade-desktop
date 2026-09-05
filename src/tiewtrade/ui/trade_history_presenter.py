@@ -6,6 +6,7 @@ from enum import Enum
 
 from tiewtrade.application.trade_history import TradeFillHistoryItem, TradeHistoryFilter
 from tiewtrade.trading.trade_history import BasketResult, FillSide
+from tiewtrade.ui.blank_text import BLANK
 from tiewtrade.ui.display_time import DISPLAY_TIMEZONE, display_timestamp
 from tiewtrade.ui.money_text import money_text, price_text, realized_text
 from tiewtrade.ui.pair_text import pair_text
@@ -73,8 +74,8 @@ def trade_history_filter(values: TradeHistoryFilterValues) -> TradeHistoryFilter
             raise ValueError("From Date must not be after To Date")
 
     return TradeHistoryFilter(
-        opened_from_utc=_utc_start(values.from_date),
-        opened_before_utc=(
+        from_utc=_utc_start(values.from_date),
+        before_utc=(
             _utc_start(values.to_date + timedelta(days=1))
             if values.to_date is not None
             else None
@@ -83,7 +84,19 @@ def trade_history_filter(values: TradeHistoryFilterValues) -> TradeHistoryFilter
 
 
 BASKET_COLUMNS: tuple[Column[BasketResult], ...] = (
-    Column("Date", LEFT, lambda basket: display_timestamp(basket.opened_at_utc)),
+    # Both ends of the round, because they answer different questions: when
+    # the Bot committed capital, and when the result below landed. A round
+    # can open one day and close the next, so one date cannot say both.
+    Column("Opened", LEFT, lambda basket: display_timestamp(basket.opened_at_utc)),
+    Column(
+        "Closed",
+        LEFT,
+        lambda basket: (
+            BLANK
+            if basket.closed_at_utc is None
+            else display_timestamp(basket.closed_at_utc)
+        ),
+    ),
     Column("Market", CENTER, lambda basket: display_enum(basket.market_type.value)),
     Column("Pair", LEFT, lambda basket: pair_text(basket.symbol)),
     Column("Timeframe", CENTER, lambda basket: basket.timeframe),

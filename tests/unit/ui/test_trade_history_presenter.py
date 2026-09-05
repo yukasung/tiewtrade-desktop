@@ -9,7 +9,8 @@ from tiewtrade.application.trade_history import (
     TradeHistoryFilter,
 )
 from tiewtrade.trading.session_config import MarketType, TradeMode
-from tiewtrade.trading.trade_history import FillSide
+from tiewtrade.trading.trade_history import BasketStatus, FillSide
+from tiewtrade.ui.blank_text import BLANK
 from tiewtrade.ui.money_text import money_text
 from tiewtrade.ui.table_column import Column
 from tiewtrade.ui.theme import NEGATIVE_COLOR, POSITIVE_COLOR
@@ -45,8 +46,8 @@ def test_filter_values_build_inclusive_utc_date_range() -> None:
 
     assert trade_history_filter(values) == TradeHistoryFilter(
         # A Bangkok day starts seven hours before the UTC one.
-        opened_from_utc=datetime(2026, 1, 1, 17, 0, tzinfo=UTC),
-        opened_before_utc=datetime(2026, 1, 3, 17, 0, tzinfo=UTC),
+        from_utc=datetime(2026, 1, 1, 17, 0, tzinfo=UTC),
+        before_utc=datetime(2026, 1, 3, 17, 0, tzinfo=UTC),
     )
 
 
@@ -81,6 +82,7 @@ def test_basket_columns_format_utc_and_every_column() -> None:
 
     assert read(BASKET_COLUMNS, basket) == (
         "2026-01-01 07:00:00",
+        "2026-01-02 07:00:00",
         "Spot",
         "BTC/USDT",
         "5m",
@@ -89,7 +91,14 @@ def test_basket_columns_format_utc_and_every_column() -> None:
         "20.00 USDT",
     )
     # One Entry counts as one, rather than reading as the absence of a count.
-    assert read(BASKET_COLUMNS, basket_result())[4] == "1"
+    assert read(BASKET_COLUMNS, basket_result())[5] == "1"
+
+
+def test_a_round_still_open_has_no_closing_day_to_show() -> None:
+    """The question was asked and has no answer yet, which is not a blank cell."""
+    running = basket_result(closed_at_utc=None, status=BasketStatus.OPEN)
+
+    assert read(BASKET_COLUMNS, running)[:2] == ("2026-01-01 07:00:00", BLANK)
 
 
 def test_fill_columns_include_symbol_and_total_for_cross_basket_history() -> None:
