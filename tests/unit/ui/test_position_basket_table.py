@@ -25,7 +25,7 @@ from tiewtrade.application.trading_workspace import (
     stale_position_basket_tab,
 )
 from tiewtrade.trading.cooldown_policy import CooldownPolicy
-from tiewtrade.trading.entry_pair import EntryPairLifecycle
+from tiewtrade.trading.entry_pair import EntryGateState, EntryPairLifecycle
 from tiewtrade.trading.entry_policy import EntryPolicy
 from tiewtrade.ui.blank_text import BLANK
 from tiewtrade.ui.position_basket_table import PositionBasketTable
@@ -917,3 +917,38 @@ def test_a_session_whose_cooldown_is_off_never_offers_to_cancel_one(
 
     assert lifecycle.completed_pairs == 1
     assert widget.cancel_cooldown_button.isVisible() is False
+
+
+def test_a_session_that_waits_days_offers_to_cancel_the_wait(qtbot: QtBot) -> None:
+    """A Cooldown that lapses on its own is still one the trader may cut short.
+
+    The row names the day it would lift by itself, and the button beside it is
+    how the trader says they would rather not wait for that day.
+    """
+    policy = EntryPolicy(max_entries=10, cooldown=CooldownPolicy.for_days(10))
+    lifecycle = EntryPairLifecycle(policy)
+    filled_at = datetime(2026, 8, 2, tzinfo=UTC)
+    lifecycle.record_fill(filled_at)
+    lifecycle.record_fill(filled_at)
+
+    gate = lifecycle.entry_gate(filled_at + timedelta(days=9))
+
+    widget = PositionBasketTable()
+    qtbot.addWidget(widget)
+    widget.show()
+    widget.show_snapshot(
+        ready_position_basket_tab(
+            basket_snapshot(
+                entry_gate=BasketEntryGate(gate.state),
+                completed_pairs=lifecycle.completed_pairs,
+                cooldown_ends_at_utc=lifecycle.cooldown_ends_at(),
+            ),
+            observed_at_utc=OBSERVED_AT,
+        )
+    )
+
+    assert gate.state is EntryGateState.COOLDOWN
+    assert lifecycle.cooldown_ends_at() == filled_at + timedelta(days=10)
+    assert widget.cancel_cooldown_button.isVisible() is True
+    assert widget.cancel_cooldown_button.isEnabled() is True
+    assert _cell(widget, "Status").text() == "Cooldown until 2026-08-12 07:00:00"
