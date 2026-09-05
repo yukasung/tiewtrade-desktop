@@ -405,3 +405,52 @@ def test_a_rebuild_that_names_no_cooldown_leaves_the_longest_one(
         ]
 
     assert days == 30
+
+
+def test_migrate_rebuilds_bot_sessions_for_a_session_a_runtime_points_at(
+    tmp_path: Path,
+) -> None:
+    """A Session with a lifecycle row must survive the Cooldown migrations.
+
+    `paper_runtime_lifecycle` references `bot_sessions`, and every migration
+    that changes a Cooldown drops and rebuilds that table. With enforcement
+    left on, the drop is refused and a trader who has ever started the Bot
+    cannot open the app at all.
+    """
+    database = SQLiteDatabase(tmp_path / "tiewtrade.sqlite3")
+    database.migrate()
+    with database.connect() as connection:
+        connection.execute("DROP TABLE bot_sessions")
+        connection.execute(_V17_BOT_SESSIONS_TABLE_SQL.format(table="bot_sessions"))
+        connection.execute(
+            """
+            INSERT INTO bot_sessions (
+                session_id, trade_mode, market_type, symbol, timeframe,
+                preset_version, capital_per_entry, max_entries,
+                cooldown_mode, cooldown_days, created_at_utc
+            ) VALUES (
+                'session', 'paper', 'spot', 'BTCUSDT', '5m',
+                'rsi-step-grid-v1', '250', 4, 'until_cancelled', NULL,
+                '2026-01-01T00:00:00+00:00'
+            )
+            """
+        )
+        connection.execute(
+            """
+            INSERT INTO paper_runtime_lifecycle (
+                session_id, state, observed_at_utc
+            ) VALUES ('session', 'stopped', '2026-01-02T00:00:00+00:00')
+            """
+        )
+        connection.execute("PRAGMA user_version = 17")
+
+    database.migrate()
+
+    with database.connect() as connection:
+        session = connection.execute("SELECT * FROM bot_sessions").fetchone()
+        lifecycle = connection.execute(
+            "SELECT session_id FROM paper_runtime_lifecycle"
+        ).fetchone()
+
+    assert session["cooldown_days"] == 30
+    assert lifecycle["session_id"] == "session"

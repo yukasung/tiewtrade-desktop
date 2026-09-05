@@ -39,11 +39,12 @@ class SQLiteDatabase:
         return connection
 
     def _keep_a_copy(self, connection: sqlite3.Connection, version: int) -> None:
-        """A copy of the file before the first migration that discards data.
+        """A copy of the file as it stood before this migration ran.
 
-        Every migration before this one only ever added. This one drops the
-        fee columns, so the shape it leaves cannot be undone from the file it
-        leaves, and a trader's own record is what is in it.
+        Migrations here drop columns, so the shape one leaves cannot always be
+        undone from the file it leaves, and a trader's own record is what is in
+        it. Kept once per version, so a file already carrying its copy is left
+        alone.
         """
         backup = self._path.with_suffix(f"{self._path.suffix}.v{version}.bak")
         if backup.exists() or not self._path.exists():
@@ -61,14 +62,19 @@ class SQLiteDatabase:
                 return
             if 1 <= version <= 9:
                 _require_drop_column_support()
-            if 1 <= version <= 14:
+            if 1 <= version < self._SCHEMA_VERSION:
                 self._keep_a_copy(connection, version)
-                # v11 and v15 both drop the table paper_runtime_lifecycle
+                # Several migrations drop the table paper_runtime_lifecycle
                 # points at and put one back under the same name. Enforcement
                 # would read the moment in between as an orphaned lifecycle,
                 # so it is off for the migration and the connection is closed
                 # before anything else can use it. Only a transaction-free
                 # moment can switch it, which is why it is switched here.
+                #
+                # Asked of "is there a migration to run at all" rather than of
+                # a version range: a range has to be widened by whoever writes
+                # the next rebuild, and the one who forgot left a trader unable
+                # to open the app.
                 connection.execute("PRAGMA foreign_keys = OFF")
 
             with connection:
