@@ -36,6 +36,9 @@ _AMOUNT_DECIMALS = 8
 _COOLDOWN_OFF = "off"
 """What the list holds for the one choice that is not a number of days."""
 
+_COOLDOWN_LABEL = "Cooldown (days)"
+"""The unit is said here, so the list itself is thirty plain numbers."""
+
 
 class SessionSetupWidget(QWidget):
     create_requested = Signal(object)
@@ -138,7 +141,7 @@ class SessionSetupWidget(QWidget):
         self.strategy.setAccessibleName("Strategy")
         self.capital_per_entry.setAccessibleName(_AMOUNT_LABEL)
         self.max_entries.setAccessibleName("Maximum Entries")
-        self.cooldown.setAccessibleName("Cooldown")
+        self.cooldown.setAccessibleName(_COOLDOWN_LABEL)
         self.leverage.setAccessibleName("Futures Leverage")
         self.create_button.setAccessibleName("Start Paper Bot")
 
@@ -280,7 +283,7 @@ class SessionSetupWidget(QWidget):
         )
         self._add_row(
             self._form_layout,
-            "Cooldown",
+            _COOLDOWN_LABEL,
             self.cooldown,
             (self.cooldown_error,),
         )

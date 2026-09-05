@@ -36,7 +36,7 @@ class SessionOverviewWidget(QWidget):
         "Strategy Preset",
         "Amount",
         "Max Entries",
-        "Cooldown",
+        "Cooldown (days)",
     )
     _FUTURES_LABELS = ("Leverage", "Margin Mode", "Position Mode")
     _CREATED_LABEL = "Created at"
@@ -64,7 +64,7 @@ class SessionOverviewWidget(QWidget):
             "Strategy Preset": self.preset_value,
             "Amount": self.capital_per_entry_value,
             "Max Entries": self.max_entries_value,
-            "Cooldown": self.cooldown_value,
+            "Cooldown (days)": self.cooldown_value,
             "Leverage": self.leverage_value,
             "Margin Mode": self.margin_mode_value,
             "Position Mode": self.position_mode_value,

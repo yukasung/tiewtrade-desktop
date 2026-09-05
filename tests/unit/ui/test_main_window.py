@@ -900,7 +900,7 @@ def test_spot_overview_leaves_the_futures_rows_out(qtbot: QtBot) -> None:
         "Strategy Preset",
         "Amount",
         "Max Entries",
-        "Cooldown",
+        "Cooldown (days)",
         "Created at",
     )
     for value in (
@@ -929,7 +929,7 @@ def test_futures_overview_keeps_the_policy_rows(qtbot: QtBot) -> None:
         "Strategy Preset",
         "Amount",
         "Max Entries",
-        "Cooldown",
+        "Cooldown (days)",
         "Leverage",
         "Margin Mode",
         "Position Mode",
@@ -4909,10 +4909,10 @@ def test_presenting_a_closing_window_does_not_bring_it_back(qtbot: QtBot) -> Non
 @pytest.mark.parametrize(
     ("cooldown", "text"),
     [
-        (CooldownPolicy.default(), "30 days"),
+        (CooldownPolicy.default(), "30"),
         (CooldownPolicy.off(), "Off"),
-        (CooldownPolicy.for_days(1), "1 day"),
-        (CooldownPolicy.for_days(3), "3 days"),
+        (CooldownPolicy.for_days(1), "1"),
+        (CooldownPolicy.for_days(3), "3"),
     ],
 )
 def test_the_overview_says_how_this_session_s_cooldown_ends(

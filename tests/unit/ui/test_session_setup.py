@@ -246,8 +246,8 @@ def test_the_form_opens_on_the_longest_cooldown(qtbot: QtBot) -> None:
     qtbot.addWidget(widget)
 
     assert widget.values().cooldown_days == "30"
-    assert widget.cooldown.currentText() == "30 days"
-    assert widget.cooldown.accessibleName() == "Cooldown"
+    assert widget.cooldown.currentText() == "30"
+    assert widget.cooldown.accessibleName() == "Cooldown (days)"
 
 
 def test_the_form_offers_off_and_every_day_it_supports(qtbot: QtBot) -> None:
@@ -256,8 +256,9 @@ def test_the_form_offers_off_and_every_day_it_supports(qtbot: QtBot) -> None:
 
     labels = [widget.cooldown.itemText(i) for i in range(widget.cooldown.count())]
 
-    assert labels[:4] == ["Off", "1 day", "2 days", "3 days"]
-    assert labels[-1] == "30 days"
+    # The unit is on the label, so the list is thirty plain numbers.
+    assert labels[:4] == ["Off", "1", "2", "3"]
+    assert labels[-1] == "30"
     assert len(labels) == CooldownPolicy.MAXIMUM_DAYS + 1
 
 
@@ -274,7 +275,7 @@ def test_choosing_a_number_of_days_states_that_number(qtbot: QtBot) -> None:
     widget = SessionSetupWidget()
     qtbot.addWidget(widget)
 
-    widget.cooldown.setCurrentIndex(widget.cooldown.findText("1 day"))
+    widget.cooldown.setCurrentIndex(widget.cooldown.findText("1"))
 
     assert widget.values().cooldown_days == "1"
 
@@ -283,8 +284,8 @@ def test_choosing_a_number_of_days_states_that_number(qtbot: QtBot) -> None:
     ("cooldown", "expected"),
     [
         (CooldownPolicy.off(), "Off"),
-        (CooldownPolicy.for_days(1), "1 day"),
-        (CooldownPolicy.for_days(3), "3 days"),
+        (CooldownPolicy.for_days(1), "1"),
+        (CooldownPolicy.for_days(3), "3"),
     ],
 )
 def test_a_session_reads_back_onto_the_form(

@@ -7,7 +7,9 @@ def cooldown_text(policy: CooldownPolicy) -> str:
     Written once so the choice a trader picks on the setup form and the
     Session the overview card states back are the same words — a Session that
     reads differently in two places reads as two Sessions.
+
+    The number is said on its own: every place that shows it names the unit in
+    its own label, the way Max Entries does, so repeating it on all thirty
+    rows of a list only makes the list harder to read down.
     """
-    if policy.days is None:
-        return "Off"
-    return f"{policy.days} day" if policy.days == 1 else f"{policy.days} days"
+    return "Off" if policy.days is None else str(policy.days)
