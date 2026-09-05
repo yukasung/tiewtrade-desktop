@@ -112,11 +112,12 @@ class SQLiteDatabase:
                     _migrate_capital_per_entry_v12(connection)
                 if version == 13:
                     # v13 keyed a waiver by the calendar month a Pair
-                    # completed, because a Cooldown lapsed two months on.
-                    # A Cooldown now stands until it is waived, so the month
-                    # names nothing and the Pair is what a waiver holds. No
-                    # waiver written under the old meaning can be read under
-                    # the new one, so none is carried over.
+                    # completed, because a Cooldown lapsed two months on. That
+                    # month named nothing — a Pair completed on the last day of
+                    # one cooled for a day — so v14 keyed a waiver to the Pair
+                    # instead, which is what it still holds. No waiver written
+                    # under the old meaning can be read under the new one, so
+                    # none is carried over.
                     connection.execute("DROP TABLE IF EXISTS paper_cooldown_waivers")
                 if 0 <= version <= 13:
                     _create_paper_cooldown_waiver_schema(connection)

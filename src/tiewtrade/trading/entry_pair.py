@@ -172,8 +172,8 @@ class EntryPairLifecycle:
         """When the Cooldown standing over this Basket lifts on its own.
 
         None whenever nothing is waiting on the clock — no Pair has completed,
-        the Policy is one that never lapses, or a sale has already broken up
-        the Pair a Cooldown would have stood over.
+        the Session's Cooldown is off, or a sale has already broken up the Pair
+        a Cooldown would have stood over.
         """
         if self._pair_completed_at is None:
             return None
@@ -231,10 +231,10 @@ class EntryPairLifecycle:
     def waive_cooldown(self, as_of: datetime) -> None:
         """Let a trader open past the Cooldown blocking this Pair, on their say.
 
-        It lifts exactly the Cooldown blocking the gate now, and the next Pair
-        this Basket completes closes the gate again. Under a Policy that
-        waits, this is the trader choosing not to wait out the rest of it;
-        under one that never lapses, it is the only way the gate opens at all.
+        Every Cooldown lifts on its own eventually, so this is only ever the
+        trader choosing not to wait out the rest of one. It lifts exactly the
+        Cooldown blocking the gate now, and the next Pair this Basket
+        completes closes the gate again for its own days.
         """
         if self.entry_gate(as_of).state is not EntryGateState.COOLDOWN:
             raise ValueError("no Cooldown is blocking this Pair")

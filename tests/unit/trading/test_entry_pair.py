@@ -13,7 +13,7 @@ from tiewtrade.trading.entry_pair import (
 from tiewtrade.trading.entry_policy import EntryPolicy
 
 AT = walk_time(1)
-"""One candle, which is all a Cooldown that never lapses is ever asked as of."""
+"""One candle: no test here waits out days, so they all answer as of the same one."""
 
 PAIR_COMPLETED_AT = walk_time(2)
 """The candle a Pair completes on, which a Cooldown that waits counts from."""
@@ -52,8 +52,8 @@ def test_one_entry_may_complete_its_pair() -> None:
     assert lifecycle.can_enter(AT)
 
 
-def test_completed_pair_holds_its_cooldown_with_no_time_limit() -> None:
-    """A Cooldown does not lapse: only the trader lifts it."""
+def test_a_completed_pair_closes_the_gate_behind_it() -> None:
+    """The Cooldown stands from the moment the Pair completes."""
     lifecycle = completed_pair()
 
     assert lifecycle.entry_gate(AT) == EntryGate(EntryGateState.COOLDOWN)

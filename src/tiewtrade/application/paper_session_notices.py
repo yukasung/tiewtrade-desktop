@@ -234,8 +234,8 @@ def snapshot_notices(
 ) -> SnapshotNotices | None:
     """Join a Session's identity onto every reading the sink says out loud.
 
-    Two of the four carry a moment the snapshot does not: a gate closing and a
-    gate lifting are things that are true from now on rather than things that
+    Everything a gate does carries a moment the snapshot does not: closing,
+    running out, and being lifted are true from now on rather than things that
     happened at a price, so they are stamped where they are noticed.
     """
     if notify is None:

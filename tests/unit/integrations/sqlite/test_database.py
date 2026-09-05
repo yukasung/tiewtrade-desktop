@@ -289,7 +289,7 @@ def _v16_bot_session(connection: sqlite3.Connection) -> None:
 def test_migrate_gives_an_older_session_the_longest_cooldown(
     tmp_path: Path,
 ) -> None:
-    """Every Session written before the choice existed waits to be cancelled."""
+    """Every Session written before the choice existed gets the longest wait."""
     database = SQLiteDatabase(tmp_path / "tiewtrade.sqlite3")
     database.migrate()
     with database.connect() as connection:
