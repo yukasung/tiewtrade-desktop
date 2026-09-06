@@ -42,6 +42,7 @@ def test_workspace_places_existing_features_in_one_screen(qtbot: QtBot) -> None:
         "Position",
         "Position History",
         "Trade History",
+        "Notifications",
     ]
     assert workspace.position_basket.state_label.text() == ("No open Position")
     assert workspace.setup.isVisible()
@@ -557,3 +558,27 @@ def test_the_toolbar_wears_the_whole_title_it_is_given(qtbot: QtBot) -> None:
     workspace.show_bot_title("   ")
 
     assert workspace.toolbar_title.text() == "TiewTrade"
+
+
+def test_the_notifications_tab_shows_its_page_and_announces_it_opened(
+    qtbot: QtBot,
+) -> None:
+    workspace = TradingWorkspace()
+    qtbot.addWidget(workspace)
+    workspace.show()
+
+    with qtbot.waitSignal(workspace.notifications_activated, timeout=1000):
+        workspace.show_tab(WorkspaceTab.NOTIFICATIONS)
+
+    assert workspace.tab_pages.currentWidget() is workspace.notifications
+    assert workspace.current_tab is WorkspaceTab.NOTIFICATIONS
+
+
+def test_leaving_the_notifications_tab_announces_it_closed(qtbot: QtBot) -> None:
+    workspace = TradingWorkspace()
+    qtbot.addWidget(workspace)
+    workspace.show()
+    workspace.show_tab(WorkspaceTab.NOTIFICATIONS)
+
+    with qtbot.waitSignal(workspace.notifications_deactivated, timeout=1000):
+        workspace.show_tab(WorkspaceTab.POSITION_BASKET)

@@ -30,8 +30,14 @@ def test_a_notice_is_read_back_exactly_as_it_was_said(tmp_path: Path) -> None:
     reopened = SQLiteSessionNotices(SQLiteDatabase(database_path))
     kept = reopened.list_notices(SESSION_ID)
     assert len(kept) == 1
-    assert kept[0].notice == _raised()
-    assert kept[0].deliveries == ()
+    item = kept[0]
+    raised = _raised()
+    assert item.notice_id == raised.notice_id
+    assert item.session_id == raised.session_id
+    assert item.kind == raised.kind
+    assert item.message == raised.message
+    assert item.raised_at_utc == raised.raised_at_utc
+    assert item.deliveries == ()
 
 
 def test_the_same_event_kept_twice_is_still_one_record(tmp_path: Path) -> None:
@@ -138,7 +144,7 @@ def test_notices_read_back_newest_first(tmp_path: Path) -> None:
 
     kept = journal.list_notices(SESSION_ID)
 
-    assert [one.notice.kind for one in kept] == [
+    assert [one.kind for one in kept] == [
         NoticeKind.BASKET_CLOSED,
         NoticeKind.ENTRY_OPENED,
     ]

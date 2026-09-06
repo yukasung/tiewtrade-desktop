@@ -25,6 +25,7 @@ from tiewtrade.application.paper_session_setup import (
     PaperSessionValidationError,
     validate_paper_session,
 )
+from tiewtrade.application.session_notices import ListSessionNotices
 from tiewtrade.application.trading_workspace import (
     BasketEntryGate,
     BasketSnapshot,
@@ -47,6 +48,7 @@ from tiewtrade.ui.chart_workflow import (
 )
 from tiewtrade.ui.connection_notice import ConnectionNotice
 from tiewtrade.ui.guarded_action import GuardedAction
+from tiewtrade.ui.notification_workflow import NotificationWorkflow
 from tiewtrade.ui.open_position_workflow import (
     OpenPositionWorkflow,
     ReadOpenBasket,
@@ -186,6 +188,7 @@ class MainWindow(QMainWindow):
         read_telegram_notifications: ReadTelegramNotifications | None = None,
         save_bot_title: SaveBotTitle | None = None,
         read_bot_title: ReadBotTitle | None = None,
+        list_session_notices: ListSessionNotices | None = None,
     ) -> None:
         super().__init__()
         self._blocked_notice = blocked_notice or self._open_blocked_notice
@@ -276,6 +279,7 @@ class MainWindow(QMainWindow):
         self._wire_bot_lifecycle(bot, take_profit_confirmation)
         self._wire_chart(chart, bot)
         self._wire_trade_history(list_basket_history, list_trade_fills)
+        self._wire_notifications(list_session_notices)
         self._wire_total_pnl(
             read_total_realized_pnl, read_high_water_mark, record_high_water_mark
         )
@@ -709,6 +713,7 @@ class MainWindow(QMainWindow):
         self._last_bot_state = value.state
         self._settings.set_bot_state(value.state)
         self._system_notice.bot_snapshot(value, previous_state)
+        self._notification_workflow.show_session(value.session.config.session_id)
         self.workspace.show_bot_control_snapshot(value)
         self._chart_workflow.runtime_snapshot(value)
         if value.state is BotRuntimeState.RUNNING:
@@ -781,6 +786,7 @@ class MainWindow(QMainWindow):
     def _show_editable_setup(self, snapshot: BotControlSnapshot) -> None:
         self._replacement_session = snapshot.session
         self.setup.set_values_from_session(snapshot.session)
+        self._notification_workflow.show_session(None)
         self.workspace.show_setup()
 
     def _still_on_screen(
@@ -1026,10 +1032,12 @@ class MainWindow(QMainWindow):
     def _show_unavailable(self, message: str) -> None:
         self._pending_validation_field = None
         self._start_after_create = False
+        self._notification_workflow.show_session(None)
         self.workspace.show_unavailable(message)
 
     @Slot()
     def _show_setup(self) -> None:
+        self._notification_workflow.show_session(None)
         self.workspace.show_setup()
         if self._default_chart_session is not None:
             self._start_chart_for(self._default_chart_session)
@@ -1099,6 +1107,7 @@ class MainWindow(QMainWindow):
         self._workflow.close()
         self._lifecycle_workflow.close()
         self._history_workflow.close()
+        self._notification_workflow.close()
         self._total_pnl.close()
         self._chart_workflow.close()
 
@@ -1161,6 +1170,29 @@ class MainWindow(QMainWindow):
         )
         self._history_workflow.attach(self.trade_history)
         self.workspace.trade_history_activated.connect(self._trade_history_activated)
+
+    def _wire_notifications(
+        self, list_session_notices: ListSessionNotices | None
+    ) -> None:
+        """The Notification tab, read only while a trader has it open.
+
+        Scoped to whichever Session is on screen: a notice belongs to the
+        Session that raised it the same way a Fill does, and a trader reading
+        this tab is reading about the Bot in front of them, not every Bot
+        this installation has ever run.
+        """
+        self._notification_workflow = NotificationWorkflow(
+            list_session_notices=list_session_notices,
+            thread_pool=self._thread_pool,
+            parent=self,
+        )
+        self._notification_workflow.attach(self.workspace.notifications)
+        self.workspace.notifications_activated.connect(
+            self._notification_workflow.activate
+        )
+        self.workspace.notifications_deactivated.connect(
+            self._notification_workflow.deactivate
+        )
 
 
 async def _unused_chart_loader(
