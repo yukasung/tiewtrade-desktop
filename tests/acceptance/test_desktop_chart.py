@@ -234,6 +234,13 @@ def test_dragging_the_chart_reads_an_older_window(qtbot: QtBot) -> None:
             chart._snapshot is not None and chart._snapshot.chart_range == requested[0]
         )
     )
+    # `window.resize` sets the top-level window's size at once; the chart
+    # nested inside it only takes its share once Qt has actually run a
+    # layout pass, which is a further, separate wait on some platforms. A
+    # drag distance measured off a chart still at its pre-layout size is a
+    # drag of the wrong number of candles — often zero, which reads back as
+    # no pan at all.
+    qtbot.waitUntil(lambda: chart.width() > 400)
 
     opening_range = requested[0]
     surface = chart._chart_surface()
