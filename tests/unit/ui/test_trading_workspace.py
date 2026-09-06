@@ -194,7 +194,7 @@ def test_settings_button_emits_settings_requested(qtbot: QtBot) -> None:
         workspace.settings_button.click()
 
 
-def test_show_settings_replaces_setup_in_place(qtbot: QtBot) -> None:
+def test_show_settings_opens_the_dialog_over_the_sidebar(qtbot: QtBot) -> None:
     workspace = TradingWorkspace()
     qtbot.addWidget(workspace)
     workspace.show()
@@ -203,11 +203,15 @@ def test_show_settings_replaces_setup_in_place(qtbot: QtBot) -> None:
     workspace.show_settings()
 
     assert workspace.is_showing_settings
+    assert workspace.settings_dialog.isVisible()
     assert workspace.settings_panel.isVisible()
     assert workspace.settings_panel.clear_database_button.isEnabled()
+    # The dialog is a modal window over the sidebar, not a page replacing it —
+    # the sidebar keeps whatever it was showing underneath.
+    assert workspace.setup.isVisible()
 
 
-def test_hide_settings_returns_to_setup_by_default(qtbot: QtBot) -> None:
+def test_hide_settings_closes_the_dialog(qtbot: QtBot) -> None:
     workspace = TradingWorkspace()
     qtbot.addWidget(workspace)
     workspace.show()
@@ -219,7 +223,7 @@ def test_hide_settings_returns_to_setup_by_default(qtbot: QtBot) -> None:
     assert workspace.setup.isVisible()
 
 
-def test_hide_settings_returns_to_bot_control_after_a_session_was_shown(
+def test_hide_settings_leaves_the_bot_control_page_shown_underneath(
     qtbot: QtBot,
 ) -> None:
     workspace = TradingWorkspace()
@@ -237,19 +241,19 @@ def test_hide_settings_returns_to_bot_control_after_a_session_was_shown(
     assert workspace.bot_control_widget.isVisible()
 
 
-def test_back_button_hides_settings(qtbot: QtBot) -> None:
+def test_cancel_button_hides_settings(qtbot: QtBot) -> None:
     workspace = TradingWorkspace()
     qtbot.addWidget(workspace)
     workspace.show()
 
     workspace.show_settings()
-    workspace.settings_panel.back_button.click()
+    workspace.settings_panel.cancel_button.click()
 
     assert not workspace.is_showing_settings
     assert workspace.setup.isVisible()
 
 
-def test_a_state_update_while_settings_is_open_does_not_switch_pages(
+def test_a_state_update_while_settings_is_open_does_not_close_it(
     qtbot: QtBot,
 ) -> None:
     """A running Bot's own snapshots must not sweep Settings off screen."""

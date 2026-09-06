@@ -27,6 +27,7 @@ from tiewtrade.ui.live_price_card import LivePriceCard
 from tiewtrade.ui.notification_page import NotificationPage
 from tiewtrade.ui.position_basket_table import PositionBasketTable
 from tiewtrade.ui.session_setup import SessionSetupWidget
+from tiewtrade.ui.settings_dialog import SettingsDialog
 from tiewtrade.ui.settings_panel import SettingsPanel
 from tiewtrade.ui.trade_history_page import TradeHistoryPage
 from tiewtrade.ui.trade_history_workflow import HistoryTab
@@ -63,6 +64,7 @@ class TradingWorkspace(QWidget):
         self.setup = SessionSetupWidget()
         self.bot_control_widget = BotControlWidget()
         self.settings_panel = SettingsPanel()
+        self.settings_dialog = SettingsDialog(self.settings_panel, parent=self)
         self.overview = self.bot_control_widget.overview
         self.position_basket = PositionBasketTable()
         self.trade_history = TradeHistoryPage()
@@ -98,13 +100,9 @@ class TradingWorkspace(QWidget):
         self._bot_pages.addWidget(self.setup)
         self._bot_pages.addWidget(self.bot_control_widget)
         self._bot_pages.addWidget(self.unavailable_panel)
-        self._bot_pages.addWidget(self.settings_panel)
         self.bot_control_widget.start_requested.connect(self.start_bot_requested)
         self.bot_control_widget.stop_requested.connect(self.stop_bot_requested)
-        self.settings_panel.back_requested.connect(self.hide_settings)
-        # What to return to once Settings is left, again — set for real the
-        # moment anything else is actually shown.
-        self._page_before_settings: QWidget = self.setup
+        self.settings_panel.close_requested.connect(self.hide_settings)
 
         # One strip of tabs, not two. Basket History and Trade History are two
         # readings of the same records rather than a place of their own, so
@@ -198,15 +196,15 @@ class TradingWorkspace(QWidget):
         self.unavailable_retry_button.setDisabled(busy)
 
     def show_settings(self) -> None:
-        self._show_bot_page(self.settings_panel)
+        self.settings_dialog.open()
 
     @Slot()
     def hide_settings(self) -> None:
-        self._show_bot_page(self._page_before_settings)
+        self.settings_dialog.reject()
 
     @property
     def is_showing_settings(self) -> bool:
-        return self._bot_pages.currentWidget() is self.settings_panel
+        return self.settings_dialog.isVisible()
 
     def _build_layout(self) -> None:
         root = QVBoxLayout(self)
@@ -343,16 +341,14 @@ class TradingWorkspace(QWidget):
         self._bot_pages.adjustSize()
 
     def _remember_and_maybe_show(self, page: QWidget) -> None:
-        """Take a state-driven page, but only show it if Settings is not up.
+        """Take a state-driven page, whether or not Settings sits over it.
 
-        A running Bot's own state keeps arriving whether or not the trader
-        is looking at it, and Settings must not be swept off screen by one
-        landing mid-visit. The page still gets its fresh content — only the
-        switch is held back, for `hide_settings` to make good on later.
+        Settings is a modal dialog rather than a page in this stack, so a
+        running Bot's own state can land on the sidebar underneath it freely
+        — the dialog blocks the trader from reaching that sidebar until it is
+        closed, and it is never itself in danger of being swept off screen.
         """
-        self._page_before_settings = page
-        if self._bot_pages.currentWidget() is not self.settings_panel:
-            self._show_bot_page(page)
+        self._show_bot_page(page)
 
     def _show_bot_page(self, page: QWidget) -> None:
         self._bot_pages.setCurrentWidget(page)

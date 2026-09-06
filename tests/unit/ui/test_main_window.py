@@ -2997,7 +2997,7 @@ def _click_settings(window: MainWindow) -> None:
     click(window.workspace.settings_button)
 
 
-def test_settings_button_shows_the_panel_in_place_of_the_bot_control_card(
+def test_settings_button_opens_the_settings_dialog(
     qtbot: QtBot,
 ) -> None:
     window = MainWindow(
@@ -3017,7 +3017,7 @@ def test_settings_button_shows_the_panel_in_place_of_the_bot_control_card(
     assert window.workspace.settings_panel.isVisible()
 
 
-def test_settings_button_toggles_back_to_the_page_it_replaced(qtbot: QtBot) -> None:
+def test_settings_button_toggles_the_dialog_closed(qtbot: QtBot) -> None:
     window = MainWindow(
         create_session=unused_create,
         load_active=no_active_session,
@@ -3037,7 +3037,7 @@ def test_settings_button_toggles_back_to_the_page_it_replaced(qtbot: QtBot) -> N
     assert window.setup.isVisible()
 
 
-def test_settings_back_button_returns_to_the_page_it_replaced(qtbot: QtBot) -> None:
+def test_settings_cancel_button_returns_to_the_page_underneath(qtbot: QtBot) -> None:
     window = MainWindow(
         create_session=unused_create,
         load_active=no_active_session,
@@ -3050,7 +3050,7 @@ def test_settings_back_button_returns_to_the_page_it_replaced(qtbot: QtBot) -> N
     qtbot.waitUntil(window.setup.isVisible)
 
     _click_settings(window)
-    click(window.workspace.settings_panel.back_button)
+    click(window.workspace.settings_panel.cancel_button)
 
     assert not window.workspace.is_showing_settings
     assert window.setup.isVisible()
@@ -3386,7 +3386,7 @@ def test_settings_panel_stays_up_while_a_running_bot_keeps_publishing(
 
     assert window.workspace.is_showing_settings
 
-    click(window.workspace.settings_panel.back_button)
+    click(window.workspace.settings_panel.cancel_button)
     assert window.workspace.bot_control_widget.isVisible()
 
 

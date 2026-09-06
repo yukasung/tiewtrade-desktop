@@ -1,6 +1,6 @@
-from PySide6.QtCore import QSize
+from PySide6.QtCore import QPoint, QSize
 from PySide6.QtGui import QIcon
-from PySide6.QtWidgets import QLabel, QLineEdit
+from PySide6.QtWidgets import QLabel, QLineEdit, QWidget
 from pytestqt.qtbot import QtBot
 
 from tests.support.qt_interactions import click
@@ -41,19 +41,21 @@ def test_clicking_the_button_emits_clear_database_requested(qtbot: QtBot) -> Non
         click(panel.clear_database_button)
 
 
-def test_the_line_fields_are_stated_under_their_labels_and_fill_the_width(
+def test_the_line_fields_are_stated_under_their_labels_and_fill_the_card(
     qtbot: QtBot,
 ) -> None:
     """A token is far longer than a field sharing its row with a label.
 
     Side by side, the label took the width the value needed and the token
-    scrolled past the edge of a field a few characters wide.
+    scrolled past the edge of a field a few characters wide. Below the two-
+    column breakpoint the LINE card is the only thing on its row, so its
+    fields still run out to (nearly) the panel's own width.
     """
     panel = SettingsPanel()
     qtbot.addWidget(panel)
-    panel.resize(600, 500)
+    panel.setFixedSize(400, 700)
     panel.show()
-    qtbot.waitUntil(panel.line_target_id.isVisible)
+    qtbot.waitUntil(lambda: panel.line_target_id.width() > panel.width() - 90)
 
     for field, text in (
         (panel.line_target_id, "Send to"),
@@ -64,15 +66,68 @@ def test_the_line_fields_are_stated_under_their_labels_and_fill_the_width(
         )
         assert label.y() < field.y()
         # Whatever room the panel has, less its own margins, is the field's.
-        assert field.width() > panel.width() - 60
+        assert field.width() > panel.width() - 90
 
 
-def test_clicking_back_emits_back_requested(qtbot: QtBot) -> None:
+def _position_in(panel: QWidget, field: QWidget) -> QPoint:
+    """A field's top-left in the panel's own coordinates, not its card's.
+
+    The LINE and Telegram fields sit in separate card frames, so their raw
+    `.x()`/`.y()` are each relative to a different parent and cannot be
+    compared directly.
+    """
+    return field.mapTo(panel, QPoint(0, 0))
+
+
+def test_wide_enough_screens_show_line_and_telegram_side_by_side(
+    qtbot: QtBot,
+) -> None:
+    panel = SettingsPanel()
+    qtbot.addWidget(panel)
+    panel.setFixedSize(760, 700)
+    panel.show()
+    qtbot.waitUntil(
+        lambda: (
+            _position_in(panel, panel.line_target_id).x()
+            < _position_in(panel, panel.telegram_chat_id).x()
+        )
+    )
+
+    assert (
+        _position_in(panel, panel.line_target_id).y()
+        == _position_in(panel, panel.telegram_chat_id).y()
+    )
+
+
+def test_narrow_screens_stack_line_and_telegram(qtbot: QtBot) -> None:
+    panel = SettingsPanel()
+    qtbot.addWidget(panel)
+    panel.setFixedSize(400, 900)
+    panel.show()
+    qtbot.waitUntil(
+        lambda: (
+            _position_in(panel, panel.line_target_id).y()
+            < _position_in(panel, panel.telegram_chat_id).y()
+        )
+    )
+
+
+def test_clicking_cancel_emits_close_requested(qtbot: QtBot) -> None:
     panel = SettingsPanel()
     qtbot.addWidget(panel)
 
-    with qtbot.waitSignal(panel.back_requested, timeout=1000):
-        click(panel.back_button)
+    with qtbot.waitSignal(panel.close_requested, timeout=1000):
+        click(panel.cancel_button)
+
+
+def test_clicking_the_header_close_button_emits_close_requested(
+    qtbot: QtBot,
+) -> None:
+    panel = SettingsPanel()
+    qtbot.addWidget(panel)
+
+    with qtbot.waitSignal(panel.close_requested, timeout=1000):
+        click(panel.close_button)
 
 
 def test_set_busy_disables_the_button_and_changes_its_label(qtbot: QtBot) -> None:

@@ -7,7 +7,7 @@ POSITIVE_COLOR = "#0ECB81"
 NEGATIVE_COLOR = "#F6465D"
 
 DARK_THEME = """
-QMainWindow, QWidget#workspace, QWidget#workspaceContent {
+QMainWindow, QWidget#workspace, QWidget#workspaceContent, QDialog#settingsDialog {
     background: #0B0E11;
     color: #F1F5F9;
     font-family: "Inter", "SF Pro Text", "Helvetica Neue", sans-serif;
@@ -315,31 +315,67 @@ QTabBar#workspaceTabs::tab:focus {
 }
 QScrollArea#botControlScroll, QWidget#botControlViewport,
 QStackedWidget#botControlPages, QScrollArea#tradeHistoryScroll,
-QWidget#tradeHistoryViewport, QWidget#tradeHistoryContent {
+QWidget#tradeHistoryViewport, QWidget#tradeHistoryContent,
+QScrollArea#settingsScroll, QWidget#settingsScrollViewport,
+QWidget#settingsScrollContent {
     background: #141A22;
     border: 0;
 }
-QScrollArea#tradeHistoryScroll QScrollBar:vertical {
+QScrollArea#tradeHistoryScroll QScrollBar:vertical,
+QScrollArea#settingsScroll QScrollBar:vertical {
     background: #0B0E11;
     border: 0;
     margin: 0;
     width: 12px;
 }
-QScrollArea#tradeHistoryScroll QScrollBar::handle:vertical {
+QScrollArea#tradeHistoryScroll QScrollBar::handle:vertical,
+QScrollArea#settingsScroll QScrollBar::handle:vertical {
     background: #3A4656;
     border: 0;
     border-radius: 6px;
     min-height: 24px;
 }
 QScrollArea#tradeHistoryScroll QScrollBar::add-line:vertical,
-QScrollArea#tradeHistoryScroll QScrollBar::sub-line:vertical {
+QScrollArea#tradeHistoryScroll QScrollBar::sub-line:vertical,
+QScrollArea#settingsScroll QScrollBar::add-line:vertical,
+QScrollArea#settingsScroll QScrollBar::sub-line:vertical {
     background: #0B0E11;
     border: 0;
     height: 0;
 }
 QScrollArea#tradeHistoryScroll QScrollBar::add-page:vertical,
-QScrollArea#tradeHistoryScroll QScrollBar::sub-page:vertical {
+QScrollArea#tradeHistoryScroll QScrollBar::sub-page:vertical,
+QScrollArea#settingsScroll QScrollBar::add-page:vertical,
+QScrollArea#settingsScroll QScrollBar::sub-page:vertical {
     background: #0B0E11;
+}
+/* Settings sits over the app in its own window, so its header and footer
+   need a rule of their own to read as fixed ends around the form that
+   scrolls between them, the way the card border already reads elsewhere. */
+QFrame#settingsHeader {
+    background: transparent;
+    border-bottom: 1px solid #2B3441;
+}
+QFrame#settingsFooter {
+    background: transparent;
+    border-top: 1px solid #2B3441;
+}
+QPushButton#dialogCloseButton {
+    background: transparent;
+    border: 0;
+    color: #94A3B8;
+    font-size: 16px;
+    font-weight: 700;
+    min-height: 28px;
+    min-width: 28px;
+    padding: 0;
+}
+QPushButton#dialogCloseButton:hover {
+    color: #F1F5F9;
+}
+QPushButton#dialogCloseButton:focus {
+    border: 2px solid #4C7DFF;
+    border-radius: 4px;
 }
 QTableWidget {
     alternate-background-color: #111821;

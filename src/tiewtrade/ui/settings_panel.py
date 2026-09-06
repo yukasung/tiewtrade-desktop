@@ -1,12 +1,10 @@
-"""Settings as a page of the Bot Control card, not a window over it.
+"""Settings, hosted inside `SettingsDialog` rather than the Bot Control sidebar.
 
-It sits in the same `_bot_pages` stack as `SessionSetupWidget` and
-`BotControlWidget`, and the room this makes is for values yet to come —
-a Binance API key, eventually — not only the one action here today. The
-button always answers a click; whether it goes anywhere — and what to
-say if it does not — is for whoever owns the actual clearing to decide,
-the same way `PositionBasketTable.close_all_requested` leaves the
-confirming to its window rather than asking it here.
+The sidebar has room for what the trader has to see at a glance while the Bot
+runs, and that is not where a Binance API key, eventually joining the two
+channels below, belongs. So this widget carries its own header and footer —
+Settings / close above, Cancel / Save Settings below — and only the form
+between them scrolls, the way the dialog's own spec asks for.
 
 The LINE and Telegram fields are filled in from what is stored, the tokens
 among them: a form that offers to change a token has to show which one it is
@@ -14,25 +12,27 @@ changing. They arrive covered and stay that way unless the trader asks to see
 one, and each token is uncovered on its own — revealing the one being typed
 should not put the other on screen beside it.
 
-The two channels are a section each rather than one section with a choice in
-it, because they are not a choice: a trader may run either, both, or neither,
-and each is turned on by its own switch.
+The two channels are a card each rather than one section with a choice in it,
+because they are not a choice: a trader may run either, both, or neither, and
+each is turned on by its own switch. Side by side while there is room for it,
+and stacked the moment there is not — never squeezed to fit two across.
 
 The Title at the top is the one value here that is read back out on screen
 rather than sent anywhere: it is what the toolbar says, all of it, so someone
 looking after several installations can tell which one the window in front of
-them is. What it says is the trader's business — a customer's name, a machine,
-a strategy they are trying — so the form asks for a title, offers the name of
-the application as the one to start from, and lets them take that out.
+them is.
 """
 
 from PySide6.QtCore import QPointF, QRectF, Qt, Signal
 from PySide6.QtGui import QAction, QColor, QIcon, QPainter, QPainterPath, QPen, QPixmap
 from PySide6.QtWidgets import (
+    QBoxLayout,
+    QFrame,
     QHBoxLayout,
     QLabel,
     QLineEdit,
     QPushButton,
+    QScrollArea,
     QVBoxLayout,
     QWidget,
 )
@@ -44,6 +44,8 @@ CLEAR_DATABASE_BUSY_TEXT = "Clearing…"
 CLEAR_DATABASE_IDLE_TEXT = "Clear All Database"
 SAVE_SETTINGS_BUSY_TEXT = "Saving…"
 SAVE_SETTINGS_IDLE_TEXT = "Save Settings"
+CANCEL_TEXT = "Cancel"
+CLOSE_BUTTON_TEXT = "✕"
 BOT_TITLE_PLACEHOLDER = "Shown at the top of the window"
 BOT_TITLE_MAX_LENGTH = 60
 """As much of a remark as the toolbar can hold beside the name of the app.
@@ -65,6 +67,11 @@ HIDE_TOKEN_TEXT = "Hide the token being typed"
 _EYE_ICON_SIZE = 18
 _EYE_ICON_COLOR = "#94A3B8"
 
+# Below this width, a LINE card and a Telegram card sharing a row have no room
+# left for a token once their own padding and the gap between them are taken
+# out — so the two stack instead of reading as two narrow, cramped columns.
+_TWO_COLUMN_BREAKPOINT = 560
+
 type LineNotificationsReading = tuple[bool, str, str]
 """Turned on, who the messages go to, and the token they are sent with."""
 
@@ -78,105 +85,105 @@ class SettingsPanel(QWidget):
     clear_database_requested = Signal()
     #: The whole page at once: the Title, then LINE, then Telegram.
     settings_save_requested = Signal(str, bool, str, str, bool, str, str)
-    back_requested = Signal()
+    #: Asked for by the header's close button and by Cancel alike — neither
+    #: means anything but "leave this open as it was found".
+    close_requested = Signal()
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.setObjectName("settingsPanel")
 
-        heading = QLabel("SETTINGS")
-        heading.setObjectName("eyebrow")
+        header, self.close_button = _header()
+        self.close_button.clicked.connect(self.close_requested)
 
         # A remark, not an identity: nothing is bound to it and nothing reads
         # it but the toolbar, so it may be changed or emptied at any time,
-        # while the Bot is running included. It gets no heading of its own —
-        # a section called TITLE over a field called Title said it twice, and
-        # the eyebrow above already says what page this is.
+        # while the Bot is running included.
         self.bot_title = QLineEdit()
         self.bot_title.setMaxLength(BOT_TITLE_MAX_LENGTH)
         self.bot_title.setPlaceholderText(BOT_TITLE_PLACEHOLDER)
-        bot_form = QVBoxLayout()
-        bot_form.setContentsMargins(0, 0, 0, 0)
-        bot_form.setSpacing(12)
-        bot_form.addLayout(_field_row("Title", self.bot_title))
+        general_heading = QLabel("GENERAL")
+        general_heading.setObjectName("eyebrow")
+        general_form = QVBoxLayout()
+        general_form.setContentsMargins(0, 0, 0, 0)
+        general_form.setSpacing(12)
+        general_form.addLayout(_field_row("Title", self.bot_title))
 
-        line_heading = QLabel("LINE NOTIFICATIONS")
-        line_heading.setObjectName("eyebrow")
+        notifications_heading = QLabel("NOTIFICATIONS")
+        notifications_heading.setObjectName("eyebrow")
 
-        # A switch rather than a tick: this setting is not a fact about the
-        # Session, it is something left running or left off.
-        self.line_enabled = ToggleSwitch()
-        line_enabled_row = _switch_row(self.line_enabled, "Send a LINE message")
-        self.line_target_id = QLineEdit()
-        self.line_target_id.setPlaceholderText("User or group ID")
-        self.line_access_token, self.reveal_token = _covered_field(
-            self, TOKEN_MISSING_PLACEHOLDER
-        )
-        # Blank unless something is wrong: what a trader has to be told about
-        # these settings is that they could not be read, not that they were.
-        self.line_token_state = _error_line()
+        line_card, line_widgets = _line_card(self)
+        (
+            self.line_enabled,
+            self.line_target_id,
+            self.line_access_token,
+            self.reveal_token,
+            self.line_token_state,
+        ) = line_widgets
 
-        telegram_heading = QLabel("TELEGRAM NOTIFICATIONS")
-        telegram_heading.setObjectName("eyebrow")
+        telegram_card, telegram_widgets = _telegram_card(self)
+        (
+            self.telegram_enabled,
+            self.telegram_chat_id,
+            self.telegram_bot_token,
+            self.reveal_telegram_token,
+            self.telegram_token_state,
+        ) = telegram_widgets
 
-        self.telegram_enabled = ToggleSwitch()
-        telegram_enabled_row = _switch_row(
-            self.telegram_enabled, "Send a Telegram message"
-        )
-        # A chat id, not a username: a bot can only send into a chat it has
-        # been added to, and that chat is named by a number the trader reads
-        # off their own bot rather than by the handle they see in the app.
-        self.telegram_chat_id = QLineEdit()
-        self.telegram_chat_id.setPlaceholderText("Chat, group or channel ID")
-        self.telegram_bot_token, self.reveal_telegram_token = _covered_field(
-            self, TELEGRAM_TOKEN_MISSING_PLACEHOLDER
-        )
-        self.telegram_token_state = _error_line()
+        columns = _NotificationsColumns(line_card, telegram_card)
 
-        self.save_settings_button = QPushButton(SAVE_SETTINGS_IDLE_TEXT)
-        self.save_settings_button.setObjectName("secondaryButton")
-        self.save_settings_button.clicked.connect(self._save_settings)
+        content = QWidget()
+        content.setObjectName("settingsScrollContent")
+        content_layout = QVBoxLayout(content)
+        content_layout.setContentsMargins(20, 16, 20, 16)
+        content_layout.setSpacing(16)
+        content_layout.addWidget(general_heading)
+        content_layout.addLayout(general_form)
+        content_layout.addWidget(notifications_heading)
+        content_layout.addWidget(columns)
+        content_layout.addStretch()
 
-        line_form = QVBoxLayout()
-        line_form.setContentsMargins(0, 0, 0, 0)
-        line_form.setSpacing(12)
-        line_form.addLayout(_field_row("Send to", self.line_target_id))
-        line_form.addLayout(_field_row("Access token", self.line_access_token))
-
-        telegram_form = QVBoxLayout()
-        telegram_form.setContentsMargins(0, 0, 0, 0)
-        telegram_form.setSpacing(12)
-        telegram_form.addLayout(_field_row("Send to", self.telegram_chat_id))
-        telegram_form.addLayout(_field_row("Bot token", self.telegram_bot_token))
+        scroll = QScrollArea()
+        scroll.setObjectName("settingsScroll")
+        scroll.viewport().setObjectName("settingsScrollViewport")
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        scroll.setWidget(content)
 
         self.clear_database_button = QPushButton(CLEAR_DATABASE_IDLE_TEXT)
         self.clear_database_button.setObjectName("destructiveButton")
         self.clear_database_button.clicked.connect(self.clear_database_requested)
 
-        self.back_button = QPushButton("Back")
-        self.back_button.setObjectName("secondaryButton")
-        self.back_button.clicked.connect(self.back_requested)
+        self.cancel_button = QPushButton(CANCEL_TEXT)
+        self.cancel_button.setObjectName("secondaryButton")
+        self.cancel_button.clicked.connect(self.close_requested)
 
+        self.save_settings_button = QPushButton(SAVE_SETTINGS_IDLE_TEXT)
+        self.save_settings_button.setObjectName("secondaryButton")
+        self.save_settings_button.clicked.connect(self._save_settings)
+
+        footer = QFrame()
+        footer.setObjectName("settingsFooter")
+        footer_layout = QHBoxLayout(footer)
+        footer_layout.setContentsMargins(20, 14, 20, 14)
+        footer_layout.setSpacing(10)
+        # Destructive on its own side: it answers to neither Cancel nor Save,
+        # and a trader reading the row left to right should not mistake it
+        # for a third way of leaving the form.
+        footer_layout.addWidget(self.clear_database_button)
+        footer_layout.addStretch()
+        footer_layout.addWidget(self.cancel_button)
+        footer_layout.addWidget(self.save_settings_button)
+
+        # Header and footer are fixed; only the form between them scrolls, so
+        # Save Settings can never be pushed off the bottom by what is above it.
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(20, 20, 20, 20)
-        layout.setSpacing(12)
-        layout.addWidget(heading)
-        layout.addLayout(bot_form)
-        layout.addWidget(line_heading)
-        layout.addLayout(line_enabled_row)
-        layout.addLayout(line_form)
-        layout.addWidget(self.line_token_state)
-        layout.addWidget(telegram_heading)
-        layout.addLayout(telegram_enabled_row)
-        layout.addLayout(telegram_form)
-        layout.addWidget(self.telegram_token_state)
-        # The actions sit at the foot of the page, under the space the values
-        # yet to come will fill, so they stay where a trader last left them
-        # instead of sliding down the page as fields are added above.
-        layout.addStretch()
-        layout.addWidget(self.save_settings_button)
-        layout.addWidget(self.clear_database_button)
-        layout.addWidget(self.back_button)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
+        layout.addWidget(header)
+        layout.addWidget(scroll, 1)
+        layout.addWidget(footer)
 
     def set_busy(self, busy: bool) -> None:
         self.clear_database_button.setEnabled(not busy)
@@ -255,6 +262,118 @@ class SettingsPanel(QWidget):
             self.telegram_chat_id.text().strip(),
             self.telegram_bot_token.text().strip(),
         )
+
+
+def _header() -> tuple[QFrame, QPushButton]:
+    """The one row that never scrolls out of view above the form."""
+    header = QFrame()
+    header.setObjectName("settingsHeader")
+    title = QLabel("Settings")
+    title.setObjectName("pageTitle")
+    close_button = QPushButton(CLOSE_BUTTON_TEXT)
+    close_button.setObjectName("dialogCloseButton")
+    close_button.setToolTip("Close")
+    layout = QHBoxLayout(header)
+    layout.setContentsMargins(20, 16, 16, 16)
+    layout.addWidget(title)
+    layout.addStretch()
+    layout.addWidget(close_button)
+    return header, close_button
+
+
+class _NotificationsColumns(QWidget):
+    """Two cards, side by side while there is room and stacked once there is not.
+
+    A `QBoxLayout` already carries both directions a card can be laid out in,
+    so switching between them is a matter of asking it to point the other way
+    rather than tearing the cards out of one layout to add them to another.
+    """
+
+    def __init__(
+        self, line_card: QWidget, telegram_card: QWidget, parent: QWidget | None = None
+    ) -> None:
+        super().__init__(parent)
+        self._box = QBoxLayout(QBoxLayout.Direction.LeftToRight, self)
+        self._box.setContentsMargins(0, 0, 0, 0)
+        self._box.setSpacing(16)
+        self._box.addWidget(line_card, 1)
+        self._box.addWidget(telegram_card, 1)
+
+    def resizeEvent(self, event: object) -> None:  # noqa: ARG002 - Qt's own signature
+        wide = self.width() >= _TWO_COLUMN_BREAKPOINT
+        direction = (
+            QBoxLayout.Direction.LeftToRight
+            if wide
+            else QBoxLayout.Direction.TopToBottom
+        )
+        if self._box.direction() != direction:
+            self._box.setDirection(direction)
+
+
+type _ChannelWidgets = tuple[ToggleSwitch, QLineEdit, QLineEdit, QAction, QLabel]
+
+
+def _line_card(owner: QWidget) -> tuple[QFrame, _ChannelWidgets]:
+    heading = QLabel("LINE NOTIFICATIONS")
+    heading.setObjectName("eyebrow")
+    # A switch rather than a tick: this setting is not a fact about the
+    # Session, it is something left running or left off.
+    enabled = ToggleSwitch()
+    enabled_row = _switch_row(enabled, "Send a LINE message")
+    target_id = QLineEdit()
+    target_id.setPlaceholderText("User or group ID")
+    access_token, reveal = _covered_field(owner, TOKEN_MISSING_PLACEHOLDER)
+    # Blank unless something is wrong: what a trader has to be told about
+    # these settings is that they could not be read, not that they were.
+    token_state = _error_line()
+
+    form = QVBoxLayout()
+    form.setContentsMargins(0, 0, 0, 0)
+    form.setSpacing(12)
+    form.addLayout(_field_row("Send to", target_id))
+    form.addLayout(_field_row("Access token", access_token))
+
+    card = QFrame()
+    card.setObjectName("card")
+    card_layout = QVBoxLayout(card)
+    card_layout.setContentsMargins(16, 16, 16, 16)
+    card_layout.setSpacing(12)
+    card_layout.addWidget(heading)
+    card_layout.addLayout(enabled_row)
+    card_layout.addLayout(form)
+    card_layout.addWidget(token_state)
+    return card, (enabled, target_id, access_token, reveal, token_state)
+
+
+def _telegram_card(owner: QWidget) -> tuple[QFrame, _ChannelWidgets]:
+    heading = QLabel("TELEGRAM NOTIFICATIONS")
+    heading.setObjectName("eyebrow")
+    enabled = ToggleSwitch()
+    enabled_row = _switch_row(enabled, "Send a Telegram message")
+    # A chat id, not a username: a bot can only send into a chat it has been
+    # added to, and that chat is named by a number the trader reads off their
+    # own bot rather than by the handle they see in the app.
+    chat_id = QLineEdit()
+    chat_id.setPlaceholderText("Chat, group or channel ID")
+    bot_token, reveal = _covered_field(owner, TELEGRAM_TOKEN_MISSING_PLACEHOLDER)
+    token_state = _error_line()
+
+    form = QVBoxLayout()
+    form.setContentsMargins(0, 0, 0, 0)
+    form.setSpacing(12)
+    form.addLayout(_field_row("Send to", chat_id))
+    form.addLayout(_field_row("Bot token", bot_token))
+
+    card = QFrame()
+    card.setObjectName("card")
+    card_layout = QVBoxLayout(card)
+    card_layout.setContentsMargins(16, 16, 16, 16)
+    card_layout.setSpacing(12)
+    card_layout.addWidget(heading)
+    card_layout.addLayout(enabled_row)
+    card_layout.addLayout(form)
+    card_layout.addWidget(token_state)
+    return card, (enabled, chat_id, bot_token, reveal, token_state)
 
 
 def _eye_icon(*, crossed: bool) -> QIcon:
