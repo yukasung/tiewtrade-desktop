@@ -589,6 +589,9 @@ def _run_desktop_holding_the_installation(
         # this installation is, and it outlives every Session it has had.
         save_bot_title=partial(save_bot_title, resolved_database_path.parent),
         read_bot_title=partial(read_bot_title, resolved_database_path.parent),
+        list_session_notices=_migrate_first(
+            prepare_database, SQLiteSessionNotices(database).list_notices
+        ),
         activation_name=activation_name,
     )
 

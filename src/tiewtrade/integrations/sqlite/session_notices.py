@@ -15,11 +15,14 @@ push it describes is already under.
 
 import logging
 import sqlite3
-from dataclasses import dataclass
 from datetime import datetime
 from uuid import UUID
 
 from tiewtrade.application.session_notice import NoticeKind
+from tiewtrade.application.session_notices import (
+    SessionNoticeDelivery,
+    SessionNoticeHistoryItem,
+)
 from tiewtrade.integrations.notifications.notice_journal import (
     NoticeDelivery,
     RaisedNotice,
@@ -27,14 +30,6 @@ from tiewtrade.integrations.notifications.notice_journal import (
 from tiewtrade.integrations.sqlite.database import SQLiteDatabase
 
 _logger = logging.getLogger(__name__)
-
-
-@dataclass(frozen=True, slots=True)
-class KeptNotice:
-    """One notice as it was said, with what each channel made of it."""
-
-    notice: RaisedNotice
-    deliveries: tuple[NoticeDelivery, ...]
 
 
 class SQLiteSessionNotices:
@@ -98,7 +93,7 @@ class SQLiteSessionNotices:
             said="notification.delivery_record_failed",
         )
 
-    def list_notices(self, session_id: UUID) -> tuple[KeptNotice, ...]:
+    def list_notices(self, session_id: UUID) -> tuple[SessionNoticeHistoryItem, ...]:
         """Everything this Session said, newest first, with its deliveries.
 
         Newest first because it is read to catch up: what the Bot did while
@@ -137,14 +132,11 @@ class SQLiteSessionNotices:
             return ()
         finally:
             connection.close()
-        by_notice: dict[str, list[NoticeDelivery]] = {}
+        by_notice: dict[str, list[SessionNoticeDelivery]] = {}
         for row in deliveries:
             by_notice.setdefault(row["notice_id"], []).append(_delivery(row))
         return tuple(
-            KeptNotice(
-                notice=_notice(row),
-                deliveries=tuple(by_notice.get(row["notice_id"], ())),
-            )
+            _history_item(row, tuple(by_notice.get(row["notice_id"], ())))
             for row in notices
         )
 
@@ -167,19 +159,21 @@ class SQLiteSessionNotices:
             connection.close()
 
 
-def _notice(row: sqlite3.Row) -> RaisedNotice:
-    return RaisedNotice(
+def _history_item(
+    row: sqlite3.Row, deliveries: tuple[SessionNoticeDelivery, ...]
+) -> SessionNoticeHistoryItem:
+    return SessionNoticeHistoryItem(
         notice_id=UUID(row["notice_id"]),
         session_id=UUID(row["session_id"]),
         kind=NoticeKind(row["kind"]),
         message=row["message"],
         raised_at_utc=datetime.fromisoformat(row["raised_at_utc"]),
+        deliveries=deliveries,
     )
 
 
-def _delivery(row: sqlite3.Row) -> NoticeDelivery:
-    return NoticeDelivery(
-        notice_id=UUID(row["notice_id"]),
+def _delivery(row: sqlite3.Row) -> SessionNoticeDelivery:
+    return SessionNoticeDelivery(
         channel=row["channel"],
         outcome=row["outcome"],
         attempts=row["attempts"],

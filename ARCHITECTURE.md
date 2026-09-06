@@ -138,6 +138,13 @@ notice ทุกใบถูกบันทึกลง SQLite ตาม PRODUCT
 แต่ถ้าเขียน "สมุดบันทึก" ไม่ได้ ระบบจะ log แล้วปล่อยผ่าน เพราะ Bot ที่หยุดเทรดเพราะจดบันทึกตัวเองไม่ได้
 คือความเสียหายที่ใหญ่กว่าแถวที่หายไปหนึ่งแถว ซึ่งเป็นกฎเดียวกับที่ push ใช้อยู่แล้ว
 
+สิ่งที่ `ui` อ่านกลับไม่ใช่ตารางข้างบนโดยตรง: `application/session_notices.py` ประกาศ
+`SessionNoticeHistoryItem`/`SessionNoticeDelivery` เป็น read model ของตัวเอง เพราะ `ui` ต้องไม่ import
+`integrations/sqlite` (Desktop UI boundary) `SQLiteSessionNotices.list_notices` คืนชนิดนี้ตรง ๆ ให้
+Desktop composition ส่งเป็น `list_session_notices` เข้า `MainWindow` แท็บ Notifications ใน Workspace จึง
+อ่านผ่านชั้นนี้เท่านั้น ผูกกับ Session ที่กำลังแสดงอยู่ (เปลี่ยนตาม Session ที่เลือก ไม่ข้าม Session) และ
+โหลดแบบ lazy เมื่อแท็บถูกเปิดเท่านั้น
+
 ทั้งสองช่องเปิดพร้อมกันได้ notice หนึ่งใบไปครบทุกช่องที่ตั้งค่าไว้ครบ ช่องที่ปิดหรือกรอกไม่ครบ
 จะไม่ถูกเปิดเลยและไม่กระทบอีกช่อง
 
