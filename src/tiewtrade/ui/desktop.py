@@ -28,7 +28,11 @@ from tiewtrade.ui.settings_workflow import (
     SaveTelegramNotifications,
 )
 from tiewtrade.ui.theme import DARK_THEME, apply_dark_appearance
-from tiewtrade.ui.total_pnl_workflow import ReadTotalRealizedPnl
+from tiewtrade.ui.total_pnl_workflow import (
+    ReadHighWaterMark,
+    ReadTotalRealizedPnl,
+    RecordHighWaterMark,
+)
 from tiewtrade.ui.trade_history_workflow import (
     ListBasketHistory,
     ListTradeFills,
@@ -42,6 +46,8 @@ def run_desktop(
     list_basket_history: ListBasketHistory | None = None,
     list_trade_fills: ListTradeFills | None = None,
     read_total_realized_pnl: ReadTotalRealizedPnl | None = None,
+    read_high_water_mark: ReadHighWaterMark | None = None,
+    record_high_water_mark: RecordHighWaterMark | None = None,
     validate_session: Callable[[PaperSessionSetupValues], None] | None = None,
     bot: BotActions = NO_BOT,
     chart: ChartSources = NO_CHART,
@@ -64,6 +70,8 @@ def run_desktop(
         list_basket_history=list_basket_history,
         list_trade_fills=list_trade_fills,
         read_total_realized_pnl=read_total_realized_pnl,
+        read_high_water_mark=read_high_water_mark,
+        record_high_water_mark=record_high_water_mark,
         validate_session=validate_session,
         bot=bot,
         chart=chart,

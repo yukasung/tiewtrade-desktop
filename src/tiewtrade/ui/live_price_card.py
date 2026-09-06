@@ -10,6 +10,12 @@ Beside it reads the other figure a trader looks at in the same glance: what
 everything this installation has traded comes to, realised and unrealised
 together. The two are read together because they are read against each
 other — a price on its own says nothing about how the trading is going.
+
+A third figure stands beside the total for the same reason PRODUCT.md 10
+asks for it: Internal Alpha enforces no Drawdown limit, so the only thing
+standing between a trader and one is watching this number themselves. It is
+a distance, never a result, so it carries no colour of its own the way the
+total does.
 """
 
 from decimal import Decimal
@@ -39,12 +45,22 @@ class LivePriceCard(QFrame):
         self.total_caption.setObjectName("eyebrow")
         self.total = QLabel(BLANK)
         self.total.setObjectName("totalPnl")
+        self.drawdown_caption = QLabel("Drawdown")
+        self.drawdown_caption.setObjectName("eyebrow")
+        self.drawdown = QLabel(BLANK)
+        self.drawdown.setObjectName("drawdown")
         layout = QHBoxLayout(self)
         layout.setContentsMargins(16, 10, 16, 10)
         layout.addLayout(_column(self.pair, self.price))
         layout.addStretch(1)
         layout.addLayout(
             _column(self.total_caption, self.total, align=Qt.AlignmentFlag.AlignRight)
+        )
+        layout.addSpacing(16)
+        layout.addLayout(
+            _column(
+                self.drawdown_caption, self.drawdown, align=Qt.AlignmentFlag.AlignRight
+            )
         )
         self._stale = False
         self._market_type: MarketType | None = None
@@ -103,6 +119,14 @@ class LivePriceCard(QFrame):
             return
         paint_by_sign(self.total, value)
 
+    def show_drawdown(self, value: Decimal | None) -> None:
+        """The distance back to the highest this installation has ever stood.
+
+        No colour: this is a magnitude to keep an eye on, not a result to be
+        read as a win or a loss the way the total is.
+        """
+        self.drawdown.setText(BLANK if value is None else money_text(value))
+
     def set_stale(self, stale: bool) -> None:
         """Say the price is no longer arriving, without taking it away.
 
@@ -127,7 +151,15 @@ class LivePriceCard(QFrame):
         # labels inside it, so the labels are the ones that have to be asked
         # for their colour again.
         style = self.style()
-        for widget in (self, self.pair, self.price, self.total_caption, self.total):
+        for widget in (
+            self,
+            self.pair,
+            self.price,
+            self.total_caption,
+            self.total,
+            self.drawdown_caption,
+            self.drawdown,
+        ):
             style.unpolish(widget)
             style.polish(widget)
 

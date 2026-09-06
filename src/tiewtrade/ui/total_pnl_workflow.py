@@ -16,16 +16,22 @@ which Entries the open Basket is holding. So the window watches that
 composition and asks again when it moves — there is nothing to poll for.
 """
 
+import logging
 from collections.abc import Callable
 from decimal import Decimal
 
 from PySide6.QtCore import QObject, QThreadPool, Signal, Slot
 
+from tiewtrade.application.drawdown import current_drawdown
 from tiewtrade.application.total_pnl import total_pnl
 from tiewtrade.application.trading_workspace import BasketSnapshot
 from tiewtrade.ui.background_task import BackgroundTask
 
+_logger = logging.getLogger(__name__)
+
 ReadTotalRealizedPnl = Callable[[], Decimal]
+ReadHighWaterMark = Callable[[], Decimal]
+RecordHighWaterMark = Callable[[Decimal], Decimal]
 
 
 class TotalPnlWorkflow(QObject):
@@ -34,17 +40,30 @@ class TotalPnlWorkflow(QObject):
     #: The total as it now reads, or None while there is no answer to give.
     total_changed = Signal(object)
 
+    #: The distance back to the highest Total P/L this installation has ever
+    #: reached, or no answer while either side of that is unknown.
+    drawdown_changed = Signal(object)
+
     def __init__(
         self,
         *,
         read_total_realized_pnl: ReadTotalRealizedPnl | None = None,
+        read_high_water_mark: ReadHighWaterMark | None = None,
+        record_high_water_mark: RecordHighWaterMark | None = None,
         thread_pool: QThreadPool | None = None,
         parent: QObject | None = None,
     ) -> None:
         super().__init__(parent)
         self._read_total_realized_pnl = read_total_realized_pnl
+        self._read_high_water_mark = read_high_water_mark
+        self._record_high_water_mark = record_high_water_mark
         self._thread_pool = thread_pool or QThreadPool.globalInstance()
         self._realized: Decimal | None = None
+        # The peak read at startup, then kept up to date locally from every
+        # total that beats it — read again only once, because after that a
+        # record's own return is the freshest answer there is.
+        self._high_water_mark: Decimal | None = None
+        self._high_water_mark_requested = False
         self._basket: BasketSnapshot | None = None
         # The newest price the chart has, kept beside the Basket rather than
         # folded into it: it belongs to whatever Pair the chart is showing,
@@ -61,9 +80,12 @@ class TotalPnlWorkflow(QObject):
         # so "not yet" cannot be spelled with it.
         self._published = False
         self._last_published: Decimal | None = None
+        self._drawdown_published = False
+        self._last_drawdown_published: Decimal | None = None
 
     @Slot()
     def start(self) -> None:
+        self._request_high_water_mark()
         self.refresh()
 
     @Slot()
@@ -121,6 +143,22 @@ class TotalPnlWorkflow(QObject):
         self._closed = True
         self._pending = False
 
+    def _request_high_water_mark(self) -> None:
+        read = self._read_high_water_mark
+        if read is None or self._high_water_mark_requested:
+            return
+        self._high_water_mark_requested = True
+        task = BackgroundTask(read)
+        task.signals.succeeded.connect(self._high_water_mark_landed)
+        self._thread_pool.start(task)
+
+    @Slot(object)
+    def _high_water_mark_landed(self, value: object) -> None:
+        if self._closed or not isinstance(value, Decimal):
+            return
+        self._high_water_mark = value
+        self._publish()
+
     @Slot(object)
     def _read_landed(self, value: object) -> None:
         if self._closed or not isinstance(value, Decimal):
@@ -153,11 +191,50 @@ class TotalPnlWorkflow(QObject):
             open_basket=self._basket,
             current_price=self._price_for(self._basket),
         )
-        if self._published and value == self._last_published:
+        # A peak that has just landed changes what drawdown reads without
+        # changing the total itself, so the two are deduplicated apart: a
+        # total unchanged since the last publish would otherwise swallow the
+        # one moment the peak had anything new to say.
+        if not self._published or value != self._last_published:
+            self._published = True
+            self._last_published = value
+            self.total_changed.emit(value)
+        self._publish_drawdown(value)
+
+    def _publish_drawdown(self, value: Decimal | None) -> None:
+        peak = self._high_water_mark
+        if (
+            value is not None
+            and peak is not None
+            and value > peak
+            and self._record_high_water_mark is not None
+        ):
+            # Shown at once against the total that just beat the peak, rather
+            # than waiting on a write nobody watching this figure should have
+            # to wait on: the total earned this peak whether or not the file
+            # ever confirms it.
+            self._high_water_mark = value
+            peak = value
+            self._record_new_high_water_mark(value)
+        drawdown = current_drawdown(high_water_mark=peak, current_total=value)
+        if self._drawdown_published and drawdown == self._last_drawdown_published:
             return
-        self._published = True
-        self._last_published = value
-        self.total_changed.emit(value)
+        self._drawdown_published = True
+        self._last_drawdown_published = drawdown
+        self.drawdown_changed.emit(drawdown)
+
+    def _record_new_high_water_mark(self, value: Decimal) -> None:
+        record = self._record_high_water_mark
+        assert record is not None
+        task = BackgroundTask(lambda: record(value))
+        task.signals.failed.connect(self._high_water_mark_record_failed)
+        self._thread_pool.start(task)
+
+    @Slot(object)
+    def _high_water_mark_record_failed(self, _error: object) -> None:
+        # The screen already shows the peak this total earned; only the copy
+        # on disk did not confirm it. Worth knowing, not worth acting on.
+        _logger.warning("equity_high_water_mark.record_failed")
 
     def _price_for(self, basket: BasketSnapshot | None) -> Decimal | None:
         """The live price, but only where it is a price for this Basket."""

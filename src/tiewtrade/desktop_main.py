@@ -65,6 +65,9 @@ from tiewtrade.integrations.sqlite.database import (
     SQLiteDatabase,
     UnsupportedDatabaseSchemaError,
 )
+from tiewtrade.integrations.sqlite.equity_high_water_mark import (
+    SQLiteEquityHighWaterMark,
+)
 from tiewtrade.integrations.sqlite.paper_runtime_lifecycle import (
     SQLitePaperRuntimeLifecycle,
 )
@@ -566,6 +569,15 @@ def _run_desktop_holding_the_installation(
         list_trade_fills=_migrate_first(prepare_database, history.list_trade_fills),
         read_total_realized_pnl=_migrate_first(
             prepare_database, history.total_realized_pnl
+        ),
+        read_high_water_mark=_migrate_first(
+            prepare_database, SQLiteEquityHighWaterMark(database).read
+        ),
+        record_high_water_mark=_migrate_first(
+            prepare_database,
+            lambda value: SQLiteEquityHighWaterMark(database).record_if_higher(
+                value, observed_at_utc=datetime.now(UTC)
+            ),
         ),
         validate_session=validate_paper_session,
         bot=_bot_actions(
