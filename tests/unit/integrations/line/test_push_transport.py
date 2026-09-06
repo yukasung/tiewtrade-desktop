@@ -1,43 +1,15 @@
 from __future__ import annotations
 
 import asyncio
-from typing import Any
 
-import aiohttp
-import pytest
-
+from tests.support.chat_push import FakeSession
 from tiewtrade.integrations.line.push_transport import PUSH_URL, LineMessagingApiPush
-from tiewtrade.integrations.notifications.notice_queue import (
-    PushOutcome,
-    PushResult,
-)
+from tiewtrade.integrations.notifications.notice_queue import PushOutcome, PushResult
 
-
-class FakeResponse:
-    def __init__(self, status: int) -> None:
-        self.status = status
-
-    async def __aenter__(self) -> FakeResponse:
-        return self
-
-    async def __aexit__(self, *args: object) -> None:
-        return None
-
-
-class FakeSession:
-    def __init__(self, status: int = 200, error: Exception | None = None) -> None:
-        self._status = status
-        self._error = error
-        self.calls: list[dict[str, Any]] = []
-
-    def post(self, url: str, **kwargs: Any) -> FakeResponse:
-        self.calls.append({"url": url, **kwargs})
-        if self._error is not None:
-            raise self._error
-        return FakeResponse(self._status)
-
-    async def close(self) -> None:
-        return None
+# What a status comes back as, and what a service that never answered does,
+# is one rule for every channel and is pinned where that rule lives — see
+# tests/unit/integrations/notifications/test_http_push.py. What is LINE's own
+# is the address, the payload shape, and where the token rides.
 
 
 def _push(session: FakeSession) -> PushResult:
@@ -61,41 +33,18 @@ def test_a_push_carries_the_message_the_token_and_the_recipient() -> None:
         "to": "U123",
         "messages": [{"type": "text", "text": "Entry #1 opened"}],
     }
-    assert call["timeout"].total == 10.0
 
 
-@pytest.mark.parametrize(
-    ("status", "outcome"),
-    [
-        (200, PushOutcome.DELIVERED),
-        (429, PushOutcome.RETRYABLE),
-        (500, PushOutcome.RETRYABLE),
-        (503, PushOutcome.RETRYABLE),
-        (400, PushOutcome.REJECTED),
-        (401, PushOutcome.REJECTED),
-        (403, PushOutcome.REJECTED),
-    ],
-)
-def test_what_line_answers_decides_whether_it_is_worth_asking_again(
-    status: int,
-    outcome: PushOutcome,
-) -> None:
-    result = _push(FakeSession(status=status))
+def test_the_token_travels_in_the_header_and_nowhere_else() -> None:
+    """LINE names the bot in a header, so nothing should copy it elsewhere.
 
-    assert result.outcome is outcome
-    assert result.status == status
+    A URL is the part of a request that gets logged by default; this pins
+    that the credential is not in the one part that leaks by accident.
+    """
+    session = FakeSession()
 
+    _push(session)
 
-@pytest.mark.parametrize(
-    "error",
-    [aiohttp.ClientConnectionError("no route"), TimeoutError()],
-)
-def test_a_transport_that_never_answered_is_worth_asking_again(
-    error: Exception,
-) -> None:
-    result = _push(FakeSession(error=error))
-
-    assert result.outcome is PushOutcome.RETRYABLE
-    # Nothing answered, so there is no status to carry — an invented one
-    # would read in the log as an answer the service never gave.
-    assert result.status is None
+    call = session.calls[0]
+    assert "token-value" not in call["url"]
+    assert "token-value" not in str(call["json"])

@@ -1,46 +1,18 @@
 from __future__ import annotations
 
 import asyncio
-from typing import Any
 
-import aiohttp
-import pytest
-
-from tiewtrade.integrations.notifications.notice_queue import (
-    PushOutcome,
-    PushResult,
-)
+from tests.support.chat_push import FakeSession
+from tiewtrade.integrations.notifications.notice_queue import PushOutcome, PushResult
 from tiewtrade.integrations.telegram.push_transport import (
     TelegramBotApiPush,
     push_url,
 )
 
-
-class FakeResponse:
-    def __init__(self, status: int) -> None:
-        self.status = status
-
-    async def __aenter__(self) -> FakeResponse:
-        return self
-
-    async def __aexit__(self, *args: object) -> None:
-        return None
-
-
-class FakeSession:
-    def __init__(self, status: int = 200, error: Exception | None = None) -> None:
-        self._status = status
-        self._error = error
-        self.calls: list[dict[str, Any]] = []
-
-    def post(self, url: str, **kwargs: Any) -> FakeResponse:
-        self.calls.append({"url": url, **kwargs})
-        if self._error is not None:
-            raise self._error
-        return FakeResponse(self._status)
-
-    async def close(self) -> None:
-        return None
+# What a status comes back as, and what a service that never answered does,
+# is one rule for every channel and is pinned where that rule lives — see
+# tests/unit/integrations/notifications/test_http_push.py. What is Telegram's
+# own is the address, the payload shape, and where the token rides.
 
 
 def _push(session: FakeSession) -> PushResult:
@@ -76,39 +48,6 @@ def test_the_message_goes_as_written_with_no_formatting_asked_for() -> None:
     _push(session)
 
     assert "parse_mode" not in session.calls[0]["json"]
-
-
-@pytest.mark.parametrize("status", [429, 500, 503])
-def test_a_service_that_cannot_answer_now_is_worth_asking_again(
-    status: int,
-) -> None:
-    assert _push(FakeSession(status=status)).outcome is PushOutcome.RETRYABLE
-
-
-@pytest.mark.parametrize("status", [400, 401, 403, 404])
-def test_a_refusal_telegram_will_repeat_is_not_retried(status: int) -> None:
-    """A revoked token, a chat the bot left, a chat id nobody knows.
-
-    All three are settings for the trader to correct, and asking again in two
-    seconds would only be refused the same way. Which of the three it was is
-    the status, and it goes back with the refusal so the log can say it.
-    """
-    result = _push(FakeSession(status=status))
-
-    assert result.outcome is PushOutcome.REJECTED
-    assert result.status == status
-
-
-def test_a_network_that_never_answers_is_worth_asking_again() -> None:
-    session = FakeSession(error=aiohttp.ClientError())
-
-    assert _push(session).outcome is PushOutcome.RETRYABLE
-
-
-def test_a_timeout_is_worth_asking_again() -> None:
-    session = FakeSession(error=TimeoutError())
-
-    assert _push(session).outcome is PushOutcome.RETRYABLE
 
 
 def test_the_token_travels_in_the_path_and_nowhere_else() -> None:

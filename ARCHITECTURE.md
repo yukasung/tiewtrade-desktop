@@ -119,8 +119,11 @@ generic interface ล่วงหน้า เมื่อมี consumer ขอ
 `MarketFeedRestoredNotice`, `BotErrorNotice`) และ contract `SessionNotifier`
 ช่องทางส่งข้อความมีสองช่อง `integrations/line` ส่งผ่าน LINE Messaging API push
 (LINE Notify ปิดบริการเมื่อ มี.ค. 2025 จึงใช้ไม่ได้) และ `integrations/telegram` ส่งผ่าน
-Telegram Bot API `sendMessage` ทั้งสอง Module มีเฉพาะ transport ส่วนคิว การ retry
-การ log และการเรียบเรียงข้อความอยู่ใน `integrations/notifications` ที่ไม่ผูกกับช่องทางใด
+Telegram Bot API `sendMessage` ทั้งสอง Module ถือไว้เฉพาะ address payload และตำแหน่งที่ token เดินทาง
+ส่วน socket ที่ยิงออกไปและการอ่านว่า status ที่ตอบกลับมาแปลว่าอะไร อยู่ใน
+`integrations/notifications/http_push.py` ที่ทั้งสองช่องใช้ร่วมกัน เพราะ retry policy ของคิวแขวนอยู่กับ
+การอ่านนั้น ถ้าเขียนไว้สองที่แล้ววันหนึ่งไม่ตรงกัน อาการจะโผล่เป็นข้อความที่เงียบหายไปเฉย ๆ
+ส่วนคิว การ retry การ log และการเรียบเรียงข้อความอยู่ใน `integrations/notifications` ที่ไม่ผูกกับช่องทางใด
 และรับชื่อช่องทางมาเป็นค่า เพื่อให้ log บอกได้ว่าข้อความของช่องไหนที่ส่งไม่ออก
 
 ทั้งสองช่องเปิดพร้อมกันได้ notice หนึ่งใบไปครบทุกช่องที่ตั้งค่าไว้ครบ ช่องที่ปิดหรือกรอกไม่ครบ
