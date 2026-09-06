@@ -4,9 +4,9 @@ The tab is not open by default — a trader who never looks does not pay for
 a background read — so nothing is asked for until it is activated. From
 there it follows the rule every background read in this application follows:
 a reply is shown only while it is still the answer to the question on
-screen. Switching Sessions bumps a generation, and a reply tagged with the
-one before it is dropped rather than painted over what the trader has
-already moved on to.
+screen. Switching Sessions, or the range a trader asks to read over, bumps a
+generation, and a reply tagged with the one before it is dropped rather than
+painted over what the trader has already moved on to.
 """
 
 from collections.abc import Callable
@@ -17,9 +17,13 @@ from PySide6.QtCore import QObject, QThreadPool, Signal, Slot
 
 from tiewtrade.application.session_notices import (
     ListSessionNotices,
+    SessionNoticeFilter,
     SessionNoticeHistoryItem,
 )
 from tiewtrade.ui.background_task import BackgroundTask
+from tiewtrade.ui.date_range_filter import DateRangeValues, default_date_range_values
+from tiewtrade.ui.display_time import display_today
+from tiewtrade.ui.notification_presenter import session_notice_filter
 
 NO_NOTIFICATIONS = "No notifications yet"
 NOTIFICATIONS_UNAVAILABLE = "Notifications unavailable"
@@ -28,13 +32,21 @@ if TYPE_CHECKING:
     from tiewtrade.ui.notification_page import NotificationPage
 
 
+def _default_filter() -> SessionNoticeFilter:
+    """Today, read fresh — an app left open overnight resets to the new day."""
+    return session_notice_filter(default_date_range_values(display_today()))
+
+
 class NotificationWorkflow(QObject):
-    """Reads what one Session said, and only while its tab is open."""
+    """Reads what one Session said, over the range asked for, only while its
+    tab is open.
+    """
 
     loading = Signal(bool)
     ready = Signal(object)
     empty = Signal()
     unavailable = Signal(str)
+    filter_invalid = Signal(str)
 
     def __init__(
         self,
@@ -49,6 +61,7 @@ class NotificationWorkflow(QObject):
             thread_pool if thread_pool is not None else QThreadPool.globalInstance()
         )
         self._session_id: UUID | None = None
+        self._filter = _default_filter()
         self._active = False
         self._closed = False
         self._generation = 0
@@ -56,10 +69,13 @@ class NotificationWorkflow(QObject):
 
     def attach(self, page: "NotificationPage") -> None:
         page.retry_requested.connect(self.retry)
+        page.apply_filters_requested.connect(self.apply_filters)
+        page.reset_requested.connect(self.reset_filters)
         self.loading.connect(self._show_loading_state(page))
         self.ready.connect(page.show_items)
         self.empty.connect(lambda: page.show_empty(NO_NOTIFICATIONS))
         self.unavailable.connect(page.show_unavailable)
+        self.filter_invalid.connect(page.show_filter_error)
 
     @staticmethod
     def _show_loading_state(page: "NotificationPage") -> "Callable[[bool], None]":
@@ -106,6 +122,32 @@ class NotificationWorkflow(QObject):
         if self._active:
             self._request()
 
+    def apply_filters(self, values: DateRangeValues) -> None:
+        if self._closed:
+            return
+        try:
+            filters = session_notice_filter(values)
+        except OverflowError:
+            self.filter_invalid.emit("To Date is out of range")
+            return
+        except ValueError as error:
+            self.filter_invalid.emit(str(error))
+            return
+
+        self._filter = filters
+        self._generation += 1
+        if self._active:
+            self._request()
+
+    @Slot()
+    def reset_filters(self) -> None:
+        if self._closed:
+            return
+        self._filter = _default_filter()
+        self._generation += 1
+        if self._active:
+            self._request()
+
     @Slot()
     def retry(self) -> None:
         self._request()
@@ -121,12 +163,13 @@ class NotificationWorkflow(QObject):
             return
         list_session_notices = self._list_session_notices
         session_id = self._session_id
+        filters = self._filter
         if list_session_notices is None or session_id is None:
             self.empty.emit()
             return
         self._generation += 1
         generation = self._generation
-        task = BackgroundTask(lambda: list_session_notices(session_id))
+        task = BackgroundTask(lambda: list_session_notices(session_id, filters))
         task.signals.succeeded.connect(
             lambda result: self._succeeded(generation, result)
         )

@@ -4,6 +4,7 @@ from uuid import UUID
 
 from tests.support.paper_session_setup import SESSION_ID, configured_spot_session
 from tiewtrade.application.session_notice import NoticeKind
+from tiewtrade.application.session_notices import SessionNoticeFilter
 from tiewtrade.integrations.notifications.notice_journal import (
     NoticeDelivery,
     RaisedNotice,
@@ -28,7 +29,7 @@ def test_a_notice_is_read_back_exactly_as_it_was_said(tmp_path: Path) -> None:
     journal.record_raised(_raised())
 
     reopened = SQLiteSessionNotices(SQLiteDatabase(database_path))
-    kept = reopened.list_notices(SESSION_ID)
+    kept = reopened.list_notices(SESSION_ID, SessionNoticeFilter())
     assert len(kept) == 1
     item = kept[0]
     raised = _raised()
@@ -51,7 +52,7 @@ def test_the_same_event_kept_twice_is_still_one_record(tmp_path: Path) -> None:
     journal.record_raised(_raised())
     journal.record_raised(_raised())
 
-    assert len(journal.list_notices(SESSION_ID)) == 1
+    assert len(journal.list_notices(SESSION_ID, SessionNoticeFilter())) == 1
 
 
 def test_each_channel_says_for_itself_how_the_sending_went(tmp_path: Path) -> None:
@@ -79,7 +80,7 @@ def test_each_channel_says_for_itself_how_the_sending_went(tmp_path: Path) -> No
         )
     )
 
-    deliveries = journal.list_notices(SESSION_ID)[0].deliveries
+    deliveries = journal.list_notices(SESSION_ID, SessionNoticeFilter())[0].deliveries
     assert [(one.channel, one.outcome, one.status) for one in deliveries] == [
         ("line", "delivered", 200),
         ("telegram", "rejected", 403),
@@ -103,7 +104,10 @@ def test_a_service_that_never_answered_keeps_no_status(tmp_path: Path) -> None:
         )
     )
 
-    assert journal.list_notices(SESSION_ID)[0].deliveries[0].status is None
+    assert (
+        journal.list_notices(SESSION_ID, SessionNoticeFilter())[0].deliveries[0].status
+        is None
+    )
 
 
 def test_a_second_word_from_one_channel_replaces_the_first(tmp_path: Path) -> None:
@@ -123,7 +127,7 @@ def test_a_second_word_from_one_channel_replaces_the_first(tmp_path: Path) -> No
             )
         )
 
-    deliveries = journal.list_notices(SESSION_ID)[0].deliveries
+    deliveries = journal.list_notices(SESSION_ID, SessionNoticeFilter())[0].deliveries
     assert len(deliveries) == 1
     assert deliveries[0].outcome == "delivered"
 
@@ -142,12 +146,36 @@ def test_notices_read_back_newest_first(tmp_path: Path) -> None:
         )
     )
 
-    kept = journal.list_notices(SESSION_ID)
+    kept = journal.list_notices(SESSION_ID, SessionNoticeFilter())
 
     assert [one.kind for one in kept] == [
         NoticeKind.BASKET_CLOSED,
         NoticeKind.ENTRY_OPENED,
     ]
+
+
+def test_notices_outside_the_asked_for_range_are_excluded(tmp_path: Path) -> None:
+    journal = SQLiteSessionNotices(_session_database(tmp_path))
+    journal.record_raised(_raised())
+    journal.record_raised(
+        RaisedNotice(
+            notice_id=OTHER_NOTICE_ID,
+            session_id=SESSION_ID,
+            kind=NoticeKind.BASKET_CLOSED,
+            message="Position closed",
+            raised_at_utc=datetime(2026, 8, 27, 11, tzinfo=UTC),
+        )
+    )
+
+    kept = journal.list_notices(
+        SESSION_ID,
+        SessionNoticeFilter(
+            from_utc=datetime(2026, 8, 27, tzinfo=UTC),
+            before_utc=datetime(2026, 8, 28, tzinfo=UTC),
+        ),
+    )
+
+    assert [one.notice_id for one in kept] == [OTHER_NOTICE_ID]
 
 
 def test_a_journal_that_cannot_write_costs_the_record_and_nothing_else(
@@ -173,7 +201,7 @@ def test_a_journal_that_cannot_write_costs_the_record_and_nothing_else(
         )
     )
 
-    assert journal.list_notices(SESSION_ID) == ()
+    assert journal.list_notices(SESSION_ID, SessionNoticeFilter()) == ()
 
 
 def _raised() -> RaisedNotice:

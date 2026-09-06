@@ -16,10 +16,10 @@ from tiewtrade.application.trade_history import (
 from tiewtrade.trading.session_config import MarketType, TradeMode
 from tiewtrade.trading.trade_history import BasketResult, BasketStatus
 from tiewtrade.ui.background_task import BackgroundTask
+from tiewtrade.ui.date_range_filter import DateRangeValues
 from tiewtrade.ui.display_time import display_today
 from tiewtrade.ui.trade_history_page import TradeHistoryPage
 from tiewtrade.ui.trade_history_presenter import (
-    TradeHistoryFilterValues,
     default_filter_values,
     trade_history_filter,
 )
@@ -189,8 +189,8 @@ def test_trade_channel_runs_one_query_and_coalesces_latest_filter() -> None:
         thread_pool=qt_pool,
     )
     workflow.select_tab(HistoryTab.TRADES)
-    workflow.apply_filters(TradeHistoryFilterValues(from_date=date(2026, 1, 2)))
-    workflow.apply_filters(TradeHistoryFilterValues(from_date=date(2026, 1, 3)))
+    workflow.apply_filters(DateRangeValues(from_date=date(2026, 1, 2)))
+    workflow.apply_filters(DateRangeValues(from_date=date(2026, 1, 3)))
 
     assert len(holding.tasks) == 1
     holding.tasks[0].run()
@@ -216,7 +216,7 @@ def test_trade_loading_callback_cannot_start_a_second_query() -> None:
         nonlocal reapplied
         if loading and not reapplied:
             reapplied = True
-            workflow.apply_filters(TradeHistoryFilterValues())
+            workflow.apply_filters(DateRangeValues())
 
     workflow.trades_loading.connect(reapply_during_loading)
 
@@ -238,7 +238,7 @@ def test_basket_loading_callback_cannot_start_a_second_query() -> None:
         nonlocal reapplied
         if loading and not reapplied:
             reapplied = True
-            workflow.apply_filters(TradeHistoryFilterValues())
+            workflow.apply_filters(DateRangeValues())
 
     workflow.baskets_loading.connect(reapply_during_loading)
 
@@ -262,7 +262,7 @@ def test_basket_failure_is_sanitized_and_retry_reuses_latest_filters(
     workflow, pool = workflow_with(fail_then_succeed)
     messages: list[str] = []
     workflow.baskets_unavailable.connect(messages.append)
-    workflow.apply_filters(TradeHistoryFilterValues(from_date=date(2026, 1, 2)))
+    workflow.apply_filters(DateRangeValues(from_date=date(2026, 1, 2)))
     qtbot.waitUntil(lambda: messages == ["Position History unavailable"])
 
     workflow.retry_baskets()
@@ -323,8 +323,8 @@ def test_only_the_latest_filters_run_after_the_active_request(qtbot: QtBot) -> N
     workflow.start()
     qtbot.waitUntil(started.is_set)
 
-    workflow.apply_filters(TradeHistoryFilterValues(from_date=date(2026, 1, 2)))
-    workflow.apply_filters(TradeHistoryFilterValues(from_date=date(2026, 1, 3)))
+    workflow.apply_filters(DateRangeValues(from_date=date(2026, 1, 2)))
+    workflow.apply_filters(DateRangeValues(from_date=date(2026, 1, 3)))
     release.set()
 
     # The filter changed twice while one query ran: only the last one is asked.
@@ -353,7 +353,7 @@ def test_close_suppresses_a_late_result(qtbot: QtBot) -> None:
 
     workflow.close()
     workflow.start()
-    workflow.apply_filters(TradeHistoryFilterValues(from_date=date(2026, 1, 2)))
+    workflow.apply_filters(DateRangeValues(from_date=date(2026, 1, 2)))
     release.set()
 
     assert pool.waitForDone(1_000)
@@ -379,7 +379,7 @@ def test_a_to_date_at_the_end_of_time_is_refused_rather_than_crashing() -> None:
     messages: list[str] = []
     workflow.filter_invalid.connect(messages.append)
 
-    workflow.apply_filters(TradeHistoryFilterValues(to_date=date(9999, 12, 31)))
+    workflow.apply_filters(DateRangeValues(to_date=date(9999, 12, 31)))
 
     assert messages == ["To Date is out of range"]
     assert requested == []
@@ -460,7 +460,7 @@ def test_a_filter_applies_only_to_the_half_that_asked() -> None:
         thread_pool=immediate_thread_pool(),
     )
     workflow.select_tab(HistoryTab.TRADES)
-    workflow.apply_filters(TradeHistoryFilterValues(from_date=date(2026, 1, 2)))
+    workflow.apply_filters(DateRangeValues(from_date=date(2026, 1, 2)))
     baskets.clear()
 
     workflow.select_tab(HistoryTab.BASKETS)

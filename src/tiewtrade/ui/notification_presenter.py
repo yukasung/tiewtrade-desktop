@@ -13,8 +13,10 @@ log.
 
 from tiewtrade.application.session_notices import (
     SessionNoticeDelivery,
+    SessionNoticeFilter,
     SessionNoticeHistoryItem,
 )
+from tiewtrade.ui.date_range_filter import DateRangeValues, utc_bounds, validate_range
 
 _CHANNEL_NAMES = {"line": "LINE", "telegram": "Telegram"}
 
@@ -23,6 +25,12 @@ _OUTCOME_TEXT = {
     "rejected": "Rejected",
     "retryable": "Not answered",
 }
+
+
+def session_notice_filter(values: DateRangeValues) -> SessionNoticeFilter:
+    validate_range(values)
+    from_utc, before_utc = utc_bounds(values)
+    return SessionNoticeFilter(from_utc=from_utc, before_utc=before_utc)
 
 
 def notice_headline(item: SessionNoticeHistoryItem) -> str:

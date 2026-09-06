@@ -22,15 +22,15 @@ from tiewtrade.application.trade_history import (
 )
 from tiewtrade.trading.session_config import MarketType, TradeMode
 from tiewtrade.ui.blank_text import BLANK
+from tiewtrade.ui.date_range_filter import DateRangeValues, QuickRange
+from tiewtrade.ui.date_range_filter_bar import FilterBar
 from tiewtrade.ui.display_time import display_today
 from tiewtrade.ui.table_column import CENTER, Column
 from tiewtrade.ui.theme import NEGATIVE_COLOR, POSITIVE_COLOR
-from tiewtrade.ui.trade_history_page import FilterBar, TradeHistoryPage
+from tiewtrade.ui.trade_history_page import TradeHistoryPage
 from tiewtrade.ui.trade_history_presenter import (
     BASKET_COLUMNS,
     FILL_COLUMNS,
-    QuickRange,
-    TradeHistoryFilterValues,
     default_filter_values,
 )
 from tiewtrade.ui.trade_history_workflow import HistoryTab
@@ -427,7 +427,7 @@ def _next_in_chain(bar: FilterBar, widget: QWidget) -> QWidget | None:
 def test_apply_and_reset_emit_immutable_filter_values(qtbot: QtBot) -> None:
     page = TradeHistoryPage()
     qtbot.addWidget(page)
-    emitted: list[TradeHistoryFilterValues] = []
+    emitted: list[DateRangeValues] = []
     resets: list[None] = []
     page.apply_filters_requested.connect(emitted.append)
     page.reset_requested.connect(lambda: resets.append(None))
@@ -435,9 +435,7 @@ def test_apply_and_reset_emit_immutable_filter_values(qtbot: QtBot) -> None:
     page.basket_filters.to_date.setDate(qdate(date(2026, 1, 3)))
 
     click(page.basket_filters.search_button)
-    picked = TradeHistoryFilterValues(
-        from_date=date(2026, 1, 2), to_date=date(2026, 1, 3)
-    )
+    picked = DateRangeValues(from_date=date(2026, 1, 2), to_date=date(2026, 1, 3))
     assert emitted == [picked]
 
     click(page.basket_filters.reset_button)
@@ -459,7 +457,7 @@ def test_an_emptied_date_leaves_that_end_of_the_range_open(qtbot: QtBot) -> None
     QTest.keyClick(page.basket_filters.to_date, Qt.Key.Key_Delete)
 
     assert page.basket_filters.to_date.text() == "YYYY-MM-DD"
-    assert page.basket_filters.filter_values() == TradeHistoryFilterValues(
+    assert page.basket_filters.filter_values() == DateRangeValues(
         from_date=date(2026, 1, 2)
     )
 
@@ -467,14 +465,14 @@ def test_an_emptied_date_leaves_that_end_of_the_range_open(qtbot: QtBot) -> None
 def test_a_quick_range_fills_both_dates_and_searches_at_once(qtbot: QtBot) -> None:
     page = TradeHistoryPage()
     qtbot.addWidget(page)
-    emitted: list[TradeHistoryFilterValues] = []
+    emitted: list[DateRangeValues] = []
     page.apply_filters_requested.connect(emitted.append)
     today = display_today()
 
     click(page.basket_filters.range_chips[QuickRange.ONE_WEEK])
 
     assert emitted == [
-        TradeHistoryFilterValues(from_date=today - timedelta(days=6), to_date=today)
+        DateRangeValues(from_date=today - timedelta(days=6), to_date=today)
     ]
     assert page.basket_filters.range_chips[QuickRange.ONE_WEEK].isChecked()
 

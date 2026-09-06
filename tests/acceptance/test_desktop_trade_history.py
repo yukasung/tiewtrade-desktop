@@ -37,8 +37,8 @@ from tiewtrade.trading.trade_history import (
     BasketStatus,
     FillSide,
 )
+from tiewtrade.ui.date_range_filter_bar import FilterBar
 from tiewtrade.ui.main_window import MainWindow
-from tiewtrade.ui.trade_history_page import FilterBar
 from tiewtrade.ui.trading_workspace import WorkspaceTab
 
 FUTURES_BASKET_ID = UUID("00000000-0000-0000-0000-000000000202")

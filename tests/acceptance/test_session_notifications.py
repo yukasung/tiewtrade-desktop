@@ -32,7 +32,10 @@ from tests.support.paper_runtime_fakes import (
 from tests.support.paper_session_setup import configured_spot_session
 from tiewtrade.application.paper_runtime import PaperRuntimeController
 from tiewtrade.application.paper_session_setup import ConfiguredPaperSession
-from tiewtrade.application.session_notices import SessionNoticeHistoryItem
+from tiewtrade.application.session_notices import (
+    SessionNoticeFilter,
+    SessionNoticeHistoryItem,
+)
 from tiewtrade.application.trading_workspace import BotRuntimeState
 from tiewtrade.integrations.binance.public_endpoints import BinancePublicEndpoints
 from tiewtrade.integrations.keyring.line_notifications import LineNotificationSettings
@@ -380,5 +383,5 @@ def _notices_after_reopening(
 ) -> tuple[SessionNoticeHistoryItem, ...]:
     """Read the records the way the next run of the application would."""
     return SQLiteSessionNotices(SQLiteDatabase(database_path)).list_notices(
-        session.config.session_id
+        session.config.session_id, SessionNoticeFilter()
     )

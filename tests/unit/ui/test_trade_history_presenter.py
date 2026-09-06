@@ -11,15 +11,17 @@ from tiewtrade.application.trade_history import (
 from tiewtrade.trading.session_config import MarketType, TradeMode
 from tiewtrade.trading.trade_history import BasketStatus, FillSide
 from tiewtrade.ui.blank_text import BLANK
+from tiewtrade.ui.date_range_filter import (
+    DateRangeValues,
+    QuickRange,
+    quick_range_dates,
+)
 from tiewtrade.ui.money_text import money_text
 from tiewtrade.ui.table_column import Column
 from tiewtrade.ui.theme import NEGATIVE_COLOR, POSITIVE_COLOR
 from tiewtrade.ui.trade_history_presenter import (
     BASKET_COLUMNS,
     FILL_COLUMNS,
-    QuickRange,
-    TradeHistoryFilterValues,
-    quick_range_dates,
     trade_history_filter,
 )
 
@@ -39,7 +41,7 @@ def colour_of[Record](
 
 
 def test_filter_values_build_inclusive_utc_date_range() -> None:
-    values = TradeHistoryFilterValues(
+    values = DateRangeValues(
         from_date=date(2026, 1, 2),
         to_date=date(2026, 1, 3),
     )
@@ -52,7 +54,7 @@ def test_filter_values_build_inclusive_utc_date_range() -> None:
 
 
 def test_filter_values_reject_from_after_to() -> None:
-    values = TradeHistoryFilterValues(
+    values = DateRangeValues(
         from_date=date(2026, 1, 3),
         to_date=date(2026, 1, 2),
     )

@@ -20,13 +20,14 @@ from PySide6.QtWidgets import (
 )
 
 from tiewtrade.application.session_notices import SessionNoticeHistoryItem
+from tiewtrade.ui.date_range_filter_bar import FilterBar
 from tiewtrade.ui.display_time import display_timestamp
 from tiewtrade.ui.notification_presenter import notice_delivery_text, notice_headline
 from tiewtrade.ui.table_column import CENTER, LEFT, Column, headers, table_item
 from tiewtrade.ui.table_empty_state import TableEmptyStateOverlay
 
 COLUMNS: tuple[Column[SessionNoticeHistoryItem], ...] = (
-    Column("When", LEFT, lambda item: display_timestamp(item.raised_at_utc)),
+    Column("Date", LEFT, lambda item: display_timestamp(item.raised_at_utc)),
     Column("Notice", LEFT, notice_headline),
     Column("Delivery", LEFT, notice_delivery_text),
 )
@@ -36,11 +37,17 @@ class NotificationPage(QWidget):
     """Everything the Bot has said for the Session this screen is reading."""
 
     retry_requested = Signal()
+    apply_filters_requested = Signal(object)
+    reset_requested = Signal()
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.setObjectName("notificationPage")
         self.setAccessibleName("Notifications")
+
+        self.filters = FilterBar()
+        self.filters.apply_filters_requested.connect(self.apply_filters_requested)
+        self.filters.reset_requested.connect(self.reset_requested)
 
         self.table = self._table()
         self.empty_state = TableEmptyStateOverlay(self.table)
@@ -58,6 +65,7 @@ class NotificationPage(QWidget):
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
+        layout.addWidget(self.filters)
         layout.addWidget(self.state_label)
         layout.addWidget(self.table, 1)
         state_row = QHBoxLayout()
@@ -71,6 +79,7 @@ class NotificationPage(QWidget):
 
     def show_items(self, items: tuple[SessionNoticeHistoryItem, ...]) -> None:
         """Show these rows, and take back whatever the read before this said."""
+        self.filters.clear_error()
         self.empty_state.clear_message()
         self.state_label.setVisible(False)
         self.retry_button.setVisible(False)
@@ -85,11 +94,15 @@ class NotificationPage(QWidget):
                     )
 
     def show_empty(self, message: str) -> None:
+        self.filters.clear_error()
         self.state_label.setVisible(False)
         self.retry_button.setVisible(False)
         with QSignalBlocker(self.table):
             self.table.setRowCount(0)
         self.empty_state.show_message(message)
+
+    def show_filter_error(self, message: str) -> None:
+        self.filters.show_error(message)
 
     def show_loading(self, message: str) -> None:
         """Say a read is underway without taking rows that already loaded."""

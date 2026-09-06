@@ -12,9 +12,9 @@ from tiewtrade.application.trade_history import (
 )
 from tiewtrade.trading.trade_history import BasketResult
 from tiewtrade.ui.background_task import BackgroundTask
+from tiewtrade.ui.date_range_filter import DateRangeValues
 from tiewtrade.ui.display_time import display_today
 from tiewtrade.ui.trade_history_presenter import (
-    TradeHistoryFilterValues,
     default_filter_values,
     trade_history_filter,
 )
@@ -120,7 +120,7 @@ class TradeHistoryWorkflow(QObject):
         """Read the half that was opened, which is not always the first one."""
         self._request_active_tab()
 
-    def apply_filters(self, values: TradeHistoryFilterValues) -> None:
+    def apply_filters(self, values: DateRangeValues) -> None:
         if self._closed:
             return
         try:

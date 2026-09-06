@@ -1,9 +1,13 @@
+from collections.abc import Callable
 from datetime import UTC, datetime
 from uuid import UUID
+
+import pytest
 
 from tiewtrade.application.session_notice import NoticeKind
 from tiewtrade.application.session_notices import (
     SessionNoticeDelivery,
+    SessionNoticeFilter,
     SessionNoticeHistoryItem,
 )
 
@@ -52,5 +56,25 @@ def test_a_notice_with_no_channel_set_up_reads_with_no_deliveries() -> None:
         raised_at_utc=RAISED_AT,
         deliveries=(),
     )
-
     assert item.deliveries == ()
+
+
+@pytest.mark.parametrize(
+    "create_filter",
+    [
+        lambda value: SessionNoticeFilter(from_utc=value),
+        lambda value: SessionNoticeFilter(before_utc=value),
+    ],
+)
+def test_session_notice_filter_requires_utc_bounds(
+    create_filter: Callable[[datetime], SessionNoticeFilter],
+) -> None:
+    with pytest.raises(ValueError, match="UTC"):
+        create_filter(datetime(2026, 1, 1))
+
+
+def test_session_notice_filter_requires_ordered_time_bounds() -> None:
+    boundary = datetime(2026, 1, 1, tzinfo=UTC)
+
+    with pytest.raises(ValueError, match="before"):
+        SessionNoticeFilter(from_utc=boundary, before_utc=boundary)

@@ -21,6 +21,7 @@ from uuid import UUID
 from tiewtrade.application.session_notice import NoticeKind
 from tiewtrade.application.session_notices import (
     SessionNoticeDelivery,
+    SessionNoticeFilter,
     SessionNoticeHistoryItem,
 )
 from tiewtrade.integrations.notifications.notice_journal import (
@@ -93,12 +94,24 @@ class SQLiteSessionNotices:
             said="notification.delivery_record_failed",
         )
 
-    def list_notices(self, session_id: UUID) -> tuple[SessionNoticeHistoryItem, ...]:
-        """Everything this Session said, newest first, with its deliveries.
+    def list_notices(
+        self, session_id: UUID, filter: SessionNoticeFilter
+    ) -> tuple[SessionNoticeHistoryItem, ...]:
+        """Everything this Session said in the range asked for, newest first.
 
         Newest first because it is read to catch up: what the Bot did while
         nobody was watching reads backwards from now.
         """
+        conditions = ["session_id = ?"]
+        parameters: list[str] = [str(session_id)]
+        if filter.from_utc is not None:
+            conditions.append("raised_at_utc >= ?")
+            parameters.append(filter.from_utc.isoformat())
+        if filter.before_utc is not None:
+            conditions.append("raised_at_utc < ?")
+            parameters.append(filter.before_utc.isoformat())
+        where = " AND ".join(conditions)
+
         try:
             connection = self._database.connect()
         except sqlite3.Error:
@@ -107,13 +120,13 @@ class SQLiteSessionNotices:
         try:
             with connection:
                 notices = connection.execute(
-                    """
+                    f"""
                     SELECT notice_id, session_id, kind, message, raised_at_utc
                     FROM session_notices
-                    WHERE session_id = ?
+                    WHERE {where}
                     ORDER BY raised_at_utc DESC, notice_id DESC
                     """,
-                    (str(session_id),),
+                    parameters,
                 ).fetchall()
                 deliveries = connection.execute(
                     """

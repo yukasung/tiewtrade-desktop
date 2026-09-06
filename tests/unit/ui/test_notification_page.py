@@ -73,7 +73,7 @@ def test_a_row_shows_when_it_happened_and_how_delivery_went(qtbot: QtBot) -> Non
     qtbot.addWidget(widget)
     widget.show_items((item,))
 
-    assert _cell(widget, "When").text() == "2026-08-26 17:05:00"
+    assert _cell(widget, "Date").text() == "2026-08-26 17:05:00"
     assert _cell(widget, "Delivery").text() == "LINE: Delivered"
 
 
@@ -134,3 +134,47 @@ def test_the_retry_button_hides_once_a_read_lands(qtbot: QtBot) -> None:
     widget.show_items((_item(),))
 
     assert not widget.retry_button.isVisible()
+
+
+def test_the_page_offers_the_same_filter_bar_as_trade_history(qtbot: QtBot) -> None:
+    widget = NotificationPage()
+    qtbot.addWidget(widget)
+
+    assert [chip.text() for chip in widget.filters.range_chips.values()] == [
+        "1 Day",
+        "1 Week",
+        "1 Month",
+        "3 Months",
+    ]
+
+    emitted: list[object] = []
+    widget.apply_filters_requested.connect(emitted.append)
+    widget.filters.search_button.click()
+
+    assert len(emitted) == 1
+
+
+def test_resetting_the_filter_bar_asks_the_page_to_reset(qtbot: QtBot) -> None:
+    widget = NotificationPage()
+    qtbot.addWidget(widget)
+
+    asked = []
+    widget.reset_requested.connect(lambda: asked.append(True))
+    widget.filters.reset_button.click()
+
+    assert asked == [True]
+
+
+def test_a_filter_error_shows_on_the_bar_and_clears_on_a_fresh_result(
+    qtbot: QtBot,
+) -> None:
+    widget = NotificationPage()
+    qtbot.addWidget(widget)
+
+    widget.show_filter_error("From Date must not be after To Date")
+
+    assert widget.filters.filter_error.text() == "From Date must not be after To Date"
+
+    widget.show_items((_item(),))
+
+    assert widget.filters.filter_error.text() == ""
