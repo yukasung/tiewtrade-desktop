@@ -14,6 +14,12 @@ from uuid import UUID
 import pytest
 
 import tiewtrade.application.paper_runtime as paper_runtime_module
+from tests.support.paper_runtime_candles import (
+    LIVE_FROM,
+    candle,
+    live_candles,
+    warm_up_candles,
+)
 from tests.support.paper_session_setup import (
     configured_futures_session,
     configured_spot_session,
@@ -67,7 +73,6 @@ from tiewtrade.market_data.source_errors import (
     MarketDataFailureKind,
     MarketDataFatalError,
 )
-from tiewtrade.strategies.rsi_step_grid.preset import RsiStepGridPreset
 from tiewtrade.trading.basket import BasketCloseReason
 from tiewtrade.trading.session_config import MarketType, TradeMode
 from tiewtrade.trading.symbol_rules import SymbolRules
@@ -79,8 +84,6 @@ from tiewtrade.trading.trade_history import (
     TradeFill,
 )
 
-_WARM_UP_COUNT = RsiStepGridPreset.v1().minimum_warm_up_candles
-_LIVE_FROM = 15
 _NOW = datetime(2026, 8, 2, 3, tzinfo=UTC)
 _STOPPED_AT = datetime(2026, 8, 2, 4, tzinfo=UTC)
 _T = TypeVar("_T")
@@ -322,7 +325,7 @@ def test_in_progress_candle_is_published_without_changing_workspace(
 ) -> None:
     session = configured_spot_session()
     database = _database_with_session(tmp_path, session)
-    source = QueuedPublicCandleSource(warm_up=_warm_up_candles())
+    source = QueuedPublicCandleSource(warm_up=warm_up_candles())
     in_progress_candles: list[Candle] = []
     controller = PaperRuntimeController(
         lifecycle=SQLitePaperRuntimeLifecycle(database),
@@ -335,7 +338,7 @@ def test_in_progress_candle_is_published_without_changing_workspace(
     )
     controller.start(session)
     before = controller.current_workspace
-    forming = _candle(_LIVE_FROM, close=Decimal("87.25"))
+    forming = candle(LIVE_FROM, close=Decimal("87.25"))
 
     source.emit_open(forming)
 
@@ -355,7 +358,7 @@ def test_a_futures_session_cannot_start_without_a_market_to_read(
     """
     session = configured_futures_session()
     database = _database_with_session(tmp_path, session)
-    source = QueuedPublicCandleSource(warm_up=_warm_up_candles())
+    source = QueuedPublicCandleSource(warm_up=warm_up_candles())
     controller = PaperRuntimeController(
         lifecycle=SQLitePaperRuntimeLifecycle(database),
         trade_history=SQLiteTradeHistory(database),
@@ -377,7 +380,7 @@ def test_in_progress_candle_observer_failure_does_not_block_runtime(
 ) -> None:
     session = configured_spot_session()
     database = _database_with_session(tmp_path, session)
-    source = QueuedPublicCandleSource(warm_up=_warm_up_candles())
+    source = QueuedPublicCandleSource(warm_up=warm_up_candles())
     controller = PaperRuntimeController(
         lifecycle=SQLitePaperRuntimeLifecycle(database),
         trade_history=SQLiteTradeHistory(database),
@@ -389,7 +392,7 @@ def test_in_progress_candle_observer_failure_does_not_block_runtime(
     )
     controller.start(session)
 
-    source.emit_open(_candle(_LIVE_FROM, close=Decimal("87.25")))
+    source.emit_open(candle(LIVE_FROM, close=Decimal("87.25")))
 
     assert source.delivery_completed.wait(1)
     assert controller.current_result.workspace.header is not None
@@ -451,8 +454,8 @@ def test_start_selects_concrete_paper_market_and_publishes_live_basket(
     assert entry.notional == entry.price * entry.quantity
     assert entry.unrealized_pnl == current.basket.unrealized_pnl
     assert current.basket.total_quantity > 0
-    assert current.basket.current_price == _live_candles()[-1].close
-    assert current.data_as_of_utc == _live_candles()[-1].close_time
+    assert current.basket.current_price == live_candles()[-1].close
+    assert current.data_as_of_utc == live_candles()[-1].close_time
     assert selected == [BinancePublicEndpoints.for_market_type(market_type)]
     marker = SQLitePaperRuntimeLifecycle(database).read(session.config.session_id)
     assert marker is not None
@@ -464,7 +467,7 @@ def test_start_selects_concrete_paper_market_and_publishes_live_basket(
     assert len(history.items) == 1
     assert history.items[0].status is BasketStatus.OPEN
     assert MarketDataRuntimeState.LIVE in controller.observed_runtime_states
-    assert completed_candles == list(_live_candles())
+    assert completed_candles == list(live_candles())
 
     source.fail_stream()
     assert source.closed.wait(2)
@@ -714,7 +717,7 @@ def test_a_basket_taken_back_is_published_before_any_live_candle(
     session = configured_spot_session()
     database = _database_with_session(tmp_path, session)
     _record_open_spot_entry(database, session, entry_atr=Decimal("2"))
-    source = ControllablePublicCandleSource(warm_up=_warm_up_candles(), live=())
+    source = ControllablePublicCandleSource(warm_up=warm_up_candles(), live=())
 
     controller = PaperRuntimeController(
         lifecycle=SQLitePaperRuntimeLifecycle(database),
@@ -735,7 +738,7 @@ def test_a_basket_taken_back_is_published_before_any_live_candle(
     # 100 + 3 ATR, the target it was carrying when it was left.
     assert basket.take_profit_price == Decimal("106")
     # Marked on the last warm-up candle, the last completed price it has seen.
-    assert basket.current_price == _warm_up_candles()[-1].close
+    assert basket.current_price == warm_up_candles()[-1].close
     controller.stop(session)
 
 
@@ -795,7 +798,7 @@ def test_a_basket_down_to_its_second_entry_is_still_published(
             closes_entry_number=1,
         ),
     )
-    source = ControllablePublicCandleSource(warm_up=_warm_up_candles(), live=())
+    source = ControllablePublicCandleSource(warm_up=warm_up_candles(), live=())
 
     controller = PaperRuntimeController(
         lifecycle=SQLitePaperRuntimeLifecycle(database),
@@ -830,7 +833,7 @@ def test_a_running_runtime_sells_the_entry_it_is_asked_for(
     database = _database_with_session(tmp_path, session)
     _record_open_spot_entry(database, session, entry_atr=Decimal("2"))
     history = SQLiteTradeHistory(database)
-    source = ControllablePublicCandleSource(warm_up=_warm_up_candles(), live=())
+    source = ControllablePublicCandleSource(warm_up=warm_up_candles(), live=())
     controller = PaperRuntimeController(
         lifecycle=SQLitePaperRuntimeLifecycle(database),
         trade_history=history,
@@ -871,7 +874,7 @@ def test_a_sale_that_kills_the_session_blocks_the_bot_instead_of_looking_alive(
     database = _database_with_session(tmp_path, session)
     _record_open_spot_entry(database, session, entry_atr=Decimal("2"))
     published: list[TradingWorkspaceSnapshot] = []
-    source = ControllablePublicCandleSource(warm_up=_warm_up_candles(), live=())
+    source = ControllablePublicCandleSource(warm_up=warm_up_candles(), live=())
     controller = PaperRuntimeController(
         lifecycle=SQLitePaperRuntimeLifecycle(database),
         trade_history=FailingSaleSpotTradeHistory(database),
@@ -908,7 +911,7 @@ def test_an_entry_the_running_basket_does_not_hold_is_not_sold(
     database = _database_with_session(tmp_path, session)
     _record_open_spot_entry(database, session, entry_atr=Decimal("2"))
     history = SQLiteTradeHistory(database)
-    source = ControllablePublicCandleSource(warm_up=_warm_up_candles(), live=())
+    source = ControllablePublicCandleSource(warm_up=warm_up_candles(), live=())
     controller = PaperRuntimeController(
         lifecycle=SQLitePaperRuntimeLifecycle(database),
         trade_history=history,
@@ -1247,8 +1250,8 @@ def test_stop_timeout_persists_blocked_marker(
     session = configured_spot_session()
     database = _database_with_session(tmp_path, session)
     source = BlockingCloseSource(
-        warm_up=_warm_up_candles(),
-        live=_live_candles(),
+        warm_up=warm_up_candles(),
+        live=live_candles(),
     )
     controller = PaperRuntimeController(
         lifecycle=SQLitePaperRuntimeLifecycle(database),
@@ -1281,7 +1284,7 @@ def test_stop_lock_timeout_keeps_gate_closed_and_ignores_later_candle(
     monkeypatch.setattr(paper_runtime_module, "_STOP_TIMEOUT_SECONDS", 0.01)
     session = configured_spot_session()
     database = _database_with_session(tmp_path, session)
-    source = QueuedPublicCandleSource(warm_up=_warm_up_candles())
+    source = QueuedPublicCandleSource(warm_up=warm_up_candles())
     snapshots: list[TradingWorkspaceSnapshot] = []
     controller = PaperRuntimeController(
         lifecycle=SQLitePaperRuntimeLifecycle(database),
@@ -1303,7 +1306,7 @@ def test_stop_lock_timeout_keeps_gate_closed_and_ignores_later_candle(
     assert result.workspace.header is not None
     assert result.workspace.header.runtime_state is BotRuntimeState.BLOCKED
     snapshot_count = len(snapshots)
-    source.emit(_live_candles()[0])
+    source.emit(live_candles()[0])
     assert source.delivery_completed.wait(1)
     assert len(snapshots) == snapshot_count
     assert controller.current_workspace.header is not None
@@ -1356,8 +1359,8 @@ def test_stop_controlled_loop_error_returns_sanitized_blocked(
     session = configured_spot_session()
     database = _database_with_session(tmp_path, session)
     source = FailingCloseSource(
-        warm_up=_warm_up_candles(),
-        live=_live_candles(),
+        warm_up=warm_up_candles(),
+        live=live_candles(),
     )
     controller = PaperRuntimeController(
         lifecycle=SQLitePaperRuntimeLifecycle(database),
@@ -1554,8 +1557,8 @@ def _unexpected_source_factory() -> NoReturn:
 
 def _source() -> ControllablePublicCandleSource:
     return ControllablePublicCandleSource(
-        warm_up=_warm_up_candles(),
-        live=_live_candles(),
+        warm_up=warm_up_candles(),
+        live=live_candles(),
     )
 
 
@@ -1574,42 +1577,6 @@ def _symbol_rules() -> SymbolRules:
     )
 
 
-def _warm_up_candles() -> tuple[Candle, ...]:
-    """A run down to the close the live candles then climb back from.
-
-    As many candles as the Preset asks for, and it is the *start* that moves
-    when the Preset asks for more: the warm-up still ends on the candle before
-    the live ones, closing at 86, so every price and time asserted off them
-    stays where it was.
-    """
-    candles: list[Candle] = []
-    for index in range(_LIVE_FROM - _WARM_UP_COUNT, _LIVE_FROM):
-        candles.append(_candle(index, close=Decimal(86 + _LIVE_FROM - 1 - index)))
-    return tuple(candles)
-
-
-def _live_candles() -> tuple[Candle, ...]:
-    close = Decimal("86")
-    candles: list[Candle] = []
-    for index in range(_LIVE_FROM, _LIVE_FROM + 11):
-        close += Decimal("1")
-        candles.append(_candle(index, close=close))
-    return tuple(candles)
-
-
-def _candle(index: int, *, close: Decimal) -> Candle:
-    opened = close - Decimal("0.5")
-    return Candle(
-        symbol="BTCUSDT",
-        timeframe="5m",
-        open_time=datetime(2026, 8, 2, tzinfo=UTC) + timedelta(minutes=index * 5),
-        open=opened,
-        high=close + Decimal("1"),
-        low=opened - Decimal("1"),
-        close=close,
-    )
-
-
 def _runtime_snapshot(state: MarketDataRuntimeState) -> MarketDataRuntimeSnapshot:
     reason = (
         MarketDataRuntimeReason.WARM_UP_COMPLETED
@@ -1620,7 +1587,7 @@ def _runtime_snapshot(state: MarketDataRuntimeState) -> MarketDataRuntimeSnapsho
         state=state,
         reason=reason,
         transitioned_at=_NOW,
-        last_accepted_open_time=_live_candles()[-1].open_time,
+        last_accepted_open_time=live_candles()[-1].open_time,
     )
 
 
@@ -2055,7 +2022,7 @@ def test_a_killed_bot_comes_back_to_the_position_it_left(tmp_path: Path) -> None
         trade_history=history,
         symbol_rules=_symbol_rules(),
         source_factory=lambda _endpoints: ControllablePublicCandleSource(
-            warm_up=_warm_up_candles(),
+            warm_up=warm_up_candles(),
             live=(),
         ),
         scheduler=ImmediateScheduler(),

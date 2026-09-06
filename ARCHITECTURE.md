@@ -117,8 +117,17 @@ generic interface ล่วงหน้า เมื่อมี consumer ขอ
 `application/session_notice.py` (`EntryOpenedNotice`, `BasketClosedNotice`,
 `CooldownStartedNotice`, `CooldownEndedNotice`, `CooldownCancelledNotice`, `MarketFeedLostNotice`,
 `MarketFeedRestoredNotice`, `BotErrorNotice`) และ contract `SessionNotifier`
-ส่วน `integrations/line` เป็นผู้ implement contract นี้ผ่าน LINE Messaging API push
-(LINE Notify ปิดบริการเมื่อ มี.ค. 2025 จึงใช้ไม่ได้)
+ช่องทางส่งข้อความมีสองช่อง `integrations/line` ส่งผ่าน LINE Messaging API push
+(LINE Notify ปิดบริการเมื่อ มี.ค. 2025 จึงใช้ไม่ได้) และ `integrations/telegram` ส่งผ่าน
+Telegram Bot API `sendMessage` ทั้งสอง Module ถือไว้เฉพาะ address payload และตำแหน่งที่ token เดินทาง
+ส่วน socket ที่ยิงออกไปและการอ่านว่า status ที่ตอบกลับมาแปลว่าอะไร อยู่ใน
+`integrations/notifications/http_push.py` ที่ทั้งสองช่องใช้ร่วมกัน เพราะ retry policy ของคิวแขวนอยู่กับ
+การอ่านนั้น ถ้าเขียนไว้สองที่แล้ววันหนึ่งไม่ตรงกัน อาการจะโผล่เป็นข้อความที่เงียบหายไปเฉย ๆ
+ส่วนคิว การ retry การ log และการเรียบเรียงข้อความอยู่ใน `integrations/notifications` ที่ไม่ผูกกับช่องทางใด
+และรับชื่อช่องทางมาเป็นค่า เพื่อให้ log บอกได้ว่าข้อความของช่องไหนที่ส่งไม่ออก
+
+ทั้งสองช่องเปิดพร้อมกันได้ notice หนึ่งใบไปครบทุกช่องที่ตั้งค่าไว้ครบ ช่องที่ปิดหรือกรอกไม่ครบ
+จะไม่ถูกเปิดเลยและไม่กระทบอีกช่อง
 
 หนึ่งเหตุการณ์คือหนึ่งข้อความ notice แต่ละชนิดถือคนละข้อเท็จจริงและอ่านคนละแบบ เปิด Position กับ
 ปิด Position จึงเป็นคนละข้อความเสมอ แม้ candle เดียวจะทำทั้งสองอย่าง
@@ -142,8 +151,8 @@ Controller จำไว้ว่า feed กำลังส่งอยู่ห
 
 `PaperRuntimeSink` เรียก notifier **หลังปล่อย entry lock** เสมอ notifier ต้องคืนค่าทันที
 ห้าม raise และต้องเรียกได้จากทุก thread — candle ยกเรื่องขึ้นบน loop ของ Runtime ส่วนคำสั่ง
-ของเทรดเดอร์ยกขึ้นบน thread ที่เขากดมา `LineNoticeNotifier` เป็นผู้รับผิดชอบความต่างนี้
-ด้วย `call_soon_threadsafe` ส่วนการส่งจริงถูก queue ไว้ให้ worker ของ `integrations/line` ทำ
+ของเทรดเดอร์ยกขึ้นบน thread ที่เขากดมา `NoticeNotifier` เป็นผู้รับผิดชอบความต่างนี้
+ด้วย `call_soon_threadsafe` ส่วนการส่งจริงถูก queue ไว้ให้ worker ของแต่ละช่องทำ
 candle ถัดไปจึงไม่รอ network และการส่งล้มเหลวไม่ทำให้ Session fail-closed — ค่าที่เสียคือข้อความ
 ไม่ใช่ Session
 
@@ -151,13 +160,19 @@ candle ถัดไปจึงไม่รอ network และการส่�
 `waive_cooldown_at_rest`, `ClosePaperPosition`) ไม่ส่งข้อความ เพราะไม่มี Runtime ถือ notifier
 อยู่ — เทรดเดอร์ที่ทำเองตอนนั้นกำลังมองหน้าจออยู่แล้ว
 
-Channel access token เป็น credential จึงอยู่ใน OS keyring ผ่าน
-`integrations/keyring/line_notifications.py` เท่านั้น ห้ามลง SQLite, log หรือ fixture
-`line_notification_composition.py` เป็น seam เดียวที่ประกอบ keyring adapter เข้ากับ
-transport โดย `desktop_main` และ `ui` รับเฉพาะ callable ที่ประกอบไว้แล้ว จึงไม่ import
-keyring หรือ transport เอง และหน้าจอ Settings รับรู้ได้แค่ว่า "มี token เก็บไว้หรือไม่"
-ไม่เคยอ่านค่า token กลับมาแสดง log ของ `integrations/line` บอกได้แค่ชนิด notice กับ symbol
-ไม่เคยบอกตัวเลขผลกำไรขาดทุน
+LINE channel access token และ Telegram bot token เป็น credential จึงอยู่ใน OS keyring
+ผ่าน `integrations/keyring/line_notifications.py` และ
+`integrations/keyring/telegram_notifications.py` เท่านั้น ห้ามลง SQLite, log หรือ fixture
+สองช่องเก็บแยก record กัน เพื่อไม่ให้ช่องที่ยังไม่ได้ตั้งค่าอ่านเป็นว่าตั้งค่าแล้วตามอีกช่อง
+Telegram วาง token ไว้ใน path ของ URL ไม่ใช่ header ที่อยู่นั้นจึงถูกประกอบในจุดที่ยิง request
+เท่านั้นและไม่ถูกเขียนลงที่อื่นเลย
+
+`notification_composition.py` เป็น seam เดียวที่ประกอบ keyring adapter เข้ากับ transport
+โดย `desktop_main` และ `ui` รับเฉพาะ callable ที่ประกอบไว้แล้ว จึงไม่ import keyring หรือ
+transport เอง หน้าจอ Settings มีคนละ section ต่อหนึ่งช่อง เปิด/ปิดด้วยสวิตช์ของตัวเอง และ
+เปิดดู token ทีละช่อง log ของช่องทางบอกได้แค่ชื่อช่อง ชนิด notice, symbol และ HTTP status
+ที่ปลายทางตอบกลับตอนปฏิเสธ (400 คือ recipient ผิด, 401 คือ token ผิด, 403 คือถูกบล็อก —
+เทรดเดอร์จะได้รู้ว่าต้องไปแก้ค่าไหน) ไม่เคยบอกตัวเลขผลกำไรขาดทุนและไม่เคยมี token อยู่ในนั้น
 
 Session อ่านค่าตั้งค่าตอน Runtime เริ่มทำงาน การแก้ค่าจึงมีผลกับการ Start ครั้งถัดไป
 

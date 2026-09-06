@@ -9,6 +9,8 @@ from tiewtrade.ui.settings_panel import (
     BOT_TITLE_MAX_LENGTH,
     SAVE_SETTINGS_BUSY_TEXT,
     SAVE_SETTINGS_IDLE_TEXT,
+    TELEGRAM_TOKEN_MISSING_PLACEHOLDER,
+    TELEGRAM_TOKEN_UNREADABLE_TEXT,
     TOKEN_MISSING_PLACEHOLDER,
     TOKEN_UNREADABLE_TEXT,
     SettingsPanel,
@@ -96,11 +98,22 @@ def test_saving_emits_everything_the_form_holds(qtbot: QtBot) -> None:
     panel.line_enabled.setChecked(True)
     panel.line_target_id.setText("  U123  ")
     panel.line_access_token.setText("  token-value  ")
+    panel.telegram_enabled.setChecked(True)
+    panel.telegram_chat_id.setText("  -1001234  ")
+    panel.telegram_bot_token.setText("  123:bot-token  ")
 
     with qtbot.waitSignal(panel.settings_save_requested, timeout=1000) as emitted:
         click(panel.save_settings_button)
 
-    assert emitted.args == ["Khun Somchai", True, "U123", "token-value"]
+    assert emitted.args == [
+        "Khun Somchai",
+        True,
+        "U123",
+        "token-value",
+        True,
+        "-1001234",
+        "123:bot-token",
+    ]
 
 
 def test_the_bot_title_is_filled_in_from_what_is_stored(qtbot: QtBot) -> None:
@@ -272,3 +285,86 @@ def test_set_busy_holds_the_save_button_too(qtbot: QtBot) -> None:
 
     assert panel.save_settings_button.isEnabled()
     assert panel.save_settings_button.text() == SAVE_SETTINGS_IDLE_TEXT
+
+
+def test_a_stored_telegram_setup_is_filled_in_behind_dots(qtbot: QtBot) -> None:
+    panel = SettingsPanel()
+    qtbot.addWidget(panel)
+
+    panel.show_telegram_notifications((True, "-1001234", "123:bot-token"))
+
+    assert panel.telegram_enabled.isChecked()
+    assert panel.telegram_chat_id.text() == "-1001234"
+    assert panel.telegram_bot_token.text() == "123:bot-token"
+    assert panel.telegram_bot_token.echoMode() is QLineEdit.EchoMode.Password
+
+
+def test_telegram_settings_with_no_token_saved_say_so(qtbot: QtBot) -> None:
+    panel = SettingsPanel()
+    qtbot.addWidget(panel)
+    panel.telegram_bot_token.setText("typed-but-not-saved")
+
+    panel.show_telegram_notifications((False, "", ""))
+
+    assert not panel.telegram_enabled.isChecked()
+    assert panel.telegram_bot_token.text() == ""
+    assert (
+        panel.telegram_bot_token.placeholderText() == TELEGRAM_TOKEN_MISSING_PLACEHOLDER
+    )
+
+
+def test_telegram_settings_nobody_could_read_say_so_under_their_own_fields(
+    qtbot: QtBot,
+) -> None:
+    """Said under the channel it is about, and not under the other one.
+
+    The two are stored apart, so a trader whose LINE settings read back fine
+    should not be sent looking at them.
+    """
+    panel = SettingsPanel()
+    qtbot.addWidget(panel)
+    panel.show()
+
+    panel.say_telegram_notifications_unreadable()
+
+    assert panel.telegram_token_state.isVisible()
+    assert panel.telegram_token_state.text() == TELEGRAM_TOKEN_UNREADABLE_TEXT
+    assert not panel.line_token_state.isVisible()
+
+    panel.show_telegram_notifications((False, "", ""))
+
+    assert not panel.telegram_token_state.isVisible()
+
+
+def test_each_token_is_uncovered_on_its_own(qtbot: QtBot) -> None:
+    """One eye reveals one field.
+
+    A trader checking which LINE token is stored has not asked to put their
+    Telegram bot token on the screen beside it.
+    """
+    panel = SettingsPanel()
+    qtbot.addWidget(panel)
+
+    panel.reveal_token.trigger()
+
+    assert panel.line_access_token.echoMode() is QLineEdit.EchoMode.Normal
+    assert panel.telegram_bot_token.echoMode() is QLineEdit.EchoMode.Password
+
+    panel.reveal_telegram_token.trigger()
+
+    assert panel.telegram_bot_token.echoMode() is QLineEdit.EchoMode.Normal
+    assert _looks_like(panel.reveal_telegram_token.icon(), crossed=False)
+
+
+def test_reading_the_settings_back_covers_the_telegram_token_again(
+    qtbot: QtBot,
+) -> None:
+    panel = SettingsPanel()
+    qtbot.addWidget(panel)
+    panel.telegram_bot_token.setText("123:bot-token")
+    panel.reveal_telegram_token.trigger()
+
+    panel.show_telegram_notifications((True, "-1001234", "123:bot-token"))
+
+    assert panel.telegram_bot_token.echoMode() is QLineEdit.EchoMode.Password
+    assert not panel.reveal_telegram_token.isChecked()

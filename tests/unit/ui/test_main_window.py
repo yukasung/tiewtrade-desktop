@@ -4566,6 +4566,141 @@ def test_opening_settings_fills_the_line_form_from_what_is_stored(
     assert panel.line_access_token.text() == "token-value"
 
 
+def test_opening_settings_fills_the_telegram_form_from_what_is_stored(
+    qtbot: QtBot,
+) -> None:
+    window = MainWindow(
+        create_session=unused_create,
+        load_active=no_active_session,
+        list_basket_history=empty_basket_history,
+        list_trade_fills=empty_trade_fills,
+        read_telegram_notifications=lambda: (True, "-1001234", "123:bot-token"),
+    )
+    qtbot.addWidget(window)
+    window.show()
+    qtbot.waitUntil(window.setup.isVisible)
+
+    _click_settings(window)
+
+    panel = window.workspace.settings_panel
+    qtbot.waitUntil(lambda: panel.telegram_chat_id.text() == "-1001234")
+    assert panel.telegram_enabled.isChecked()
+    assert panel.telegram_bot_token.text() == "123:bot-token"
+
+
+def test_one_save_keeps_both_channels_and_the_title(
+    qtbot: QtBot,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """One button, one busy state, one acknowledgement — for the whole page.
+
+    A trader who filled in both channels and pressed Save once must not have
+    to press it again for the other one, and must not be told twice that
+    their settings landed.
+    """
+    line: list[tuple[bool, str, str]] = []
+    telegram: list[tuple[bool, str, str]] = []
+    said_saved: list[str] = []
+    monkeypatch.setattr(
+        QMessageBox,
+        "information",
+        lambda parent, title, text, *args: said_saved.append(text),
+    )
+
+    window = MainWindow(
+        create_session=unused_create,
+        load_active=no_active_session,
+        list_basket_history=empty_basket_history,
+        list_trade_fills=empty_trade_fills,
+        save_line_notifications=lambda *values: line.append(values),
+        save_telegram_notifications=lambda *values: telegram.append(values),
+    )
+    qtbot.addWidget(window)
+    window.show()
+    qtbot.waitUntil(window.setup.isVisible)
+    _click_settings(window)
+    panel = window.workspace.settings_panel
+    qtbot.waitUntil(panel.save_settings_button.isEnabled)
+
+    panel.line_enabled.setChecked(True)
+    panel.line_target_id.setText("U123")
+    panel.line_access_token.setText("token-value")
+    panel.telegram_enabled.setChecked(True)
+    panel.telegram_chat_id.setText("-1001234")
+    panel.telegram_bot_token.setText("123:bot-token")
+    click(panel.save_settings_button)
+
+    qtbot.waitUntil(lambda: bool(line) and bool(telegram))
+    assert line == [(True, "U123", "token-value")]
+    assert telegram == [(True, "-1001234", "123:bot-token")]
+    qtbot.waitUntil(lambda: bool(said_saved))
+    assert said_saved == [settings_workflow_module.SETTINGS_SAVED_TEXT]
+
+
+def test_saving_telegram_settings_hands_them_off_and_reads_them_back(
+    qtbot: QtBot,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The Telegram half is filled from what was stored, as the LINE half is."""
+    saved: list[tuple[bool, str, str]] = []
+    readings = [(False, "", ""), (True, "-1001234", "stored-bot-token")]
+    monkeypatch.setattr(QMessageBox, "information", lambda *args: None)
+
+    window = MainWindow(
+        create_session=unused_create,
+        load_active=no_active_session,
+        list_basket_history=empty_basket_history,
+        list_trade_fills=empty_trade_fills,
+        save_telegram_notifications=lambda *values: saved.append(values),
+        read_telegram_notifications=lambda: readings[min(len(saved), 1)],
+    )
+    qtbot.addWidget(window)
+    window.show()
+    qtbot.waitUntil(window.setup.isVisible)
+    _click_settings(window)
+    panel = window.workspace.settings_panel
+    qtbot.waitUntil(panel.save_settings_button.isEnabled)
+
+    panel.telegram_enabled.setChecked(True)
+    panel.telegram_chat_id.setText("-1001234")
+    panel.telegram_bot_token.setText("123:bot-token")
+    click(panel.save_settings_button)
+
+    qtbot.waitUntil(lambda: saved == [(True, "-1001234", "123:bot-token")])
+    qtbot.waitUntil(lambda: panel.telegram_bot_token.text() == "stored-bot-token")
+
+
+def test_a_reading_that_fails_is_reported_under_each_channel_it_was_asked_of(
+    qtbot: QtBot,
+) -> None:
+    """A channel nothing was going to read has nothing to report.
+
+    Both channels are read under one action, so one failure is the whole
+    run's — but saying so under a channel this installation was never wired
+    to fetch would send a trader looking for settings that do not exist.
+    """
+
+    def unreadable() -> tuple[bool, str, str]:
+        raise RuntimeError("no keyring here")
+
+    window = MainWindow(
+        create_session=unused_create,
+        load_active=no_active_session,
+        list_basket_history=empty_basket_history,
+        list_trade_fills=empty_trade_fills,
+        read_telegram_notifications=unreadable,
+    )
+    qtbot.addWidget(window)
+    window.show()
+    qtbot.waitUntil(window.setup.isVisible)
+
+    _click_settings(window)
+
+    panel = window.workspace.settings_panel
+    qtbot.waitUntil(panel.telegram_token_state.isVisible)
+    assert not panel.line_token_state.isVisible()
+
+
 def test_saving_line_settings_hands_them_off_and_reads_them_back(
     qtbot: QtBot,
     monkeypatch: pytest.MonkeyPatch,

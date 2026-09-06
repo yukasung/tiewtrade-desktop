@@ -1043,7 +1043,7 @@ def test_desktop_session_setup_sources_exclude_runtime_and_sensitive_imports() -
     )
 
 
-def test_line_notification_composition_is_the_only_place_a_token_is_reached() -> None:
+def test_notification_composition_is_the_only_place_a_token_is_reached() -> None:
     """The credential seam is one file, and it faces away from the screen.
 
     `desktop_main` composes everything and is forbidden a keyring for exactly
@@ -1052,10 +1052,11 @@ def test_line_notification_composition_is_the_only_place_a_token_is_reached() ->
     reached instead, and it may not import `ui` — nothing on screen gets to
     ask it for the value it holds.
     """
-    composition_path = Path("src/tiewtrade/line_notification_composition.py")
+    composition_path = Path("src/tiewtrade/notification_composition.py")
     imports = _imported_modules(composition_path)
 
     assert "tiewtrade.integrations.keyring.line_notifications" in imports
+    assert "tiewtrade.integrations.keyring.telegram_notifications" in imports
     assert not {module for module in imports if module.startswith("tiewtrade.ui")}
     assert "keyring" not in _imported_modules(Path("src/tiewtrade/desktop_main.py"))
 
