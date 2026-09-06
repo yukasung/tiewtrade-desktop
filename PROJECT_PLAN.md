@@ -87,8 +87,12 @@ Recovery, Paper Futures, public market-data runtime และ Desktop UI
    atomic, แสดง durable Overview และวาง Thin PySide6 worker boundary
 8. DEV-96 — เพิ่ม Trade History UI หลัง Desktop Session Setup acceptance gate ผ่าน
 9. Desktop UI สำหรับ Dashboard, Orders, Positions และ Notifications
-10. Stop Session, startup Recovery และ deterministic reconciliation ด้วย fake adapters
-11. Paper acceptance ครบทั้ง business rules, persistence, UI และ Recovery
+10. Stop Session และ startup Recovery สำหรับ Paper (ไม่มี exchange state ให้ reconcile — ตาม
+    PRODUCT.md 12.2 ขั้น "ดึง exchange state" ผูกกับ Live Session เท่านั้น Preflight,
+    idempotency และ reconciliation จึงเป็นของ Milestone 4 ไม่ใช่ที่นี่ ดู Milestone 4 ด้านล่าง)
+11. Drawdown แสดงคู่กับ PnL ใน UI ตาม PRODUCT.md 10 และ 15.1 (แสดงเพื่อเฝ้าระวังเท่านั้น
+    ไม่บังคับปิด Position)
+12. Paper acceptance ครบทั้ง business rules, persistence, UI และ Recovery
 
 สถานะ DEV-92–DEV-95: durable SQLite Trade History รองรับ normalized Basket/Fill
 ของ Paper Spot และ Paper Futures, exact Decimal/UTC round-trip, deterministic IDs,
@@ -216,6 +220,17 @@ marker เป็น `STOPPED` โดยไม่ยิงขอ candle ใด �
 ตั้งช่องทางไว้เลย และการเขียนที่ล้มเหลวเสียแค่บันทึก ไม่หยุด Session ตามกฎเดียวกับ push
 acceptance พิสูจน์แล้วว่าข้อความที่ผู้ใช้ได้รับกับผลของแต่ละช่องอ่านกลับได้จากไฟล์เดิมหลังเปิดใหม่
 ส่วนหน้าจอที่อ่านบันทึกนี้กลับมาแสดงยังไม่มี เป็นงานลำดับถัดไป
+
+สถานะ Drawdown display slice: UI แสดง Drawdown คู่กับ Total P/L บน Live Price Card ตาม
+PRODUCT.md 10 และ 15.1 แล้ว นิยามเป็น current drawdown — ระยะห่างจาก high-water mark ของ
+Total P/L ที่สูงสุดเท่าที่เคยขึ้นถึง ลบด้วยค่าปัจจุบัน จึงเคลื่อนไหว live คู่กับราคาเหมือน Total P/L
+เอง high-water mark เก็บเป็นแถวเดียวระดับ installation ในตาราง `equity_high_water_mark`
+(schema v21) เพราะเป็นขอบเขตเดียวกับที่ Total P/L อ่านอยู่แล้ว (realized ทุก Session บวก
+unrealized ของ Basket ที่เปิดอยู่) เขียนแบบ atomic UPSERT-max ในทรานแซกชันเดียวเพื่อกัน
+race ระหว่างอ่านกับเขียน และเลือกไม่ fail-closed เหมือนกับ Notification journal — เป็นตัวเลข
+สำหรับเฝ้าระวังเท่านั้น ไม่ใช่เงื่อนไขบังคับปิด Position (Internal Alpha ไม่มี Drawdown hard limit
+ตาม PRODUCT.md 10) ค่าที่หน้าจอแสดงจึงเป็นค่าที่คำนวณจาก total ที่เพิ่งอ่านได้ทันที ไม่รอผลเขียนยืนยัน
+จากไฟล์ก่อน
 
 ## Milestone 4 — Live Spot
 

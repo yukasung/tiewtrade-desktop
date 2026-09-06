@@ -24,7 +24,7 @@ class UnsupportedDatabaseSchemaError(ValueError):
 
 
 class SQLiteDatabase:
-    _SCHEMA_VERSION = 20
+    _SCHEMA_VERSION = 21
     _BUSY_TIMEOUT_MS = 5_000
 
     def __init__(self, path: Path) -> None:
@@ -160,6 +160,10 @@ class SQLiteDatabase:
                     # Nothing to carry over: what a Bot said before there was
                     # anywhere to keep it was said and gone.
                     _create_session_notice_schema(connection)
+                if 0 <= version <= 20:
+                    # No history to backfill: a peak measured from here on is
+                    # honest about the account it starts watching from.
+                    _create_equity_high_water_mark_schema(connection)
                 connection.execute(f"PRAGMA user_version = {self._SCHEMA_VERSION}")
         finally:
             connection.close()
@@ -173,6 +177,7 @@ class SQLiteDatabase:
         connection = self.connect()
         try:
             with connection:
+                connection.execute("DELETE FROM equity_high_water_mark")
                 connection.execute("DELETE FROM session_notice_deliveries")
                 connection.execute("DELETE FROM session_notices")
                 connection.execute("DELETE FROM trade_fills")
@@ -842,6 +847,19 @@ def _create_session_notice_schema(connection: sqlite3.Connection) -> None:
             attempts INTEGER NOT NULL CHECK (attempts > 0),
             settled_at_utc TEXT NOT NULL,
             PRIMARY KEY (notice_id, channel)
+        )
+        """
+    )
+
+
+def _create_equity_high_water_mark_schema(connection: sqlite3.Connection) -> None:
+    """One row for the whole installation: the highest Total P/L ever seen."""
+    connection.execute(
+        """
+        CREATE TABLE IF NOT EXISTS equity_high_water_mark (
+            id INTEGER PRIMARY KEY CHECK (id = 1),
+            high_water_mark TEXT NOT NULL,
+            updated_at_utc TEXT NOT NULL
         )
         """
     )

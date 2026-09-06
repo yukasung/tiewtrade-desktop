@@ -207,6 +207,53 @@ def test_clearing_the_price_leaves_the_total_alone(qtbot: QtBot) -> None:
     assert POSITIVE_COLOR in card.total.styleSheet()
 
 
+def test_the_drawdown_reads_beside_the_total_and_starts_blank(qtbot: QtBot) -> None:
+    card = LivePriceCard()
+    qtbot.addWidget(card)
+
+    assert card.drawdown_caption.text() == "Drawdown"
+    assert card.drawdown.text() == BLANK
+
+
+def test_a_drawdown_reads_as_a_plain_money_figure(qtbot: QtBot) -> None:
+    card = LivePriceCard()
+    qtbot.addWidget(card)
+
+    card.show_drawdown(Decimal("180"))
+
+    assert card.drawdown.text() == "180.00 USDT"
+
+
+def test_standing_at_the_peak_reads_as_zero_not_a_blank(qtbot: QtBot) -> None:
+    """No distance from the peak is a result, not a missing reading."""
+    card = LivePriceCard()
+    qtbot.addWidget(card)
+
+    card.show_drawdown(Decimal("0"))
+
+    assert card.drawdown.text() == "0.00 USDT"
+
+
+def test_no_drawdown_yet_reads_as_a_blank(qtbot: QtBot) -> None:
+    card = LivePriceCard()
+    qtbot.addWidget(card)
+    card.show_drawdown(Decimal("180"))
+
+    card.show_drawdown(None)
+
+    assert card.drawdown.text() == BLANK
+
+
+def test_clearing_the_price_leaves_the_drawdown_alone(qtbot: QtBot) -> None:
+    card = LivePriceCard()
+    qtbot.addWidget(card)
+    card.show_drawdown(Decimal("180"))
+
+    card.clear()
+
+    assert card.drawdown.text() == "180.00 USDT"
+
+
 def candle(
     *,
     open_price: str = "77682.00",

@@ -84,7 +84,9 @@ from tiewtrade.ui.system_notice import (
 )
 from tiewtrade.ui.take_profit_confirmation import UNREADABLE_POSITION_MESSAGE
 from tiewtrade.ui.total_pnl_workflow import (
+    ReadHighWaterMark,
     ReadTotalRealizedPnl,
+    RecordHighWaterMark,
     TotalPnlWorkflow,
 )
 from tiewtrade.ui.trade_history_workflow import (
@@ -167,6 +169,8 @@ class MainWindow(QMainWindow):
         list_basket_history: ListBasketHistory | None = None,
         list_trade_fills: ListTradeFills | None = None,
         read_total_realized_pnl: ReadTotalRealizedPnl | None = None,
+        read_high_water_mark: ReadHighWaterMark | None = None,
+        record_high_water_mark: RecordHighWaterMark | None = None,
         validate_session: Callable[[PaperSessionSetupValues], None] | None = None,
         bot: BotActions = NO_BOT,
         chart: ChartSources = NO_CHART,
@@ -272,7 +276,9 @@ class MainWindow(QMainWindow):
         self._wire_bot_lifecycle(bot, take_profit_confirmation)
         self._wire_chart(chart, bot)
         self._wire_trade_history(list_basket_history, list_trade_fills)
-        self._wire_total_pnl(read_total_realized_pnl)
+        self._wire_total_pnl(
+            read_total_realized_pnl, read_high_water_mark, record_high_water_mark
+        )
         self._workflow.start()
         self._total_pnl.start()
 
@@ -1116,16 +1122,29 @@ class MainWindow(QMainWindow):
         self.close()
 
     def _wire_total_pnl(
-        self, read_total_realized_pnl: ReadTotalRealizedPnl | None
+        self,
+        read_total_realized_pnl: ReadTotalRealizedPnl | None,
+        read_high_water_mark: ReadHighWaterMark | None,
+        record_high_water_mark: RecordHighWaterMark | None,
     ) -> None:
-        """The figure beside the price: everything realised, plus what is held."""
+        """The figure beside the price: everything realised, plus what is held.
+
+        Drawdown rides beside it rather than as its own workflow: the two
+        never disagree about what "now" is worth, because one reading
+        produces both.
+        """
         self._total_pnl = TotalPnlWorkflow(
             read_total_realized_pnl=read_total_realized_pnl,
+            read_high_water_mark=read_high_water_mark,
+            record_high_water_mark=record_high_water_mark,
             thread_pool=self._thread_pool,
             parent=self,
         )
         self._total_pnl.total_changed.connect(
             self.workspace.live_price_card.show_total_pnl
+        )
+        self._total_pnl.drawdown_changed.connect(
+            self.workspace.live_price_card.show_drawdown
         )
 
     def _wire_trade_history(

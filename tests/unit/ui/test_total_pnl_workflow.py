@@ -24,13 +24,35 @@ def _unmarked_basket() -> BasketSnapshot:
 
 def _workflow(
     read_total_realized_pnl: object = None,
+    *,
+    read_high_water_mark: object = None,
+    record_high_water_mark: object = None,
 ) -> tuple[TotalPnlWorkflow, list[object]]:
     workflow = TotalPnlWorkflow(
         read_total_realized_pnl=read_total_realized_pnl,  # type: ignore[arg-type]
+        read_high_water_mark=read_high_water_mark,  # type: ignore[arg-type]
+        record_high_water_mark=record_high_water_mark,  # type: ignore[arg-type]
         thread_pool=QThreadPool(),
     )
     shown: list[object] = []
     workflow.total_changed.connect(shown.append)
+    return workflow, shown
+
+
+def _drawdown_workflow(
+    *,
+    realized: Decimal,
+    high_water_mark: Decimal,
+    record: object = None,
+) -> tuple[TotalPnlWorkflow, list[object]]:
+    workflow = TotalPnlWorkflow(
+        read_total_realized_pnl=lambda: realized,
+        read_high_water_mark=lambda: high_water_mark,
+        record_high_water_mark=record,  # type: ignore[arg-type]
+        thread_pool=QThreadPool(),
+    )
+    shown: list[object] = []
+    workflow.drawdown_changed.connect(shown.append)
     return workflow, shown
 
 
@@ -243,3 +265,116 @@ def test_a_cleared_price_leaves_the_basket_reading_as_the_runtime_marked_it(
     workflow.clear_price()
 
     assert shown[-1] == Decimal("1010")
+
+
+def test_with_no_way_to_read_a_peak_drawdown_has_no_answer(qtbot: QtBot) -> None:
+    workflow = TotalPnlWorkflow(
+        read_total_realized_pnl=lambda: Decimal("10"),
+        thread_pool=QThreadPool(),
+    )
+    drawdown_shown: list[object] = []
+    workflow.drawdown_changed.connect(drawdown_shown.append)
+
+    workflow.start()
+    qtbot.waitUntil(lambda: len(drawdown_shown) >= 1)
+
+    assert drawdown_shown[-1] is None
+
+
+def test_standing_at_the_peak_reads_as_no_drawdown(qtbot: QtBot) -> None:
+    workflow, shown = _drawdown_workflow(
+        realized=Decimal("500"), high_water_mark=Decimal("500")
+    )
+
+    workflow.start()
+
+    qtbot.waitUntil(lambda: shown[-1:] == [Decimal("0")])
+
+
+def test_below_the_peak_reads_as_the_distance_back_to_it(qtbot: QtBot) -> None:
+    workflow, shown = _drawdown_workflow(
+        realized=Decimal("320"), high_water_mark=Decimal("500")
+    )
+
+    workflow.start()
+
+    qtbot.waitUntil(lambda: shown[-1:] == [Decimal("180")])
+
+
+def test_a_new_peak_is_recorded_and_reads_as_no_drawdown(qtbot: QtBot) -> None:
+    recorded: list[Decimal] = []
+
+    def record(value: Decimal) -> Decimal:
+        recorded.append(value)
+        return value
+
+    workflow, shown = _drawdown_workflow(
+        realized=Decimal("650"), high_water_mark=Decimal("500"), record=record
+    )
+
+    workflow.start()
+
+    qtbot.waitUntil(lambda: shown[-1:] == [Decimal("0")])
+    assert recorded == [Decimal("650")]
+
+
+def test_standing_below_the_peak_never_asks_to_record_anything(
+    qtbot: QtBot,
+) -> None:
+    """A total that has not beaten the peak is not the Bot's best day yet."""
+    recorded: list[Decimal] = []
+
+    def record(value: Decimal) -> Decimal:
+        recorded.append(value)
+        return value
+
+    workflow, shown = _drawdown_workflow(
+        realized=Decimal("320"), high_water_mark=Decimal("500"), record=record
+    )
+
+    workflow.start()
+
+    qtbot.waitUntil(lambda: shown[-1:] == [Decimal("180")])
+    qtbot.wait(50)
+    assert recorded == []
+
+
+def test_a_live_price_that_sets_a_new_peak_is_recorded_too(qtbot: QtBot) -> None:
+    recorded: list[Decimal] = []
+
+    def record(value: Decimal) -> Decimal:
+        recorded.append(value)
+        return value
+
+    workflow, shown = _drawdown_workflow(
+        realized=Decimal("500"), high_water_mark=Decimal("500"), record=record
+    )
+    workflow.start()
+    qtbot.waitUntil(lambda: shown[-1:] == [Decimal("0")])
+
+    basket = basket_snapshot(unrealized_pnl=Decimal("150"))
+    workflow.set_open_basket(basket)
+
+    qtbot.waitUntil(lambda: recorded == [Decimal("650")])
+    assert shown[-1] == Decimal("0")
+
+
+def test_a_write_that_never_answers_still_reads_the_value_offered(
+    qtbot: QtBot,
+) -> None:
+    """The screen shows the total's own peak even if the file never confirms it.
+
+    A record that could not be kept costs the record, not the figure a trader
+    is watching right now.
+    """
+
+    def record(value: Decimal) -> Decimal:
+        raise RuntimeError("sqlite failed at /private/tmp with api_key=secret")
+
+    workflow, shown = _drawdown_workflow(
+        realized=Decimal("650"), high_water_mark=Decimal("500"), record=record
+    )
+
+    workflow.start()
+
+    qtbot.waitUntil(lambda: shown[-1:] == [Decimal("0")])

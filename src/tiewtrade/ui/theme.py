@@ -69,10 +69,17 @@ QLabel#totalPnl {
     font-size: 18px;
     font-weight: 700;
 }
+/* Smaller again: a distance to watch, not the headline result the total is. */
+QLabel#drawdown {
+    color: #94A3B8;
+    font-size: 14px;
+    font-weight: 700;
+}
 /* A price that stopped arriving still reads, dimmed. The label's own colour
    is handed back when it goes stale, so this rule has nothing to lose to. */
 QFrame#livePriceCard[stale="true"] QLabel#livePrice,
 QFrame#livePriceCard[stale="true"] QLabel#totalPnl,
+QFrame#livePriceCard[stale="true"] QLabel#drawdown,
 QFrame#livePriceCard[stale="true"] QLabel#eyebrow {
     color: #64748B;
 }
