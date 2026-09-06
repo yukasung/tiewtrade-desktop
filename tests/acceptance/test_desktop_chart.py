@@ -6,6 +6,7 @@ from pathlib import Path
 from threading import Event
 from typing import TypeVar
 
+from PySide6.QtCore import QPointF
 from PySide6.QtWidgets import QPushButton
 from pytest import MonkeyPatch
 from pytestqt.qtbot import QtBot
@@ -250,7 +251,21 @@ def test_dragging_the_chart_reads_an_older_window(qtbot: QtBot) -> None:
     middle = int(surface.center().y())
     press_x = int(surface.left()) + 20
     release_x = press_x + round(slot * 30)
+    at_press = {
+        "can_pan": chart._can_pan(),
+        "surface_contains_point": chart._chart_surface().contains(
+            QPointF(press_x, middle)
+        ),
+        "surface_at_press": (
+            chart._chart_surface().left(),
+            chart._chart_surface().top(),
+            chart._chart_surface().width(),
+            chart._chart_surface().height(),
+        ),
+        "snapshot_state_at_press": chart._snapshot.state if chart._snapshot else None,
+    }
     press(chart, press_x, middle)
+    pan_anchor_after_press = chart._pan_anchor
     release(chart, release_x, middle)
 
     try:
@@ -259,6 +274,8 @@ def test_dragging_the_chart_reads_an_older_window(qtbot: QtBot) -> None:
         print(
             "DEBUG_DRAG_TIMEOUT",
             {
+                "at_press": at_press,
+                "pan_anchor_after_press": pan_anchor_after_press,
                 "chart_width": chart.width(),
                 "chart_height": chart.height(),
                 "surface": (
