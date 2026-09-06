@@ -89,6 +89,19 @@ class TotalPnlWorkflow(QObject):
         self.refresh()
 
     @Slot()
+    def refresh_high_water_mark(self) -> None:
+        """Ask the database for the peak again, the way a wipe leaves it.
+
+        The peak is otherwise read once and kept for the life of the window,
+        so a Clear Database that empties the row underneath it would
+        otherwise leave this figure holding a peak nothing on disk still
+        remembers.
+        """
+        self._high_water_mark = None
+        self._high_water_mark_requested = False
+        self._request_high_water_mark()
+
+    @Slot()
     def refresh(self) -> None:
         """Ask the database what has been realised, if it is not already out."""
         read = self._read_total_realized_pnl

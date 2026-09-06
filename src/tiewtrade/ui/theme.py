@@ -64,11 +64,8 @@ QLabel#livePrice, QLabel#totalPnl, QLabel#drawdown {
     font-size: 14px;
     font-weight: 700;
 }
-QLabel#livePrice, QLabel#totalPnl {
+QLabel#livePrice, QLabel#totalPnl, QLabel#drawdown {
     color: #F1F5F9;
-}
-QLabel#drawdown {
-    color: #94A3B8;
 }
 /* A price that stopped arriving still reads, dimmed. The label's own colour
    is handed back when it goes stale, so this rule has nothing to lose to. */

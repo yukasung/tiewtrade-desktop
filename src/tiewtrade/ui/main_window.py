@@ -974,9 +974,14 @@ class MainWindow(QMainWindow):
         The chart is read back for the same reason: its Buy/Sell badges are
         drawings of fills whose rows are gone, and nothing else would ask
         for them again until the next trade.
+
+        The Total P/L peak is asked for again too: it is otherwise read once
+        and held for the life of the window, so left alone it would keep
+        showing Drawdown against a peak the wipe had already erased.
         """
         self._history_workflow.start()
         self._total_pnl.refresh()
+        self._total_pnl.refresh_high_water_mark()
         self._chart_workflow.refresh_fills()
         session = self._current_session()
         if session is not None:

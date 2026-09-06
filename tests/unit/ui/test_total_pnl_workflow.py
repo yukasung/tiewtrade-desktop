@@ -359,6 +359,26 @@ def test_a_live_price_that_sets_a_new_peak_is_recorded_too(qtbot: QtBot) -> None
     assert shown[-1] == Decimal("0")
 
 
+def test_a_cleared_database_drops_the_old_peak_for_the_one_now_on_disk(
+    qtbot: QtBot,
+) -> None:
+    """A Clear Database wipes the peak's row; the figure must ask again."""
+    peaks = [Decimal("500")]
+
+    workflow, shown = _drawdown_workflow(
+        realized=Decimal("320"), high_water_mark=Decimal("500")
+    )
+    workflow._read_high_water_mark = lambda: peaks[-1]
+
+    workflow.start()
+    qtbot.waitUntil(lambda: shown[-1:] == [Decimal("180")])
+
+    peaks.append(Decimal("0"))
+    workflow.refresh_high_water_mark()
+
+    qtbot.waitUntil(lambda: shown[-1:] == [Decimal("0")])
+
+
 def test_a_write_that_never_answers_still_reads_the_value_offered(
     qtbot: QtBot,
 ) -> None:
