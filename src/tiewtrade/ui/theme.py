@@ -56,24 +56,19 @@ QLabel#eyebrow {
     font-size: 11px;
     font-weight: 700;
 }
-QLabel#livePrice {
-    color: #F1F5F9;
-    font-size: 22px;
-    font-weight: 700;
-}
-/* Smaller than the price it reads beside: the side column is a fixed width
-   and this figure carries its quote asset, so two prices' worth of digits
-   do not both fit at 22px. */
-QLabel#totalPnl {
-    color: #F1F5F9;
-    font-size: 18px;
-    font-weight: 700;
-}
-/* Smaller again: a distance to watch, not the headline result the total is. */
-QLabel#drawdown {
-    color: #94A3B8;
+/* One size for all three figures on this card, rather than three reading as
+   headline, subtitle and footnote of each other. 14px is the size the
+   widest of them — Total P/L, carrying its quote asset — actually fits at
+   inside the column's fixed width; the other two follow it down. */
+QLabel#livePrice, QLabel#totalPnl, QLabel#drawdown {
     font-size: 14px;
     font-weight: 700;
+}
+QLabel#livePrice, QLabel#totalPnl {
+    color: #F1F5F9;
+}
+QLabel#drawdown {
+    color: #94A3B8;
 }
 /* A price that stopped arriving still reads, dimmed. The label's own colour
    is handed back when it goes stale, so this rule has nothing to lose to. */
