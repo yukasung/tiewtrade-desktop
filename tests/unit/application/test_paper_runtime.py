@@ -1266,7 +1266,11 @@ def test_stop_timeout_persists_blocked_marker(
 
     result = controller.stop(session)
 
-    assert source.close_started.wait(1)
+    # A stop that already timed out still has to walk the close path through
+    # a background thread before it gets here — more hops than the file's
+    # other waits, and the one this repo's CI has actually caught running
+    # short on a busy runner.
+    assert source.close_started.wait(2)
     assert result.workspace.header is not None
     assert result.workspace.header.runtime_state is BotRuntimeState.BLOCKED
     assert result.blocked_reason == "Paper Bot could not be stopped"

@@ -225,13 +225,23 @@ def test_dragging_the_chart_reads_an_older_window(qtbot: QtBot) -> None:
     window.show()
     chart = window.workspace.chart
     qtbot.waitUntil(lambda: len(requested) == 1)
+    # The loader having been called is not the same moment the chart can be
+    # dragged. The window opens by publishing a Loading snapshot and reading
+    # a range behind it, and a chart mid-read refuses to pan at all — so a
+    # drag simulated on the strength of the loader having been *called* can
+    # land on a chart still loading and be ignored outright, gesture and all.
+    # Waited for on the widget's own terms, which is what the drag needs to
+    # be true, rather than on the loader call standing in for it.
+    qtbot.waitUntil(chart._can_pan)
 
     opening_range = requested[0]
     surface = chart._chart_surface()
     slot = surface.width() / visible_candle_count(opening_range, "5m")
     middle = int(surface.center().y())
-    press(chart, int(surface.left()) + 20, middle)
-    release(chart, int(surface.left()) + 20 + round(slot * 30), middle)
+    press_x = int(surface.left()) + 20
+    release_x = press_x + round(slot * 30)
+    press(chart, press_x, middle)
+    release(chart, release_x, middle)
 
     qtbot.waitUntil(lambda: len(requested) == 2)
     older = requested[1]
