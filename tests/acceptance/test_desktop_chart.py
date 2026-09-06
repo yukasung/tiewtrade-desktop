@@ -225,6 +225,15 @@ def test_dragging_the_chart_reads_an_older_window(qtbot: QtBot) -> None:
     window.show()
     chart = window.workspace.chart
     qtbot.waitUntil(lambda: len(requested) == 1)
+    # The loader having been called is not the same moment the widget takes
+    # the snapshot it returned — that lands back on the Qt thread a beat
+    # later. A drag simulated before it lands finds a chart that still
+    # cannot be panned, and the whole gesture goes nowhere.
+    qtbot.waitUntil(
+        lambda: (
+            chart._snapshot is not None and chart._snapshot.chart_range == requested[0]
+        )
+    )
 
     opening_range = requested[0]
     surface = chart._chart_surface()

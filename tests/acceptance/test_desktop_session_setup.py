@@ -649,7 +649,15 @@ def test_desktop_paper_session_create_overview_and_restart_restore(
 
     _enter_form_values(first_window, case)
     click(first_window.setup.create_button)
-    qtbot.waitUntil(lambda: create_calls == 1)
+    # `create_calls` is bumped on the worker thread a statement before the
+    # write it counts actually lands, so waiting on it alone can catch the
+    # window between the two — the durable row is the fact worth waiting for.
+    qtbot.waitUntil(
+        lambda: (
+            SQLiteActivePaperSessions(SQLiteDatabase(database_path)).get_active()
+            is not None
+        )
+    )
 
     durable_session = SQLiteActivePaperSessions(
         SQLiteDatabase(database_path)
