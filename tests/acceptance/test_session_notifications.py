@@ -46,6 +46,10 @@ from tiewtrade.integrations.sqlite.database import SQLiteDatabase
 from tiewtrade.integrations.sqlite.paper_runtime_lifecycle import (
     SQLitePaperRuntimeLifecycle,
 )
+from tiewtrade.integrations.sqlite.session_notices import (
+    KeptNotice,
+    SQLiteSessionNotices,
+)
 from tiewtrade.integrations.sqlite.trade_history import SQLiteTradeHistory
 from tiewtrade.trading.symbol_rules import SymbolRules
 
@@ -250,6 +254,10 @@ def test_a_refused_message_is_not_retried_and_does_not_stop_the_bot(
     assert basket.entry_count == 1
 
 
+def _database_path(tmp_path: Path) -> Path:
+    return tmp_path / "acceptance.sqlite3"
+
+
 def _run_until_a_message(
     tmp_path: Path,
     services: dict[str, ChatService],
@@ -259,7 +267,7 @@ def _run_until_a_message(
 ) -> tuple[ConfiguredPaperSession, SQLiteDatabase]:
     """Start a Paper Spot Bot, let it trade, and stop it once it has spoken."""
     session = configured_spot_session()
-    database = SQLiteDatabase(tmp_path / "acceptance.sqlite3")
+    database = SQLiteDatabase(_database_path(tmp_path))
     database.migrate()
     assert SQLiteActivePaperSessions(database).create(session).created
     watched = wait_for if wait_for is not None else services["line"]
@@ -275,7 +283,11 @@ def _run_until_a_message(
         source_factory=_source_factory(),
         scheduler=ImmediateScheduler(),
         snapshot_callback=lambda _snapshot: None,
-        notifier_factory=composition.session_notifier,
+        # The journal the desktop composes, on the database the Session's own
+        # Fills are written to.
+        notifier_factory=lambda: composition.session_notifier(
+            journal=SQLiteSessionNotices(database)
+        ),
     )
     result = controller.start(session)
     assert result.workspace.header is not None
@@ -308,3 +320,67 @@ def _message_of(call: dict[str, Any]) -> str:
     if "messages" in payload:
         return str(payload["messages"][0]["text"])
     return str(payload["text"])
+
+
+def test_what_the_bot_said_outlives_the_process_that_said_it(
+    tmp_path: Path,
+    chat_services: Callable[..., dict[str, ChatService]],
+) -> None:
+    """The message reached a phone; the record of it reaches the next run.
+
+    A chat message is gone as soon as it is read, and the log is not a record
+    a trader can be asked to keep. What was said, and whether each service
+    took it, is read back out of the database the Session traded into.
+    """
+    services = chat_services()
+
+    session, database = _run_until_a_message(tmp_path, services)
+    _wait_for_calls(services["telegram"], 1)
+
+    kept = _notices_after_reopening(_database_path(tmp_path), session)
+    assert kept, "the Bot said something and kept no record of it"
+    entry = kept[0]
+    assert entry.notice.message == services["line"].messages[0]
+    assert entry.notice.session_id == session.config.session_id
+    assert sorted(delivery.channel for delivery in entry.deliveries) == [
+        "line",
+        "telegram",
+    ]
+    assert {delivery.outcome for delivery in entry.deliveries} == {"delivered"}
+
+
+def test_a_refusal_is_kept_beside_the_message_it_refused(
+    tmp_path: Path,
+    chat_services: Callable[..., dict[str, ChatService]],
+) -> None:
+    """Which service did not take it, and what it answered with.
+
+    This is the record's whole reason for being: a trader who never got a
+    message can find out here whether it was sent and refused, and by which
+    of their two chat services.
+    """
+    refusing = ChatService(403)
+    services = chat_services(line=refusing)
+
+    session, database = _run_until_a_message(
+        tmp_path, services, wait_for=services["telegram"]
+    )
+    _wait_for_calls(refusing, 1)
+
+    kept = _notices_after_reopening(_database_path(tmp_path), session)
+    assert kept
+    settled = {
+        delivery.channel: (delivery.outcome, delivery.status)
+        for delivery in kept[0].deliveries
+    }
+    assert settled["line"] == ("rejected", 403)
+    assert settled["telegram"][0] == "delivered"
+
+
+def _notices_after_reopening(
+    database_path: Path, session: ConfiguredPaperSession
+) -> tuple[KeptNotice, ...]:
+    """Read the records the way the next run of the application would."""
+    return SQLiteSessionNotices(SQLiteDatabase(database_path)).list_notices(
+        session.config.session_id
+    )

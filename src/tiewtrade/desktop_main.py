@@ -68,6 +68,7 @@ from tiewtrade.integrations.sqlite.database import (
 from tiewtrade.integrations.sqlite.paper_runtime_lifecycle import (
     SQLitePaperRuntimeLifecycle,
 )
+from tiewtrade.integrations.sqlite.session_notices import SQLiteSessionNotices
 from tiewtrade.integrations.sqlite.trade_history import SQLiteTradeHistory
 from tiewtrade.market_data.candle import Candle
 from tiewtrade.notification_composition import (
@@ -545,7 +546,11 @@ def _run_desktop_holding_the_installation(
         prepare_database=prepare_database,
         symbol_rules=_symbol_rules_for,
         source_factory=BinancePublicMarketData,
-        notifier_factory=session_notifier,
+        # What the Bot says is kept beside what it traded, in the same file
+        # the Session and its Fills are in: one installation, one history.
+        notifier_factory=lambda: session_notifier(
+            journal=SQLiteSessionNotices(database)
+        ),
     )
 
     def shutdown_desktop_runtimes() -> None:

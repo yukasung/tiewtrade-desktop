@@ -18,6 +18,7 @@ therefore takes effect the next time it is started, which is also the only
 moment a token can be checked without a message waiting on it.
 """
 
+import logging
 from collections.abc import AsyncIterator, Sequence
 from contextlib import AbstractAsyncContextManager, AsyncExitStack, asynccontextmanager
 
@@ -36,6 +37,11 @@ from tiewtrade.integrations.keyring.telegram_notifications import (
     save_telegram_notification_settings,
 )
 from tiewtrade.integrations.line.push_transport import LineMessagingApiPush
+from tiewtrade.integrations.notifications.notice_journal import (
+    NoticeJournal,
+    raised_notice,
+)
+from tiewtrade.integrations.notifications.notice_message import notice_message
 from tiewtrade.integrations.notifications.notice_queue import (
     NoticeNotifier,
     NoticePush,
@@ -51,6 +57,8 @@ __all__ = [
     "session_notifier",
     "telegram_notification_reading",
 ]
+
+_logger = logging.getLogger(__name__)
 
 LINE_CHANNEL = "line"
 TELEGRAM_CHANNEL = "telegram"
@@ -79,12 +87,20 @@ def telegram_notification_reading() -> tuple[bool, str, str]:
 
 
 @asynccontextmanager
-async def session_notifier() -> AsyncIterator[SessionNotifier]:
+async def session_notifier(
+    *,
+    journal: NoticeJournal | None = None,
+) -> AsyncIterator[SessionNotifier]:
     """Open whatever will say what the Bot did, for the life of a Runtime.
 
     Settings that are off, or half-filled, give a notifier that says nothing:
     nothing upstream has to ask which channels a trader wanted, or whether
     they wanted any.
+
+    The journal is not one of the channels and does not depend on there being
+    any. What the Bot said is the Session's own history — a trader who set no
+    chat service up still has an installation that can say what happened while
+    they were away — so it is kept first, and the channels carry on from there.
     """
     async with AsyncExitStack() as stack:
         notify_each: list[SessionNotifier] = []
@@ -98,6 +114,7 @@ async def session_notifier() -> AsyncIterator[SessionNotifier]:
                         target_id=line.target_id,
                     ),
                     channel=LINE_CHANNEL,
+                    journal=journal,
                 )
             )
         telegram = load_telegram_notification_settings()
@@ -110,9 +127,10 @@ async def session_notifier() -> AsyncIterator[SessionNotifier]:
                         chat_id=telegram.chat_id,
                     ),
                     channel=TELEGRAM_CHANNEL,
+                    journal=journal,
                 )
             )
-        yield _say_it_everywhere(notify_each)
+        yield _keep_then_say(journal, _say_it_everywhere(notify_each))
 
 
 async def _open_channel(
@@ -120,6 +138,7 @@ async def _open_channel(
     push: AbstractAsyncContextManager[NoticePush],
     *,
     channel: str,
+    journal: NoticeJournal | None = None,
 ) -> SessionNotifier:
     """One transport and the queue in front of it, held open by the caller.
 
@@ -127,7 +146,9 @@ async def _open_channel(
     before the socket it would be pushed over is closed.
     """
     opened = await stack.enter_async_context(push)
-    notifier = await stack.enter_async_context(NoticeNotifier(opened, channel=channel))
+    notifier = await stack.enter_async_context(
+        NoticeNotifier(opened, channel=channel, journal=journal)
+    )
     return notifier.notify
 
 
@@ -147,6 +168,33 @@ def _say_it_everywhere(notify_each: Sequence[SessionNotifier]) -> SessionNotifie
             notify(notice)
 
     return say_it
+
+
+def _keep_then_say(
+    journal: NoticeJournal | None,
+    say_it: SessionNotifier,
+) -> SessionNotifier:
+    """Write it down first, then tell whoever is set up to be told.
+
+    Kept before the push rather than after it, because the record is of what
+    happened and not of what got out: a chat service that is down for an hour
+    must not leave an hour of the Session's history unwritten.
+
+    Called on the Runtime's own thread, so it must not raise and must not wait
+    — the journal is a local file, and one that will not take the row says so
+    by keeping nothing.
+    """
+    if journal is None:
+        return say_it
+
+    def keep_then_say(notice: SessionNotice) -> None:
+        try:
+            journal.record_raised(raised_notice(notice, notice_message(notice)))
+        except Exception:
+            _logger.warning("notification.record_failed")
+        say_it(notice)
+
+    return keep_then_say
 
 
 def _say_nothing(notice: SessionNotice) -> None:

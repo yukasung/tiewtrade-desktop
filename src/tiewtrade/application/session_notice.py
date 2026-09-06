@@ -15,6 +15,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime
 from decimal import Decimal
+from enum import StrEnum
 from uuid import UUID
 
 from tiewtrade.trading.basket import BasketCloseReason
@@ -170,3 +171,70 @@ it must return promptly, must never raise, and must be safe to call from
 either: a message that could not be sent is not a reason for the Bot to stop
 trading, and waiting on a network is not something a Session may be made to do.
 """
+
+
+class NoticeKind(StrEnum):
+    """What a notice is, in the words a durable record keeps it under.
+
+    Written out rather than taken from the class name: a record read back a
+    month from now says what happened at the time, and renaming a class is
+    not an event in a Session's history.
+    """
+
+    ENTRY_OPENED = "entry_opened"
+    BASKET_CLOSED = "basket_closed"
+    COOLDOWN_STARTED = "cooldown_started"
+    COOLDOWN_ENDED = "cooldown_ended"
+    COOLDOWN_CANCELLED = "cooldown_cancelled"
+    MARKET_FEED_LOST = "market_feed_lost"
+    MARKET_FEED_RESTORED = "market_feed_restored"
+    BOT_ERROR = "bot_error"
+
+
+def notice_kind(notice: SessionNotice) -> NoticeKind:
+    """Which of the eight this notice is."""
+    match notice:
+        case EntryOpenedNotice():
+            return NoticeKind.ENTRY_OPENED
+        case BasketClosedNotice():
+            return NoticeKind.BASKET_CLOSED
+        case CooldownStartedNotice():
+            return NoticeKind.COOLDOWN_STARTED
+        case CooldownEndedNotice():
+            return NoticeKind.COOLDOWN_ENDED
+        case CooldownCancelledNotice():
+            return NoticeKind.COOLDOWN_CANCELLED
+        case MarketFeedLostNotice():
+            return NoticeKind.MARKET_FEED_LOST
+        case MarketFeedRestoredNotice():
+            return NoticeKind.MARKET_FEED_RESTORED
+        case BotErrorNotice():
+            return NoticeKind.BOT_ERROR
+
+
+def notice_moment(notice: SessionNotice) -> datetime:
+    """When the thing this notice is about happened.
+
+    Each notice names its own moment after the thing it reports — a Fill is
+    filled, a Basket is closed, a feed is observed — so the one question every
+    record asks of every notice is answered here instead of eight times over.
+
+    It is never the moment a message was written or sent: a notice queued
+    behind a chat service that is down still reports the Fill's own time, and
+    a record that drifted to delivery time would date the Session's history by
+    how the trader's phone was doing.
+    """
+    match notice:
+        case EntryOpenedNotice():
+            return notice.filled_at
+        case BasketClosedNotice():
+            return notice.closed_at
+        case CooldownStartedNotice():
+            # The day it lifts on is where it is going, not when it began.
+            return notice.started_at
+        case CooldownEndedNotice():
+            return notice.ended_at
+        case CooldownCancelledNotice():
+            return notice.cancelled_at
+        case MarketFeedLostNotice() | MarketFeedRestoredNotice() | BotErrorNotice():
+            return notice.observed_at
