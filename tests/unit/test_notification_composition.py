@@ -243,3 +243,75 @@ def test_telegram_settings_that_are_off_or_half_filled_say_nothing_at_all(
 
     assert telegram_push.messages == []
     assert telegram_push.opened_with == {}
+
+
+class RecordingJournal:
+    def __init__(self) -> None:
+        self.raised: list[object] = []
+        self.deliveries: list[object] = []
+
+    def record_raised(self, notice: object) -> None:
+        self.raised.append(notice)
+
+    def record_delivery(self, delivery: object) -> None:
+        self.deliveries.append(delivery)
+
+
+def test_what_the_bot_said_is_kept_even_with_no_chat_service_set_up(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A notice is a thing that happened, whether or not anyone was told.
+
+    The record is the Session's own history and does not belong to a chat
+    service — a trader who set no channel up still has an installation that
+    can say what the Bot did while they were away.
+    """
+    journal = RecordingJournal()
+
+    _notify_once_with(monkeypatch, journal)
+
+    assert len(journal.raised) == 1
+    assert journal.raised[0].message  # type: ignore[attr-defined]
+    assert journal.deliveries == []
+
+
+def test_one_notice_over_two_channels_is_one_record_and_two_deliveries(
+    monkeypatch: pytest.MonkeyPatch,
+    push: RecordingPush,
+    telegram_push: RecordingPush,
+) -> None:
+    journal = RecordingJournal()
+
+    _notify_once_with(
+        monkeypatch,
+        journal,
+        settings=_settings(),
+        telegram=_telegram_settings(),
+    )
+
+    kept = {record.notice_id for record in journal.raised}  # type: ignore[attr-defined]
+    assert len(kept) == 1
+    assert sorted(
+        delivery.channel  # type: ignore[attr-defined]
+        for delivery in journal.deliveries
+    ) == ["line", "telegram"]
+
+
+def _notify_once_with(
+    monkeypatch: pytest.MonkeyPatch,
+    journal: RecordingJournal,
+    settings: object = _NO_LINE,
+    telegram: object = _NOTHING_STORED,
+) -> None:
+    monkeypatch.setattr(
+        composition, "load_line_notification_settings", lambda: settings
+    )
+    monkeypatch.setattr(
+        composition, "load_telegram_notification_settings", lambda: telegram
+    )
+
+    async def run() -> None:
+        async with composition.session_notifier(journal=journal) as notify:
+            notify(NOTICE)
+
+    asyncio.run(run())

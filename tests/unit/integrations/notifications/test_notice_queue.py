@@ -242,3 +242,88 @@ def test_a_service_that_never_answered_has_no_status_to_report(
 
     assert "drop_reason=retryable" in caplog.text
     assert "status=" not in caplog.text
+
+
+class RecordingJournal:
+    """Keeps what it was told, the way a durable journal would."""
+
+    def __init__(self) -> None:
+        self.raised: list[object] = []
+        self.deliveries: list[object] = []
+
+    def record_raised(self, notice: object) -> None:
+        self.raised.append(notice)
+
+    def record_delivery(self, delivery: object) -> None:
+        self.deliveries.append(delivery)
+
+
+class RefusingJournal(RecordingJournal):
+    def record_delivery(self, delivery: object) -> None:
+        raise RuntimeError("the journal is unavailable")
+
+
+def test_how_the_sending_went_is_kept_for_the_channel_it_went_to() -> None:
+    journal = RecordingJournal()
+    push = FakePush([PushOutcome.DELIVERED])
+
+    _notify_and_settle_with(push, journal)
+
+    assert len(journal.deliveries) == 1
+    delivery = journal.deliveries[0]
+    assert delivery.channel == "line"  # type: ignore[attr-defined]
+    assert delivery.outcome == PushOutcome.DELIVERED.value  # type: ignore[attr-defined]
+    assert delivery.attempts == 1  # type: ignore[attr-defined]
+
+
+def test_a_notice_that_took_two_pushes_says_so_in_the_record() -> None:
+    """One try or two is what tells a bad minute from a refusal, later."""
+    journal = RecordingJournal()
+    push = FakePush([PushOutcome.RETRYABLE, PushResult(PushOutcome.DELIVERED, 200)])
+
+    _notify_and_settle_with(push, journal)
+
+    delivery = journal.deliveries[0]
+    assert delivery.attempts == 2  # type: ignore[attr-defined]
+    assert delivery.status == 200  # type: ignore[attr-defined]
+
+
+def test_a_refusal_is_kept_with_what_the_service_answered() -> None:
+    journal = RecordingJournal()
+    push = FakePush([PushResult(PushOutcome.REJECTED, 403)])
+
+    _notify_and_settle_with(push, journal)
+
+    delivery = journal.deliveries[0]
+    assert delivery.outcome == PushOutcome.REJECTED.value  # type: ignore[attr-defined]
+    assert delivery.status == 403  # type: ignore[attr-defined]
+
+
+def test_a_journal_that_will_not_keep_the_record_costs_only_the_record() -> None:
+    """The message still goes out, and the next one still goes out after it.
+
+    A Session brought down by its own diary is the failure worth designing
+    against; a missing row is not.
+    """
+    push = FakePush([PushOutcome.DELIVERED, PushOutcome.DELIVERED])
+
+    _notify_and_settle_with(push, RefusingJournal(), notices=2)
+
+    assert len(push.messages) == 2
+
+
+def _notify_and_settle_with(
+    push: FakePush, journal: RecordingJournal, *, notices: int = 1
+) -> None:
+    async def run() -> None:
+        async with NoticeNotifier(
+            push,
+            channel="line",
+            retry_delay_seconds=0,
+            queue_size=8,
+            journal=journal,
+        ) as notifier:
+            for _ in range(notices):
+                notifier.notify(NOTICE)
+
+    asyncio.run(run())

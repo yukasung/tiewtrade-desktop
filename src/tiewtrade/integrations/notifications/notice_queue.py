@@ -24,13 +24,19 @@ decision.
 
 import asyncio
 import logging
-from collections.abc import Awaitable
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from enum import StrEnum
 from types import TracebackType
 from typing import Protocol, Self
 
 from tiewtrade.application.session_notice import SessionNotice
+from tiewtrade.integrations.notifications.notice_journal import (
+    NoticeDelivery,
+    NoticeJournal,
+    raised_notice,
+)
 from tiewtrade.integrations.notifications.notice_message import notice_message
 
 _logger = logging.getLogger(__name__)
@@ -106,8 +112,14 @@ class NoticeNotifier:
         channel: str,
         queue_size: int = DEFAULT_QUEUE_SIZE,
         retry_delay_seconds: float = DEFAULT_RETRY_DELAY_SECONDS,
+        journal: NoticeJournal | None = None,
+        clock: Callable[[], datetime] = lambda: datetime.now(UTC),
     ) -> None:
         self._push = push
+        # Optional because a channel can be pushed without anything keeping
+        # records — the message is the job, and the record is about the job.
+        self._journal = journal
+        self._clock = clock
         # Named rather than inferred from the transport: the log is read to
         # find out which chat service stopped answering, and a class name is
         # not that answer once a second channel exists.
@@ -207,10 +219,13 @@ class NoticeNotifier:
 
     async def _deliver(self, notice: SessionNotice) -> None:
         message = notice_message(notice)
+        attempts = 1
         result = await self._attempt(message, notice)
         if result.outcome is PushOutcome.RETRYABLE:
             await asyncio.sleep(self._retry_delay_seconds)
+            attempts += 1
             result = await self._attempt(message, notice)
+        self._keep_the_record(notice, message, result, attempts)
         if result.outcome is PushOutcome.DELIVERED:
             self._log(logging.INFO, NoticeEventName.SENT, _fields(notice))
             return
@@ -223,6 +238,39 @@ class NoticeNotifier:
                 **({} if result.status is None else {"status": result.status}),
             ),
         )
+
+    def _keep_the_record(
+        self,
+        notice: SessionNotice,
+        message: str,
+        result: PushResult,
+        attempts: int,
+    ) -> None:
+        """Say what became of this notice on this channel, if anyone is keeping it.
+
+        A journal that will not take it costs the record and nothing else:
+        the message has already gone out, and the next one goes out after it.
+        The failure is not logged with the notice's own fields, because a
+        record nobody could keep is not news about the Session.
+        """
+        journal = self._journal
+        if journal is None:
+            return
+        record = raised_notice(notice, message)
+        try:
+            journal.record_raised(record)
+            journal.record_delivery(
+                NoticeDelivery(
+                    notice_id=record.notice_id,
+                    channel=self._channel,
+                    outcome=result.outcome.value,
+                    attempts=attempts,
+                    settled_at_utc=self._clock(),
+                    status=result.status,
+                )
+            )
+        except Exception:
+            _logger.warning("%s.notification.record_failed", self._channel)
 
     async def _attempt(
         self,

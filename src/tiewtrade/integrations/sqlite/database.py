@@ -24,7 +24,7 @@ class UnsupportedDatabaseSchemaError(ValueError):
 
 
 class SQLiteDatabase:
-    _SCHEMA_VERSION = 19
+    _SCHEMA_VERSION = 20
     _BUSY_TIMEOUT_MS = 5_000
 
     def __init__(self, path: Path) -> None:
@@ -156,6 +156,10 @@ class SQLiteDatabase:
                     # closed, which no index covered while the range was read
                     # over the day it opened.
                     _create_basket_closed_index(connection)
+                if 0 <= version <= 19:
+                    # Nothing to carry over: what a Bot said before there was
+                    # anywhere to keep it was said and gone.
+                    _create_session_notice_schema(connection)
                 connection.execute(f"PRAGMA user_version = {self._SCHEMA_VERSION}")
         finally:
             connection.close()
@@ -169,6 +173,8 @@ class SQLiteDatabase:
         connection = self.connect()
         try:
             with connection:
+                connection.execute("DELETE FROM session_notice_deliveries")
+                connection.execute("DELETE FROM session_notices")
                 connection.execute("DELETE FROM trade_fills")
                 connection.execute("DELETE FROM paper_cooldown_waivers")
                 connection.execute("DELETE FROM paper_runtime_lifecycle")
@@ -798,6 +804,45 @@ def _create_bot_sessions_indexes(connection: sqlite3.Connection) -> None:
         CREATE UNIQUE INDEX IF NOT EXISTS bot_sessions_single_active_idx
         ON bot_sessions ((1))
         WHERE ended_at_utc IS NULL
+        """
+    )
+
+
+def _create_session_notice_schema(connection: sqlite3.Connection) -> None:
+    """What the Bot said, and what each chat service made of it.
+
+    The event and its deliveries are kept apart because one thing happened and
+    each channel settled it on its own — a notice with no channel set up is
+    still a thing that happened, and reads as a row with no deliveries.
+    """
+    connection.execute(
+        """
+        CREATE TABLE IF NOT EXISTS session_notices (
+            notice_id TEXT PRIMARY KEY,
+            session_id TEXT NOT NULL REFERENCES bot_sessions(session_id),
+            kind TEXT NOT NULL,
+            message TEXT NOT NULL,
+            raised_at_utc TEXT NOT NULL
+        )
+        """
+    )
+    connection.execute(
+        """
+        CREATE INDEX IF NOT EXISTS session_notices_by_session_raised
+        ON session_notices (session_id, raised_at_utc DESC)
+        """
+    )
+    connection.execute(
+        """
+        CREATE TABLE IF NOT EXISTS session_notice_deliveries (
+            notice_id TEXT NOT NULL REFERENCES session_notices(notice_id),
+            channel TEXT NOT NULL,
+            outcome TEXT NOT NULL,
+            status INTEGER,
+            attempts INTEGER NOT NULL CHECK (attempts > 0),
+            settled_at_utc TEXT NOT NULL,
+            PRIMARY KEY (notice_id, channel)
+        )
         """
     )
 
