@@ -14,9 +14,7 @@ belongs to.
 
 from __future__ import annotations
 
-import asyncio
-from collections.abc import AsyncIterator, Awaitable, Callable
-from datetime import UTC, datetime
+from collections.abc import Callable
 from decimal import Decimal
 from pathlib import Path
 from threading import Event
@@ -27,7 +25,10 @@ import pytest
 from _pytest.monkeypatch import MonkeyPatch
 
 import tiewtrade.notification_composition as composition
-from tests.support.paper_runtime_candles import live_candles, warm_up_candles
+from tests.support.paper_runtime_fakes import (
+    ImmediateScheduler,
+    PaperRuntimeCandleSource,
+)
 from tests.support.paper_session_setup import configured_spot_session
 from tiewtrade.application.paper_runtime import PaperRuntimeController
 from tiewtrade.application.paper_session_setup import ConfiguredPaperSession
@@ -46,32 +47,13 @@ from tiewtrade.integrations.sqlite.paper_runtime_lifecycle import (
     SQLitePaperRuntimeLifecycle,
 )
 from tiewtrade.integrations.sqlite.trade_history import SQLiteTradeHistory
-from tiewtrade.market_data.candle import Candle
-from tiewtrade.market_data.candle_source import MarketDataKlineUpdate
-from tiewtrade.market_data.config import MarketDataConfig
-from tiewtrade.market_data.source_errors import (
-    MarketDataFailureKind,
-    MarketDataFatalError,
-)
 from tiewtrade.trading.symbol_rules import SymbolRules
 
 LINE_TOKEN = "line-token-value"
 LINE_TARGET = "U1234567890"
 TELEGRAM_TOKEN = "1234:telegram-token-value"
 TELEGRAM_CHAT = "-1009876"
-_NOW = datetime(2026, 8, 2, 3, tzinfo=UTC)
 _T = TypeVar("_T")
-
-
-class ImmediateScheduler:
-    def now(self) -> datetime:
-        return _NOW
-
-    async def sleep(self, seconds: float) -> None:
-        await asyncio.sleep(0)
-
-    async def wait_for(self, awaitable: Awaitable[_T], timeout: float) -> _T:
-        return await awaitable
 
 
 class ChatService:
@@ -134,51 +116,6 @@ class ChatResponse:
 
     async def __aexit__(self, *args: object) -> None:
         return None
-
-
-class OneEntryCandleSource:
-    """Warm-up, then the live candles the Preset opens an Entry on."""
-
-    def __init__(self) -> None:
-        self._warm_up = warm_up_candles()
-        self._live = live_candles()
-        self.closed = Event()
-
-    async def load_recent(
-        self,
-        config: MarketDataConfig,
-        *,
-        count: int,
-        completed_before: datetime,
-    ) -> tuple[Candle, ...]:
-        return self._warm_up
-
-    async def load_range(
-        self,
-        config: MarketDataConfig,
-        *,
-        start: datetime,
-        end: datetime,
-    ) -> tuple[Candle, ...]:
-        raise AssertionError("contiguous fake candles must not backfill")
-
-    def stream_klines(
-        self, config: MarketDataConfig
-    ) -> AsyncIterator[MarketDataKlineUpdate]:
-        return self._stream()
-
-    async def close(self) -> None:
-        self.closed.set()
-
-    async def _stream(self) -> AsyncIterator[MarketDataKlineUpdate]:
-        for candle in self._live:
-            yield MarketDataKlineUpdate(candle=candle, is_closed=True)
-        # Nothing more is coming, and the Runtime is stopped by the test.
-        await asyncio.Event().wait()
-        raise MarketDataFatalError(  # pragma: no cover - never reached
-            "fake stream finished",
-            kind=MarketDataFailureKind.TRANSPORT,
-        )
 
 
 @pytest.fixture
@@ -353,8 +290,8 @@ def _run_until_a_message(
     return session, database
 
 
-def _source_factory() -> Callable[[BinancePublicEndpoints], OneEntryCandleSource]:
-    source = OneEntryCandleSource()
+def _source_factory() -> Callable[[BinancePublicEndpoints], PaperRuntimeCandleSource]:
+    source = PaperRuntimeCandleSource()
     return lambda _endpoints: source
 
 
