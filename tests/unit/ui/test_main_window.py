@@ -4598,12 +4598,12 @@ def test_saving_line_settings_hands_them_off_and_reads_them_back(
     qtbot.waitUntil(window.setup.isVisible)
     _click_settings(window)
     panel = window.workspace.settings_panel
-    qtbot.waitUntil(lambda: panel.save_line_button.isEnabled())
+    qtbot.waitUntil(lambda: panel.save_settings_button.isEnabled())
 
     panel.line_enabled.setChecked(True)
     panel.line_target_id.setText("U123")
     panel.line_access_token.setText("token-value")
-    click(panel.save_line_button)
+    click(panel.save_settings_button)
 
     qtbot.waitUntil(lambda: saved == [(True, "U123", "token-value")])
     qtbot.waitUntil(lambda: panel.line_access_token.text() == "stored-token")
@@ -4636,11 +4636,11 @@ def test_line_settings_that_cannot_be_stored_are_reported_where_they_were_typed(
     _click_settings(window)
     panel = window.workspace.settings_panel
 
-    click(panel.save_line_button)
+    click(panel.save_settings_button)
 
     qtbot.waitUntil(lambda: bool(seen))
-    assert "Could not save the LINE settings." in seen[0]
-    qtbot.waitUntil(panel.save_line_button.isEnabled)
+    assert "Could not save the settings." in seen[0]
+    qtbot.waitUntil(panel.save_settings_button.isEnabled)
 
 
 def test_saving_line_settings_says_so(
@@ -4672,9 +4672,9 @@ def test_saving_line_settings_says_so(
     qtbot.waitUntil(window.setup.isVisible)
     _click_settings(window)
     panel = window.workspace.settings_panel
-    qtbot.waitUntil(panel.save_line_button.isEnabled)
+    qtbot.waitUntil(panel.save_settings_button.isEnabled)
 
-    click(panel.save_line_button)
+    click(panel.save_settings_button)
 
     qtbot.waitUntil(lambda: bool(seen))
     assert seen == [settings_workflow_module.SETTINGS_SAVED_TEXT]
@@ -4720,11 +4720,80 @@ def test_line_settings_that_could_not_be_saved_are_never_called_saved(
     _click_settings(window)
     panel = window.workspace.settings_panel
 
-    click(panel.save_line_button)
+    click(panel.save_settings_button)
 
     qtbot.waitUntil(lambda: bool(warned))
-    qtbot.waitUntil(panel.save_line_button.isEnabled)
+    qtbot.waitUntil(panel.save_settings_button.isEnabled)
     assert said_saved == []
+
+
+def test_the_toolbar_wears_the_stored_title_from_the_first_frame(
+    qtbot: QtBot,
+) -> None:
+    """A stored title is on screen before anyone opens Settings.
+
+    Several installations looked after by one person look identical, and the
+    window has to answer which one it is without being asked.
+    """
+    window = MainWindow(
+        create_session=unused_create,
+        load_active=no_active_session,
+        list_basket_history=empty_basket_history,
+        list_trade_fills=empty_trade_fills,
+        read_bot_title=lambda: "Khun Somchai",
+    )
+    qtbot.addWidget(window)
+    window.show()
+
+    qtbot.waitUntil(lambda: window.workspace.toolbar_title.text() == "Khun Somchai")
+
+
+def test_an_untitled_installation_names_the_application_alone(
+    qtbot: QtBot,
+) -> None:
+    window = MainWindow(
+        create_session=unused_create,
+        load_active=no_active_session,
+        list_basket_history=empty_basket_history,
+        list_trade_fills=empty_trade_fills,
+        read_bot_title=lambda: "",
+    )
+    qtbot.addWidget(window)
+    window.show()
+    qtbot.waitUntil(window.setup.isVisible)
+
+    assert window.workspace.toolbar_title.text() == "TiewTrade"
+
+
+def test_saving_the_title_stores_it_and_puts_it_on_the_toolbar(
+    qtbot: QtBot,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The toolbar reads what was stored, the way the form does."""
+    stored: list[str] = []
+    monkeypatch.setattr(QMessageBox, "information", lambda *args: None)
+
+    window = MainWindow(
+        create_session=unused_create,
+        load_active=no_active_session,
+        list_basket_history=empty_basket_history,
+        list_trade_fills=empty_trade_fills,
+        save_line_notifications=lambda enabled, target_id, token: None,
+        save_bot_title=stored.append,
+        read_bot_title=lambda: stored[-1] if stored else "",
+    )
+    qtbot.addWidget(window)
+    window.show()
+    qtbot.waitUntil(window.setup.isVisible)
+    _click_settings(window)
+    panel = window.workspace.settings_panel
+    qtbot.waitUntil(panel.save_settings_button.isEnabled)
+
+    panel.bot_title.setText("VPS-02")
+    click(panel.save_settings_button)
+
+    qtbot.waitUntil(lambda: stored == ["VPS-02"])
+    qtbot.waitUntil(lambda: window.workspace.toolbar_title.text() == "VPS-02")
 
 
 _LIVE_PRICE_CANDLE = flat_candle(datetime(2026, 8, 2, 9, 0, tzinfo=UTC), "78355.24")

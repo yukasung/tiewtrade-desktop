@@ -13,6 +13,7 @@ from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
+from functools import partial
 from pathlib import Path
 from threading import Lock
 from time import sleep
@@ -52,6 +53,10 @@ from tiewtrade.desktop_logging import PACKAGE_LOGGER, configure_desktop_logging
 from tiewtrade.desktop_paper_runtime import PaperRuntimeActions
 from tiewtrade.integrations.binance.public_endpoints import BinancePublicEndpoints
 from tiewtrade.integrations.binance.public_market_data import BinancePublicMarketData
+from tiewtrade.integrations.preferences.bot_title import (
+    read_bot_title,
+    save_bot_title,
+)
 from tiewtrade.integrations.process_lock.installation_lock import InstallationLock
 from tiewtrade.integrations.sqlite.active_paper_sessions import (
     SQLiteActivePaperSessions,
@@ -571,6 +576,10 @@ def _run_desktop_holding_the_installation(
         clear_database=_migrate_first(prepare_database, database.clear_all_data),
         save_line_notifications=_keep_line_notifications,
         read_line_notifications=line_notification_reading,
+        # Beside the database, for the same reason the log is: it is what
+        # this installation is, and it outlives every Session it has had.
+        save_bot_title=partial(save_bot_title, resolved_database_path.parent),
+        read_bot_title=partial(read_bot_title, resolved_database_path.parent),
         activation_name=activation_name,
     )
 

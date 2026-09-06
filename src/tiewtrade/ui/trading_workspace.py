@@ -19,8 +19,10 @@ from tiewtrade.application.bot_control import BotControlSnapshot, configured_bot
 from tiewtrade.application.paper_session_setup import ConfiguredPaperSession
 from tiewtrade.application.trading_workspace import TradingWorkspaceSnapshot
 from tiewtrade.ui.bot_control import BotControlWidget
+from tiewtrade.ui.bot_title import DEFAULT_BOT_TITLE, bot_title_or_default
 from tiewtrade.ui.candlestick_chart import CandlestickChartWidget
 from tiewtrade.ui.connection_notice import ConnectionNoticeCard
+from tiewtrade.ui.cooldown_notice import CooldownNoticeCard
 from tiewtrade.ui.live_price_card import LivePriceCard
 from tiewtrade.ui.position_basket_table import PositionBasketTable
 from tiewtrade.ui.session_setup import SessionSetupWidget
@@ -70,11 +72,12 @@ class TradingWorkspace(QWidget):
 
         self.chart = CandlestickChartWidget()
         self.connection_notice_card = ConnectionNoticeCard()
+        self.cooldown_notice_card = CooldownNoticeCard()
         self.live_price_card = LivePriceCard()
 
         self.workspace_header = QFrame()
         self.workspace_header.setObjectName("workspaceToolbar")
-        self.toolbar_title = QLabel("TiewTrade")
+        self.toolbar_title = QLabel(DEFAULT_BOT_TITLE)
         self.toolbar_title.setObjectName("toolbarTitle")
         self.settings_button = QPushButton("Settings")
         self.settings_button.setObjectName("secondaryButton")
@@ -123,6 +126,18 @@ class TradingWorkspace(QWidget):
 
         self._build_layout()
 
+    @Slot(str)
+    def show_bot_title(self, title: str) -> None:
+        """Say what this installation calls itself, which is the whole title.
+
+        One machine looks like every other machine running this, and someone
+        looking after several of them has no other way to tell the window in
+        front of them from the one next to it. A title emptied altogether
+        leaves the toolbar naming the application, which is what an
+        installation nobody has titled says anyway.
+        """
+        self.toolbar_title.setText(bot_title_or_default(title))
+
     @Slot()
     def show_setup(self) -> None:
         self._activate_setup()
@@ -132,6 +147,7 @@ class TradingWorkspace(QWidget):
         if not isinstance(value, TradingWorkspaceSnapshot):
             return
         self.position_basket.show_snapshot(value.position_basket)
+        self.cooldown_notice_card.show_basket(value.position_basket.basket)
 
     @Slot(str)
     def show_setup_for_validation(self, field: str) -> None:
@@ -146,6 +162,9 @@ class TradingWorkspace(QWidget):
         self.bot_control_scroll.ensureWidgetVisible(error_label)
 
     def _activate_setup(self) -> None:
+        # There is no Session on the setup form, so there is no Cooldown for
+        # a notice beside it to be about.
+        self.cooldown_notice_card.hide()
         self._remember_and_maybe_show(self.setup)
 
     def show_configured_session(self, session: ConfiguredPaperSession) -> None:
@@ -231,7 +250,13 @@ class TradingWorkspace(QWidget):
         self.bot_control_scroll.setObjectName("botControlScroll")
         self.bot_control_scroll.viewport().setObjectName("botControlViewport")
         self.bot_control_scroll.setWidgetResizable(True)
+        # The side column is narrow, and a scroll bar would take its width
+        # out of the readings. The panel still scrolls by wheel and still
+        # answers `ensureWidgetVisible`; it just never paints a track.
         self.bot_control_scroll.setHorizontalScrollBarPolicy(
+            Qt.ScrollBarPolicy.ScrollBarAlwaysOff
+        )
+        self.bot_control_scroll.setVerticalScrollBarPolicy(
             Qt.ScrollBarPolicy.ScrollBarAlwaysOff
         )
         self.bot_control_scroll.setFrameShape(QFrame.Shape.NoFrame)
@@ -239,6 +264,7 @@ class TradingWorkspace(QWidget):
             QSizePolicy.Policy.Ignored,
             QSizePolicy.Policy.Minimum,
         )
+        self._size_stack_to_current_page()
         self.bot_control_scroll.setWidget(self._bot_pages)
         bot_layout.addWidget(self.bot_control_scroll, 1)
 
@@ -249,6 +275,7 @@ class TradingWorkspace(QWidget):
         side_layout.setSpacing(12)
         side_layout.addWidget(self.workspace_header)
         side_layout.addWidget(self.connection_notice_card)
+        side_layout.addWidget(self.cooldown_notice_card)
         side_layout.addWidget(self.live_price_card)
         side_layout.addWidget(self.bot_control, 1)
 
@@ -283,6 +310,26 @@ class TradingWorkspace(QWidget):
         )
         self.trade_history_activated.emit()
 
+    def _size_stack_to_current_page(self) -> None:
+        """Let the stack ask only for the height of the page on screen.
+
+        A stack otherwise asks for the tallest page it holds, which would
+        stretch a short page — Bot Control — past the viewport and take its
+        button out of sight. An ignored page contributes no height.
+        """
+        current = self._bot_pages.currentWidget()
+        for index in range(self._bot_pages.count()):
+            page = self._bot_pages.widget(index)
+            if page is None:
+                continue
+            page.setSizePolicy(
+                QSizePolicy.Policy.Preferred,
+                QSizePolicy.Policy.Minimum
+                if page is current
+                else QSizePolicy.Policy.Ignored,
+            )
+        self._bot_pages.adjustSize()
+
     def _remember_and_maybe_show(self, page: QWidget) -> None:
         """Take a state-driven page, but only show it if Settings is not up.
 
@@ -297,5 +344,6 @@ class TradingWorkspace(QWidget):
 
     def _show_bot_page(self, page: QWidget) -> None:
         self._bot_pages.setCurrentWidget(page)
+        self._size_stack_to_current_page()
         self.bot_control_scroll.horizontalScrollBar().setValue(0)
         self.bot_control_scroll.verticalScrollBar().setValue(0)

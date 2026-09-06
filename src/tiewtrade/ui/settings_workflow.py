@@ -27,6 +27,12 @@ type SaveLineNotifications = Callable[[bool, str, str], None]
 type ReadLineNotifications = Callable[[], LineNotificationsReading]
 """Read back the LINE settings — never the token, only that there is one."""
 
+type SaveBotTitle = Callable[[str], None]
+"""Keep what this installation calls itself, wherever it is kept."""
+
+type ReadBotTitle = Callable[[], str]
+"""Read back what this installation calls itself, or "" for nobody's."""
+
 SETTINGS_SAVED_TEXT = "Settings saved successfully."
 """Said only once the settings are actually stored, never before.
 
@@ -62,6 +68,9 @@ class SettingsWorkflow(QObject):
     #: Every durable row this installation had has just been wiped.
     database_cleared = Signal()
 
+    #: What this installation is now called, for whoever puts it on screen.
+    bot_title_changed = Signal(str)
+
     def __init__(
         self,
         *,
@@ -69,6 +78,8 @@ class SettingsWorkflow(QObject):
         clear_database: Callable[[], None] | None = None,
         save_line_notifications: SaveLineNotifications | None = None,
         read_line_notifications: ReadLineNotifications | None = None,
+        save_bot_title: SaveBotTitle | None = None,
+        read_bot_title: ReadBotTitle | None = None,
         thread_pool: QThreadPool | None = None,
         parent: QObject | None = None,
     ) -> None:
@@ -77,6 +88,8 @@ class SettingsWorkflow(QObject):
         self._clear_database = clear_database
         self._save_line_notifications = save_line_notifications
         self._read_line_notifications = read_line_notifications
+        self._save_bot_title = save_bot_title
+        self._read_bot_title = read_bot_title
         pool = thread_pool or QThreadPool.globalInstance()
         self._bot_state: BotRuntimeState | None = None
         busy = self._say_busy
@@ -90,15 +103,15 @@ class SettingsWorkflow(QObject):
             failure_log="Could not clear the database",
             start=pool.start,
         )
-        self._keep_line_settings = GuardedAction(
+        self._keep_settings = GuardedAction(
             available=busy,
             report_failure=lambda: QMessageBox.warning(
                 panel,
                 "Settings",
-                "Could not save the LINE settings. "
+                "Could not save the settings. "
                 "This machine may not be letting TiewTrade store them.",
             ),
-            failure_log="Could not save the LINE notification settings",
+            failure_log="Could not save the settings",
             start=pool.start,
         )
         # Reading is its own action rather than a second use of the one that
@@ -110,8 +123,19 @@ class SettingsWorkflow(QObject):
             failure_log="Could not read the LINE notification settings",
             start=pool.start,
         )
+        # The Title is read at launch, before anything is on the Settings page
+        # and long before anyone opens it, because the toolbar says it from
+        # the first frame. A read that fails leaves the toolbar naming the
+        # application alone, which is what an untitled installation shows
+        # anyway — so there is nothing to put in front of the trader about it.
+        self._show_bot_title = GuardedAction(
+            available=busy,
+            report_failure=lambda: None,
+            failure_log="Could not read the bot title",
+            start=pool.start,
+        )
         panel.clear_database_requested.connect(self._clear_database_requested)
-        panel.line_notifications_save_requested.connect(self._save_requested)
+        panel.settings_save_requested.connect(self._save_requested)
 
     def _say_busy(self, available: bool) -> None:
         self._panel.set_busy(not available)
@@ -121,12 +145,32 @@ class SettingsWorkflow(QObject):
         self._bot_state = state
 
     @Slot()
+    def refresh_bot_title(self) -> None:
+        """Read what this installation is called, for the form and the toolbar.
+
+        Asked for at launch as well as on the Settings page: the toolbar wears
+        the Title whether or not anyone has been near the form.
+        """
+        read = self._read_bot_title
+        if read is None or self._show_bot_title.is_running:
+            return
+        self._show_bot_title.run(read, succeeded=self._bot_title_landed)
+
+    @Slot(object)
+    def _bot_title_landed(self, title: object) -> None:
+        if not isinstance(title, str):
+            return
+        self._panel.show_bot_title(title)
+        self.bot_title_changed.emit(title)
+
+    @Slot()
     def opened(self) -> None:
-        """Fill the LINE form from what is stored, now the panel is up.
+        """Fill the form from what is stored, now the panel is up.
 
         The form opens as it is and fills in when the reading lands, because
         the reading is not something the window can wait on.
         """
+        self.refresh_bot_title()
         read = self._read_line_notifications
         if read is None or self._show_line_settings.is_running:
             return
@@ -138,20 +182,46 @@ class SettingsWorkflow(QObject):
             return
         self._panel.show_line_notifications(reading)
 
-    @Slot(bool, str, str)
+    @Slot(str, bool, str, str)
     def _save_requested(
         self,
+        bot_title: str,
         enabled: bool,
         target_id: str,
         access_token: str,
     ) -> None:
+        """Keep everything the page holds, under the one button that asks.
+
+        Both values are kept in one action rather than one each, because the
+        page has one button and one busy state: two actions would answer it
+        twice, and a trader would be told twice that their settings landed.
+
+        The LINE settings go first. They are the half kept somewhere this
+        application does not own, and the half a machine can refuse to keep,
+        so a save that fails is a save that has touched nothing yet.
+        """
         save = self._save_line_notifications
-        if save is None or self._keep_line_settings.is_running:
+        if save is None or self._keep_settings.is_running:
             return
-        self._keep_line_settings.run(
-            lambda: save(enabled, target_id, access_token),
+        save_title = self._save_bot_title
+        self._keep_settings.run(
+            lambda: self._keep_everything(
+                lambda: save(enabled, target_id, access_token),
+                save_title,
+                bot_title,
+            ),
             succeeded=self._settings_kept,
         )
+
+    @staticmethod
+    def _keep_everything(
+        keep_line_settings: Callable[[], None],
+        save_bot_title: SaveBotTitle | None,
+        bot_title: str,
+    ) -> None:
+        keep_line_settings()
+        if save_bot_title is not None:
+            save_bot_title(bot_title)
 
     @Slot(object)
     def _settings_kept(self, _result: object) -> None:

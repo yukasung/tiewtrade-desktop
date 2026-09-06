@@ -174,13 +174,13 @@ def test_calendar_popup_renders_with_dark_readable_palette(qtbot: QtBot) -> None
     assert _palette_color(calendar_view, QPalette.ColorRole.Text) == QColor("#F1F5F9")
 
 
-def test_bot_control_scroll_surfaces_and_scrollbar_render_dark(qtbot: QtBot) -> None:
+def test_bot_control_scroll_surfaces_render_dark(qtbot: QtBot) -> None:
+    """The panel has no scroll bar of its own, only the surfaces under it."""
     workspace = TradingWorkspace()
     qtbot.addWidget(workspace)
     workspace.setStyleSheet(DARK_THEME)
     workspace.setFixedSize(1024, 700)
     workspace.show()
-    scroll_bar = workspace.bot_control_scroll.verticalScrollBar()
 
     assert _palette_color(workspace._bot_pages, QPalette.ColorRole.Window) == QColor(
         "#141A22"
@@ -188,11 +188,7 @@ def test_bot_control_scroll_surfaces_and_scrollbar_render_dark(qtbot: QtBot) -> 
     assert _palette_color(
         workspace.bot_control_scroll.viewport(), QPalette.ColorRole.Window
     ) == QColor("#141A22")
-    assert _palette_color(scroll_bar, QPalette.ColorRole.Window) == QColor("#0B0E11")
-    assert _palette_color(scroll_bar, QPalette.ColorRole.Base) == QColor("#0B0E11")
-    assert (
-        max(QColor(color).lightness() for color in _rendered_colors(scroll_bar)) < 128
-    )
+    assert not workspace.bot_control_scroll.verticalScrollBar().isVisible()
 
 
 def test_trade_history_scroll_surfaces_and_scrollbar_render_dark(
