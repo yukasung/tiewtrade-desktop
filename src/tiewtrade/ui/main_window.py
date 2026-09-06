@@ -39,6 +39,7 @@ from tiewtrade.ui.bot_lifecycle_workflow import (
     LifecycleAction,
     RuntimeSnapshotRelay,
 )
+from tiewtrade.ui.bot_title import bot_title_or_default
 from tiewtrade.ui.chart_fact_relay import ChartFactRelay
 from tiewtrade.ui.chart_workflow import (
     ChartWorkflow,
@@ -228,9 +229,10 @@ class MainWindow(QMainWindow):
             parent=self,
         )
         self._settings.database_cleared.connect(self._database_cleared)
-        # The toolbar wears whatever this installation is called, from the
-        # first frame and again whenever it is changed on the Settings page.
-        self._settings.bot_title_changed.connect(self.workspace.show_bot_title)
+        # The toolbar keeps naming the application; only the OS window title
+        # wears whatever this installation is called, from the first frame
+        # and again whenever it is changed on the Settings page.
+        self._settings.bot_title_changed.connect(self._show_bot_title_on_window)
         self._settings.refresh_bot_title()
         self._system_notice = SystemNoticeWorkflow(
             connection_notice=(
@@ -952,6 +954,16 @@ class MainWindow(QMainWindow):
             lambda: ask_about_closing_all_at_market(self),
             close_position,
         )
+
+    @Slot(str)
+    def _show_bot_title_on_window(self, title: str) -> None:
+        """Wear the same name on the OS window title as the toolbar wears.
+
+        A trader running several installations side by side tells them apart
+        from the OS window list and dock/taskbar, not just from inside one
+        window already in front of them.
+        """
+        self.setWindowTitle(bot_title_or_default(title))
 
     @Slot()
     def _settings_requested(self) -> None:

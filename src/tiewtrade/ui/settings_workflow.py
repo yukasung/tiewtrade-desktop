@@ -141,9 +141,9 @@ class SettingsWorkflow(QObject):
             start=pool.start,
         )
         # The Title is read at launch, before anything is on the Settings page
-        # and long before anyone opens it, because the toolbar says it from
-        # the first frame. A read that fails leaves the toolbar naming the
-        # application alone, which is what an untitled installation shows
+        # and long before anyone opens it, because the OS window title wears
+        # it from the first frame. A read that fails leaves the window naming
+        # the application alone, which is what an untitled installation shows
         # anyway — so there is nothing to put in front of the trader about it.
         self._show_bot_title = GuardedAction(
             available=busy,
@@ -176,10 +176,10 @@ class SettingsWorkflow(QObject):
 
     @Slot()
     def refresh_bot_title(self) -> None:
-        """Read what this installation is called, for the form and the toolbar.
+        """Read what this installation is called, for the form and the window.
 
-        Asked for at launch as well as on the Settings page: the toolbar wears
-        the Title whether or not anyone has been near the form.
+        Asked for at launch as well as on the Settings page: the OS window
+        title wears the Title whether or not anyone has been near the form.
         """
         read = self._read_bot_title
         if read is None or self._show_bot_title.is_running:

@@ -4862,13 +4862,16 @@ def test_line_settings_that_could_not_be_saved_are_never_called_saved(
     assert said_saved == []
 
 
-def test_the_toolbar_wears_the_stored_title_from_the_first_frame(
+def test_the_window_title_wears_the_stored_title_from_the_first_frame(
     qtbot: QtBot,
 ) -> None:
-    """A stored title is on screen before anyone opens Settings.
+    """A stored title is on the OS window title before anyone opens Settings.
 
-    Several installations looked after by one person look identical, and the
-    window has to answer which one it is without being asked.
+    Several installations looked after by one person look identical from the
+    OS window list or dock/taskbar, and the window has to answer which one it
+    is without being asked. The toolbar inside the window, however, keeps
+    naming the application: the trader already knows which window they are
+    looking at once it is in front of them.
     """
     window = MainWindow(
         create_session=unused_create,
@@ -4880,7 +4883,8 @@ def test_the_toolbar_wears_the_stored_title_from_the_first_frame(
     qtbot.addWidget(window)
     window.show()
 
-    qtbot.waitUntil(lambda: window.workspace.toolbar_title.text() == "Khun Somchai")
+    qtbot.waitUntil(lambda: window.windowTitle() == "Khun Somchai")
+    assert window.workspace.toolbar_title.text() == "TiewTrade"
 
 
 def test_an_untitled_installation_names_the_application_alone(
@@ -4898,13 +4902,14 @@ def test_an_untitled_installation_names_the_application_alone(
     qtbot.waitUntil(window.setup.isVisible)
 
     assert window.workspace.toolbar_title.text() == "TiewTrade"
+    assert window.windowTitle() == "TiewTrade"
 
 
-def test_saving_the_title_stores_it_and_puts_it_on_the_toolbar(
+def test_saving_the_title_stores_it_and_puts_it_on_the_window_title(
     qtbot: QtBot,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """The toolbar reads what was stored, the way the form does."""
+    """The OS window title reads what was stored; the toolbar does not."""
     stored: list[str] = []
     monkeypatch.setattr(QMessageBox, "information", lambda *args: None)
 
@@ -4928,7 +4933,8 @@ def test_saving_the_title_stores_it_and_puts_it_on_the_toolbar(
     click(panel.save_settings_button)
 
     qtbot.waitUntil(lambda: stored == ["VPS-02"])
-    qtbot.waitUntil(lambda: window.workspace.toolbar_title.text() == "VPS-02")
+    qtbot.waitUntil(lambda: window.windowTitle() == "VPS-02")
+    assert window.workspace.toolbar_title.text() == "TiewTrade"
 
 
 _LIVE_PRICE_CANDLE = flat_candle(datetime(2026, 8, 2, 9, 0, tzinfo=UTC), "78355.24")

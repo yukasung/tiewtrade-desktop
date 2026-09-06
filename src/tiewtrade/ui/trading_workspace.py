@@ -19,7 +19,7 @@ from tiewtrade.application.bot_control import BotControlSnapshot, configured_bot
 from tiewtrade.application.paper_session_setup import ConfiguredPaperSession
 from tiewtrade.application.trading_workspace import TradingWorkspaceSnapshot
 from tiewtrade.ui.bot_control import BotControlWidget
-from tiewtrade.ui.bot_title import DEFAULT_BOT_TITLE, bot_title_or_default
+from tiewtrade.ui.bot_title import DEFAULT_BOT_TITLE
 from tiewtrade.ui.candlestick_chart import CandlestickChartWidget
 from tiewtrade.ui.connection_notice import ConnectionNoticeCard
 from tiewtrade.ui.cooldown_notice import CooldownNoticeCard
@@ -129,18 +129,6 @@ class TradingWorkspace(QWidget):
         unavailable_layout.addStretch()
 
         self._build_layout()
-
-    @Slot(str)
-    def show_bot_title(self, title: str) -> None:
-        """Say what this installation calls itself, which is the whole title.
-
-        One machine looks like every other machine running this, and someone
-        looking after several of them has no other way to tell the window in
-        front of them from the one next to it. A title emptied altogether
-        leaves the toolbar naming the application, which is what an
-        installation nobody has titled says anyway.
-        """
-        self.toolbar_title.setText(bot_title_or_default(title))
 
     @Slot()
     def show_setup(self) -> None:
