@@ -24,6 +24,7 @@ from tiewtrade.ui.candlestick_chart import CandlestickChartWidget
 from tiewtrade.ui.connection_notice import ConnectionNoticeCard
 from tiewtrade.ui.cooldown_notice import CooldownNoticeCard
 from tiewtrade.ui.live_price_card import LivePriceCard
+from tiewtrade.ui.notification_page import NotificationPage
 from tiewtrade.ui.position_basket_table import PositionBasketTable
 from tiewtrade.ui.session_setup import SessionSetupWidget
 from tiewtrade.ui.settings_panel import SettingsPanel
@@ -39,15 +40,18 @@ class WorkspaceTab(IntEnum):
     POSITION_BASKET = 0
     BASKET_HISTORY = 1
     TRADE_HISTORY = 2
+    NOTIFICATIONS = 3
 
 
 # The screen says Position where the domain says Basket: a Basket is one
 # round of trading, which is what a trader already calls a position.
-_TAB_TITLES = ("Position", "Position History", "Trade History")
+_TAB_TITLES = ("Position", "Position History", "Trade History", "Notifications")
 
 
 class TradingWorkspace(QWidget):
     trade_history_activated = Signal()
+    notifications_activated = Signal()
+    notifications_deactivated = Signal()
     start_bot_requested = Signal()
     stop_bot_requested = Signal()
     settings_requested = Signal()
@@ -62,6 +66,7 @@ class TradingWorkspace(QWidget):
         self.overview = self.bot_control_widget.overview
         self.position_basket = PositionBasketTable()
         self.trade_history = TradeHistoryPage()
+        self.notifications = NotificationPage()
 
         self.unavailable_panel = QFrame()
         self.unavailable_message = QLabel()
@@ -117,6 +122,7 @@ class TradingWorkspace(QWidget):
         self.tab_pages.setObjectName("workspaceTabPages")
         self.tab_pages.addWidget(self.position_basket)
         self.tab_pages.addWidget(self.trade_history)
+        self.tab_pages.addWidget(self.notifications)
         self.tabs.currentChanged.connect(self._tab_changed)
 
         unavailable_layout = QVBoxLayout(self.unavailable_panel)
@@ -299,8 +305,14 @@ class TradingWorkspace(QWidget):
     @Slot(int)
     def _tab_changed(self, index: int) -> None:
         tab = WorkspaceTab(index)
+        if tab is not WorkspaceTab.NOTIFICATIONS:
+            self.notifications_deactivated.emit()
         if tab is WorkspaceTab.POSITION_BASKET:
             self.tab_pages.setCurrentWidget(self.position_basket)
+            return
+        if tab is WorkspaceTab.NOTIFICATIONS:
+            self.tab_pages.setCurrentWidget(self.notifications)
+            self.notifications_activated.emit()
             return
         self.tab_pages.setCurrentWidget(self.trade_history)
         self.trade_history.show_history_tab(

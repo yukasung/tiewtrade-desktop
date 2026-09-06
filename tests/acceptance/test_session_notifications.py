@@ -32,6 +32,7 @@ from tests.support.paper_runtime_fakes import (
 from tests.support.paper_session_setup import configured_spot_session
 from tiewtrade.application.paper_runtime import PaperRuntimeController
 from tiewtrade.application.paper_session_setup import ConfiguredPaperSession
+from tiewtrade.application.session_notices import SessionNoticeHistoryItem
 from tiewtrade.application.trading_workspace import BotRuntimeState
 from tiewtrade.integrations.binance.public_endpoints import BinancePublicEndpoints
 from tiewtrade.integrations.keyring.line_notifications import LineNotificationSettings
@@ -46,10 +47,7 @@ from tiewtrade.integrations.sqlite.database import SQLiteDatabase
 from tiewtrade.integrations.sqlite.paper_runtime_lifecycle import (
     SQLitePaperRuntimeLifecycle,
 )
-from tiewtrade.integrations.sqlite.session_notices import (
-    KeptNotice,
-    SQLiteSessionNotices,
-)
+from tiewtrade.integrations.sqlite.session_notices import SQLiteSessionNotices
 from tiewtrade.integrations.sqlite.trade_history import SQLiteTradeHistory
 from tiewtrade.trading.symbol_rules import SymbolRules
 
@@ -340,8 +338,8 @@ def test_what_the_bot_said_outlives_the_process_that_said_it(
     kept = _notices_after_reopening(_database_path(tmp_path), session)
     assert kept, "the Bot said something and kept no record of it"
     entry = kept[0]
-    assert entry.notice.message == services["line"].messages[0]
-    assert entry.notice.session_id == session.config.session_id
+    assert entry.message == services["line"].messages[0]
+    assert entry.session_id == session.config.session_id
     assert sorted(delivery.channel for delivery in entry.deliveries) == [
         "line",
         "telegram",
@@ -379,7 +377,7 @@ def test_a_refusal_is_kept_beside_the_message_it_refused(
 
 def _notices_after_reopening(
     database_path: Path, session: ConfiguredPaperSession
-) -> tuple[KeptNotice, ...]:
+) -> tuple[SessionNoticeHistoryItem, ...]:
     """Read the records the way the next run of the application would."""
     return SQLiteSessionNotices(SQLiteDatabase(database_path)).list_notices(
         session.config.session_id

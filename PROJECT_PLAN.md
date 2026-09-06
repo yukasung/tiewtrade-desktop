@@ -170,6 +170,11 @@ severity, UTC drawer rows, acknowledge แบบ idempotent และ deduplicat
 dependency ไปยัง credentials, private endpoint หรือ Live adapter; งานนี้ไม่เพิ่ม
 notification persistence, business/risk policy หรือ Live execution
 
+DEV-137 ถูกถอดออกทั้งระบบใน commit "strip the workspace down to chart, tables and bot
+control" (12 ส.ค. 2026) เพราะ drawer และระบบแจ้งเตือนที่เปิดมันอ่านเป็น running commentary
+ที่แย่งพื้นที่ชาร์ต ตั้งแต่นั้น "Notifications" ในหน้าจอหลักของ PRODUCT.md 13 ไม่มี UI รองรับ
+จนถึง slice ด้านล่างที่แทนที่ด้วยแท็บใหม่ ซึ่งเป็นคนละงานคนละรูปแบบ — ไม่มี unread/drawer/acknowledge
+
 สถานะ Session Cooldown Policy slice: Cooldown เปลี่ยนจากค่าคงที่ของ product มาเป็นค่าที่ผู้ใช้
 เลือกตอนสร้าง Session — 1–30 วัน หรือ `Off` — โดยค่าเริ่มต้นคือ 30 วันซึ่งบล็อกนานที่สุด
 Session ที่ประกอบขึ้นโดยไม่ได้เลือกจึงระมัดระวังที่สุดเสมอ จำนวนวันวัดด้วยเวลาของ candle
@@ -215,7 +220,12 @@ marker เป็น `STOPPED` โดยไม่ยิงขอ candle ใด �
 สองช่องทางและการ raise ซ้ำหลัง restart จึงลงเป็นแถวเดียว เขียนก่อน push เสมอ notice จึงถูกเก็บแม้ไม่ได้
 ตั้งช่องทางไว้เลย และการเขียนที่ล้มเหลวเสียแค่บันทึก ไม่หยุด Session ตามกฎเดียวกับ push
 acceptance พิสูจน์แล้วว่าข้อความที่ผู้ใช้ได้รับกับผลของแต่ละช่องอ่านกลับได้จากไฟล์เดิมหลังเปิดใหม่
-ส่วนหน้าจอที่อ่านบันทึกนี้กลับมาแสดงยังไม่มี เป็นงานลำดับถัดไป
+หน้าจอที่อ่านบันทึกนี้กลับมาแสดงส่งมอบแล้วเช่นกัน: แท็บ Notifications ข้าง Position/Position
+History/Trade History แสดง notice ของ Session ที่กำลังดูอยู่ ใหม่สุดก่อน แต่ละแถวบอกเวลา ข้อความที่
+เปิดเรื่อง และผลของทุกช่องทางที่ตั้งค่าไว้ (ส่งถึง/ถูกปฏิเสธพร้อม status/ไม่ตอบ) อ่านผ่านเฉพาะ
+`application/session_notices.py` ที่ `ui` ได้รับอนุญาต ไม่แตะ `integrations/sqlite` โดยตรง โหลดแบบ lazy
+เมื่อแท็บถูกเปิดเท่านั้น ป้องกัน read ที่ไม่มีใครดู และมี generation guard กัน reply ของ Session เก่า
+มาทับของ Session ที่เพิ่งสลับไปดู
 
 ## Milestone 4 — Live Spot
 

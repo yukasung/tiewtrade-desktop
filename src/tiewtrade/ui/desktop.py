@@ -9,6 +9,7 @@ from PySide6.QtCore import QTimer
 from PySide6.QtWidgets import QApplication, QMessageBox
 
 from tiewtrade.application.paper_session_setup import PaperSessionSetupValues
+from tiewtrade.application.session_notices import ListSessionNotices
 from tiewtrade.ui.instance_activation import InstanceActivation
 from tiewtrade.ui.main_window import (
     NO_BOT,
@@ -51,6 +52,7 @@ def run_desktop(
     read_telegram_notifications: ReadTelegramNotifications | None = None,
     save_bot_title: SaveBotTitle | None = None,
     read_bot_title: ReadBotTitle | None = None,
+    list_session_notices: ListSessionNotices | None = None,
     activation_name: str | None = None,
 ) -> int:
     app = the_qt_application()
@@ -72,6 +74,7 @@ def run_desktop(
         read_telegram_notifications=read_telegram_notifications,
         save_bot_title=save_bot_title,
         read_bot_title=read_bot_title,
+        list_session_notices=list_session_notices,
     )
     window.setStyleSheet(DARK_THEME)
     window.show()
