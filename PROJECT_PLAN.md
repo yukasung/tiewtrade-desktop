@@ -202,6 +202,13 @@ Title เก็บเป็นไฟล์ข้างฐานข้อมู�
 ประวัติ และไม่ใช่ที่เดียวกับ credential ซึ่งมันไม่ใช่ นอกจากนี้ Position History อ่านตามวันที่
 Basket ปิดตาม spec ของตัวเอง และ Bot Control panel ยืนได้โดยไม่มี scroll bar
 
+สถานะ Stop / startup Recovery acceptance slice: เรื่องที่ผู้ใช้เจอจริงถูกพิสูจน์ต่อกันทั้งเส้นแล้ว —
+เครื่องดับตอนที่ Basket ยังเปิดอยู่ เปิดโปรแกรมอีกครั้ง แล้ว Position เดิมยังอยู่ครบ Recovery เขียน
+marker เป็น `STOPPED` โดยไม่ยิงขอ candle ใด ๆ จึงไม่สร้าง indicator state หรือ Entry Intent ย้อนหลัง
+และไม่เพิ่ม Basket หรือ Fill ใหม่เลย เมื่อกด Start อีกครั้ง Bot รับ Basket เดิมกลับมาพร้อม Take Profit
+ของมัน ส่วน caller ที่ยังไม่ได้อ้างสิทธิ์ installation จะไม่แตะ marker และคง `BLOCKED` ไว้ เพราะ marker
+ที่ Bot ที่ยังมีชีวิตถืออยู่ อ่านแล้วเหมือนกับ marker ที่ Bot ที่ตายแล้วทิ้งไว้ทุกประการ
+
 ## Milestone 4 — Live Spot
 
 เริ่มได้เมื่อ Paper Trading Complete ผ่านทั้งหมด:
