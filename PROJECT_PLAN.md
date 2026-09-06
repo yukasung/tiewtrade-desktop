@@ -170,6 +170,36 @@ severity, UTC drawer rows, acknowledge แบบ idempotent และ deduplicat
 dependency ไปยัง credentials, private endpoint หรือ Live adapter; งานนี้ไม่เพิ่ม
 notification persistence, business/risk policy หรือ Live execution
 
+สถานะ Session Cooldown Policy slice: Cooldown เปลี่ยนจากค่าคงที่ของ product มาเป็นค่าที่ผู้ใช้
+เลือกตอนสร้าง Session — 1–30 วัน หรือ `Off` — โดยค่าเริ่มต้นคือ 30 วันซึ่งบล็อกนานที่สุด
+Session ที่ประกอบขึ้นโดยไม่ได้เลือกจึงระมัดระวังที่สุดเสมอ จำนวนวันวัดด้วยเวลาของ candle
+ไม่ใช่นาฬิกาของเครื่อง replay ชุด candle เดิมจึงให้คำตอบเดิม ตัว Cooldown เองไม่ถูกเก็บลง
+ฐานข้อมูล เพราะอ่านกลับได้จาก Entries ที่ยังเปิดค้างและ `filled_at` ของ Fill ที่ทำให้ Pair ครบ
+"Cancel Cooldown" ตัดการรอได้ครั้งละหนึ่ง Cooldown ทั้ง Paper Spot และ Paper Futures โดย Spot
+persist waiver ไว้ให้อยู่รอดข้าม restart ส่วน Futures ไม่เก็บเพราะไม่รับ Basket ที่เปิดค้างกลับมา
+Desktop แสดง Cooldown ทั้งบนทุกแถวของ Position tab, ปุ่ม Cancel ข้างแท็บ และการ์ดแจ้งเตือน
+ข้าง Bot Control ด้วยถ้อยคำชุดเดียวกัน เพื่อไม่ให้ Cooldown เดียวถูกอ่านเป็นคนละเรื่องในสองที่
+งานนี้ไม่แตะ Live, network หรือ credentials
+
+สถานะ Chat Notification Channels slice: notice ที่ `application` เป็นเจ้าของ
+(`EntryOpenedNotice`, `BasketClosedNotice`, `CooldownStartedNotice`, `CooldownEndedNotice`,
+`CooldownCancelledNotice`, `MarketFeedLostNotice`, `MarketFeedRestoredNotice`,
+`BotErrorNotice`) ออกไปถึงเครื่องของผู้ใช้จริงได้แล้วผ่าน LINE Messaging API push และ
+Telegram Bot API `sendMessage` เปิดพร้อมกันได้ทั้งสองช่อง ช่องที่ปิดหรือกรอกไม่ครบจะไม่ถูก
+เปิดเลยและไม่กระทบอีกช่อง credential ทั้งสองอยู่ใน OS keyring เท่านั้น ตั้งค่าได้จากหน้า
+Settings ของ Desktop คิว การ retry หนึ่งครั้ง การ log และการเรียบเรียงข้อความอยู่ใน
+`integrations/notifications` ที่ไม่ผูกกับช่องทางใด ส่วน socket และการอ่านว่า status ที่ตอบกลับมา
+ควร retry หรือไม่อยู่ใน `http_push.py` ที่ทั้งสองช่องใช้ร่วมกัน Session ที่ราย notice ไม่เคยรอ
+socket และ push ที่ล้มเหลวถูก log แล้วทิ้ง ไม่ย้อนกลับไปกระทบ trading decision ใด
+งานนี้ยังไม่มี notification persistence และยังไม่มี acceptance test ที่พิสูจน์เส้นทางทั้งเส้น
+ตั้งแต่เหตุการณ์ใน Session จนถึง fake transport ซึ่งยังเป็นเงื่อนไขค้างของ Milestone 3 ข้อ 11
+
+สถานะ Workspace refinements slice: ผู้ใช้ตั้ง Title ของ installation เองได้จากหน้า Settings และ
+toolbar สวมชื่อนั้นทั้งชื่อ เพื่อให้คนที่ดูแลหลายเครื่องแยกหน้าต่างตรงหน้าออกจากเครื่องข้าง ๆ ได้
+Title เก็บเป็นไฟล์ข้างฐานข้อมูล ไม่ใช่ใน SQLite ที่ "Clear All Database" จะกวาดไปพร้อม
+ประวัติ และไม่ใช่ที่เดียวกับ credential ซึ่งมันไม่ใช่ นอกจากนี้ Position History อ่านตามวันที่
+Basket ปิดตาม spec ของตัวเอง และ Bot Control panel ยืนได้โดยไม่มี scroll bar
+
 ## Milestone 4 — Live Spot
 
 เริ่มได้เมื่อ Paper Trading Complete ผ่านทั้งหมด:
@@ -205,6 +235,10 @@ notification persistence, business/risk policy หรือ Live execution
 | Binance public market data | `integrations/binance` | ส่งมอบใน Paper Trading Complete โดยไม่ใช้ credentials |
 | Binance Live execution | `integrations/binance` | เพิ่มตาม Live gates เท่านั้น |
 | Persistence | `integrations/sqlite` | จัดการ transaction, durable mapping และ persistence-specific fail-closed coordinator; ไม่เก็บ secrets |
+| Notice, คิว, retry และการเรียบเรียงข้อความ | `integrations/notifications` | ไม่ผูกกับช่องทางใด รับชื่อช่องทางมาเป็นค่า; socket ร่วมอยู่ใน `http_push.py` |
+| Chat transport | `integrations/line`, `integrations/telegram` | ถือเฉพาะ address, payload และตำแหน่งที่ token เดินทาง |
+| Credentials | `integrations/keyring` | OS keyring เท่านั้น ไม่ลง SQLite, config, fixture หรือ log |
+| ค่าตั้งของเครื่องที่ไม่ใช่ความลับ | `integrations/preferences` | เช่น Bot Title; อยู่ข้างฐานข้อมูล ไม่ปนกับ credential หรือประวัติการเทรด |
 | Desktop UI | `ui` | ไม่ถือ business rules |
 
 `execution` เป็นเจ้าของ deterministic simulation ภายในโปรแกรม ส่วน side effects ที่
