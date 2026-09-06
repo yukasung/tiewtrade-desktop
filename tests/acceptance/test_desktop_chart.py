@@ -224,6 +224,8 @@ def test_dragging_the_chart_reads_an_older_window(qtbot: QtBot) -> None:
     window.resize(1200, 700)
     window.show()
     chart = window.workspace.chart
+    pan_emissions: list[object] = []
+    chart.range_requested.connect(pan_emissions.append)
     qtbot.waitUntil(lambda: len(requested) == 1)
     # The loader having been called is not the same moment the widget takes
     # the snapshot it returned — that lands back on the Qt thread a beat
@@ -246,10 +248,39 @@ def test_dragging_the_chart_reads_an_older_window(qtbot: QtBot) -> None:
     surface = chart._chart_surface()
     slot = surface.width() / visible_candle_count(opening_range, "5m")
     middle = int(surface.center().y())
-    press(chart, int(surface.left()) + 20, middle)
-    release(chart, int(surface.left()) + 20 + round(slot * 30), middle)
+    press_x = int(surface.left()) + 20
+    release_x = press_x + round(slot * 30)
+    press(chart, press_x, middle)
+    release(chart, release_x, middle)
 
-    qtbot.waitUntil(lambda: len(requested) == 2)
+    try:
+        qtbot.waitUntil(lambda: len(requested) == 2)
+    except Exception:
+        print(
+            "DEBUG_DRAG_TIMEOUT",
+            {
+                "chart_width": chart.width(),
+                "chart_height": chart.height(),
+                "surface": (
+                    surface.left(),
+                    surface.top(),
+                    surface.width(),
+                    surface.height(),
+                ),
+                "slot": slot,
+                "press_x": press_x,
+                "release_x": release_x,
+                "middle": middle,
+                "requested_len": len(requested),
+                "pan_emissions": pan_emissions,
+                "pan_anchor_after": chart._pan_anchor,
+                "chart_visible": chart.isVisible(),
+                "chart_enabled": chart.isEnabled(),
+                "window_active": window.isActiveWindow(),
+                "snapshot_state": chart._snapshot.state if chart._snapshot else None,
+            },
+        )
+        raise
     older = requested[1]
     assert older.end == opening_range.end - timedelta(minutes=5) * 30
     assert older.end - older.start == opening_range.end - opening_range.start
