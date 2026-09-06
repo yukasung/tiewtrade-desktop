@@ -191,8 +191,10 @@ Settings ของ Desktop คิว การ retry หนึ่งครั้
 `integrations/notifications` ที่ไม่ผูกกับช่องทางใด ส่วน socket และการอ่านว่า status ที่ตอบกลับมา
 ควร retry หรือไม่อยู่ใน `http_push.py` ที่ทั้งสองช่องใช้ร่วมกัน Session ที่ราย notice ไม่เคยรอ
 socket และ push ที่ล้มเหลวถูก log แล้วทิ้ง ไม่ย้อนกลับไปกระทบ trading decision ใด
-งานนี้ยังไม่มี notification persistence และยังไม่มี acceptance test ที่พิสูจน์เส้นทางทั้งเส้น
-ตั้งแต่เหตุการณ์ใน Session จนถึง fake transport ซึ่งยังเป็นเงื่อนไขค้างของ Milestone 3 ข้อ 11
+acceptance พิสูจน์เส้นทางทั้งเส้นแล้ว ตั้งแต่ candle ที่ทำให้ Bot เปิด Entry ไปจนถึง request ที่ถึง
+socket ปลอมของทั้งสองช่อง ครอบทั้งกรณีส่งถึง, กรณี 5xx ที่ถูกถามซ้ำอีกครั้งด้วยข้อความเดิม และ
+กรณีถูกปฏิเสธซึ่งไม่ retry ไม่ทำให้อีกช่องเงียบ และไม่กระทบ Entry ที่บันทึกไว้แล้ว
+งานนี้ยังไม่มี notification persistence
 
 สถานะ Workspace refinements slice: ผู้ใช้ตั้ง Title ของ installation เองได้จากหน้า Settings และ
 toolbar สวมชื่อนั้นทั้งชื่อ เพื่อให้คนที่ดูแลหลายเครื่องแยกหน้าต่างตรงหน้าออกจากเครื่องข้าง ๆ ได้
