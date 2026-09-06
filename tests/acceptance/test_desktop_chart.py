@@ -6,7 +6,6 @@ from pathlib import Path
 from threading import Event
 from typing import TypeVar
 
-from PySide6.QtCore import QPointF
 from PySide6.QtWidgets import QPushButton
 from pytest import MonkeyPatch
 from pytestqt.qtbot import QtBot
@@ -225,25 +224,15 @@ def test_dragging_the_chart_reads_an_older_window(qtbot: QtBot) -> None:
     window.resize(1200, 700)
     window.show()
     chart = window.workspace.chart
-    pan_emissions: list[object] = []
-    chart.range_requested.connect(pan_emissions.append)
     qtbot.waitUntil(lambda: len(requested) == 1)
-    # The loader having been called is not the same moment the widget takes
-    # the snapshot it returned — that lands back on the Qt thread a beat
-    # later. A drag simulated before it lands finds a chart that still
-    # cannot be panned, and the whole gesture goes nowhere.
-    qtbot.waitUntil(
-        lambda: (
-            chart._snapshot is not None and chart._snapshot.chart_range == requested[0]
-        )
-    )
-    # `window.resize` sets the top-level window's size at once; the chart
-    # nested inside it only takes its share once Qt has actually run a
-    # layout pass, which is a further, separate wait on some platforms. A
-    # drag distance measured off a chart still at its pre-layout size is a
-    # drag of the wrong number of candles — often zero, which reads back as
-    # no pan at all.
-    qtbot.waitUntil(lambda: chart.width() > 400)
+    # The loader having been called is not the same moment the chart can be
+    # dragged. The window opens by publishing a Loading snapshot and reading
+    # a range behind it, and a chart mid-read refuses to pan at all — so a
+    # drag simulated on the strength of the loader having been *called* can
+    # land on a chart still loading and be ignored outright, gesture and all.
+    # Waited for on the widget's own terms, which is what the drag needs to
+    # be true, rather than on the loader call standing in for it.
+    qtbot.waitUntil(chart._can_pan)
 
     opening_range = requested[0]
     surface = chart._chart_surface()
@@ -251,53 +240,10 @@ def test_dragging_the_chart_reads_an_older_window(qtbot: QtBot) -> None:
     middle = int(surface.center().y())
     press_x = int(surface.left()) + 20
     release_x = press_x + round(slot * 30)
-    at_press = {
-        "can_pan": chart._can_pan(),
-        "surface_contains_point": chart._chart_surface().contains(
-            QPointF(press_x, middle)
-        ),
-        "surface_at_press": (
-            chart._chart_surface().left(),
-            chart._chart_surface().top(),
-            chart._chart_surface().width(),
-            chart._chart_surface().height(),
-        ),
-        "snapshot_state_at_press": chart._snapshot.state if chart._snapshot else None,
-    }
     press(chart, press_x, middle)
-    pan_anchor_after_press = chart._pan_anchor
     release(chart, release_x, middle)
 
-    try:
-        qtbot.waitUntil(lambda: len(requested) == 2)
-    except Exception:
-        print(
-            "DEBUG_DRAG_TIMEOUT",
-            {
-                "at_press": at_press,
-                "pan_anchor_after_press": pan_anchor_after_press,
-                "chart_width": chart.width(),
-                "chart_height": chart.height(),
-                "surface": (
-                    surface.left(),
-                    surface.top(),
-                    surface.width(),
-                    surface.height(),
-                ),
-                "slot": slot,
-                "press_x": press_x,
-                "release_x": release_x,
-                "middle": middle,
-                "requested_len": len(requested),
-                "pan_emissions": pan_emissions,
-                "pan_anchor_after": chart._pan_anchor,
-                "chart_visible": chart.isVisible(),
-                "chart_enabled": chart.isEnabled(),
-                "window_active": window.isActiveWindow(),
-                "snapshot_state": chart._snapshot.state if chart._snapshot else None,
-            },
-        )
-        raise
+    qtbot.waitUntil(lambda: len(requested) == 2)
     older = requested[1]
     assert older.end == opening_range.end - timedelta(minutes=5) * 30
     assert older.end - older.start == opening_range.end - opening_range.start
